@@ -81,6 +81,43 @@ def test_request_refresh_wakes_the_poller_immediately():
         poller.stop()
 
 
+def test_refresh_requested_during_in_flight_fetch_is_not_dropped():
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+    call_count = {"n": 0}
+    lock = threading.Lock()
+
+    def fake_fetch():
+        with lock:
+            call_count["n"] += 1
+            n = call_count["n"]
+        if n == 1:
+            fetch_started.set()
+            release_fetch.wait(timeout=2)
+        return _ok_result()
+
+    poller = Poller(fetch_fn=fake_fetch, poll_interval=3600)
+    poller.start()
+    try:
+        assert fetch_started.wait(timeout=2)
+        # A refresh is requested WHILE the first fetch is still in flight --
+        # this must not be silently dropped by the loop's post-fetch clear().
+        poller.request_refresh()
+        release_fetch.set()
+
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            with lock:
+                if call_count["n"] >= 2:
+                    break
+            time.sleep(0.02)
+
+        with lock:
+            assert call_count["n"] >= 2, "refresh requested during an in-flight fetch was dropped"
+    finally:
+        poller.stop()
+
+
 def test_poller_never_raises_out_of_the_loop_when_fetch_fn_raises():
     def raising_fetch():
         raise RuntimeError("boom")
