@@ -24,7 +24,7 @@ def test_find_wsl_credentials_returns_single_match():
     def fake_run(cmd, **kwargs):
         if cmd == ["wsl.exe", "-l", "-q"]:
             return FakeCompletedProcess(stdout="Ubuntu\r\n".encode("utf-16-le"))
-        if cmd[:4] == ["wsl.exe", "-d", "Ubuntu", "--"]:
+        if cmd[:4] == ["wsl.exe", "-d", "Ubuntu", "--exec"]:
             return FakeCompletedProcess(stdout=b"/home/cptsmidge/.claude/.credentials.json\n")
         raise AssertionError(f"unexpected command: {cmd}")
 
