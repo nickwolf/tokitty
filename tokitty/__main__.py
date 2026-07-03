@@ -1,4 +1,3 @@
-# tokitty/tokitty/__main__.py
 """Entry point: python -m tokitty."""
 from __future__ import annotations
 
