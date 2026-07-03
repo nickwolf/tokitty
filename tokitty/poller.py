@@ -80,7 +80,13 @@ class Poller:
                 jitter = backoff * BACKOFF_JITTER * random.random()
                 backoff = min(backoff * 2 + jitter, BACKOFF_MAX)
 
-            self._wake_event.clear()
+            if self._wake_event.is_set():
+                # A refresh was requested while this fetch was in flight --
+                # honor it immediately instead of clearing the signal and
+                # sleeping out the full interval.
+                self._wake_event.clear()
+                continue
+
             self._sleep_fn(interval)
 
     def _poll_once(self) -> PollResult:
