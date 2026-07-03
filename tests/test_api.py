@@ -95,3 +95,67 @@ def test_parse_usage_response_ignores_malformed_limit_entries():
 
     assert len(snapshot.limits) == 1
     assert snapshot.limits[0].kind == "session"
+
+
+def test_fetch_usage_sends_bearer_token_and_beta_header():
+    import urllib.error
+    from unittest.mock import MagicMock, patch
+
+    from tokitty.api import BASE_URL, ApiError, fetch_usage
+
+    fake_response = MagicMock()
+    fake_response.read.return_value = b'{"ok": true}'
+    fake_response.__enter__.return_value = fake_response
+    fake_response.__exit__.return_value = False
+
+    with patch("tokitty.api.urllib.request.urlopen", return_value=fake_response) as mock_urlopen:
+        result = fetch_usage("test-token-123")
+
+    assert result == {"ok": True}
+    sent_request = mock_urlopen.call_args[0][0]
+    assert sent_request.full_url == BASE_URL
+    assert sent_request.get_header("Authorization") == "Bearer test-token-123"
+    assert sent_request.get_header("Anthropic-beta") == "oauth-2025-04-20"
+
+
+def test_fetch_usage_raises_api_error_with_status_code_on_http_error():
+    import urllib.error
+    from unittest.mock import patch
+
+    from tokitty.api import BASE_URL, ApiError, fetch_usage
+
+    http_error = urllib.error.HTTPError(BASE_URL, 401, "Unauthorized", {}, None)
+
+    with patch("tokitty.api.urllib.request.urlopen", side_effect=http_error):
+        with pytest.raises(ApiError) as exc_info:
+            fetch_usage("expired-token")
+
+    assert exc_info.value.status_code == 401
+
+
+def test_fetch_usage_raises_api_error_on_network_error():
+    import urllib.error
+    from unittest.mock import patch
+
+    from tokitty.api import ApiError, fetch_usage
+
+    with patch("tokitty.api.urllib.request.urlopen", side_effect=urllib.error.URLError("no route")):
+        with pytest.raises(ApiError) as exc_info:
+            fetch_usage("some-token")
+
+    assert exc_info.value.status_code is None
+
+
+def test_fetch_usage_raises_api_error_on_invalid_json():
+    from unittest.mock import MagicMock, patch
+
+    from tokitty.api import ApiError, fetch_usage
+
+    fake_response = MagicMock()
+    fake_response.read.return_value = b"not json"
+    fake_response.__enter__.return_value = fake_response
+    fake_response.__exit__.return_value = False
+
+    with patch("tokitty.api.urllib.request.urlopen", return_value=fake_response):
+        with pytest.raises(ApiError):
+            fetch_usage("some-token")
