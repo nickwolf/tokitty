@@ -15,8 +15,10 @@ from tokitty.geometry import clamp_position
 from tokitty.sprites import PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
-CARD_HEIGHT = 110
-CAT_CANVAS_SIZE = 100
+CARD_HEIGHT = 128
+CAT_CANVAS_SIZE = 112
+STATS_X = 132
+BAR_WIDTH = 158
 BG_COLOR = "#1c1c22"
 FG_COLOR = "#f0f0f0"
 DIM_COLOR = "#8a8a92"
@@ -36,6 +38,7 @@ class TokittyWindow:
         self.on_refresh_requested = None  # set externally by __main__.py
         self._current_state = "sleeping"
         self._frame_index = 0
+        self._driving_tag = ""
 
         self._configure_window()
         self._build_widgets()
@@ -59,31 +62,36 @@ class TokittyWindow:
                 pass
 
     def _build_widgets(self) -> None:
-        self.canvas = tk.Canvas(self.root, width=100, height=100, bg=BG_COLOR, highlightthickness=0)
-        self.canvas.place(x=6, y=5)
-
-        self.tag_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.tag_label.place(x=8, y=108)
+        self.canvas = tk.Canvas(
+            self.root, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=BG_COLOR, highlightthickness=0
+        )
+        self.canvas.place(x=8, y=8)
 
         self.session_label = tk.Label(self.root, text="SESSION", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
-        self.session_label.place(x=112, y=8)
-        self.session_bar_bg = tk.Canvas(self.root, width=170, height=8, bg=BAR_BG, highlightthickness=0)
-        self.session_bar_bg.place(x=112, y=26)
+        self.session_label.place(x=STATS_X, y=12)
+        self.session_bar_bg = tk.Canvas(self.root, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.session_bar_bg.place(x=STATS_X, y=30)
         self.session_reset_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.session_reset_label.place(x=112, y=38)
+        self.session_reset_label.place(x=STATS_X, y=42)
 
         self.weekly_label = tk.Label(self.root, text="WEEK", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
-        self.weekly_label.place(x=112, y=54)
-        self.weekly_bar_bg = tk.Canvas(self.root, width=170, height=8, bg=BAR_BG, highlightthickness=0)
-        self.weekly_bar_bg.place(x=112, y=72)
+        self.weekly_label.place(x=STATS_X, y=60)
+        self.weekly_bar_bg = tk.Canvas(self.root, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.weekly_bar_bg.place(x=STATS_X, y=78)
         self.weekly_reset_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.weekly_reset_label.place(x=112, y=84)
+        self.weekly_reset_label.place(x=STATS_X, y=90)
 
+        # credits_label and hint_label share the same slot -- _display_state_for
+        # only ever populates one of them at a time (credits on ok status,
+        # hint on every non-ok status), so they never need to be visible
+        # together.
         self.credits_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.credits_label.place(x=112, y=96)
+        self.credits_label.place(x=STATS_X, y=108)
 
-        self.hint_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.hint_label.place(x=8, y=86)
+        self.hint_label = tk.Label(
+            self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
+        )
+        self.hint_label.place(x=STATS_X, y=108)
 
     def _bind_drag(self) -> None:
         self.root.bind("<Button-1>", self._on_drag_start)
@@ -154,7 +162,7 @@ class TokittyWindow:
         dimmed: bool,
     ) -> None:
         self._current_state = state
-        self.tag_label.configure(text=driving_tag)
+        self._driving_tag = driving_tag
 
         fg = DIM_COLOR if dimmed else FG_COLOR
         self.session_label.configure(fg=fg)
@@ -162,23 +170,23 @@ class TokittyWindow:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, 170 * min(session_pct, 100) / 100, 8, fill=bar_color(session_pct), width=0, tags="fill"
+            0, 0, BAR_WIDTH * min(session_pct, 100) / 100, 8, fill=bar_color(session_pct), width=0, tags="fill"
         )
         self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
 
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, 170 * min(weekly_pct, 100) / 100, 8, fill=bar_color(weekly_pct), width=0, tags="fill"
+            0, 0, BAR_WIDTH * min(weekly_pct, 100) / 100, 8, fill=bar_color(weekly_pct), width=0, tags="fill"
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
-        self.credits_label.configure(text=credits_text or "")
-
         if hint_text:
+            self.credits_label.configure(text="")
             self.hint_label.configure(text=hint_text)
             self.hint_label.lift()
         else:
             self.hint_label.configure(text="")
+            self.credits_label.configure(text=credits_text or "")
 
     def _animate(self) -> None:
         frames = get_frames(self._current_state)
@@ -201,3 +209,9 @@ class TokittyWindow:
                 x0 = x_off + col_index * SCALE
                 y0 = y_off + row_index * SCALE
                 self.canvas.create_rectangle(x0, y0, x0 + SCALE, y0 + SCALE, fill=color, width=0, tags="cat")
+
+        if self._driving_tag:
+            self.canvas.create_text(
+                6, CAT_CANVAS_SIZE - 6, text=self._driving_tag, anchor="sw",
+                fill=DIM_COLOR, font=("Segoe UI", 8), tags="cat",
+            )

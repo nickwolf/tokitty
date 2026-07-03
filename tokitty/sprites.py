@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
+SCALE = 7  # device pixels per sprite pixel when rendered on the Canvas
 
 PALETTE: Dict[str, str] = {
     ".": "",  # transparent -- not drawn
