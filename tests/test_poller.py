@@ -118,6 +118,37 @@ def test_refresh_requested_during_in_flight_fetch_is_not_dropped():
         poller.stop()
 
 
+def test_single_refresh_while_idle_triggers_exactly_one_extra_fetch():
+    call_count = {"n": 0}
+    lock = threading.Lock()
+    got_first = threading.Event()
+
+    def fake_fetch():
+        with lock:
+            call_count["n"] += 1
+            n = call_count["n"]
+        if n == 1:
+            got_first.set()
+        return _ok_result()
+
+    poller = Poller(fetch_fn=fake_fetch, poll_interval=3600)
+    poller.start()
+    try:
+        assert got_first.wait(timeout=2)
+        time.sleep(0.1)  # let the poller settle into its idle sleep
+        with lock:
+            before = call_count["n"]
+
+        poller.request_refresh()
+        time.sleep(0.3)  # long enough for one fetch, and a wrongly-doubled one to show up
+
+        with lock:
+            after = call_count["n"]
+        assert after == before + 1, f"expected exactly one extra fetch, got {after - before}"
+    finally:
+        poller.stop()
+
+
 def test_poller_never_raises_out_of_the_loop_when_fetch_fn_raises():
     def raising_fetch():
         raise RuntimeError("boom")
