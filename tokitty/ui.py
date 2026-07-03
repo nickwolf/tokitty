@@ -81,17 +81,18 @@ class TokittyWindow:
         self.weekly_reset_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
         self.weekly_reset_label.place(x=STATS_X, y=90)
 
-        # credits_label and hint_label share the same slot -- _display_state_for
-        # only ever populates one of them at a time (credits on ok status,
-        # hint on every non-ok status), so they never need to be visible
-        # together.
-        self.credits_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
-        self.credits_label.place(x=STATS_X, y=108)
-
-        self.hint_label = tk.Label(
+        # One widget for both credits and the error hint -- _display_state_for
+        # only ever populates one at a time (credits on ok status, hint on
+        # every non-ok status), so they never need to show together. Two
+        # separate Labels stacked at the same coordinates looked like this
+        # instead: even with text="", the widget on top still paints its own
+        # background over the widget underneath's left edge, clipping the
+        # first character (the "$" in the credits line) -- found via a real
+        # screenshot, not guessed.
+        self.status_label = tk.Label(
             self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
         )
-        self.hint_label.place(x=STATS_X, y=108)
+        self.status_label.place(x=STATS_X, y=108)
 
     def _bind_drag(self) -> None:
         self.root.bind("<Button-1>", self._on_drag_start)
@@ -180,13 +181,7 @@ class TokittyWindow:
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
-        if hint_text:
-            self.credits_label.configure(text="")
-            self.hint_label.configure(text=hint_text)
-            self.hint_label.lift()
-        else:
-            self.hint_label.configure(text="")
-            self.credits_label.configure(text=credits_text or "")
+        self.status_label.configure(text=hint_text if hint_text else (credits_text or ""))
 
     def _animate(self) -> None:
         frames = get_frames(self._current_state)
