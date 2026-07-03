@@ -30,8 +30,12 @@ def list_wsl_distros(run: Callable = subprocess.run) -> List[str]:
 def _credentials_paths_in_distro(distro: str, run: Callable = subprocess.run) -> List[str]:
     """Return WSL-side absolute paths to credentials files found under /home in a distro."""
     try:
+        # --exec (not --) is required here: wsl.exe's default invocation
+        # re-joins the argv after `--` before handing it to the distro's
+        # shell, which mangles a multi-word `sh -c "<script>"` and leaves
+        # variables like $u empty. --exec preserves the argv array as-is.
         result = run(
-            ["wsl.exe", "-d", distro, "--", "sh", "-c", _CHECK_SCRIPT],
+            ["wsl.exe", "-d", distro, "--exec", "sh", "-c", _CHECK_SCRIPT],
             capture_output=True,
             timeout=10,
             check=False,
