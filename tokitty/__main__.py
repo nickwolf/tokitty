@@ -84,33 +84,22 @@ def debug_print() -> int:
     return 0
 
 
-def _display_state_for(result: PollResult, previous: Optional[PollResult]) -> dict:
-    """Translate a PollResult into what the UI should show: cat state,
-    percentages, reset text (or a live countdown when capped), driving
-    tag, credits line, hint, and whether to render dimmed.
-    """
-    if result.status != "ok" or result.snapshot is None:
-        hints = {
-            "stale_token": "token stale — open Claude Code",
-            "credentials_unreachable": "can't find credentials",
-            "ambiguous_credentials": "multiple installs — set TOKITTY_CREDENTIALS",
-            "api_error": "API hiccup, retrying",
-        }
-        last_good = previous.snapshot if previous and previous.snapshot else None
-        return {
-            "state": "confused",
-            "session_pct": last_good.session_pct if last_good else 0.0,
-            "weekly_pct": last_good.weekly_pct if last_good else 0.0,
-            "session_reset_text": "—",
-            "weekly_reset_text": "—",
-            "driving_tag": "",
-            "credits_text": None,
-            "hint_text": hints.get(result.status, "unknown error"),
-            "dimmed": True,
-        }
+# Shown only once our own clock says a cached countdown should already
+# have hit zero and we still can't confirm it -- see _display_state_for.
+_STALE_HINTS = {
+    "stale_token": "token expired, reopen Claude Code",
+    "credentials_unreachable": "can't confirm, credentials unreachable",
+    "ambiguous_credentials": "can't confirm, set TOKITTY_CREDENTIALS",
+    "api_error": "can't confirm, API hiccup",
+}
 
-    snapshot = result.snapshot
-    now = datetime.now(timezone.utc)
+
+def _display_from_snapshot(snapshot, now: datetime) -> dict:
+    """Compute state/percentages/reset text/credits from a snapshot as of
+    `now`. A countdown only needs a resets_at timestamp and a clock, so
+    this works equally well for a fresh snapshot or a cached one from an
+    earlier successful poll.
+    """
     binding = select_binding_capped_limit(snapshot.limits)
 
     if binding is not None:
@@ -130,9 +119,6 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult]) -> di
         session_text = format_reset_time(snapshot.session_resets_at) if snapshot.session_resets_at else "—"
         weekly_text = format_reset_day(snapshot.weekly_resets_at) if snapshot.weekly_resets_at else "—"
 
-    if previous and previous.snapshot and detect_activate(previous.snapshot, snapshot):
-        state = "activate"
-
     credits_text = None
     if snapshot.credits_used is not None and snapshot.credits_used > 0 and snapshot.credits_limit is not None:
         credits_text = f"${snapshot.credits_used:.2f} / ${snapshot.credits_limit:.2f}"
@@ -145,9 +131,67 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult]) -> di
         "weekly_reset_text": weekly_text,
         "driving_tag": driving_tag,
         "credits_text": credits_text,
-        "hint_text": None,
-        "dimmed": False,
     }
+
+
+def _display_state_for(result: PollResult, previous: Optional[PollResult], now: Optional[datetime] = None) -> dict:
+    """Translate a PollResult into what the UI should show: cat state,
+    percentages, reset text (or a live countdown when capped), driving
+    tag, credits line, hint, and whether to render dimmed.
+
+    `previous` is expected to be the last *successful* PollResult (see
+    _next_last_good), not just whatever the previous tick saw -- a
+    countdown to a known resets_at only needs a clock, not a live
+    connection, so a stale token (or any other transient fetch failure)
+    keeps showing that same cached countdown instead of blanking out.
+    A small warning only appears once our own clock says the cached
+    countdown should already be done and we still can't confirm it.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if result.status == "ok" and result.snapshot is not None:
+        display = _display_from_snapshot(result.snapshot, now)
+        if previous and previous.snapshot and detect_activate(previous.snapshot, result.snapshot):
+            display["state"] = "activate"
+        display["hint_text"] = None
+        display["dimmed"] = False
+        return display
+
+    last_good = previous.snapshot if previous and previous.snapshot else None
+    if last_good is not None:
+        display = _display_from_snapshot(last_good, now)
+        binding = select_binding_capped_limit(last_good.limits)
+        overdue = binding is not None and compute_capped_substate(binding, now=now).time_to_reset.total_seconds() <= 0
+        display["hint_text"] = _STALE_HINTS.get(result.status, "can't confirm, reconnect") if overdue else None
+        display["dimmed"] = overdue
+        return display
+
+    hints = {
+        "stale_token": "token stale, open Claude Code",
+        "credentials_unreachable": "can't find credentials",
+        "ambiguous_credentials": "multiple installs, set TOKITTY_CREDENTIALS",
+        "api_error": "API hiccup, retrying",
+    }
+    return {
+        "state": "confused",
+        "session_pct": 0.0,
+        "weekly_pct": 0.0,
+        "session_reset_text": "—",
+        "weekly_reset_text": "—",
+        "driving_tag": "",
+        "credits_text": None,
+        "hint_text": hints.get(result.status, "unknown error"),
+        "dimmed": True,
+    }
+
+
+def _next_last_good(latest: PollResult, last_good: Optional[PollResult]) -> Optional[PollResult]:
+    """Track the most recent *successful* poll, independent of how many
+    failed polls land in between -- so a stale token doesn't wipe out the
+    cached snapshot _display_state_for needs for its countdown fallback.
+    """
+    return latest if latest.status == "ok" else last_good
 
 
 def run_gui() -> int:
@@ -179,14 +223,14 @@ def run_gui() -> int:
 
     poller = Poller(fetch_fn=build_fetch_fn())
     window.on_refresh_requested = poller.request_refresh
-    previous_holder = {"result": None}
+    last_good_holder = {"result": None}
 
     def tick():
         latest = poller.get_latest()
         if latest is not None:
-            display = _display_state_for(latest, previous_holder["result"])
+            display = _display_state_for(latest, last_good_holder["result"])
             window.render(**display)
-            previous_holder["result"] = latest
+            last_good_holder["result"] = _next_last_good(latest, last_good_holder["result"])
         root.after(UI_REFRESH_MS, tick)
 
     poller.start()
