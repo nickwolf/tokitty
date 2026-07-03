@@ -160,7 +160,7 @@ Capped/wake sub-states add: Flopped (2 frames) + Stirring (2) + Waking (2) + Act
 | Ambiguous credentials | more than one WSL distro has a credentials file, no override set | Confused | "multiple Claude Code installs found — set TOKITTY_CREDENTIALS" |
 | API/schema error | non-401 HTTP error (incl. 429 — no retry-storm, just back off), timeout, JSON/parse failure | Confused | "API hiccup, retrying" |
 
-All states keep showing last-good data, dimmed. The widget must never show a crash dialog and never exit on its own.
+All states keep showing last-good data. **Refined after a real usage gap (2026-07-03):** a countdown to a known `resets_at` only needs a clock, not a live connection, so a stale token or other transient poll failure keeps rendering the last known-good snapshot's mood/capped state and live countdown exactly as if still connected, with no dimming and no hint. Only once the cached countdown's own clock says it should already be at zero, and the poll still can't confirm it, does the UI dim and show the short hint from the table above. The widget must never show a crash dialog and never exit on its own.
 
 ## Hardening (in scope for POC)
 
