@@ -1,9 +1,48 @@
 """Client for Claude Code's usage endpoint."""
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
+
+BASE_URL = "https://api.anthropic.com/api/oauth/usage"
+BETA_HEADER = "oauth-2025-04-20"
+USER_AGENT = "tokitty/0.1"
+
+
+class ApiError(Exception):
+    """Raised for any usage-endpoint failure: network, timeout, or non-2xx."""
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def fetch_usage(access_token: str, timeout: float = 10.0) -> dict:
+    """Call the usage endpoint and return the parsed JSON body."""
+    request = urllib.request.Request(
+        BASE_URL,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "anthropic-beta": BETA_HEADER,
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        raise ApiError(f"HTTP {exc.code} from usage endpoint", status_code=exc.code) from exc
+    except urllib.error.URLError as exc:
+        raise ApiError(f"Network error reaching usage endpoint: {exc.reason}") from exc
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ApiError(f"Usage endpoint returned invalid JSON: {exc}") from exc
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
