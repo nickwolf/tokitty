@@ -176,6 +176,7 @@ All states keep showing last-good data, dimmed. The widget must never show a cra
 - **Security/privacy statement in README, stated plainly:** Tokitty only *reads* the local Claude Code credentials file and sends the access token only to `api.anthropic.com`; it never transmits, logs, or persists the token anywhere else. State/lock files (position only) live in the OS user-config dir, never the repo.
 - **"Not affiliated with Anthropic"** disclaimer; "Claude" and "Claude Code" are Anthropic's marks, used only to describe compatibility.
 - **Document only tested platforms.** Don't claim macOS/Linux support before actually running it there — update the README's platform table as each gets verified, not before.
+- **README documents the build process itself** — this was built with Claude (Fable 5) using a subagent-driven-development workflow: an owner session designs/plans/reviews, and per-task implementer + reviewer subagents (deliberately tiered to cheaper models for mechanical tasks) do the actual coding, with the UI/animation work done directly by the owner session rather than delegated. Worth a short, honest "How this was built" section — this is a genuine, interesting part of the portfolio story, not just a disclaimer.
 - **Own art only** — all pixel-grid sprite data is original, no lifted assets.
 - `.gitignore`: `__pycache__/`, build artifacts, any local `.env`. (State files can't leak into the repo by construction — see State/config location above — but keep the gitignore entry anyway as defense in depth.)
 
