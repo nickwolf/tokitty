@@ -1,7 +1,6 @@
 """Tkinter window: chrome, drag, always-on-top, right-click menu,
-position persistence. Rendering (bars, cat frames) is added on top of
-this shell in a follow-up commit. The only module in this package that
-imports tkinter.
+position persistence, and rendering (bars, animated cat frames). The
+only module in this package that imports tkinter.
 """
 from __future__ import annotations
 
@@ -9,17 +8,22 @@ import json
 import sys
 import tkinter as tk
 from pathlib import Path
+from typing import Optional
 
+from tokitty.display import bar_color
 from tokitty.geometry import clamp_position
+from tokitty.sprites import PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
 CARD_HEIGHT = 110
+CAT_CANVAS_SIZE = 100
 BG_COLOR = "#1c1c22"
 FG_COLOR = "#f0f0f0"
 DIM_COLOR = "#8a8a92"
 BAR_BG = "#333340"
 
 POSITION_FILENAME = "position.json"
+FRAME_INTERVAL_MS = 800
 
 
 class TokittyWindow:
@@ -30,12 +34,15 @@ class TokittyWindow:
         self._drag_offset = (0, 0)
         self._always_on_top = tk.BooleanVar(value=True)
         self.on_refresh_requested = None  # set externally by __main__.py
+        self._current_state = "sleeping"
+        self._frame_index = 0
 
         self._configure_window()
         self._build_widgets()
         self._restore_position()
         self._bind_drag()
         self._build_context_menu()
+        self._animate()
 
     def _configure_window(self) -> None:
         self.root.overrideredirect(True)
@@ -133,3 +140,64 @@ class TokittyWindow:
             )
         except OSError:
             pass
+
+    def render(
+        self,
+        state: str,
+        session_pct: float,
+        weekly_pct: float,
+        session_reset_text: str,
+        weekly_reset_text: str,
+        driving_tag: str,
+        credits_text: Optional[str],
+        hint_text: Optional[str],
+        dimmed: bool,
+    ) -> None:
+        self._current_state = state
+        self.tag_label.configure(text=driving_tag)
+
+        fg = DIM_COLOR if dimmed else FG_COLOR
+        self.session_label.configure(fg=fg)
+        self.weekly_label.configure(fg=fg)
+
+        self.session_bar_bg.delete("fill")
+        self.session_bar_bg.create_rectangle(
+            0, 0, 170 * min(session_pct, 100) / 100, 8, fill=bar_color(session_pct), width=0, tags="fill"
+        )
+        self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
+
+        self.weekly_bar_bg.delete("fill")
+        self.weekly_bar_bg.create_rectangle(
+            0, 0, 170 * min(weekly_pct, 100) / 100, 8, fill=bar_color(weekly_pct), width=0, tags="fill"
+        )
+        self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
+
+        self.credits_label.configure(text=credits_text or "")
+
+        if hint_text:
+            self.hint_label.configure(text=hint_text)
+            self.hint_label.lift()
+        else:
+            self.hint_label.configure(text="")
+
+    def _animate(self) -> None:
+        frames = get_frames(self._current_state)
+        frame = frames[self._frame_index % len(frames)]
+        self._draw_frame(frame)
+        self._frame_index += 1
+        self.root.after(FRAME_INTERVAL_MS, self._animate)
+
+    def _draw_frame(self, frame) -> None:
+        self.canvas.delete("cat")
+        frame_w = len(frame[0]) * SCALE
+        frame_h = len(frame) * SCALE
+        x_off = max((CAT_CANVAS_SIZE - frame_w) // 2, 0)
+        y_off = max((CAT_CANVAS_SIZE - frame_h) // 2, 0)
+        for row_index, row in enumerate(frame):
+            for col_index, ch in enumerate(row):
+                color = PALETTE.get(ch, "")
+                if not color:
+                    continue
+                x0 = x_off + col_index * SCALE
+                y0 = y_off + row_index * SCALE
+                self.canvas.create_rectangle(x0, y0, x0 + SCALE, y0 + SCALE, fill=color, width=0, tags="cat")
