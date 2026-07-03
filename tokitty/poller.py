@@ -68,6 +68,12 @@ class Poller:
     def _run(self) -> None:
         backoff = BACKOFF_INITIAL
         while not self._stop_event.is_set():
+            # Clear before fetching, not after: Event.wait() doesn't clear
+            # the flag it woke on, so an ordinary idle-triggered refresh
+            # would otherwise still see its own flag set after the fetch
+            # it requested and fire a spurious second one.
+            self._wake_event.clear()
+
             result = self._poll_once()
             with self._lock:
                 self._latest = result
@@ -81,10 +87,9 @@ class Poller:
                 backoff = min(backoff * 2 + jitter, BACKOFF_MAX)
 
             if self._wake_event.is_set():
-                # A refresh was requested while this fetch was in flight --
-                # honor it immediately instead of clearing the signal and
-                # sleeping out the full interval.
-                self._wake_event.clear()
+                # A *new* refresh was requested while this fetch was in
+                # flight -- honor it immediately instead of sleeping out
+                # the full interval.
                 continue
 
             self._sleep_fn(interval)
