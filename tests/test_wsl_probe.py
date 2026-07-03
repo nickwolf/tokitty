@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from tokitty.credentials import AmbiguousCredentialsError, CredentialsError
@@ -62,3 +64,48 @@ def test_read_wsl_credentials_returns_file_contents():
     contents = read_wsl_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json", run=fake_run)
 
     assert contents == '{"claudeAiOauth": {}}'
+
+
+# Every wsl.exe invocation must suppress its console window -- otherwise
+# every poll flashes a visible terminal window on Windows (pythonw.exe has
+# no console of its own, but wsl.exe is a console app that opens one by
+# default when spawned without CREATE_NO_WINDOW).
+EXPECTED_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def test_list_wsl_distros_suppresses_console_window():
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return FakeCompletedProcess(stdout="Ubuntu\r\n".encode("utf-16-le"))
+
+    list_wsl_distros(run=fake_run)
+
+    assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS
+
+
+def test_credentials_paths_in_distro_suppresses_console_window():
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["wsl.exe", "-l", "-q"]:
+            return FakeCompletedProcess(stdout="Ubuntu\r\n".encode("utf-16-le"))
+        captured.update(kwargs)
+        return FakeCompletedProcess(stdout=b"/home/cptsmidge/.claude/.credentials.json\n")
+
+    find_wsl_credentials(run=fake_run)
+
+    assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS
+
+
+def test_read_wsl_credentials_suppresses_console_window():
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return FakeCompletedProcess(stdout=b'{"claudeAiOauth": {}}')
+
+    read_wsl_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json", run=fake_run)
+
+    assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS

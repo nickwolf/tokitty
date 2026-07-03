@@ -14,11 +14,19 @@ from tokitty.credentials import ENV_OVERRIDE, AmbiguousCredentialsError, Credent
 
 _CHECK_SCRIPT = 'for u in /home/*; do f="$u/.claude/.credentials.json"; [ -f "$f" ] && echo "$f"; done'
 
+# wsl.exe is a console app; spawning it from a GUI process (pythonw.exe has
+# no console of its own) without this flag flashes a visible terminal
+# window on every poll. getattr(...) keeps this a no-op on non-Windows,
+# where the constant doesn't exist but this module's tests still run.
+_NO_CONSOLE_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def list_wsl_distros(run: Callable = subprocess.run) -> List[str]:
     """Return the names of installed WSL distros, via `wsl.exe -l -q`."""
     try:
-        result = run(["wsl.exe", "-l", "-q"], capture_output=True, timeout=10, check=False)
+        result = run(
+            ["wsl.exe", "-l", "-q"], capture_output=True, timeout=10, check=False, creationflags=_NO_CONSOLE_FLAGS
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CredentialsError(f"Could not list WSL distros: {exc}") from exc
 
@@ -39,6 +47,7 @@ def _credentials_paths_in_distro(distro: str, run: Callable = subprocess.run) ->
             capture_output=True,
             timeout=10,
             check=False,
+            creationflags=_NO_CONSOLE_FLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -80,7 +89,13 @@ def find_wsl_credentials(run: Callable = subprocess.run) -> Tuple[str, str]:
 def read_wsl_credentials(distro: str, wsl_path: str, run: Callable = subprocess.run) -> str:
     """Return the raw file contents of a credentials file inside WSL, via `wsl.exe cat`."""
     try:
-        result = run(["wsl.exe", "-d", distro, "--", "cat", wsl_path], capture_output=True, timeout=10, check=False)
+        result = run(
+            ["wsl.exe", "-d", distro, "--", "cat", wsl_path],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            creationflags=_NO_CONSOLE_FLAGS,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CredentialsError(f"Could not read credentials from WSL distro {distro}: {exc}") from exc
 
