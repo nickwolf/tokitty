@@ -2975,6 +2975,10 @@ If Tokitty can't find your Claude Code credentials automatically (e.g. more than
 export TOKITTY_CREDENTIALS=/path/to/.claude/.credentials.json
 ```
 
+## How this was built
+
+Tokitty was built with [Claude](https://claude.com/product/claude-code) (Fable 5) using a subagent-driven-development workflow: an owner session designed the spec and implementation plan, then dispatched a fresh implementer subagent per task with a reviewer subagent checking spec compliance and code quality before each task landed — deliberately tiered to cheaper/faster models for the mechanical, fully-specified logic modules (credentials, API client, locking, mood/wake-sequence state machine, formatting), with a standard-tier model for the threading/integration work. The pixel-art sprites, the tkinter window, and the animation loop were built directly by the owner session rather than delegated, since that's the part where a bit of craft mattered most. The review loop caught and fixed several real bugs along the way (a monkeypatch self-recursion bug in a test, a refresh-request race condition in the polling worker, a `wsl.exe` argv-mangling quirk found during live verification) — the commit history is the actual record of that process, not just the finished result.
+
 ## Known limitations (POC)
 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
