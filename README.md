@@ -4,7 +4,7 @@ A cat-themed desktop widget that shows your live Claude Code usage (session %, w
 
 Once Tokitty has a snapshot, it keeps counting down using its own clock, no live connection needed to know when a known reset time arrives. If a poll fails (for example, the OAuth access token going stale between Claude Code sessions), Tokitty keeps showing that same cached countdown rather than blanking out, and only surfaces a small warning once the countdown should already be done and it still can't confirm the reset actually happened.
 
-**Not affiliated with Anthropic.** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility (but I am open to it, *wink wink*).
+**Not affiliated with Anthropic.  (but I am open to it, *wink wink*)** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility.
 
 ## Security & privacy
 
