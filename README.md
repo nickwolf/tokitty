@@ -1,10 +1,10 @@
 # Tokitty
 
-A cat-themed desktop widget that shows your live Claude Code usage (session %, weekly %, reset countdowns, and extra-usage credits) with a pixel cat whose mood reflects how close you are to the limit. When a limit is capped, the cat rests, then stirs, then wakes up as the reset approaches, then hops back to sleep once usage clears.
+A cat-themed desktop widget that shows your live Claude Code usage (session %, weekly %, reset countdowns, and extra-usage credits) with a pixel cat whose mood reflects how close you are to the limit. When a limit is capped, the cat rests, then stirs, then wakes up as the reset approaches, then hops back to sleep once usage clears. Does not assist with boredom and existential dread upon hitting weekly limit.
 
 Once Tokitty has a snapshot, it keeps counting down using its own clock, no live connection needed to know when a known reset time arrives. If a poll fails (for example, the OAuth access token going stale between Claude Code sessions), Tokitty keeps showing that same cached countdown rather than blanking out, and only surfaces a small warning once the countdown should already be done and it still can't confirm the reset actually happened.
 
-**Not affiliated with Anthropic.** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility.
+**Not affiliated with Anthropic.** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility (but I am open to it, *wink wink*).
 
 ## Security & privacy
 
@@ -12,9 +12,8 @@ Tokitty only *reads* your local Claude Code OAuth credentials file: it never wri
 
 ## Platforms tested
 
-- **Windows 11, native Python 3.13 (`pythonw.exe`), with Claude Code running inside WSL2**: the primary, recommended setup, and the only platform verified end-to-end. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs clean against a real account, and the window itself (drag, always-on-top, sizing, text legibility, animation) has been visually confirmed on a real desktop across several rounds of screenshot-driven fixes.
-- **Linux via WSL2 (WSLg)**: untested. `python3 -m tokitty --debug-print` (the non-GUI data path) works from inside WSL against the real account, but the full GUI path couldn't be attempted at all in this repo's dev environment (`python3-tk` isn't installed there and needs `sudo`, which wasn't available).
-- **Native Linux, macOS**: untested. Don't assume these work until someone actually runs it there.
+- **Windows 11, native Python 3.13 (`pythonw.exe`), with Claude Code running inside WSL2**: the primary, recommended setup, and the only platform verified end-to-end. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs clean against a real account, and the window itself (drag, always-on-top, sizing, text legibility, animation) has been visually confirmed on a real desktop across several rounds of screenshot-driven fixes. In daily use..
+- **Native Linux, macOS**: untested. Don't assume these work until someone actually runs it there, but it'll probably work just fine.
 
 *(Update this table as each platform is actually verified.)*
 
