@@ -21,13 +21,10 @@ from typing import Dict, List
 
 SCALE = 7  # device pixels per sprite pixel when rendered on the Canvas
 
-PALETTE: Dict[str, str] = {
+# Non-coat colors: shared by every coat preset.
+BASE_PALETTE: Dict[str, str] = {
     ".": "",  # transparent -- not drawn
     "k": "#2b1a12",  # outline / closed-eye line
-    "o": "#e8823c",  # coat
-    "O": "#c26a2c",  # coat shading
-    "s": "#a8541f",  # tabby stripe
-    "p": "#f6b8c8",  # inner ear
     "w": "#fff6ec",  # muzzle / belly / paws
     "e": "#3fae5c",  # eye, open
     "n": "#d6748c",  # nose (default accent)
@@ -36,6 +33,30 @@ PALETTE: Dict[str, str] = {
     "?": "#e8c23c",  # confused accent
     "h": "#f2d675",  # activate/happy sparkle accent
 }
+
+# Coat presets: each defines the same region keys. "c" is the patch
+# region -- distinct cells in the grids that only some coats color
+# differently (calico patches); on the default orange tabby it matches
+# the coat so the pattern plumbing is invisible until Phase 4 uses it.
+COATS: Dict[str, Dict[str, str]] = {
+    "orange_tabby": {
+        "o": "#e8823c",  # coat
+        "O": "#c26a2c",  # coat shading
+        "s": "#a8541f",  # tabby stripe
+        "c": "#e8823c",  # patch region (matches coat on this preset)
+        "p": "#f6b8c8",  # inner ear
+    },
+}
+
+
+def get_palette(coat: str = "orange_tabby") -> Dict[str, str]:
+    """Full character->color mapping for one coat preset."""
+    merged = dict(BASE_PALETTE)
+    merged.update(COATS[coat])
+    return merged
+
+
+PALETTE: Dict[str, str] = get_palette()
 
 # Sitting, calm pose -- ears relaxed. L/R are the eye cells, A is a
 # single accent cell (nose by default, repainted per state).
