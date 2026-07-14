@@ -1,6 +1,6 @@
 import pytest
 
-from tokitty.sprites import ALL_STATES, PALETTE, get_frames
+from tokitty.sprites import ALL_STATES, COATS, PALETTE, get_frames, get_palette
 
 
 def test_all_states_have_at_least_two_frames():
@@ -33,3 +33,21 @@ def test_every_character_used_is_in_the_palette():
 def test_unknown_state_raises_key_error():
     with pytest.raises(KeyError):
         get_frames("nonexistent-mood")
+
+
+def test_get_palette_default_matches_module_palette():
+    assert get_palette() == PALETTE
+
+
+def test_get_palette_unknown_coat_raises_key_error():
+    with pytest.raises(KeyError):
+        get_palette("nonexistent-coat")
+
+
+def test_every_coat_defines_exactly_the_coat_keys():
+    for name, coat in COATS.items():
+        assert set(coat) == {"o", "O", "s", "c", "p"}, name
+
+
+def test_palette_covers_pattern_char():
+    assert PALETTE["c"] == PALETTE["o"]  # invisible on the default coat
