@@ -2,10 +2,11 @@
 
 Three 28x26 pose templates (sitting calm, sitting alert/upright, and
 lying down) are each composed with small per-state substitution dicts
-to produce concrete frames. Placeholder letters (L, R, A, T) each
-appear exactly once per template, so "replace every occurrence of this
-character" is equivalent to "replace this one designated cell" -- this
-guarantees every produced frame is structurally valid (equal
+to produce concrete frames. Sitting/alert placeholders (L, R, A) each
+appear exactly once per template; the flopped template also carries
+tail-sweep region markers (1-5, several cells each) that frames paint
+or blank wholesale. Every substitution maps one character to one
+character, so every produced frame is structurally valid (equal
 dimensions, only palette-defined characters) by construction rather
 than by hand-aligning ~20 independent grids.
 
@@ -121,7 +122,7 @@ ALERT_TEMPLATE: List[str] = [
 ]
 
 # Lying down, for the capped/wake sequence. L is the visible (near)
-# eye, T is the tail-tip cell.
+# eye; 1-5 mark the three tail-sweep poses (see FLOPPED_FRAME_SPECS).
 FLOPPED_TEMPLATE: List[str] = [
     "............................",
     "............................",

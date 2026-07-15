@@ -64,10 +64,11 @@ def test_placeholders_appear_exactly_once_per_template():
         joined = "".join(template)
         for ch in placeholders:
             assert joined.count(ch) == 1, f"{ch} appears {joined.count(ch)} times"
-    # the flopped tail-sweep regions: each position marker present, disjoint
+    # the flopped tail-sweep regions: every marker (unique and shared)
+    # must be present or a pose silently loses segments
     joined = "".join(FLOPPED_TEMPLATE)
-    for ch in "123":
-        assert joined.count(ch) >= 3, f"tail sweep {ch} too small"
+    for ch in "12345":
+        assert joined.count(ch) >= 2, f"tail sweep {ch} too small"
 
 
 def test_pattern_region_is_used():
