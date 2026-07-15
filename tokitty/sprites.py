@@ -1,6 +1,6 @@
 """Pixel-art data for the cat: palette, pose templates, and per-mood frames.
 
-Three 15x13 pose templates (sitting calm, sitting alert/upright, and
+Three 28x26 pose templates (sitting calm, sitting alert/upright, and
 lying down) are each composed with small per-state substitution dicts
 to produce concrete frames. Placeholder letters (L, R, A, T) each
 appear exactly once per template, so "replace every occurrence of this
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-SCALE = 7  # device pixels per sprite pixel when rendered on the Canvas
+SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
 
 # Non-coat colors: shared by every coat preset.
 BASE_PALETTE: Dict[str, str] = {
@@ -61,55 +61,94 @@ PALETTE: Dict[str, str] = get_palette()
 # Sitting, calm pose -- ears relaxed. L/R are the eye cells, A is a
 # single accent cell (nose by default, repainted per state).
 SITTING_TEMPLATE: List[str] = [
-    "...............",
-    "....oo.s..oo...",
-    "...oooooooooo..",
-    "....ooooooo....",
-    "....oLoooRo....",
-    "....oowwwoo....",
-    "....owwAwwo..Oo",
-    ".....wwwwwOO.o.",
-    "....soowoosOOo.",
-    "...ooowwwoooOo.",
-    "...oowwwwwooOo.",
-    "...oowwwwwooOo.",
-    "....owwwwwoO...",
+    "............................",
+    "........o.........o.........",
+    ".......ooo...o...ooo........",
+    "......ooooooooooooooo.......",
+    "......oopoosssssoopoo.......",
+    ".....ooocccoooooooooOO......",
+    ".......occsssosssoOO........",
+    ".......oooooooooooOO........",
+    "......ooooLoooooRooOO.......",
+    ".......oooooowooooOO........",
+    ".......oooowwAwwooOO........",
+    ".......ooowwwwwwwoOO........",
+    "........ooowwwwwoOO.........",
+    ".........oooowooOO..........",
+    "........ooooooooooo..OO.....",
+    ".......ooooooooooooo..OO....",
+    "......ooooooooooooooo..OO...",
+    "......osssooowooooooo..OO...",
+    "......ooooowwwwwooooo...OO..",
+    ".....osssowwwwwwwcccoo..OO..",
+    "......oooowwwwwwwccco...OO..",
+    "......ooowwwwwwwwwcco..OO...",
+    "......oooowwwwwwwoooo.OO....",
+    ".......ooowwwwwwwooo.OO.....",
+    "........oowwwwwwwOO.........",
+    ".........oooooooOO..........",
 ]
 
 # Sitting, alert pose -- ears sharply perked, upright posture. Same
 # placeholder cells as SITTING_TEMPLATE.
 ALERT_TEMPLATE: List[str] = [
-    "....oo....oo...",
-    "....oo.s..oo...",
-    "...oooooooooo..",
-    "....oLoooRo....",
-    "....ooooooo....",
-    "....oowwwoo....",
-    ".....wwAww...o.",
-    ".....owwwoOO.o.",
-    "....sooooosOOo.",
-    "...ooowwwoooO..",
-    "...oowwwwwooO..",
-    "...oowwwwwooO..",
-    "....owwwwwoO...",
+    "........o.........o.........",
+    "........o....o....o.........",
+    ".......opooooooooopo........",
+    "......oopoosssssoopoo.......",
+    "......oocccoooooooooo.......",
+    ".......occsssosssoOO........",
+    ".......oooooooooooOO........",
+    "......ooooLoooooRooOO.......",
+    ".......oooooowooooOO........",
+    ".......oooowwAwwooOO........",
+    ".......ooowwwwwwwoOO........",
+    "........ooowwwwwoOO.........",
+    "..........ooowoOO...........",
+    "..........oooooOO...........",
+    ".........ooooooooo...OO.....",
+    "........ooooooooooo...OO....",
+    ".......ooooooooooooo...OO...",
+    ".......sssooowoooooo...OO...",
+    ".......oooowwwwwoooo....OO..",
+    "......sssowwwwwwwccco...OO..",
+    ".......ooowwwwwwwccc....OO..",
+    ".......oowwwwwwwwwcc...OO...",
+    ".......ooowwwwwwwooo..OO....",
+    "........oowwwwwwwoo..OO.....",
+    ".........OwwwwwwwO..........",
+    "..........oooooOO...........",
 ]
 
 # Lying down, for the capped/wake sequence. L is the visible (near)
 # eye, T is the tail-tip cell.
 FLOPPED_TEMPLATE: List[str] = [
-    "...............",
-    "...............",
-    "...............",
-    "...............",
-    "...............",
-    ".opoo....s.....",
-    ".oooosooOOOO...",
-    "ooLooooOOOOOOo.",
-    "owwwoooOOOOOOoT",
-    ".wwwwwwwwwwwwT.",
-    ".....wwwwwwwo..",
-    ".....ww.www..o.",
-    "...............",
+    "............................",
+    "............................",
+    "............................",
+    "....oo......oo..............",
+    "...oopo...opoo..............",
+    "...oopooooopoo..............",
+    "...ooooooooooo..............",
+    "...oooosssoooo..............",
+    "..ooooooooooooo.............",
+    "..oossooooossoo.............",
+    "..ooooooooooooo.............",
+    "..oooLooookkooo.............",
+    "..oooooonoooooo..........To.",
+    "..oooowwwwwoooo..........oo.",
+    "...ooowwwwwooooossooooooooo.",
+    "....ooowwwooooooooossoooooo.",
+    ".....oOOOOOoooooooooooss..oo",
+    "......OOOOOooooooooOooooo.oo",
+    "...wwoooooooooooooOooooo..oo",
+    "..wwooooooooowwwwwOoccooooo.",
+    "...........owwwwwwOccccooo..",
+    "..wwoooooooowwwwwwwOoccoo...",
+    "..wwoooooooowwwwwwwoooooooww",
+    "........................ooww",
+    "............................",
+    "............................",
 ]
 
 SITTING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
