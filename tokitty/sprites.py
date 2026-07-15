@@ -135,12 +135,12 @@ FLOPPED_TEMPLATE: List[str] = [
     "..oossooooossoo.............",
     "..ooooooooooooo.............",
     "..oooLooookkooo.............",
-    "..oooooonoooooo..........To.",
-    "..oooowwwwwoooo..........oo.",
-    "...ooowwwwwooooossooooooooo.",
-    "....ooowwwooooooooossoooooo.",
-    ".....oOOOOOoooooooooooss..oo",
-    "......OOOOOooooooooOooooo.oo",
+    "..oooooonoooooo........1..23",
+    "..oooowwwwwoooo........11223",
+    "...ooowwwwwooooossoooo..1453",
+    "....ooowwwooooooooossoo.1453",
+    ".....oOOOOOoooooooooooss.4oo",
+    "......OOOOOooooooooOoooo..oo",
     "...wwoooooooooooooOooooo..oo",
     "..wwooooooooowwwwwOoccooooo.",
     "...........owwwwwwOccccooo..",
@@ -165,9 +165,27 @@ ALERT_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "activate": [{"L": "e", "R": "e", "A": "h"}, {"L": "e", "R": "e", "A": "n"}],
 }
 
+# The flopped tail wags through three 2px-thick positions. Template
+# markers: "1"/"2"/"3" = cells unique to sweep pose 1/2/3; "4" = cells
+# shared by poses 1+2; "5" = shared by poses 2+3. Each frame paints its
+# pose's cells with coat color and blanks the rest.
+_TAIL_POSE_1 = {"1": "o", "4": "o", "2": ".", "5": ".", "3": "."}
+_TAIL_POSE_2 = {"2": "o", "4": "o", "5": "o", "1": ".", "3": "."}
+_TAIL_POSE_3 = {"3": "o", "5": "o", "1": ".", "2": ".", "4": "."}
+
 FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "flopped": [{"L": "k", "T": "k"}, {"L": "k", "T": "O"}],
-    "stirring": [{"L": "k", "T": "O"}, {"L": "e", "T": "k"}],
+    # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
+    # (left, up, right, up, left, ...) instead of snapping right-to-left.
+    "flopped": [
+        {"L": "k", **_TAIL_POSE_1},
+        {"L": "k", **_TAIL_POSE_2},
+        {"L": "k", **_TAIL_POSE_3},
+        {"L": "k", **_TAIL_POSE_2},
+    ],
+    "stirring": [
+        {"L": "k", **_TAIL_POSE_2},
+        {"L": "e", **_TAIL_POSE_3},
+    ],
 }
 
 ALL_STATES = (
