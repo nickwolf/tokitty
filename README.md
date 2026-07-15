@@ -56,7 +56,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
 - Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run: `python3-tk` isn't installed in the reference dev environment.
-- Sprite art is a first pass: a 15x13 grid composed from three reusable pose templates (sitting calm, sitting alert, lying down), not a fully independent illustration per state. Recognizable and animated, not polished.
+- Sprite art is composed from three reusable 28x26 pose templates (sitting calm, sitting alert, lying down) with per-state substitutions, not a fully independent illustration per state.
 
 ## Roadmap
 

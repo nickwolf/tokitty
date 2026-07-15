@@ -1,11 +1,12 @@
 """Pixel-art data for the cat: palette, pose templates, and per-mood frames.
 
-Three 15x13 pose templates (sitting calm, sitting alert/upright, and
+Three 28x26 pose templates (sitting calm, sitting alert/upright, and
 lying down) are each composed with small per-state substitution dicts
-to produce concrete frames. Placeholder letters (L, R, A, T) each
-appear exactly once per template, so "replace every occurrence of this
-character" is equivalent to "replace this one designated cell" -- this
-guarantees every produced frame is structurally valid (equal
+to produce concrete frames. Sitting/alert placeholders (L, R, A) each
+appear exactly once per template; the flopped template also carries
+tail-sweep region markers (1-5, several cells each) that frames paint
+or blank wholesale. Every substitution maps one character to one
+character, so every produced frame is structurally valid (equal
 dimensions, only palette-defined characters) by construction rather
 than by hand-aligning ~20 independent grids.
 
@@ -19,15 +20,12 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-SCALE = 7  # device pixels per sprite pixel when rendered on the Canvas
+SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
 
-PALETTE: Dict[str, str] = {
+# Non-coat colors: shared by every coat preset.
+BASE_PALETTE: Dict[str, str] = {
     ".": "",  # transparent -- not drawn
     "k": "#2b1a12",  # outline / closed-eye line
-    "o": "#e8823c",  # coat
-    "O": "#c26a2c",  # coat shading
-    "s": "#a8541f",  # tabby stripe
-    "p": "#f6b8c8",  # inner ear
     "w": "#fff6ec",  # muzzle / belly / paws
     "e": "#3fae5c",  # eye, open
     "n": "#d6748c",  # nose (default accent)
@@ -37,58 +35,121 @@ PALETTE: Dict[str, str] = {
     "h": "#f2d675",  # activate/happy sparkle accent
 }
 
+# Coat presets: each defines the same region keys. "c" is the patch
+# region -- distinct cells in the grids that only some coats color
+# differently (calico patches); on the default orange tabby it matches
+# the coat so the pattern plumbing is invisible until Phase 4 uses it.
+COATS: Dict[str, Dict[str, str]] = {
+    "orange_tabby": {
+        "o": "#e8823c",  # coat
+        "O": "#c26a2c",  # coat shading
+        "s": "#a8541f",  # tabby stripe
+        "c": "#e8823c",  # patch region (matches coat on this preset)
+        "p": "#f6b8c8",  # inner ear
+    },
+}
+
+
+def get_palette(coat: str = "orange_tabby") -> Dict[str, str]:
+    """Full character->color mapping for one coat preset."""
+    merged = dict(BASE_PALETTE)
+    merged.update(COATS[coat])
+    return merged
+
+
+PALETTE: Dict[str, str] = get_palette()
+
 # Sitting, calm pose -- ears relaxed. L/R are the eye cells, A is a
 # single accent cell (nose by default, repainted per state).
 SITTING_TEMPLATE: List[str] = [
-    "...............",
-    "....oo.s..oo...",
-    "...oooooooooo..",
-    "....ooooooo....",
-    "....oLoooRo....",
-    "....oowwwoo....",
-    "....owwAwwo..Oo",
-    ".....wwwwwOO.o.",
-    "....soowoosOOo.",
-    "...ooowwwoooOo.",
-    "...oowwwwwooOo.",
-    "...oowwwwwooOo.",
-    "....owwwwwoO...",
+    "............................",
+    "........o.........o.........",
+    ".......ooo...o...ooo........",
+    "......ooooooooooooooo.......",
+    "......oopoosssssoopoo.......",
+    ".....ooocccoooooooooOO......",
+    ".......occsssosssoOO........",
+    ".......oooooooooooOO........",
+    "......ooooLoooooRooOO.......",
+    ".......oooooowooooOO........",
+    ".......oooowwAwwooOO........",
+    ".......ooowwwwwwwoOO........",
+    "........ooowwwwwoOO.........",
+    ".........oooowooOO..........",
+    "........ooooooooooo..OO.....",
+    ".......ooooooooooooo..OO....",
+    "......ooooooooooooooo..OO...",
+    "......osssooowooooooo..OO...",
+    "......ooooowwwwwooooo...OO..",
+    ".....osssowwwwwwwcccoo..OO..",
+    "......oooowwwwwwwccco...OO..",
+    "......ooowwwwwwwwwcco..OO...",
+    "......oooowwwwwwwoooo.OO....",
+    ".......ooowwwwwwwooo.OO.....",
+    "........oowwwwwwwOO.........",
+    ".........oooooooOO..........",
 ]
 
 # Sitting, alert pose -- ears sharply perked, upright posture. Same
 # placeholder cells as SITTING_TEMPLATE.
 ALERT_TEMPLATE: List[str] = [
-    "....oo....oo...",
-    "....oo.s..oo...",
-    "...oooooooooo..",
-    "....oLoooRo....",
-    "....ooooooo....",
-    "....oowwwoo....",
-    ".....wwAww...o.",
-    ".....owwwoOO.o.",
-    "....sooooosOOo.",
-    "...ooowwwoooO..",
-    "...oowwwwwooO..",
-    "...oowwwwwooO..",
-    "....owwwwwoO...",
+    "........o.........o.........",
+    "........o....o....o.........",
+    ".......opooooooooopo........",
+    "......oopoosssssoopoo.......",
+    "......oocccoooooooooo.......",
+    ".......occsssosssoOO........",
+    ".......oooooooooooOO........",
+    "......ooooLoooooRooOO.......",
+    ".......oooooowooooOO........",
+    ".......oooowwAwwooOO........",
+    ".......ooowwwwwwwoOO........",
+    "........ooowwwwwoOO.........",
+    "..........ooowoOO...........",
+    "..........oooooOO...........",
+    ".........ooooooooo...OO.....",
+    "........ooooooooooo...OO....",
+    ".......ooooooooooooo...OO...",
+    ".......sssooowoooooo...OO...",
+    ".......oooowwwwwoooo....OO..",
+    "......sssowwwwwwwccco...OO..",
+    ".......ooowwwwwwwccc....OO..",
+    ".......oowwwwwwwwwcc...OO...",
+    ".......ooowwwwwwwooo..OO....",
+    "........oowwwwwwwoo..OO.....",
+    ".........OwwwwwwwO..........",
+    "..........oooooOO...........",
 ]
 
 # Lying down, for the capped/wake sequence. L is the visible (near)
-# eye, T is the tail-tip cell.
+# eye; 1-5 mark the three tail-sweep poses (see FLOPPED_FRAME_SPECS).
 FLOPPED_TEMPLATE: List[str] = [
-    "...............",
-    "...............",
-    "...............",
-    "...............",
-    "...............",
-    ".opoo....s.....",
-    ".oooosooOOOO...",
-    "ooLooooOOOOOOo.",
-    "owwwoooOOOOOOoT",
-    ".wwwwwwwwwwwwT.",
-    ".....wwwwwwwo..",
-    ".....ww.www..o.",
-    "...............",
+    "............................",
+    "............................",
+    "............................",
+    "....oo......oo..............",
+    "...oopo...opoo..............",
+    "...oopooooopoo..............",
+    "...ooooooooooo..............",
+    "...oooosssoooo..............",
+    "..ooooooooooooo.............",
+    "..oossooooossoo.............",
+    "..ooooooooooooo.............",
+    "..oooLooookkooo.............",
+    "..oooooonoooooo........1..23",
+    "..oooowwwwwoooo........11223",
+    "...ooowwwwwooooossoooo..1453",
+    "....ooowwwooooooooossoo.1453",
+    ".....oOOOOOoooooooooooss.4oo",
+    "......OOOOOooooooooOoooo..oo",
+    "...wwoooooooooooooOooooo..oo",
+    "..wwooooooooowwwwwOoccooooo.",
+    "...........owwwwwwOccccooo..",
+    "..wwoooooooowwwwwwwOoccoo...",
+    "..wwoooooooowwwwwwwoooooooww",
+    "........................ooww",
+    "............................",
+    "............................",
 ]
 
 SITTING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
@@ -105,9 +166,27 @@ ALERT_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "activate": [{"L": "e", "R": "e", "A": "h"}, {"L": "e", "R": "e", "A": "n"}],
 }
 
+# The flopped tail wags through three 2px-thick positions. Template
+# markers: "1"/"2"/"3" = cells unique to sweep pose 1/2/3; "4" = cells
+# shared by poses 1+2; "5" = shared by poses 2+3. Each frame paints its
+# pose's cells with coat color and blanks the rest.
+_TAIL_POSE_1 = {"1": "o", "4": "o", "2": ".", "5": ".", "3": "."}
+_TAIL_POSE_2 = {"2": "o", "4": "o", "5": "o", "1": ".", "3": "."}
+_TAIL_POSE_3 = {"3": "o", "5": "o", "1": ".", "2": ".", "4": "."}
+
 FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "flopped": [{"L": "k", "T": "k"}, {"L": "k", "T": "O"}],
-    "stirring": [{"L": "k", "T": "O"}, {"L": "e", "T": "k"}],
+    # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
+    # (left, up, right, up, left, ...) instead of snapping right-to-left.
+    "flopped": [
+        {"L": "k", **_TAIL_POSE_1},
+        {"L": "k", **_TAIL_POSE_2},
+        {"L": "k", **_TAIL_POSE_3},
+        {"L": "k", **_TAIL_POSE_2},
+    ],
+    "stirring": [
+        {"L": "k", **_TAIL_POSE_2},
+        {"L": "e", **_TAIL_POSE_3},
+    ],
 }
 
 ALL_STATES = (
