@@ -35,6 +35,42 @@ def test_unknown_state_raises_key_error():
         get_frames("nonexistent-mood")
 
 
+from tokitty.sprites import (
+    ALERT_TEMPLATE, FLOPPED_TEMPLATE, SCALE, SITTING_TEMPLATE,
+)
+
+CAT_CANVAS_SIZE = 112  # mirrors ui.py; sprites must fit it
+
+
+def test_new_grid_dimensions():
+    for template in (SITTING_TEMPLATE, ALERT_TEMPLATE, FLOPPED_TEMPLATE):
+        assert len(template) == 26
+        assert all(len(row) == 28 for row in template)
+
+
+def test_sprite_fits_cat_canvas():
+    for state in ALL_STATES:
+        frame = get_frames(state)[0]
+        assert len(frame[0]) * SCALE <= CAT_CANVAS_SIZE
+        assert len(frame) * SCALE <= CAT_CANVAS_SIZE
+
+
+def test_placeholders_appear_exactly_once_per_template():
+    for template, placeholders in (
+        (SITTING_TEMPLATE, "LRA"),
+        (ALERT_TEMPLATE, "LRA"),
+        (FLOPPED_TEMPLATE, "LT"),
+    ):
+        joined = "".join(template)
+        for ch in placeholders:
+            assert joined.count(ch) == 1, f"{ch} appears {joined.count(ch)} times"
+
+
+def test_pattern_region_is_used():
+    joined = "".join(SITTING_TEMPLATE + ALERT_TEMPLATE + FLOPPED_TEMPLATE)
+    assert "c" in joined, "templates must use the patch region so coats can differ"
+
+
 def test_get_palette_default_matches_module_palette():
     assert get_palette() == PALETTE
 
