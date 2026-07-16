@@ -249,6 +249,14 @@ def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "--debug-print" in argv:
         return debug_print()
+    if "--install-hooks" in argv:
+        from tokitty.hooks_install import install_hooks
+
+        return install_hooks()
+    if "--uninstall-hooks" in argv:
+        from tokitty.hooks_install import uninstall_hooks
+
+        return uninstall_hooks()
     return run_gui()
 
 
