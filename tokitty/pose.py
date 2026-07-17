@@ -25,7 +25,7 @@ ACTIVITY_SPRITE_PLACEHOLDERS = {
 
 # v1 substates of the capped/wake sequence (see mood.compute_capped_substate)
 # -- these outrank an activity-derived pose, per spec.
-_CAPPED_WAKE_STATES = frozenset({"flopped", "stirring", "waking"})
+_CAPPED_WAKE_STATES = frozenset({"activate", "flopped", "stirring", "waking"})
 
 _ACTIVITY_POSE_STATES = frozenset({"working", "thinking", "done_hop"})
 
