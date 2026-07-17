@@ -154,6 +154,31 @@ def test_done_hop_expires_to_idle():
     assert view2.state == "idle"
 
 
+def test_done_hop_anchored_to_observe_time_not_event_ts():
+    """A ~1Hz watcher may observe a Stop event well after its ts (polling lag).
+    The DONE_HOP_S window must be anchored to the observe-time `now`, not the
+    event's own `ts`, or slow polling could eat the whole hop window."""
+    t = ActivityTracker()
+    base = 1000.0
+    t.observe({"s1": rec("s1", "UserPromptSubmit", base, seq=1)}, now=base)
+    stop_event_ts = base + WORK_STRETCH_MIN_S + 1
+    # Observed 5s late relative to the event's own ts.
+    observed_at = stop_event_ts + 5.0
+    t.observe({"s1": rec("s1", "Stop", stop_event_ts, seq=2)}, now=observed_at)
+
+    # Immediately after observation: still done_hop, anchored to observed_at.
+    view = t.aggregate(observed_at + 0.1)
+    assert view.state == "done_hop"
+
+    # Just before DONE_HOP_S has elapsed from observed_at: still done_hop.
+    view2 = t.aggregate(observed_at + DONE_HOP_S - 0.1)
+    assert view2.state == "done_hop"
+
+    # After DONE_HOP_S elapsed from observed_at: idle.
+    view3 = t.aggregate(observed_at + DONE_HOP_S + 0.1)
+    assert view3.state == "idle"
+
+
 def test_ignore_seq_regression():
     t = ActivityTracker()
     t.observe({"s1": rec("s1", "PreToolUse", 100.0, seq=5, tool_name="Bash")}, now=100.0)

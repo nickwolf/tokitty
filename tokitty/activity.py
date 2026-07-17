@@ -7,7 +7,7 @@ event only) and turns them into a single ActivityView the UI can render.
 See docs/task-6-brief (issue #6) for the full spec this implements.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 ACTIVITY_STATES = ("permission", "working", "thinking", "done_hop", "idle")
@@ -136,7 +136,7 @@ class ActivityTracker:
                 )
                 if gated:
                     state.base_state = "done_hop"
-                    state.done_hop_at = ts
+                    state.done_hop_at = now
                 else:
                     state.base_state = "idle"
                     state.done_hop_at = None
