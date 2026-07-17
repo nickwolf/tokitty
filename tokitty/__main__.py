@@ -4,8 +4,11 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Tuple
 
+from tokitty.activity import ActivityTracker
+from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
 from tokitty.credentials import (
     AmbiguousCredentialsError,
@@ -19,6 +22,7 @@ from tokitty.display import format_countdown, format_reset_day, format_reset_tim
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
+from tokitty.pose import resolve_pose
 from tokitty.poller import PollResult, Poller
 
 # tkinter (and tokitty.ui, which imports it) is deliberately NOT imported
@@ -68,6 +72,35 @@ def build_fetch_fn():
     return fetch
 
 
+def resolve_activity_sessions() -> Tuple[Optional[str], Optional[str]]:
+    """Return (sessions_dir, distro_name) for the ActivityWatcher.
+
+    distro_name is None on Linux/macOS (no WSL check needed) and on any
+    resolution failure -- resolution failure always means "run without
+    activity" (sessions_dir=None too), never a crash. Single default
+    account for now (issue #7's scope); a future multi-account watcher
+    would resolve one of these per account.
+    """
+    if sys.platform != "win32":
+        try:
+            from tokitty.hooks_install import get_config_dirs
+
+            config_dir = get_config_dirs()[0]
+        except Exception:
+            config_dir = str(Path.home() / ".claude")
+        return str(Path(config_dir) / "tokitty" / "sessions"), None
+
+    from tokitty.wsl_probe import find_wsl_credentials, wsl_sessions_dir_from_credentials
+
+    try:
+        distro, wsl_credentials_path = find_wsl_credentials()
+    except CredentialsError:
+        return None, None
+
+    sessions_dir = wsl_sessions_dir_from_credentials(distro, wsl_credentials_path)
+    return sessions_dir, distro
+
+
 def debug_print() -> int:
     result = build_fetch_fn()()
     print(f"status: {result.status}")
@@ -81,6 +114,16 @@ def debug_print() -> int:
         print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
         if s.credits_used is not None and s.credits_limit is not None:
             print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+
+    sessions_dir, distro_name = resolve_activity_sessions()
+    if sessions_dir is not None:
+        watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+        watcher._tick_once()  # one-shot snapshot; no background thread for a single debug print
+        activity = watcher.get_latest()
+        if activity is not None:
+            label = f" ({activity.tool_label})" if activity.tool_label else ""
+            print(f"activity: {activity.state}{label}")
+
     return 0
 
 
@@ -225,21 +268,31 @@ def run_gui() -> int:
     window.on_refresh_requested = poller.request_refresh
     last_good_holder = {"result": None}
 
+    sessions_dir, distro_name = resolve_activity_sessions()
+    watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+
     def tick():
         latest = poller.get_latest()
         if latest is not None:
             display = _display_state_for(latest, last_good_holder["result"])
+            activity = watcher.get_latest()
+            pose = resolve_pose(display["state"], activity)
+            display["state"] = pose["sprite_state"]
+            display["tool_label"] = pose["tool_label"]
+            display["accent"] = pose["accent"]
             window.render(**display)
             last_good_holder["result"] = _next_last_good(latest, last_good_holder["result"])
         root.after(UI_REFRESH_MS, tick)
 
     poller.start()
+    watcher.start()
     root.after(UI_REFRESH_MS, tick)
 
     try:
         root.mainloop()
     finally:
         poller.stop()
+        watcher.stop()
         lock.release()
 
     return 0
