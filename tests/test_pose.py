@@ -40,12 +40,27 @@ def test_permission_beats_working():
     assert result["accent"] is True
 
 
-def test_capped_wake_states_beat_working_activity():
-    for capped_state in ("flopped", "stirring", "waking"):
-        result = resolve_pose(capped_state, ActivityView(state="working", tool_label="Running"))
-        assert result["sprite_state"] == capped_state
-        assert result["tool_label"] == ""
-        assert result["accent"] is False
+def test_activate_not_overridden_by_working_activity():
+    result = resolve_pose("activate", ActivityView(state="working", tool_label="Coding"))
+    assert result["sprite_state"] == "activate"
+    assert result["tool_label"] == ""
+    assert result["accent"] is False
+
+
+def test_capped_wake_states_beat_activity_states():
+    capped_states = ("activate", "flopped", "stirring", "waking")
+    activity_states = (
+        ("working", "Running"),
+        ("thinking", ""),
+        ("done_hop", ""),
+    )
+    for capped_state in capped_states:
+        for activity_state, tool_label in activity_states:
+            activity = ActivityView(state=activity_state, tool_label=tool_label) if tool_label else ActivityView(state=activity_state)
+            result = resolve_pose(capped_state, activity)
+            assert result["sprite_state"] == capped_state
+            assert result["tool_label"] == ""
+            assert result["accent"] is False
 
 
 def test_permission_beats_capped_wake_states():
