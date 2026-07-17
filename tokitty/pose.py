@@ -12,15 +12,15 @@ from typing import Optional
 
 from tokitty.activity import ActivityView
 
-# Placeholder sprite mapping (task 8 draws the real ones). Keep this the
-# ONLY place activity states map to sprite names -- task 8 swaps it by
-# changing only this dict, once real sprites named "working", "thinking",
-# "permission", "done_hop" exist.
+# Activity state -> sprite state. Keep this the ONLY place activity
+# states map to sprite names (kept as its own dict, not inlined, so a
+# future art pass can swap sprite names here without touching the
+# resolution logic below).
 ACTIVITY_SPRITE_PLACEHOLDERS = {
-    "permission": "alert",
-    "working": "interested",
-    "thinking": "content",
-    "done_hop": "activate",
+    "permission": "permission",
+    "working": "working",
+    "thinking": "thinking",
+    "done_hop": "done_hop",
 }
 
 # v1 substates of the capped/wake sequence (see mood.compute_capped_substate)
