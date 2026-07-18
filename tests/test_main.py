@@ -1,7 +1,9 @@
+import sys
 from datetime import datetime, timedelta, timezone
 
-from tokitty.__main__ import _display_state_for, _next_last_good
+from tokitty.__main__ import _display_state_for, _next_last_good, build_fetch_fn, resolve_activity_sessions
 from tokitty.api import LimitInfo, UsageSnapshot
+from tokitty.credentials import CredentialsError
 from tokitty.poller import PollResult
 
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
@@ -154,3 +156,39 @@ def test_overdue_capped_beats_resting():
     display = _display_state_for(stale, previous=good)
     assert display["hint_text"] == "token expired, reopen Claude Code"
     assert display["dimmed"] is True
+
+
+def test_resolve_activity_sessions_explicit_posix_dir(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "linux")
+    sessions_dir, distro = resolve_activity_sessions("/home/u/.claude-work")
+    assert sessions_dir == "/home/u/.claude-work/tokitty/sessions"
+    assert distro is None
+
+
+def test_resolve_activity_sessions_explicit_unc_dir(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    sessions_dir, distro = resolve_activity_sessions(
+        "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work")
+    assert sessions_dir == "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work\\tokitty\\sessions"
+    assert distro == "Ubuntu"
+
+
+def test_resolve_activity_sessions_unc_dir_on_linux_translates(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "linux")
+    sessions_dir, distro = resolve_activity_sessions(
+        "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work")
+    assert sessions_dir == "/home/u/.claude-work/tokitty/sessions"
+    assert distro is None
+
+
+def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_resolve(config_dir=None):
+        seen["config_dir"] = config_dir
+        raise CredentialsError("stop here")
+
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", fake_resolve)
+    result = build_fetch_fn(config_dir="/home/u/.claude-work")()
+    assert seen["config_dir"] == "/home/u/.claude-work"
+    assert result.status == "credentials_unreachable"
