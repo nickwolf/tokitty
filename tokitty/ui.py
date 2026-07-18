@@ -15,7 +15,7 @@ from tokitty.geometry import clamp_position
 from tokitty.sprites import PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
-CARD_HEIGHT = 128
+PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
 CAT_CANVAS_SIZE = 112
 STATS_X = 132
 BAR_WIDTH = 158
@@ -34,59 +34,41 @@ POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
 
 
-class TokittyWindow:
-    def __init__(self, root: tk.Tk, state_dir: Path):
-        self.root = root
-        self.state_dir = state_dir
-        self._position_path = state_dir / POSITION_FILENAME
-        self._drag_offset = (0, 0)
-        self._always_on_top = tk.BooleanVar(value=True)
-        self.on_refresh_requested = None  # set externally by __main__.py
+def card_height(pane_count: int) -> int:
+    return PANE_HEIGHT * pane_count
+
+
+class Pane:
+    """One cat + bars unit. Owns its widgets inside a parent Frame; knows
+    nothing about window chrome, drag, or position."""
+
+    def __init__(self, parent):
+        self.parent = parent
         self._current_state = "sleeping"
         self._frame_index = 0
         self._driving_tag = ""
         self._tool_label = ""
         self._accent = False
-
-        self._configure_window()
         self._build_widgets()
-        self._restore_position()
-        self._bind_drag()
-        self._build_context_menu()
-        self._animate()
-
-    def _configure_window(self) -> None:
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.configure(bg=BG_COLOR)
-        self.root.geometry(f"{CARD_WIDTH}x{CARD_HEIGHT}")
-
-        if sys.platform == "win32":
-            try:
-                import ctypes
-
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                pass
 
     def _build_widgets(self) -> None:
         self.canvas = tk.Canvas(
-            self.root, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=BG_COLOR, highlightthickness=0
+            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=BG_COLOR, highlightthickness=0
         )
         self.canvas.place(x=8, y=8)
 
-        self.session_label = tk.Label(self.root, text="SESSION", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
         self.session_label.place(x=STATS_X, y=12)
-        self.session_bar_bg = tk.Canvas(self.root, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.session_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.session_bar_bg.place(x=STATS_X, y=30)
-        self.session_reset_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
         self.session_reset_label.place(x=STATS_X, y=42)
 
-        self.weekly_label = tk.Label(self.root, text="WEEK", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
         self.weekly_label.place(x=STATS_X, y=60)
-        self.weekly_bar_bg = tk.Canvas(self.root, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.weekly_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.weekly_bar_bg.place(x=STATS_X, y=78)
-        self.weekly_reset_label = tk.Label(self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
         self.weekly_reset_label.place(x=STATS_X, y=90)
 
         # One widget for both credits and the error hint -- _display_state_for
@@ -98,65 +80,9 @@ class TokittyWindow:
         # first character (the "$" in the credits line) -- found via a real
         # screenshot, not guessed.
         self.status_label = tk.Label(
-            self.root, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
+            self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
         )
         self.status_label.place(x=STATS_X, y=108)
-
-    def _bind_drag(self) -> None:
-        self.root.bind("<Button-1>", self._on_drag_start)
-        self.root.bind("<B1-Motion>", self._on_drag_move)
-        self.root.bind("<ButtonRelease-1>", self._on_drag_end)
-
-    def _on_drag_start(self, event: tk.Event) -> None:
-        self._drag_offset = (event.x, event.y)
-
-    def _on_drag_move(self, event: tk.Event) -> None:
-        x = self.root.winfo_x() + event.x - self._drag_offset[0]
-        y = self.root.winfo_y() + event.y - self._drag_offset[1]
-        self.root.geometry(f"+{x}+{y}")
-
-    def _on_drag_end(self, _event: tk.Event) -> None:
-        self._save_position()
-
-    def _build_context_menu(self) -> None:
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
-        self.menu.add_checkbutton(label="Always in front", variable=self._always_on_top, command=self._toggle_always_on_top)
-        self.menu.add_separator()
-        self.menu.add_command(label="Exit", command=self.root.destroy)
-        self.root.bind("<Button-3>", self._show_context_menu)
-
-    def _show_context_menu(self, event: tk.Event) -> None:
-        self.menu.tk_popup(event.x_root, event.y_root)
-
-    def _on_refresh_now(self) -> None:
-        if self.on_refresh_requested is not None:
-            self.on_refresh_requested()
-
-    def _toggle_always_on_top(self) -> None:
-        self.root.attributes("-topmost", self._always_on_top.get())
-
-    def _restore_position(self) -> None:
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        x, y = screen_w - CARD_WIDTH - 24, screen_h - CARD_HEIGHT - 24
-
-        if self._position_path.is_file():
-            try:
-                saved = json.loads(self._position_path.read_text(encoding="utf-8"))
-                x, y = clamp_position(int(saved["x"]), int(saved["y"]), CARD_WIDTH, CARD_HEIGHT, screen_w, screen_h)
-            except (OSError, ValueError, KeyError, json.JSONDecodeError):
-                pass
-
-        self.root.geometry(f"{CARD_WIDTH}x{CARD_HEIGHT}+{x}+{y}")
-
-    def _save_position(self) -> None:
-        try:
-            self._position_path.write_text(
-                json.dumps({"x": self.root.winfo_x(), "y": self.root.winfo_y()}), encoding="utf-8"
-            )
-        except OSError:
-            pass
 
     def render(
         self,
@@ -178,7 +104,7 @@ class TokittyWindow:
         self._accent = accent
 
         bg = ACCENT_BG if accent else BG_COLOR
-        self.root.configure(bg=bg)
+        self.parent.configure(bg=bg)
         self.canvas.configure(bg=bg)
         for label in (
             self.session_label,
@@ -207,12 +133,11 @@ class TokittyWindow:
 
         self.status_label.configure(text=hint_text if hint_text else (credits_text or ""))
 
-    def _animate(self) -> None:
+    def draw_next_frame(self) -> None:
         frames = get_frames(self._current_state)
         frame = frames[self._frame_index % len(frames)]
         self._draw_frame(frame)
         self._frame_index += 1
-        self.root.after(FRAME_INTERVAL_MS, self._animate)
 
     def _draw_frame(self, frame) -> None:
         self.canvas.delete("cat")
@@ -240,3 +165,109 @@ class TokittyWindow:
                 6, 6, text=self._tool_label, anchor="nw",
                 fill=FG_COLOR, font=("Segoe UI", 8), tags="cat",
             )
+
+
+class TokittyWindow:
+    def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1):
+        self.root = root
+        self.state_dir = state_dir
+        self._pane_count = pane_count
+        self._height = card_height(pane_count)
+        self._position_path = state_dir / POSITION_FILENAME
+        self._drag_offset = (0, 0)
+        self._always_on_top = tk.BooleanVar(value=True)
+        self.on_refresh_requested = None  # set externally by __main__.py
+
+        self._configure_window()
+        self.panes = []
+        for i in range(pane_count):
+            frame = tk.Frame(root, width=CARD_WIDTH, height=PANE_HEIGHT, bg=BG_COLOR)
+            frame.place(x=0, y=i * PANE_HEIGHT)
+            self.panes.append(Pane(frame))
+        self._restore_position()
+        self._bind_drag()
+        self._build_context_menu()
+        self._animate()
+
+    def _configure_window(self) -> None:
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg=BG_COLOR)
+        self.root.geometry(f"{CARD_WIDTH}x{self._height}")
+
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                pass
+
+    def _bind_drag(self) -> None:
+        # Bound on root only: every pane Frame and its child widgets carry
+        # the toplevel (root) in their default bindtags, so a Button-1
+        # press anywhere in the window -- including inside a pane -- already
+        # reaches these handlers without per-widget binding.
+        self.root.bind("<Button-1>", self._on_drag_start)
+        self.root.bind("<B1-Motion>", self._on_drag_move)
+        self.root.bind("<ButtonRelease-1>", self._on_drag_end)
+
+    def _on_drag_start(self, event: tk.Event) -> None:
+        self._drag_offset = (event.x, event.y)
+
+    def _on_drag_move(self, event: tk.Event) -> None:
+        x = self.root.winfo_x() + event.x - self._drag_offset[0]
+        y = self.root.winfo_y() + event.y - self._drag_offset[1]
+        self.root.geometry(f"+{x}+{y}")
+
+    def _on_drag_end(self, _event: tk.Event) -> None:
+        self._save_position()
+
+    def _build_context_menu(self) -> None:
+        self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
+        self.menu.add_checkbutton(label="Always in front", variable=self._always_on_top, command=self._toggle_always_on_top)
+        self.menu.add_separator()
+        self.menu.add_command(label="Exit", command=self.root.destroy)
+        self.root.bind_all("<Button-3>", self._show_context_menu)
+
+    def _show_context_menu(self, event: tk.Event) -> None:
+        self.menu.tk_popup(event.x_root, event.y_root)
+
+    def _on_refresh_now(self) -> None:
+        if self.on_refresh_requested is not None:
+            self.on_refresh_requested()
+
+    def _toggle_always_on_top(self) -> None:
+        self.root.attributes("-topmost", self._always_on_top.get())
+
+    def _restore_position(self) -> None:
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        x, y = screen_w - CARD_WIDTH - 24, screen_h - self._height - 24
+
+        if self._position_path.is_file():
+            try:
+                saved = json.loads(self._position_path.read_text(encoding="utf-8"))
+                x, y = clamp_position(int(saved["x"]), int(saved["y"]), CARD_WIDTH, self._height, screen_w, screen_h)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                pass
+
+        self.root.geometry(f"{CARD_WIDTH}x{self._height}+{x}+{y}")
+
+    def _save_position(self) -> None:
+        try:
+            self._position_path.write_text(
+                json.dumps({"x": self.root.winfo_x(), "y": self.root.winfo_y()}), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def render(self, **kwargs) -> None:
+        # v1 compatibility: single-pane callers (debug-state path) untouched
+        self.panes[0].render(**kwargs)
+
+    def _animate(self) -> None:
+        for pane in self.panes:
+            pane.draw_next_frame()
+        self.root.after(FRAME_INTERVAL_MS, self._animate)

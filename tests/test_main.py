@@ -1,7 +1,9 @@
+import sys
 from datetime import datetime, timedelta, timezone
 
-from tokitty.__main__ import _display_state_for, _next_last_good
+from tokitty.__main__ import _display_state_for, _next_last_good, build_fetch_fn, resolve_activity_sessions
 from tokitty.api import LimitInfo, UsageSnapshot
+from tokitty.credentials import CredentialsError
 from tokitty.poller import PollResult
 
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
@@ -58,15 +60,16 @@ def test_non_ok_with_no_good_snapshot_shows_blocking_fallback():
     assert display["hint_text"]
 
 
-def test_non_ok_with_cached_uncapped_snapshot_reuses_cached_data_silently():
+def test_non_ok_with_cached_uncapped_snapshot_shows_resting_look():
     previous = _ok(_snapshot(session_pct=56.0, weekly_pct=50.0))
 
     display = _display_state_for(_error("stale_token"), previous=previous, now=NOW)
 
     assert display["session_pct"] == 56.0
     assert display["weekly_pct"] == 50.0
-    assert display["hint_text"] is None
-    assert display["dimmed"] is False
+    assert display["state"] == "sleeping"
+    assert display["dimmed"] is True
+    assert "last seen" in display["hint_text"]
 
 
 def test_non_ok_with_cached_capped_snapshot_keeps_counting_down_silently():
@@ -111,3 +114,81 @@ def test_next_last_good_stays_none_until_first_success():
     bad = _error("stale_token")
 
     assert _next_last_good(bad, None) is None
+
+
+def test_stale_token_with_cache_shows_resting_look():
+    # Use the file's existing helper for an ok PollResult
+    good = _ok(_snapshot(session_pct=42.0))
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    assert display["state"] == "sleeping"
+    assert display["dimmed"] is True
+    assert display["hint_text"].startswith("last seen ")
+    assert display["session_pct"] == 42.0  # last-good numbers still shown
+
+
+def test_stale_token_resting_uses_last_good_fetch_time():
+    good = _ok(_snapshot())
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    expected = good.fetched_at.astimezone().strftime("%H:%M")
+    assert display["hint_text"] == f"last seen {expected}"
+
+
+def test_stale_token_without_cache_keeps_v1_hint():
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=None)
+    assert display["state"] == "confused"
+    assert display["hint_text"] == "token stale, open Claude Code"
+
+
+def test_overdue_capped_beats_resting():
+    # last-good has an active capped limit whose resets_at is already past:
+    # the "can't confirm" warning must win over the resting look.
+    capped_limit = _limit(kind="session", resets_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    capped_snapshot = _snapshot(session_pct=100.0, limits=[capped_limit])
+    good = _ok(capped_snapshot)
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    assert display["hint_text"] == "token expired, reopen Claude Code"
+    assert display["dimmed"] is True
+
+
+def test_resolve_activity_sessions_explicit_posix_dir(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "linux")
+    sessions_dir, distro = resolve_activity_sessions("/home/u/.claude-work")
+    assert sessions_dir == "/home/u/.claude-work/tokitty/sessions"
+    assert distro is None
+
+
+def test_resolve_activity_sessions_explicit_unc_dir(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    sessions_dir, distro = resolve_activity_sessions(
+        "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work")
+    assert sessions_dir == "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work\\tokitty\\sessions"
+    assert distro == "Ubuntu"
+
+
+def test_resolve_activity_sessions_unc_dir_on_linux_translates(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "linux")
+    sessions_dir, distro = resolve_activity_sessions(
+        "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work")
+    assert sessions_dir == "/home/u/.claude-work/tokitty/sessions"
+    assert distro is None
+
+
+def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_resolve(config_dir=None):
+        seen["config_dir"] = config_dir
+        raise CredentialsError("stop here")
+
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", fake_resolve)
+    result = build_fetch_fn(config_dir="/home/u/.claude-work")()
+    assert seen["config_dir"] == "/home/u/.claude-work"
+    assert result.status == "credentials_unreachable"
