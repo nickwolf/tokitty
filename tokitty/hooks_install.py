@@ -59,12 +59,35 @@ def _is_windows_local_path(config_dir: str) -> bool:
     return len(config_dir) >= 2 and config_dir[1] == ":" and config_dir[0].isalpha()
 
 
+def _default_config_dir() -> str:
+    """Return the default single config dir, resolving WSL on Windows.
+
+    On win32, Claude Code actually lives inside WSL (the watcher polls it
+    via find_wsl_credentials too -- see __main__.resolve_activity_sessions),
+    so the installer must target the same \\\\wsl.localhost UNC dir rather
+    than a Windows-local ~/.claude that nothing ever reads. Falls back to
+    the Windows-local path if WSL resolution fails for any reason (no WSL
+    installed, no credentials found, ambiguous install, wsl.exe error).
+    """
+    if sys.platform == "win32":
+        try:
+            from tokitty.wsl_probe import find_wsl_credentials, wsl_config_dir_from_credentials
+
+            distro, wsl_credentials_path = find_wsl_credentials()
+            return wsl_config_dir_from_credentials(distro, wsl_credentials_path)
+        except Exception:
+            pass
+    return str(Path.home() / ".claude")
+
+
 def get_config_dirs() -> List[str]:
     """Return the list of Claude Code config dirs to install/uninstall hooks in.
 
-    Default is the single dir ~/.claude. If <state-dir>/accounts.json exists
-    and contains a list of config-dir paths under key "accounts" (each item
-    an object with a "config_dir" key), those are used instead.
+    Default is the single dir ~/.claude (or, on Windows with WSL, the
+    \\\\wsl.localhost dir where Claude Code actually lives -- see
+    _default_config_dir). If <state-dir>/accounts.json exists and contains
+    a list of config-dir paths under key "accounts" (each item an object
+    with a "config_dir" key), those are used instead.
     """
     state_dir = get_state_dir()
     accounts_file = state_dir / "accounts.json"
@@ -79,13 +102,15 @@ def get_config_dirs() -> List[str]:
                     return dirs
         except Exception:
             pass
-    return [str(Path.home() / ".claude")]
+    return [_default_config_dir()]
 
 
 def _build_command(config_dir: str) -> str:
     native = _wsl_native_path(config_dir)
     interpreter = "python" if _is_windows_local_path(config_dir) else "python3"
-    return f"{interpreter} {native}/tokitty/hook_writer.py --sessions-dir {native}/tokitty/sessions"
+    script = f'"{native}/tokitty/hook_writer.py"'
+    sessions_dir = f'"{native}/tokitty/sessions"'
+    return f"{interpreter} {script} --sessions-dir {sessions_dir}"
 
 
 def _backup(path: Path) -> None:
@@ -93,6 +118,14 @@ def _backup(path: Path) -> None:
         return
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_path = path.with_name(f"{path.name}.tokitty-backup-{stamp}")
+    if backup_path.exists():
+        suffix = 2
+        while True:
+            candidate = path.with_name(f"{path.name}.tokitty-backup-{stamp}-{suffix}")
+            if not candidate.exists():
+                backup_path = candidate
+                break
+            suffix += 1
     shutil.copy2(path, backup_path)
 
 
@@ -171,6 +204,20 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 
     if not events_to_add:
         return ConfigDirResult(config_dir, True, "already installed, nothing to do", installed_events=[])
+
+    existing_hooks = data.get("hooks")
+    if existing_hooks is not None and not isinstance(existing_hooks, dict):
+        return ConfigDirResult(
+            config_dir, False, f"aborted, settings.json 'hooks' key is not an object: {existing_hooks!r}"
+        )
+    for event, _matcher in events_to_add:
+        entries = existing_hooks.get(event) if existing_hooks else None
+        if entries is not None and not isinstance(entries, list):
+            return ConfigDirResult(
+                config_dir,
+                False,
+                f"aborted, settings.json 'hooks.{event}' is not a list: {entries!r}",
+            )
 
     _backup(settings_path)
 

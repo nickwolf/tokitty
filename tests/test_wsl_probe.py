@@ -8,6 +8,7 @@ from tokitty.wsl_probe import (
     list_running_distros,
     list_wsl_distros,
     read_wsl_credentials,
+    wsl_config_dir_from_credentials,
     wsl_sessions_dir_from_credentials,
 )
 
@@ -163,3 +164,15 @@ def test_wsl_sessions_dir_from_credentials_handles_other_usernames():
     sessions_dir = wsl_sessions_dir_from_credentials("Debian", "/home/someone-else/.claude/.credentials.json")
 
     assert sessions_dir == "\\\\wsl.localhost\\Debian\\home\\someone-else\\.claude\\tokitty\\sessions"
+
+
+def test_wsl_config_dir_from_credentials_derives_username_from_path():
+    config_dir = wsl_config_dir_from_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json")
+
+    assert config_dir == "\\\\wsl.localhost\\Ubuntu\\home\\cptsmidge\\.claude"
+
+
+def test_wsl_config_dir_from_credentials_handles_other_usernames():
+    config_dir = wsl_config_dir_from_credentials("Debian", "/home/someone-else/.claude/.credentials.json")
+
+    assert config_dir == "\\\\wsl.localhost\\Debian\\home\\someone-else\\.claude"
