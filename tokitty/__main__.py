@@ -206,8 +206,21 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         display = _display_from_snapshot(last_good, now)
         binding = select_binding_capped_limit(last_good.limits)
         overdue = binding is not None and compute_capped_substate(binding, now=now).time_to_reset.total_seconds() <= 0
-        display["hint_text"] = _STALE_HINTS.get(result.status, "can't confirm, reconnect") if overdue else None
-        display["dimmed"] = overdue
+        if overdue:
+            display["hint_text"] = _STALE_HINTS.get(result.status, "can't confirm, reconnect")
+            display["dimmed"] = True
+        elif result.status == "stale_token" and binding is None:
+            # Resting look: a work account's token expires ~1h after that
+            # account's Claude Code last ran, so outside work hours this is
+            # the pane's normal steady state -- not an error. Dim the
+            # last-good numbers, sleep the cat, timestamp it quietly.
+            last_seen = previous.fetched_at.astimezone().strftime("%H:%M")
+            display["state"] = "sleeping"
+            display["hint_text"] = f"last seen {last_seen}"
+            display["dimmed"] = True
+        else:
+            display["hint_text"] = None
+            display["dimmed"] = False
         return display
 
     hints = {
