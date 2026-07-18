@@ -33,6 +33,13 @@ BASE_PALETTE: Dict[str, str] = {
     "!": "#e6483c",  # alert/panic accent
     "?": "#e8c23c",  # confused accent
     "h": "#f2d675",  # activate/happy sparkle accent
+    # Prop colors (task 8 activity sprites). Non-coat: props must not
+    # change with coat, so these live in BASE_PALETTE, not COATS.
+    "g": "#9aa0ac",  # laptop chassis
+    "b": "#7fd8f0",  # laptop screen glow, dim
+    "B": "#c8f2ff",  # laptop screen glow, bright (typing pulse)
+    "f": "#ff3fa4",  # flag cloth -- hot magenta, distinct from every accent
+    "d": "#c9a15a",  # flag pole -- light wood, reads against dark backdrops
 }
 
 # Coat presets: each defines the same region keys. "c" is the patch
@@ -152,6 +159,153 @@ FLOPPED_TEMPLATE: List[str] = [
     "............................",
 ]
 
+def _overlay(template: List[str], patches: Dict[tuple, str]) -> List[str]:
+    """Copy `template`, stamping single characters at (row, col) coords.
+
+    Used to derive new pose templates (props alongside the established
+    cat) from the existing SITTING/ALERT templates without hand-retyping
+    all 26 rows -- the props land in cells that are transparent ('.') in
+    the source template, so the cat silhouette is untouched.
+    """
+    rows = [list(r) for r in template]
+    for (r, c), ch in patches.items():
+        rows[r][c] = ch
+    return ["".join(r) for r in rows]
+
+
+# Sitting-at-laptop pose -- SITTING_TEMPLATE with an open laptop in
+# three-quarter profile stamped IN FRONT of the cat (the stamps
+# deliberately occlude the cat's left flank and lower chest). The
+# screen is a wide slanted slab -- landscape glow area, tilted back
+# away from the cat -- and the keyboard deck is much wider than the
+# screen is tall, so the silhouette reads laptop, not phone. "S" is
+# the glow (dim/bright per frame); "P" cells on the deck are where the
+# paws land for the typing frame.
+WORKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
+    # screen slab: top bezel, glow rows slanting toward the hinge
+    # (one column of margin at the left edge, like every other row)
+    (14, 1): "g", (14, 2): "g", (14, 3): "g", (14, 4): "g", (14, 5): "g",
+    (14, 6): "g", (14, 7): "g", (14, 8): "g",
+    (15, 1): "g", (15, 2): "S", (15, 3): "S", (15, 4): "S", (15, 5): "S",
+    (15, 6): "S", (15, 7): "S", (15, 8): "g",
+    (16, 1): "g", (16, 2): "S", (16, 3): "S", (16, 4): "S", (16, 5): "S",
+    (16, 6): "S", (16, 7): "S", (16, 8): "g",
+    (17, 2): "g", (17, 3): "S", (17, 4): "S", (17, 5): "S", (17, 6): "S",
+    (17, 7): "S", (17, 8): "S", (17, 9): "g",
+    (18, 2): "g", (18, 3): "S", (18, 4): "S", (18, 5): "S", (18, 6): "S",
+    (18, 7): "S", (18, 8): "S", (18, 9): "g",
+    (19, 2): "g", (19, 3): "S", (19, 4): "S", (19, 5): "S", (19, 6): "S",
+    (19, 7): "S", (19, 8): "S", (19, 9): "g",
+    (20, 2): "g", (20, 3): "g", (20, 4): "g", (20, 5): "g", (20, 6): "g",
+    (20, 7): "g", (20, 8): "g", (20, 9): "g",
+    # hinge + wide keyboard deck running under the cat's front paws
+    (21, 3): "g", (21, 4): "g", (21, 5): "g", (21, 6): "g", (21, 7): "g",
+    (21, 8): "g", (21, 9): "g", (21, 10): "g", (21, 11): "g", (21, 12): "g",
+    (21, 13): "g", (21, 14): "g", (21, 15): "g", (21, 16): "g",
+    (22, 2): "g", (22, 3): "g", (22, 4): "g", (22, 5): "g", (22, 6): "g",
+    (22, 7): "g", (22, 8): "g", (22, 9): "P", (22, 10): "P", (22, 11): "P",
+    (22, 12): "P", (22, 13): "g", (22, 14): "g", (22, 15): "g", (22, 16): "g",
+    # base front edge
+    (23, 3): "g", (23, 4): "g", (23, 5): "g", (23, 6): "g", (23, 7): "g",
+    (23, 8): "g", (23, 9): "g", (23, 10): "g", (23, 11): "g", (23, 12): "g",
+    (23, 13): "g", (23, 14): "g", (23, 15): "g",
+})
+
+# Contemplative pose -- SITTING_TEMPLATE with a thought bubble above
+# the head. "t" is the small seed dot (lit in BOTH frames, so neither
+# frame is ever pixel-identical to idle); "T" cells extend it into a
+# larger bubble plus an ascending trail dot in the second frame.
+THINKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
+    # seed dot, always on
+    (1, 13): "t", (1, 14): "t",
+    # bubble growth + trail dot toward the head, frame 2 only
+    # (avoids (2,13), an existing head-tuft pixel)
+    (0, 14): "T", (0, 15): "T", (0, 16): "T",
+    (1, 15): "T", (1, 16): "T",
+    (2, 14): "T", (2, 15): "T", (2, 16): "T",
+    (2, 12): "T",
+})
+
+# Flag-waving pose -- ALERT_TEMPLATE (upright, attentive) with a thick
+# pole down the right edge and a LARGE solid pennant. "8" is the pole
+# (always on, two cells wide so it reads at real size); "6" is the
+# raised pennant (rows 0-4, flying high off the pole top) and "7" the
+# dropped pennant (rows 5-9, sagging down the pole) -- the two never
+# share cells, so the whole flag visibly snaps between positions.
+PERMISSION_TEMPLATE: List[str] = _overlay(ALERT_TEMPLATE, {
+    # pole: tall, unbroken, two cells thick, held by the cat -- the
+    # lower shaft slants in toward the flank and a coat-colored arm
+    # (literal "o" cells, rows 11-12) grips it, so it reads "cat
+    # holding flag", not "flag planted nearby"
+    (0, 25): "8", (0, 26): "8", (1, 25): "8", (1, 26): "8",
+    (2, 25): "8", (2, 26): "8", (3, 25): "8", (3, 26): "8",
+    (4, 25): "8", (4, 26): "8", (5, 25): "8", (5, 26): "8",
+    (6, 25): "8", (6, 26): "8", (7, 25): "8", (7, 26): "8",
+    (8, 25): "8", (8, 26): "8", (9, 25): "8", (9, 26): "8",
+    (10, 25): "8", (10, 26): "8", (11, 25): "8", (11, 26): "8",
+    (12, 25): "8", (12, 26): "8", (13, 25): "8", (13, 26): "8",
+    # lower shaft: single-width, stepping inward to the cat's side
+    (14, 25): "8", (15, 24): "8", (16, 24): "8",
+    (17, 23): "8", (18, 23): "8", (19, 22): "8",
+    # arm + paw gripping the pole
+    (11, 22): "o", (11, 23): "o", (11, 24): "o",
+    (12, 17): "o", (12, 18): "o", (12, 19): "o", (12, 20): "o",
+    (12, 21): "o", (12, 22): "o", (12, 23): "o", (12, 24): "o",
+    # raised pennant (flies high and wide off the pole top)
+    (0, 19): "6", (0, 20): "6", (0, 21): "6", (0, 22): "6", (0, 23): "6",
+    (0, 24): "6",
+    (1, 19): "6", (1, 20): "6", (1, 21): "6", (1, 22): "6", (1, 23): "6",
+    (1, 24): "6",
+    (2, 20): "6", (2, 21): "6", (2, 22): "6", (2, 23): "6", (2, 24): "6",
+    (3, 21): "6", (3, 22): "6", (3, 23): "6", (3, 24): "6",
+    (4, 22): "6", (4, 23): "6", (4, 24): "6",
+    # dropped pennant (sags down the pole, widening as it falls)
+    (5, 22): "7", (5, 23): "7", (5, 24): "7",
+    (6, 21): "7", (6, 22): "7", (6, 23): "7", (6, 24): "7",
+    (7, 21): "7", (7, 22): "7", (7, 23): "7", (7, 24): "7",
+    (8, 20): "7", (8, 21): "7", (8, 22): "7", (8, 23): "7", (8, 24): "7",
+    (9, 20): "7", (9, 21): "7", (9, 22): "7", (9, 23): "7", (9, 24): "7",
+})
+
+def _shift_up(template: List[str], n: int) -> List[str]:
+    """Translate a template up by `n` rows, backfilling blank rows.
+
+    The top `n` source rows fall off the grid; callers pick shifts whose
+    lost rows are blank or near-blank (SITTING loses only two 1px ear
+    tips at n=2, which reads as hop squash rather than damage).
+    """
+    blank = "." * len(template[0])
+    return template[n:] + [blank] * n
+
+
+# Happy completion hop -- two templates, one per frame, so the WHOLE
+# cat translates upward when airborne instead of just losing its feet.
+# Both share a persistent ground line (literal "s") at the bottom row;
+# the airborne frame is the sitting cat shifted up two rows, leaving a
+# real clearance gap above the unbroken ground, with bright motion
+# dashes (literal "B") in the gap under the paws.
+DONE_HOP_GROUNDED_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
+    # ground line flanking the seated cat
+    (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s", (25, 7): "s",
+    (25, 8): "s",
+    (25, 18): "s", (25, 19): "s", (25, 20): "s", (25, 21): "s",
+    (25, 22): "s", (25, 23): "s", (25, 24): "s",
+})
+
+DONE_HOP_AIRBORNE_TEMPLATE: List[str] = _overlay(
+    _shift_up(SITTING_TEMPLATE, 2), {
+        # unbroken ground line: the cat now ends at row 23, so rows
+        # 24-25 read as clear air between paws and ground
+        (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s",
+        (25, 7): "s", (25, 8): "s", (25, 9): "s", (25, 10): "s",
+        (25, 11): "s", (25, 12): "s", (25, 13): "s", (25, 14): "s",
+        (25, 15): "s", (25, 16): "s", (25, 17): "s", (25, 18): "s",
+        (25, 19): "s", (25, 20): "s", (25, 21): "s", (25, 22): "s",
+        (25, 23): "s", (25, 24): "s",
+        # bright motion dashes in the clearance gap under the paws
+        (24, 9): "B", (24, 10): "B", (24, 15): "B", (24, 16): "B",
+    })
+
 SITTING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "sleeping": [{"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}],
     "content": [{"L": "e", "R": "e", "A": "n"}, {"L": "k", "R": "k", "A": "n"}],
@@ -189,10 +343,51 @@ FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     ],
 }
 
+WORKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
+    "working": [
+        {"L": "e", "R": "e", "A": "n", "S": "b", "P": "g"},
+        # typing pulse: lidded eyes, looking down at the bright screen
+        {"L": "k", "R": "k", "A": "n", "S": "B", "P": "w"},
+    ],
+}
+
+THINKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
+    "thinking": [
+        {"L": "e", "R": "e", "A": "n", "t": "?", "T": "."},
+        # bubble grows, one eye squints, nose flashes the accent
+        {"L": "e", "R": "k", "A": "?", "t": "?", "T": "?"},
+    ],
+}
+
+PERMISSION_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
+    "permission": [
+        {"L": "e", "R": "e", "A": "!", "8": "d", "6": "f", "7": "."},
+        {"L": "e", "R": "e", "A": "!", "8": "d", "6": ".", "7": "f"},
+    ],
+}
+
+# done_hop pairs a template WITH each frame's substitutions -- the only
+# state whose two frames use different base grids (whole-cat translate).
+DONE_HOP_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
+    "done_hop": [
+        {"L": "e", "R": "e", "A": "h"},  # grounded
+        {"L": "e", "R": "e", "A": "h"},  # airborne (shifted template)
+    ],
+}
+
+DONE_HOP_FRAME_TEMPLATES: List[List[str]] = [
+    DONE_HOP_GROUNDED_TEMPLATE,
+    DONE_HOP_AIRBORNE_TEMPLATE,
+]
+
 ALL_STATES = (
     tuple(SITTING_FRAME_SPECS.keys())
     + tuple(ALERT_FRAME_SPECS.keys())
     + tuple(FLOPPED_FRAME_SPECS.keys())
+    + tuple(WORKING_FRAME_SPECS.keys())
+    + tuple(THINKING_FRAME_SPECS.keys())
+    + tuple(PERMISSION_FRAME_SPECS.keys())
+    + tuple(DONE_HOP_FRAME_SPECS.keys())
 )
 
 
@@ -209,6 +404,20 @@ def get_frames(state: str) -> List[List[str]]:
         template, specs = ALERT_TEMPLATE, ALERT_FRAME_SPECS[state]
     elif state in FLOPPED_FRAME_SPECS:
         template, specs = FLOPPED_TEMPLATE, FLOPPED_FRAME_SPECS[state]
+    elif state in WORKING_FRAME_SPECS:
+        template, specs = WORKING_TEMPLATE, WORKING_FRAME_SPECS[state]
+    elif state in THINKING_FRAME_SPECS:
+        template, specs = THINKING_TEMPLATE, THINKING_FRAME_SPECS[state]
+    elif state in PERMISSION_FRAME_SPECS:
+        template, specs = PERMISSION_TEMPLATE, PERMISSION_FRAME_SPECS[state]
+    elif state in DONE_HOP_FRAME_SPECS:
+        # per-frame templates: the airborne frame translates the cat
+        return [
+            _apply(tmpl, subs)
+            for tmpl, subs in zip(
+                DONE_HOP_FRAME_TEMPLATES, DONE_HOP_FRAME_SPECS[state]
+            )
+        ]
     else:
         raise KeyError(f"Unknown sprite state: {state!r}")
 
