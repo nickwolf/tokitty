@@ -24,6 +24,12 @@ FG_COLOR = "#f0f0f0"
 DIM_COLOR = "#8a8a92"
 BAR_BG = "#333340"
 
+# Permission accent: shifts the card's background so a pending permission
+# prompt registers in peripheral vision without a modal. Reverts to
+# BG_COLOR the moment the activity state clears.
+ACCENT_BG = "#3a1620"
+ACCENT_FG = "#ffb4a8"
+
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
 
@@ -39,6 +45,8 @@ class TokittyWindow:
         self._current_state = "sleeping"
         self._frame_index = 0
         self._driving_tag = ""
+        self._tool_label = ""
+        self._accent = False
 
         self._configure_window()
         self._build_widgets()
@@ -161,11 +169,27 @@ class TokittyWindow:
         credits_text: Optional[str],
         hint_text: Optional[str],
         dimmed: bool,
+        tool_label: str = "",
+        accent: bool = False,
     ) -> None:
         self._current_state = state
         self._driving_tag = driving_tag
+        self._tool_label = tool_label
+        self._accent = accent
 
-        fg = DIM_COLOR if dimmed else FG_COLOR
+        bg = ACCENT_BG if accent else BG_COLOR
+        self.root.configure(bg=bg)
+        self.canvas.configure(bg=bg)
+        for label in (
+            self.session_label,
+            self.session_reset_label,
+            self.weekly_label,
+            self.weekly_reset_label,
+            self.status_label,
+        ):
+            label.configure(bg=bg)
+
+        fg = DIM_COLOR if dimmed else (ACCENT_FG if accent else FG_COLOR)
         self.session_label.configure(fg=fg)
         self.weekly_label.configure(fg=fg)
 
@@ -209,4 +233,10 @@ class TokittyWindow:
             self.canvas.create_text(
                 6, CAT_CANVAS_SIZE - 6, text=self._driving_tag, anchor="sw",
                 fill=DIM_COLOR, font=("Segoe UI", 8), tags="cat",
+            )
+
+        if self._tool_label:
+            self.canvas.create_text(
+                6, 6, text=self._tool_label, anchor="nw",
+                fill=FG_COLOR, font=("Segoe UI", 8), tags="cat",
             )

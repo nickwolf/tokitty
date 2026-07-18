@@ -3,7 +3,14 @@ import subprocess
 import pytest
 
 from tokitty.credentials import AmbiguousCredentialsError, CredentialsError
-from tokitty.wsl_probe import find_wsl_credentials, list_wsl_distros, read_wsl_credentials
+from tokitty.wsl_probe import (
+    find_wsl_credentials,
+    list_running_distros,
+    list_wsl_distros,
+    read_wsl_credentials,
+    wsl_config_dir_from_credentials,
+    wsl_sessions_dir_from_credentials,
+)
 
 
 class FakeCompletedProcess:
@@ -109,3 +116,63 @@ def test_read_wsl_credentials_suppresses_console_window():
     read_wsl_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json", run=fake_run)
 
     assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS
+
+
+def test_list_running_distros_parses_utf16_output():
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["wsl.exe", "--list", "--running", "--quiet"]
+        return FakeCompletedProcess(stdout="Ubuntu\r\n".encode("utf-16-le"))
+
+    distros = list_running_distros(run=fake_run)
+
+    assert distros == ["Ubuntu"]
+
+
+def test_list_running_distros_returns_empty_when_none_running():
+    def fake_run(cmd, **kwargs):
+        return FakeCompletedProcess(stdout="".encode("utf-16-le"))
+
+    assert list_running_distros(run=fake_run) == []
+
+
+def test_list_running_distros_returns_empty_on_error_instead_of_raising():
+    def fake_run(cmd, **kwargs):
+        raise OSError("wsl.exe not found")
+
+    assert list_running_distros(run=fake_run) == []
+
+
+def test_list_running_distros_suppresses_console_window():
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return FakeCompletedProcess(stdout="Ubuntu\r\n".encode("utf-16-le"))
+
+    list_running_distros(run=fake_run)
+
+    assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS
+
+
+def test_wsl_sessions_dir_from_credentials_derives_username_from_path():
+    sessions_dir = wsl_sessions_dir_from_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json")
+
+    assert sessions_dir == "\\\\wsl.localhost\\Ubuntu\\home\\cptsmidge\\.claude\\tokitty\\sessions"
+
+
+def test_wsl_sessions_dir_from_credentials_handles_other_usernames():
+    sessions_dir = wsl_sessions_dir_from_credentials("Debian", "/home/someone-else/.claude/.credentials.json")
+
+    assert sessions_dir == "\\\\wsl.localhost\\Debian\\home\\someone-else\\.claude\\tokitty\\sessions"
+
+
+def test_wsl_config_dir_from_credentials_derives_username_from_path():
+    config_dir = wsl_config_dir_from_credentials("Ubuntu", "/home/cptsmidge/.claude/.credentials.json")
+
+    assert config_dir == "\\\\wsl.localhost\\Ubuntu\\home\\cptsmidge\\.claude"
+
+
+def test_wsl_config_dir_from_credentials_handles_other_usernames():
+    config_dir = wsl_config_dir_from_credentials("Debian", "/home/someone-else/.claude/.credentials.json")
+
+    assert config_dir == "\\\\wsl.localhost\\Debian\\home\\someone-else\\.claude"
