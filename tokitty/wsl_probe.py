@@ -114,14 +114,28 @@ def find_wsl_credentials(run: Callable = subprocess.run) -> Tuple[str, str]:
     )
 
 
+def _wsl_home_windows_style(wsl_credentials_path: str) -> str:
+    home = wsl_credentials_path.rsplit("/.claude/", 1)[0]
+    return home.lstrip("/").replace("/", "\\")
+
+
 def wsl_sessions_dir_from_credentials(distro: str, wsl_credentials_path: str) -> str:
     """Derive the \\\\wsl.localhost UNC path to tokitty's sessions dir from
     a (distro, wsl-side credentials path) pair returned by
     find_wsl_credentials -- never hardcode a username, always derive it
     from the actual credentials path found."""
-    home = wsl_credentials_path.rsplit("/.claude/", 1)[0]
-    windows_style_home = home.lstrip("/").replace("/", "\\")
+    windows_style_home = _wsl_home_windows_style(wsl_credentials_path)
     return f"\\\\wsl.localhost\\{distro}\\{windows_style_home}\\.claude\\tokitty\\sessions"
+
+
+def wsl_config_dir_from_credentials(distro: str, wsl_credentials_path: str) -> str:
+    """Derive the \\\\wsl.localhost UNC path to the WSL-side Claude Code
+    config dir (the one containing settings.json) from a (distro, wsl-side
+    credentials path) pair returned by find_wsl_credentials -- never
+    hardcode a username, always derive it from the actual credentials path
+    found."""
+    windows_style_home = _wsl_home_windows_style(wsl_credentials_path)
+    return f"\\\\wsl.localhost\\{distro}\\{windows_style_home}\\.claude"
 
 
 def read_wsl_credentials(distro: str, wsl_path: str, run: Callable = subprocess.run) -> str:

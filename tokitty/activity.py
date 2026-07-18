@@ -153,7 +153,13 @@ class ActivityTracker:
 
     def _effective_view(self, session_id: str, state: _SessionState, now: float) -> Optional[ActivityView]:
         if state.permission:
-            # Permission does not decay on the idle timer.
+            # Permission does not decay on the idle timer. Accepted limitation:
+            # if a permission prompt is abandoned (Esc, killed terminal, closed
+            # window) with no further hook event and no SessionEnd, this flag
+            # has nothing to lower it and stays up until stale_session_ids()
+            # sweeps the session out entirely at GONE_S (30 min). By design --
+            # not worth a separate decay timer for an edge case that self-heals
+            # on session cleanup.
             return ActivityView(state="permission", session_id=session_id)
 
         if state.base_state == "done_hop":

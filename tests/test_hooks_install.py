@@ -39,22 +39,30 @@ def test_windows_local_path_detected():
 def test_build_command_posix_uses_python3():
     cmd = hi._build_command("/home/nick/.claude")
     assert cmd == (
-        "python3 /home/nick/.claude/tokitty/hook_writer.py "
-        "--sessions-dir /home/nick/.claude/tokitty/sessions"
+        'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_wsl_unc_maps_to_native():
     cmd = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude")
     assert cmd == (
-        "python3 /home/nick/.claude/tokitty/hook_writer.py "
-        "--sessions-dir /home/nick/.claude/tokitty/sessions"
+        'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_windows_local_uses_python():
     cmd = hi._build_command(r"C:\Users\nick\.claude")
-    assert cmd.startswith("python C:\\Users\\nick\\.claude/tokitty/hook_writer.py")
+    assert cmd.startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
+
+
+def test_build_command_quotes_spaced_path():
+    cmd = hi._build_command("/home/nick 2/.claude")
+    assert cmd == (
+        'python3 "/home/nick 2/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/nick 2/.claude/tokitty/sessions"'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +101,45 @@ def test_get_config_dirs_falls_back_on_malformed_accounts_json(monkeypatch, tmp_
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     dirs = hi.get_config_dirs()
     assert dirs == [str(fake_home / ".claude")]
+
+
+# ---------------------------------------------------------------------------
+# _default_config_dir (win32 WSL resolution)
+# ---------------------------------------------------------------------------
+
+def test_default_config_dir_non_win32_is_home_claude(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(hi.sys, "platform", "linux")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    assert hi._default_config_dir() == str(fake_home / ".claude")
+
+
+def test_default_config_dir_win32_resolves_wsl_unc(monkeypatch, tmp_path):
+    monkeypatch.setattr(hi.sys, "platform", "win32")
+
+    def fake_find_wsl_credentials(run=None):
+        return "Ubuntu", "/home/nick/.claude/.credentials.json"
+
+    import tokitty.wsl_probe as wsl_probe
+    monkeypatch.setattr(wsl_probe, "find_wsl_credentials", fake_find_wsl_credentials)
+
+    assert hi._default_config_dir() == r"\\wsl.localhost\Ubuntu\home\nick\.claude"
+
+
+def test_default_config_dir_win32_falls_back_when_wsl_resolution_fails(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(hi.sys, "platform", "win32")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    def raising_find_wsl_credentials(run=None):
+        raise RuntimeError("no wsl.exe")
+
+    import tokitty.wsl_probe as wsl_probe
+    monkeypatch.setattr(wsl_probe, "find_wsl_credentials", raising_find_wsl_credentials)
+
+    assert hi._default_config_dir() == str(fake_home / ".claude")
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +211,24 @@ def test_install_writes_timestamped_backup(tmp_path):
     assert json.loads(backups[0].read_text()) == {"foo": "bar"}
 
 
+def test_backup_uniquifies_on_same_second_collision(monkeypatch, tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    settings_path.write_text(json.dumps({"foo": "bar"}))
+    monkeypatch.setattr(hi.time, "strftime", lambda fmt: "20260101-000000")
+
+    hi._backup(settings_path)
+    settings_path.write_text(json.dumps({"foo": "baz"}))
+    hi._backup(settings_path)
+
+    backups = sorted(config_dir.glob("settings.json.tokitty-backup-*"))
+    assert len(backups) == 2
+    contents = {b.read_text() for b in backups}
+    assert json.dumps({"foo": "bar"}) in contents
+    assert json.dumps({"foo": "baz"}) in contents
+
+
 def test_install_no_backup_when_settings_missing(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
@@ -212,6 +277,30 @@ def test_install_aborts_on_corrupt_settings_json_touches_nothing(tmp_path):
     assert not result.ok
     assert (config_dir / "settings.json").read_text() == original
     assert not (config_dir / "tokitty").exists()
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_aborts_cleanly_on_non_dict_hooks_key(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps({"hooks": "not-a-dict"}))
+    original = (config_dir / "settings.json").read_text()
+    result = hi.install_hooks_for_dir(str(config_dir))
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_aborts_cleanly_on_non_list_event_value(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": "not-a-list"}})
+    )
+    original = (config_dir / "settings.json").read_text()
+    result = hi.install_hooks_for_dir(str(config_dir))
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
     assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
 
 
