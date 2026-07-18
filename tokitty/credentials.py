@@ -54,14 +54,35 @@ def _home_relative_source() -> Optional[LocalCredentialsSource]:
     return None
 
 
-def resolve_credentials_source() -> CredentialsSource:
+def _posix_from_unc_or_same(config_dir: str) -> str:
+    """On non-Windows, a UNC config_dir from accounts.json still refers to a
+    local path once inside the distro -- translate it; otherwise pass through."""
+    from tokitty.accounts import parse_wsl_unc
+
+    unc = parse_wsl_unc(config_dir)
+    return unc[1] if unc is not None else config_dir
+
+
+def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsSource:
     """Return the credentials source to use.
 
-    Resolution order: explicit override, then home-relative, then (on
-    Windows only) a WSL fallback probe. Raises CredentialsError if nothing
-    is found, or AmbiguousCredentialsError if more than one WSL distro has
-    a credentials file and no override is set.
+    With an explicit config_dir (from accounts.json), that dir's
+    .credentials.json is used directly -- a WSL UNC dir on Windows maps to
+    a wsl.exe-read source so we never open the UNC path from Python.
+    Without one: v1 resolution order (env override, home-relative, WSL probe).
     """
+    if config_dir:
+        from tokitty.accounts import parse_wsl_unc
+
+        unc = parse_wsl_unc(config_dir)
+        if unc is not None and sys.platform == "win32":
+            distro, posix_dir = unc
+            return WslDistroCredentialsSource(distro=distro, wsl_path=f"{posix_dir}/.credentials.json")
+        candidate = Path(_posix_from_unc_or_same(config_dir)) / ".credentials.json"
+        if not candidate.is_file():
+            raise CredentialsError(f"No credentials file at {candidate} (from accounts.json)")
+        return LocalCredentialsSource(path=candidate)
+
     override = _override_source()
     if override is not None:
         if not override.path.is_file():
