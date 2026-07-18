@@ -183,16 +183,17 @@ def _overlay(template: List[str], patches: Dict[tuple, str]) -> List[str]:
 # paws land for the typing frame.
 WORKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
     # screen slab: top bezel, glow rows slanting toward the hinge
-    (14, 0): "g", (14, 1): "g", (14, 2): "g", (14, 3): "g", (14, 4): "g",
-    (14, 5): "g", (14, 6): "g", (14, 7): "g",
-    (15, 0): "g", (15, 1): "S", (15, 2): "S", (15, 3): "S", (15, 4): "S",
-    (15, 5): "S", (15, 6): "S", (15, 7): "g",
-    (16, 0): "g", (16, 1): "S", (16, 2): "S", (16, 3): "S", (16, 4): "S",
-    (16, 5): "S", (16, 6): "S", (16, 7): "g",
-    (17, 1): "g", (17, 2): "S", (17, 3): "S", (17, 4): "S", (17, 5): "S",
-    (17, 6): "S", (17, 7): "S", (17, 8): "g",
-    (18, 1): "g", (18, 2): "S", (18, 3): "S", (18, 4): "S", (18, 5): "S",
-    (18, 6): "S", (18, 7): "S", (18, 8): "g",
+    # (one column of margin at the left edge, like every other row)
+    (14, 1): "g", (14, 2): "g", (14, 3): "g", (14, 4): "g", (14, 5): "g",
+    (14, 6): "g", (14, 7): "g", (14, 8): "g",
+    (15, 1): "g", (15, 2): "S", (15, 3): "S", (15, 4): "S", (15, 5): "S",
+    (15, 6): "S", (15, 7): "S", (15, 8): "g",
+    (16, 1): "g", (16, 2): "S", (16, 3): "S", (16, 4): "S", (16, 5): "S",
+    (16, 6): "S", (16, 7): "S", (16, 8): "g",
+    (17, 2): "g", (17, 3): "S", (17, 4): "S", (17, 5): "S", (17, 6): "S",
+    (17, 7): "S", (17, 8): "S", (17, 9): "g",
+    (18, 2): "g", (18, 3): "S", (18, 4): "S", (18, 5): "S", (18, 6): "S",
+    (18, 7): "S", (18, 8): "S", (18, 9): "g",
     (19, 2): "g", (19, 3): "S", (19, 4): "S", (19, 5): "S", (19, 6): "S",
     (19, 7): "S", (19, 8): "S", (19, 9): "g",
     (20, 2): "g", (20, 3): "g", (20, 4): "g", (20, 5): "g", (20, 6): "g",
@@ -210,11 +211,19 @@ WORKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
     (23, 13): "g", (23, 14): "g", (23, 15): "g",
 })
 
-# Contemplative pose -- SITTING_TEMPLATE with a small thought-dot accent
-# floating above the head. "T" toggles on/off with the nose accent.
+# Contemplative pose -- SITTING_TEMPLATE with a thought bubble above
+# the head. "t" is the small seed dot (lit in BOTH frames, so neither
+# frame is ever pixel-identical to idle); "T" cells extend it into a
+# larger bubble plus an ascending trail dot in the second frame.
 THINKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
-    (0, 13): "T", (0, 14): "T",
-    (1, 13): "T", (1, 14): "T",
+    # seed dot, always on
+    (1, 13): "t", (1, 14): "t",
+    # bubble growth + trail dot toward the head, frame 2 only
+    # (avoids (2,13), an existing head-tuft pixel)
+    (0, 14): "T", (0, 15): "T", (0, 16): "T",
+    (1, 15): "T", (1, 16): "T",
+    (2, 14): "T", (2, 15): "T", (2, 16): "T",
+    (2, 12): "T",
 })
 
 # Flag-waving pose -- ALERT_TEMPLATE (upright, attentive) with a thick
@@ -224,7 +233,10 @@ THINKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
 # dropped pennant (rows 5-9, sagging down the pole) -- the two never
 # share cells, so the whole flag visibly snaps between positions.
 PERMISSION_TEMPLATE: List[str] = _overlay(ALERT_TEMPLATE, {
-    # pole: tall, unbroken, two cells thick
+    # pole: tall, unbroken, two cells thick, held by the cat -- the
+    # lower shaft slants in toward the flank and a coat-colored arm
+    # (literal "o" cells, rows 11-12) grips it, so it reads "cat
+    # holding flag", not "flag planted nearby"
     (0, 25): "8", (0, 26): "8", (1, 25): "8", (1, 26): "8",
     (2, 25): "8", (2, 26): "8", (3, 25): "8", (3, 26): "8",
     (4, 25): "8", (4, 26): "8", (5, 25): "8", (5, 26): "8",
@@ -232,6 +244,13 @@ PERMISSION_TEMPLATE: List[str] = _overlay(ALERT_TEMPLATE, {
     (8, 25): "8", (8, 26): "8", (9, 25): "8", (9, 26): "8",
     (10, 25): "8", (10, 26): "8", (11, 25): "8", (11, 26): "8",
     (12, 25): "8", (12, 26): "8", (13, 25): "8", (13, 26): "8",
+    # lower shaft: single-width, stepping inward to the cat's side
+    (14, 25): "8", (15, 24): "8", (16, 24): "8",
+    (17, 23): "8", (18, 23): "8", (19, 22): "8",
+    # arm + paw gripping the pole
+    (11, 22): "o", (11, 23): "o", (11, 24): "o",
+    (12, 17): "o", (12, 18): "o", (12, 19): "o", (12, 20): "o",
+    (12, 21): "o", (12, 22): "o", (12, 23): "o", (12, 24): "o",
     # raised pennant (flies high and wide off the pole top)
     (0, 19): "6", (0, 20): "6", (0, 21): "6", (0, 22): "6", (0, 23): "6",
     (0, 24): "6",
@@ -248,38 +267,44 @@ PERMISSION_TEMPLATE: List[str] = _overlay(ALERT_TEMPLATE, {
     (9, 20): "7", (9, 21): "7", (9, 22): "7", (9, 23): "7", (9, 24): "7",
 })
 
-# Happy completion hop -- SITTING_TEMPLATE with a persistent ground
-# line (literal "s" cells outside the cat plus "2" markers under it)
-# and the cat's bottom THREE rows marked for lift-off: "9" (white
-# cells), "0" (coat cells) and "1" (shaded cells) all vanish in the
-# airborne frame, while the "2" cells become ground color -- leaving a
-# clear ground-clearance gap between the lifted cat and the unbroken
-# ground line. "M" motion-dash clusters only show mid-air.
-DONE_HOP_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
-    # rows 23-24: cat bottom, blanked when airborne
-    (23, 7): "0", (23, 8): "0", (23, 9): "0",
-    (23, 10): "9", (23, 11): "9", (23, 12): "9", (23, 13): "9",
-    (23, 14): "9", (23, 15): "9", (23, 16): "9",
-    (23, 17): "0", (23, 18): "0", (23, 19): "0",
-    (23, 21): "1", (23, 22): "1",
-    (24, 8): "0", (24, 9): "0",
-    (24, 10): "9", (24, 11): "9", (24, 12): "9", (24, 13): "9",
-    (24, 14): "9", (24, 15): "9", (24, 16): "9",
-    (24, 17): "1", (24, 18): "1",
-    # row 25: cat rim when grounded, becomes ground line when airborne
-    (25, 9): "2", (25, 10): "2", (25, 11): "2", (25, 12): "2",
-    (25, 13): "2", (25, 14): "2", (25, 15): "2", (25, 16): "2",
-    (25, 17): "2",
-    # persistent ground line flanking the cat (both frames)
+def _shift_up(template: List[str], n: int) -> List[str]:
+    """Translate a template up by `n` rows, backfilling blank rows.
+
+    The top `n` source rows fall off the grid; callers pick shifts whose
+    lost rows are blank or near-blank (SITTING loses only two 1px ear
+    tips at n=2, which reads as hop squash rather than damage).
+    """
+    blank = "." * len(template[0])
+    return template[n:] + [blank] * n
+
+
+# Happy completion hop -- two templates, one per frame, so the WHOLE
+# cat translates upward when airborne instead of just losing its feet.
+# Both share a persistent ground line (literal "s") at the bottom row;
+# the airborne frame is the sitting cat shifted up two rows, leaving a
+# real clearance gap above the unbroken ground, with bright motion
+# dashes (literal "B") in the gap under the paws.
+DONE_HOP_GROUNDED_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
+    # ground line flanking the seated cat
     (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s", (25, 7): "s",
     (25, 8): "s",
     (25, 18): "s", (25, 19): "s", (25, 20): "s", (25, 21): "s",
     (25, 22): "s", (25, 23): "s", (25, 24): "s",
-    # motion dashes: flanks plus the clearance gap under the paws
-    (20, 3): "M", (20, 4): "M", (21, 3): "M", (21, 4): "M",
-    (20, 22): "M", (20, 23): "M", (21, 21): "M", (21, 22): "M",
-    (24, 4): "M", (24, 5): "M", (24, 20): "M", (24, 21): "M",
 })
+
+DONE_HOP_AIRBORNE_TEMPLATE: List[str] = _overlay(
+    _shift_up(SITTING_TEMPLATE, 2), {
+        # unbroken ground line: the cat now ends at row 23, so rows
+        # 24-25 read as clear air between paws and ground
+        (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s",
+        (25, 7): "s", (25, 8): "s", (25, 9): "s", (25, 10): "s",
+        (25, 11): "s", (25, 12): "s", (25, 13): "s", (25, 14): "s",
+        (25, 15): "s", (25, 16): "s", (25, 17): "s", (25, 18): "s",
+        (25, 19): "s", (25, 20): "s", (25, 21): "s", (25, 22): "s",
+        (25, 23): "s", (25, 24): "s",
+        # bright motion dashes in the clearance gap under the paws
+        (24, 9): "B", (24, 10): "B", (24, 15): "B", (24, 16): "B",
+    })
 
 SITTING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "sleeping": [{"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}],
@@ -321,14 +346,16 @@ FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
 WORKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "working": [
         {"L": "e", "R": "e", "A": "n", "S": "b", "P": "g"},
-        {"L": "e", "R": "k", "A": "n", "S": "B", "P": "w"},
+        # typing pulse: lidded eyes, looking down at the bright screen
+        {"L": "k", "R": "k", "A": "n", "S": "B", "P": "w"},
     ],
 }
 
 THINKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "thinking": [
-        {"L": "e", "R": "e", "A": "n", "T": "."},
-        {"L": "e", "R": "e", "A": "?", "T": "?"},
+        {"L": "e", "R": "e", "A": "n", "t": "?", "T": "."},
+        # bubble grows, one eye squints, nose flashes the accent
+        {"L": "e", "R": "k", "A": "?", "t": "?", "T": "?"},
     ],
 }
 
@@ -339,17 +366,19 @@ PERMISSION_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     ],
 }
 
+# done_hop pairs a template WITH each frame's substitutions -- the only
+# state whose two frames use different base grids (whole-cat translate).
 DONE_HOP_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     "done_hop": [
-        # grounded: full cat, ground line only at the flanks
-        {"L": "e", "R": "e", "A": "h",
-         "9": "w", "0": "o", "1": "O", "2": "o", "M": "."},
-        # airborne: bottom rows lift away, ground line runs unbroken,
-        # motion dashes flare in the gap and at the flanks
-        {"L": "e", "R": "e", "A": "h",
-         "9": ".", "0": ".", "1": ".", "2": "s", "M": "h"},
+        {"L": "e", "R": "e", "A": "h"},  # grounded
+        {"L": "e", "R": "e", "A": "h"},  # airborne (shifted template)
     ],
 }
+
+DONE_HOP_FRAME_TEMPLATES: List[List[str]] = [
+    DONE_HOP_GROUNDED_TEMPLATE,
+    DONE_HOP_AIRBORNE_TEMPLATE,
+]
 
 ALL_STATES = (
     tuple(SITTING_FRAME_SPECS.keys())
@@ -382,7 +411,13 @@ def get_frames(state: str) -> List[List[str]]:
     elif state in PERMISSION_FRAME_SPECS:
         template, specs = PERMISSION_TEMPLATE, PERMISSION_FRAME_SPECS[state]
     elif state in DONE_HOP_FRAME_SPECS:
-        template, specs = DONE_HOP_TEMPLATE, DONE_HOP_FRAME_SPECS[state]
+        # per-frame templates: the airborne frame translates the cat
+        return [
+            _apply(tmpl, subs)
+            for tmpl, subs in zip(
+                DONE_HOP_FRAME_TEMPLATES, DONE_HOP_FRAME_SPECS[state]
+            )
+        ]
     else:
         raise KeyError(f"Unknown sprite state: {state!r}")
 
