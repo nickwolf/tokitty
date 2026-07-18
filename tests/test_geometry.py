@@ -19,3 +19,13 @@ def test_clamp_position_resets_position_beyond_screen_bounds():
 
 def test_clamp_position_handles_window_larger_than_screen():
     assert clamp_position(100, 100, 5000, 5000, 1920, 1080) == (0, 0)
+
+
+def test_saved_bottom_edge_position_clamped_for_taller_card():
+    # A position saved by the 128px single-pane card, restored by the
+    # 256px dual-pane card, must be pulled up so the card stays on screen.
+    screen_w, screen_h = 1920, 1080
+    saved_x, saved_y = 1596, 1080 - 128 - 24  # v1 default bottom-right
+    x, y = clamp_position(saved_x, saved_y, 300, 256, screen_w, screen_h)
+    assert y + 256 <= screen_h
+    assert x == saved_x
