@@ -58,15 +58,16 @@ def test_non_ok_with_no_good_snapshot_shows_blocking_fallback():
     assert display["hint_text"]
 
 
-def test_non_ok_with_cached_uncapped_snapshot_reuses_cached_data_silently():
+def test_non_ok_with_cached_uncapped_snapshot_shows_resting_look():
     previous = _ok(_snapshot(session_pct=56.0, weekly_pct=50.0))
 
     display = _display_state_for(_error("stale_token"), previous=previous, now=NOW)
 
     assert display["session_pct"] == 56.0
     assert display["weekly_pct"] == 50.0
-    assert display["hint_text"] is None
-    assert display["dimmed"] is False
+    assert display["state"] == "sleeping"
+    assert display["dimmed"] is True
+    assert "last seen" in display["hint_text"]
 
 
 def test_non_ok_with_cached_capped_snapshot_keeps_counting_down_silently():
@@ -111,3 +112,45 @@ def test_next_last_good_stays_none_until_first_success():
     bad = _error("stale_token")
 
     assert _next_last_good(bad, None) is None
+
+
+def test_stale_token_with_cache_shows_resting_look():
+    # Use the file's existing helper for an ok PollResult
+    good = _ok(_snapshot(session_pct=42.0))
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    assert display["state"] == "sleeping"
+    assert display["dimmed"] is True
+    assert display["hint_text"].startswith("last seen ")
+    assert display["session_pct"] == 42.0  # last-good numbers still shown
+
+
+def test_stale_token_resting_uses_last_good_fetch_time():
+    good = _ok(_snapshot())
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    expected = good.fetched_at.astimezone().strftime("%H:%M")
+    assert display["hint_text"] == f"last seen {expected}"
+
+
+def test_stale_token_without_cache_keeps_v1_hint():
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=None)
+    assert display["state"] == "confused"
+    assert display["hint_text"] == "token stale, open Claude Code"
+
+
+def test_overdue_capped_beats_resting():
+    # last-good has an active capped limit whose resets_at is already past:
+    # the "can't confirm" warning must win over the resting look.
+    capped_limit = _limit(kind="session", resets_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    capped_snapshot = _snapshot(session_pct=100.0, limits=[capped_limit])
+    good = _ok(capped_snapshot)
+    stale = PollResult(status="stale_token", snapshot=None, message="expired",
+                       fetched_at=datetime.now(timezone.utc))
+    display = _display_state_for(stale, previous=good)
+    assert display["hint_text"] == "token expired, reopen Claude Code"
+    assert display["dimmed"] is True
