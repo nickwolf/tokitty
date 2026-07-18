@@ -34,11 +34,11 @@ DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 UI_REFRESH_MS = 500
 
 
-def build_fetch_fn():
+def build_fetch_fn(config_dir: Optional[str] = None):
     def fetch() -> PollResult:
         now = datetime.now(timezone.utc)
         try:
-            source = resolve_credentials_source()
+            source = resolve_credentials_source(config_dir=config_dir)
         except AmbiguousCredentialsError as exc:
             return PollResult(status="ambiguous_credentials", snapshot=None, message=str(exc), fetched_at=now)
         except CredentialsError as exc:
@@ -72,7 +72,7 @@ def build_fetch_fn():
     return fetch
 
 
-def resolve_activity_sessions() -> Tuple[Optional[str], Optional[str]]:
+def resolve_activity_sessions(config_dir: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     """Return (sessions_dir, distro_name) for the ActivityWatcher.
 
     distro_name is None on Linux/macOS (no WSL check needed) and on any
@@ -80,7 +80,25 @@ def resolve_activity_sessions() -> Tuple[Optional[str], Optional[str]]:
     activity" (sessions_dir=None too), never a crash. Single default
     account for now (issue #7's scope); a future multi-account watcher
     would resolve one of these per account.
+
+    With an explicit config_dir (from accounts.json): a WSL UNC dir stays
+    UNC on win32 (with the distro name parsed out for the running-distro
+    check) and is translated to its posix path on Linux; a plain dir is
+    used as-is on either platform. Without one: v1 behavior below.
     """
+    if config_dir:
+        from tokitty.accounts import parse_wsl_unc
+
+        unc = parse_wsl_unc(config_dir)
+        if sys.platform == "win32":
+            if unc is not None:
+                distro = unc[0]
+                sessions = config_dir.rstrip("\\/") + "\\tokitty\\sessions"
+                return sessions, distro
+            return str(Path(config_dir) / "tokitty" / "sessions"), None
+        base = unc[1] if unc is not None else config_dir
+        return str(Path(base) / "tokitty" / "sessions"), None
+
     if sys.platform != "win32":
         try:
             from tokitty.hooks_install import get_config_dirs
@@ -102,27 +120,35 @@ def resolve_activity_sessions() -> Tuple[Optional[str], Optional[str]]:
 
 
 def debug_print() -> int:
-    result = build_fetch_fn()()
-    print(f"status: {result.status}")
-    if result.message:
-        print(f"message: {result.message}")
-    if result.source_description:
-        print(f"credentials source: {result.source_description}")
-    if result.snapshot is not None:
-        s = result.snapshot
-        print(f"session: {s.session_pct:.1f}% (resets {s.session_resets_at})")
-        print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
-        if s.credits_used is not None and s.credits_limit is not None:
-            print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+    from tokitty.accounts import load_accounts
 
-    sessions_dir, distro_name = resolve_activity_sessions()
-    if sessions_dir is not None:
-        watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
-        watcher._tick_once()  # one-shot snapshot; no background thread for a single debug print
-        activity = watcher.get_latest()
-        if activity is not None:
-            label = f" ({activity.tool_label})" if activity.tool_label else ""
-            print(f"activity: {activity.state}{label}")
+    accounts = load_accounts(get_state_dir())
+    for account in accounts or [None]:
+        if account is not None:
+            print(f"— {account.name} ({account.config_dir})")
+        config_dir = account.config_dir if account else None
+
+        result = build_fetch_fn(config_dir)()
+        print(f"status: {result.status}")
+        if result.message:
+            print(f"message: {result.message}")
+        if result.source_description:
+            print(f"credentials source: {result.source_description}")
+        if result.snapshot is not None:
+            s = result.snapshot
+            print(f"session: {s.session_pct:.1f}% (resets {s.session_resets_at})")
+            print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
+            if s.credits_used is not None and s.credits_limit is not None:
+                print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+
+        sessions_dir, distro_name = resolve_activity_sessions(config_dir)
+        if sessions_dir is not None:
+            watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+            watcher._tick_once()  # one-shot snapshot; no background thread for a single debug print
+            activity = watcher.get_latest()
+            if activity is not None:
+                label = f" ({activity.tool_label})" if activity.tool_label else ""
+                print(f"activity: {activity.state}{label}")
 
     return 0
 
@@ -263,49 +289,79 @@ def run_gui() -> int:
         print("Tokitty is already running.", file=sys.stderr)
         return 1
 
+    from tokitty.accounts import env_conflict_warning, load_accounts
+
+    accounts = load_accounts(state_dir)
+    warning = env_conflict_warning(accounts)
+    if warning:
+        print(f"tokitty: {warning}", file=sys.stderr)
+
+    debug_accounts = os.environ.get("TOKITTY_DEBUG_ACCOUNTS")
+    pane_count = 2 if debug_accounts == "2" else (len(accounts) if accounts else 1)
+
     root = tk.Tk()
-    window = TokittyWindow(root, state_dir)
+    window = TokittyWindow(root, state_dir, pane_count=pane_count)
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
-    if debug_state:
-        window.render(
-            state=debug_state, session_pct=0.0, weekly_pct=0.0,
-            session_reset_text="—", weekly_reset_text="—",
+    if debug_state or debug_accounts == "2":
+        fake = dict(
+            state=debug_state or "content", session_pct=37.0, weekly_pct=62.0,
+            session_reset_text="resets 9pm", weekly_reset_text="resets Fri",
             driving_tag="debug", credits_text=None, hint_text=None, dimmed=False,
         )
+        for index, pane in enumerate(window.panes):
+            resting = dict(fake, state="sleeping", dimmed=True,
+                           hint_text="last seen 17:40")
+            pane.render(**(fake if index == 0 else resting))
         root.mainloop()
         lock.release()
         return 0
 
-    poller = Poller(fetch_fn=build_fetch_fn())
-    window.on_refresh_requested = poller.request_refresh
-    last_good_holder = {"result": None}
+    units = []
+    for index, account in enumerate(accounts or [None]):
+        config_dir = account.config_dir if account else None
+        poller = Poller(fetch_fn=build_fetch_fn(config_dir))
+        sessions_dir, distro_name = resolve_activity_sessions(config_dir)
+        watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+        units.append({"pane": window.panes[index], "poller": poller,
+                      "watcher": watcher, "last_good": None})
 
-    sessions_dir, distro_name = resolve_activity_sessions()
-    watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+    def refresh_all():
+        for unit in units:
+            unit["poller"].request_refresh()
+
+    window.on_refresh_requested = refresh_all
+    if warning:
+        window.panes[0].render(state="confused", session_pct=0.0, weekly_pct=0.0,
+                               session_reset_text="—", weekly_reset_text="—", driving_tag="",
+                               credits_text=None, hint_text=warning, dimmed=True)
 
     def tick():
-        latest = poller.get_latest()
-        if latest is not None:
-            display = _display_state_for(latest, last_good_holder["result"])
-            activity = watcher.get_latest()
+        for unit in units:
+            latest = unit["poller"].get_latest()
+            if latest is None:
+                continue
+            display = _display_state_for(latest, unit["last_good"])
+            activity = unit["watcher"].get_latest()
             pose = resolve_pose(display["state"], activity)
             display["state"] = pose["sprite_state"]
             display["tool_label"] = pose["tool_label"]
             display["accent"] = pose["accent"]
-            window.render(**display)
-            last_good_holder["result"] = _next_last_good(latest, last_good_holder["result"])
+            unit["pane"].render(**display)
+            unit["last_good"] = _next_last_good(latest, unit["last_good"])
         root.after(UI_REFRESH_MS, tick)
 
-    poller.start()
-    watcher.start()
+    for unit in units:
+        unit["poller"].start()
+        unit["watcher"].start()
     root.after(UI_REFRESH_MS, tick)
 
     try:
         root.mainloop()
     finally:
-        poller.stop()
-        watcher.stop()
+        for unit in units:
+            unit["poller"].stop()
+            unit["watcher"].stop()
         lock.release()
 
     return 0
