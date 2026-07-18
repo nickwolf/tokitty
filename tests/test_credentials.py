@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+import tokitty.credentials as credentials
 from tokitty.credentials import (
     ENV_OVERRIDE,
     CredentialsError,
     LocalCredentialsSource,
+    WslDistroCredentialsSource,
     describe_source,
     is_token_expired,
     load_credentials,
@@ -98,3 +100,34 @@ def test_is_token_expired_false_when_future():
 
 def test_is_token_expired_true_when_missing():
     assert is_token_expired({}) is True
+
+
+def test_explicit_config_dir_posix(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV_OVERRIDE, "/should/be/ignored")
+    creds = tmp_path / ".credentials.json"
+    creds.write_text("{}", encoding="utf-8")
+    source = resolve_credentials_source(config_dir=str(tmp_path))
+    assert isinstance(source, LocalCredentialsSource)
+    assert source.path == creds
+
+
+def test_explicit_config_dir_missing_file_raises(tmp_path):
+    with pytest.raises(CredentialsError):
+        resolve_credentials_source(config_dir=str(tmp_path / "nope"))
+
+
+def test_explicit_config_dir_wsl_unc(monkeypatch):
+    monkeypatch.setattr(credentials.sys, "platform", "win32")
+    source = resolve_credentials_source(config_dir="\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude-work")
+    assert isinstance(source, WslDistroCredentialsSource)
+    assert source.distro == "Ubuntu"
+    assert source.wsl_path == "/home/u/.claude-work/.credentials.json"
+
+
+def test_no_config_dir_keeps_v1_override_behavior(tmp_path, monkeypatch):
+    creds = tmp_path / "c.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(ENV_OVERRIDE, str(creds))
+    source = resolve_credentials_source()
+    assert isinstance(source, LocalCredentialsSource)
+    assert source.path == creds
