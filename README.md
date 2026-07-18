@@ -18,6 +18,31 @@ and the cat starts reacting to what a running Claude Code session is doing: a th
 
 On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in the Windows-native `~/.claude`. `--install-hooks` (and `--uninstall-hooks`) detect this automatically — same WSL-credentials probe the live-activity watcher uses — and target the `\\wsl.localhost\<distro>\home\<user>\.claude` dir instead, falling back to the Windows-local `~/.claude` only if WSL resolution fails (no WSL installed, no Claude Code credentials found, etc). Running `python3 -m tokitty --install-hooks` from inside WSL itself installs to the same dir and is equivalent — pick whichever shell is convenient.
 
+## Two accounts
+
+Tokitty can track two Claude Code accounts (e.g. personal + work) side by side in one window: two stacked cat/bar panes instead of one, sharing a single always-on-top card. This is opt-in and off by default — with no config, tokitty behaves exactly like v1, single account, single pane.
+
+To turn it on, create `accounts.json` in tokitty's per-user state directory (the same directory `position.json` already lives in — `%LOCALAPPDATA%\Tokitty\` on Windows, `~/Library/Application Support/Tokitty` on macOS, `$XDG_CONFIG_HOME/tokitty` or `~/.config/tokitty` on Linux):
+
+```json
+{
+  "accounts": [
+    {"name": "personal", "config_dir": "\\\\wsl.localhost\\Ubuntu\\home\\cptsmidge\\.claude", "coat": "orange_tabby"},
+    {"name": "work",     "config_dir": "\\\\wsl.localhost\\Ubuntu\\home\\cptsmidge\\.claude-work", "coat": "gray_tabby"}
+  ]
+}
+```
+
+Each entry's `config_dir` points at that account's Claude Code config directory (a WSL UNC path, a native path, whatever `--install-hooks` would target for that account). `coat` is parsed and stored but not yet rendered — coat customization lands in a later phase. If `accounts.json` is missing, empty, or fails to parse, tokitty falls straight back to v1's automatic single-account credential resolution — nothing in that path changes.
+
+`TOKITTY_CREDENTIALS` (see Configuration above) still works, but only for single-account mode. If both `TOKITTY_CREDENTIALS` and a valid `accounts.json` are present, `accounts.json` wins and the env var is ignored; tokitty prints a startup warning to stderr so the conflict doesn't pass silently.
+
+**The resting look is normal, not an error.** Work-account tokens typically expire around an hour after that account's Claude Code last ran. Outside work hours, the work pane will show its last-good numbers dimmed, a sleeping cat, and a "last seen HH:MM" label — that's the expected steady state for an idle account, not a warning condition, and no error styling is applied.
+
+After creating or editing `accounts.json`, re-run `python -m tokitty --install-hooks` — the installer reads the same file and installs hooks into every listed account's config dir, not just the default one. As with any hook change, restart any Claude Code sessions that are already open; hook registration isn't hot-reloaded into a running session.
+
+Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one in the resting look) without needing a real `accounts.json` or a second account — handy for checking layout changes.
+
 ## Security & privacy
 
 Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position is the only thing Tokitty's core polling persists, and it's stored in your OS's normal per-user config directory, never inside this repo.
@@ -29,6 +54,8 @@ The live-activity feature above is opt-in and changes this picture only if you t
 - **What it persists.** Per session, it writes one small JSON state file to `<config-dir>/tokitty/sessions/<session_id>.json` containing just the session id, the event name, a sequence number, a timestamp, and — for tool-call and agent events — the tool name and agent id. Prompt text, tool arguments/output, and file contents are never written to that file. On `SessionEnd` the file is deleted; tokitty's own watcher also deletes state files it judges stale (no update within its timeout window) so a crashed or killed session doesn't leave the cat stuck.
 - **Failure behavior.** The hook script never writes to stdout and never exits non-zero, under any input — Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing it does can ever interfere with your actual session. This is covered by tests, not just a claim.
 - **Nothing leaves your machine.** None of this activity data is transmitted anywhere; it's read locally by tokitty's own watcher to drive the sprite.
+
+Two-account mode (above) extends this picture the same way single-account mode already worked, just twice: with `accounts.json` present, tokitty reads OAuth credentials and (if hooks are installed) hook/session state from a second Claude Code config dir in addition to the default one. Nothing about what's read, persisted, or transmitted changes — it's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains account names, config-dir paths, and coat choices you type in yourself.
 
 ## Platforms tested
 
