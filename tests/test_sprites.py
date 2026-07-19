@@ -1,6 +1,6 @@
 import pytest
 
-from tokitty.sprites import ALL_STATES, COATS, PALETTE, get_frames, get_palette
+from tokitty.sprites import ALL_STATES, BASE_PALETTE, COATS, PALETTE, get_frames, get_palette
 
 
 def test_all_states_have_at_least_two_frames():
@@ -92,3 +92,47 @@ def test_every_coat_defines_exactly_the_coat_keys():
 
 def test_palette_covers_pattern_char():
     assert PALETTE["c"] == PALETTE["o"]  # invisible on the default coat
+
+
+def test_all_coats_define_identical_region_keys():
+    expected = set(COATS["orange_tabby"].keys())
+    assert set(COATS.keys()) == {"orange_tabby", "gray_tabby", "black", "white", "calico"}
+    for name, coat in COATS.items():
+        assert set(coat.keys()) == expected, name
+        for char, color in coat.items():
+            assert color.startswith("#") and len(color) == 7, (name, char)
+
+
+def test_black_coat_body_lighter_than_outline():
+    def lum(hex_color):
+        r, g, b = (int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    assert lum(COATS["black"]["o"]) > lum(BASE_PALETTE["k"]) + 15
+
+
+def test_calico_patch_differs_from_coat():
+    assert COATS["calico"]["c"] != COATS["calico"]["o"]
+
+
+def test_ground_line_is_not_coat_colored():
+    for frames in (get_frames("done_hop"),):
+        for frame in frames:
+            bottom_rows = frame[-3:]
+            joined = "".join("".join(r) for r in bottom_rows)
+            assert "G" in joined  # ground exists
+    # the ground char is defined in BASE_PALETTE, not any coat
+    assert "G" in BASE_PALETTE
+    for coat in COATS.values():
+        assert "G" not in coat
+
+
+def test_every_state_frame_char_is_in_every_coat_palette():
+    # No ALL_SPRITE_STATES constant exists; sprites.ALL_STATES enumerates
+    # every state get_frames knows, so we use that directly.
+    for coat in COATS:
+        palette = get_palette(coat)
+        for state in ALL_STATES:
+            for frame in get_frames(state):
+                for row in frame:
+                    for ch in row:
+                        assert ch in palette, (coat, state, ch)

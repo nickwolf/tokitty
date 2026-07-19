@@ -8,11 +8,12 @@ import json
 import sys
 import tkinter as tk
 from pathlib import Path
-from typing import Optional
+from tkinter import colorchooser, simpledialog
+from typing import Callable, Optional
 
 from tokitty.display import bar_color
 from tokitty.geometry import clamp_position
-from tokitty.sprites import PALETTE, SCALE, get_frames
+from tokitty.sprites import COATS, PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
 PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
@@ -38,37 +39,105 @@ def card_height(pane_count: int) -> int:
     return PANE_HEIGHT * pane_count
 
 
+def pane_index_at(y: int, pane_count: int) -> int:
+    """Map a y coordinate (relative to the window's top edge) to a pane
+    index, clamped to the valid range [0, pane_count - 1]."""
+    y = max(y, 0)
+    return min(y // PANE_HEIGHT, pane_count - 1)
+
+
+def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
+    """Return the bar fill color: the override if set, else the
+    threshold-based bar_color(pct)."""
+    return override or bar_color(pct)
+
+
 class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label="", coat=None):
         self.parent = parent
         self._current_state = "sleeping"
         self._frame_index = 0
         self._driving_tag = ""
         self._tool_label = ""
         self._accent = False
+        self._palette = palette if palette is not None else PALETTE
+        self._card_bg = card_bg if card_bg is not None else BG_COLOR
+        self._bar_fill = bar_fill
+        self._label = label
+        self._coat = coat if coat is not None else "orange_tabby"
         self._build_widgets()
 
+    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, coat=None) -> None:
+        """Live re-style without rebuilding widgets. Each parameter left as
+        None keeps that slot's current value unchanged -- to reset a slot
+        back to the preset/default, pass the preset's/default value
+        explicitly (e.g. module PALETTE, BG_COLOR, or "" for no label)."""
+        if palette is not None:
+            self._palette = palette
+        if card_bg is not None:
+            self._card_bg = card_bg
+        if bar_fill is not None:
+            self._bar_fill = bar_fill
+        if label is not None:
+            self._label = label
+        if coat is not None:
+            self._coat = coat
+
+        bg = ACCENT_BG if self._accent else self._card_bg
+        self.parent.configure(bg=bg)
+        self.canvas.configure(bg=bg)
+        for widget in (
+            self.session_label,
+            self.session_reset_label,
+            self.weekly_label,
+            self.weekly_reset_label,
+            self.status_label,
+            self.label_widget,
+        ):
+            widget.configure(bg=bg)
+
+        self.session_bar_bg.delete("fill")
+        self.session_bar_bg.create_rectangle(
+            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(self._last_session_pct, self._bar_fill),
+            width=0, tags="fill",
+        )
+        self.weekly_bar_bg.delete("fill")
+        self.weekly_bar_bg.create_rectangle(
+            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(self._last_weekly_pct, self._bar_fill),
+            width=0, tags="fill",
+        )
+
+        self._update_label()
+
+    def _update_label(self) -> None:
+        self.label_widget.configure(text=self._label, bg=self._card_bg if not self._accent else ACCENT_BG)
+
     def _build_widgets(self) -> None:
+        self._last_session_pct = 0.0
+        self._last_weekly_pct = 0.0
+        self._last_session_pct_px = 0
+        self._last_weekly_pct_px = 0
+
         self.canvas = tk.Canvas(
-            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=BG_COLOR, highlightthickness=0
+            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=self._card_bg, highlightthickness=0
         )
         self.canvas.place(x=8, y=8)
 
-        self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.session_label.place(x=STATS_X, y=12)
         self.session_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.session_bar_bg.place(x=STATS_X, y=30)
-        self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.session_reset_label.place(x=STATS_X, y=42)
 
-        self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.weekly_label.place(x=STATS_X, y=60)
         self.weekly_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.weekly_bar_bg.place(x=STATS_X, y=78)
-        self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.weekly_reset_label.place(x=STATS_X, y=90)
 
         # One widget for both credits and the error hint -- _display_state_for
@@ -80,9 +149,16 @@ class Pane:
         # first character (the "$" in the credits line) -- found via a real
         # screenshot, not guessed.
         self.status_label = tk.Label(
-            self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
+            self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
         )
         self.status_label.place(x=STATS_X, y=108)
+
+        # Small dim label at the pane's top-right (cat name / identifier).
+        # Empty text renders as an empty Label -- takes no visible space.
+        self.label_widget = tk.Label(
+            self.parent, text=self._label, fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
+        )
+        self.label_widget.place(x=CARD_WIDTH - 6, y=4, anchor="ne")
 
     def render(
         self,
@@ -102,8 +178,12 @@ class Pane:
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
+        self._last_session_pct = session_pct
+        self._last_weekly_pct = weekly_pct
+        self._last_session_pct_px = BAR_WIDTH * min(session_pct, 100) / 100
+        self._last_weekly_pct_px = BAR_WIDTH * min(weekly_pct, 100) / 100
 
-        bg = ACCENT_BG if accent else BG_COLOR
+        bg = ACCENT_BG if accent else self._card_bg
         self.parent.configure(bg=bg)
         self.canvas.configure(bg=bg)
         for label in (
@@ -112,6 +192,7 @@ class Pane:
             self.weekly_label,
             self.weekly_reset_label,
             self.status_label,
+            self.label_widget,
         ):
             label.configure(bg=bg)
 
@@ -121,13 +202,13 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, BAR_WIDTH * min(session_pct, 100) / 100, 8, fill=bar_color(session_pct), width=0, tags="fill"
+            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(session_pct, self._bar_fill), width=0, tags="fill"
         )
         self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
 
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, BAR_WIDTH * min(weekly_pct, 100) / 100, 8, fill=bar_color(weekly_pct), width=0, tags="fill"
+            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(weekly_pct, self._bar_fill), width=0, tags="fill"
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
@@ -147,7 +228,7 @@ class Pane:
         y_off = max((CAT_CANVAS_SIZE - frame_h) // 2, 0)
         for row_index, row in enumerate(frame):
             for col_index, ch in enumerate(row):
-                color = PALETTE.get(ch, "")
+                color = self._palette.get(ch, "")
                 if not color:
                     continue
                 x0 = x_off + col_index * SCALE
@@ -177,6 +258,13 @@ class TokittyWindow:
         self._drag_offset = (0, 0)
         self._always_on_top = tk.BooleanVar(value=True)
         self.on_refresh_requested = None  # set externally by __main__.py
+        # (pane_index, field, value) -- set externally by __main__.py. field
+        # is one of "coat", "coat_base", "coat_shade", "card_bg", "bar_fill",
+        # "label", or "reset" (value ignored for "reset"). For "label", an
+        # empty string clears the stored name back to its default.
+        self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
+        self._menu_pane_index = 0
+        self._coat_var = tk.StringVar(value="orange_tabby")
 
         self._configure_window()
         self.panes = []
@@ -224,15 +312,101 @@ class TokittyWindow:
         self._save_position()
 
     def _build_context_menu(self) -> None:
+        self._rebuild_context_menu()
+        self.root.bind_all("<Button-3>", self._show_context_menu)
+
+    def _rebuild_context_menu(self) -> None:
+        """Rebuild the menu flat: pane-specific entries (Coat cascade,
+        Customize...) for the clicked pane, followed by the fixed
+        window-level entries. No "Settings" nesting -- owner decision."""
+        if getattr(self, "menu", None) is not None:
+            self.menu.destroy()
         self.menu = tk.Menu(self.root, tearoff=0)
+
+        pane = self.panes[self._menu_pane_index]
+        self._coat_var = tk.StringVar(value=pane._coat)
+
+        coat_menu = tk.Menu(self.menu, tearoff=0)
+        for coat_name in COATS:
+            coat_menu.add_radiobutton(
+                label=coat_name,
+                variable=self._coat_var,
+                value=coat_name,
+                command=lambda name=coat_name: self._on_coat_selected(name),
+            )
+        self.menu.add_cascade(label="Coat", menu=coat_menu)
+        self.menu.add_command(label="Customize…", command=self._open_customize_dialog)
+        self.menu.add_command(label="Rename…", command=self._open_rename_dialog)
+        self.menu.add_separator()
+
         self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
         self.menu.add_checkbutton(label="Always in front", variable=self._always_on_top, command=self._toggle_always_on_top)
         self.menu.add_separator()
         self.menu.add_command(label="Exit", command=self.root.destroy)
-        self.root.bind_all("<Button-3>", self._show_context_menu)
 
     def _show_context_menu(self, event: tk.Event) -> None:
+        y_relative = event.y_root - self.root.winfo_rooty()
+        self._menu_pane_index = pane_index_at(y_relative, len(self.panes))
+        self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
+
+    def _on_coat_selected(self, coat_name: str) -> None:
+        self._fire_customization_changed(self._menu_pane_index, "coat", coat_name)
+
+    def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
+        if self.on_customization_changed is not None:
+            self.on_customization_changed(pane_index, field, value)
+
+    def _open_customize_dialog(self) -> None:
+        pane_index = self._menu_pane_index
+        pane = self.panes[pane_index]
+        label = pane._label or f"Cat {pane_index + 1}"
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Customize {label}")
+        dialog.transient(self.root)
+        dialog.configure(bg=BG_COLOR)
+        dialog.resizable(False, False)
+
+        rows = [
+            ("Coat base", "coat_base"),
+            ("Coat shading", "coat_shade"),
+            ("Card background", "card_bg"),
+            ("Bar color", "bar_fill"),
+        ]
+        for row_index, (row_label, field) in enumerate(rows):
+            tk.Label(dialog, text=row_label, fg=FG_COLOR, bg=BG_COLOR).grid(
+                row=row_index, column=0, sticky="w", padx=8, pady=6
+            )
+            tk.Button(
+                dialog,
+                text="Choose…",
+                command=lambda f=field: self._pick_color(pane_index, dialog, f),
+            ).grid(row=row_index, column=1, padx=8, pady=6)
+
+        button_row = len(rows)
+        tk.Button(
+            dialog,
+            text="Reset to preset",
+            command=lambda: self._fire_customization_changed(pane_index, "reset", None),
+        ).grid(row=button_row, column=0, padx=8, pady=(4, 10))
+        tk.Button(dialog, text="Close", command=dialog.destroy).grid(
+            row=button_row, column=1, padx=8, pady=(4, 10)
+        )
+
+    def _open_rename_dialog(self) -> None:
+        pane_index = self._menu_pane_index
+        pane = self.panes[pane_index]
+        result = simpledialog.askstring(
+            "Rename", "Cat name:", parent=self.root, initialvalue=pane._label
+        )
+        if result is not None:
+            self._fire_customization_changed(pane_index, "label", result)
+
+    def _pick_color(self, pane_index: int, dialog: tk.Toplevel, field: str) -> None:
+        _rgb, hex_color = colorchooser.askcolor(parent=dialog)
+        if hex_color:
+            self._fire_customization_changed(pane_index, field, hex_color)
 
     def _on_refresh_now(self) -> None:
         if self.on_refresh_requested is not None:
