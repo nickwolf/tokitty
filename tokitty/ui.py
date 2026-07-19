@@ -8,11 +8,12 @@ import json
 import sys
 import tkinter as tk
 from pathlib import Path
-from typing import Optional
+from tkinter import colorchooser
+from typing import Callable, Optional
 
 from tokitty.display import bar_color
 from tokitty.geometry import clamp_position
-from tokitty.sprites import PALETTE, SCALE, get_frames
+from tokitty.sprites import COATS, PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
 PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
@@ -38,6 +39,13 @@ def card_height(pane_count: int) -> int:
     return PANE_HEIGHT * pane_count
 
 
+def pane_index_at(y: int, pane_count: int) -> int:
+    """Map a y coordinate (relative to the window's top edge) to a pane
+    index, clamped to the valid range [0, pane_count - 1]."""
+    y = max(y, 0)
+    return min(y // PANE_HEIGHT, pane_count - 1)
+
+
 def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
     """Return the bar fill color: the override if set, else the
     threshold-based bar_color(pct)."""
@@ -48,7 +56,7 @@ class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label=""):
+    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label="", coat=None):
         self.parent = parent
         self._current_state = "sleeping"
         self._frame_index = 0
@@ -59,9 +67,10 @@ class Pane:
         self._card_bg = card_bg if card_bg is not None else BG_COLOR
         self._bar_fill = bar_fill
         self._label = label
+        self._coat = coat if coat is not None else "orange_tabby"
         self._build_widgets()
 
-    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None) -> None:
+    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, coat=None) -> None:
         """Live re-style without rebuilding widgets. Each parameter left as
         None keeps that slot's current value unchanged -- to reset a slot
         back to the preset/default, pass the preset's/default value
@@ -74,6 +83,8 @@ class Pane:
             self._bar_fill = bar_fill
         if label is not None:
             self._label = label
+        if coat is not None:
+            self._coat = coat
 
         bg = ACCENT_BG if self._accent else self._card_bg
         self.parent.configure(bg=bg)
@@ -247,6 +258,9 @@ class TokittyWindow:
         self._drag_offset = (0, 0)
         self._always_on_top = tk.BooleanVar(value=True)
         self.on_refresh_requested = None  # set externally by __main__.py
+        self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
+        self._menu_pane_index = 0
+        self._coat_var = tk.StringVar(value="orange_tabby")
 
         self._configure_window()
         self.panes = []
@@ -294,15 +308,89 @@ class TokittyWindow:
         self._save_position()
 
     def _build_context_menu(self) -> None:
+        self._rebuild_context_menu()
+        self.root.bind_all("<Button-3>", self._show_context_menu)
+
+    def _rebuild_context_menu(self) -> None:
+        """Rebuild the menu flat: pane-specific entries (Coat cascade,
+        Customize...) for the clicked pane, followed by the fixed
+        window-level entries. No "Settings" nesting -- owner decision."""
         self.menu = tk.Menu(self.root, tearoff=0)
+
+        pane = self.panes[self._menu_pane_index]
+        self._coat_var = tk.StringVar(value=pane._coat)
+
+        coat_menu = tk.Menu(self.menu, tearoff=0)
+        for coat_name in COATS:
+            coat_menu.add_radiobutton(
+                label=coat_name,
+                variable=self._coat_var,
+                value=coat_name,
+                command=lambda name=coat_name: self._on_coat_selected(name),
+            )
+        self.menu.add_cascade(label="Coat", menu=coat_menu)
+        self.menu.add_command(label="Customize…", command=self._open_customize_dialog)
+        self.menu.add_separator()
+
         self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
         self.menu.add_checkbutton(label="Always in front", variable=self._always_on_top, command=self._toggle_always_on_top)
         self.menu.add_separator()
         self.menu.add_command(label="Exit", command=self.root.destroy)
-        self.root.bind_all("<Button-3>", self._show_context_menu)
 
     def _show_context_menu(self, event: tk.Event) -> None:
+        y_relative = event.y_root - self.root.winfo_rooty()
+        self._menu_pane_index = pane_index_at(y_relative, len(self.panes))
+        self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
+
+    def _on_coat_selected(self, coat_name: str) -> None:
+        self._fire_customization_changed(self._menu_pane_index, "coat", coat_name)
+
+    def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
+        if self.on_customization_changed is not None:
+            self.on_customization_changed(pane_index, field, value)
+
+    def _open_customize_dialog(self) -> None:
+        pane_index = self._menu_pane_index
+        pane = self.panes[pane_index]
+        label = pane._label or f"Cat {pane_index + 1}"
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Customize {label}")
+        dialog.transient(self.root)
+        dialog.configure(bg=BG_COLOR)
+        dialog.resizable(False, False)
+
+        rows = [
+            ("Coat base", "coat_base"),
+            ("Coat shading", "coat_shade"),
+            ("Card background", "card_bg"),
+            ("Bar color", "bar_fill"),
+        ]
+        for row_index, (row_label, field) in enumerate(rows):
+            tk.Label(dialog, text=row_label, fg=FG_COLOR, bg=BG_COLOR).grid(
+                row=row_index, column=0, sticky="w", padx=8, pady=6
+            )
+            tk.Button(
+                dialog,
+                text="Choose…",
+                command=lambda f=field: self._pick_color(pane_index, dialog, f),
+            ).grid(row=row_index, column=1, padx=8, pady=6)
+
+        button_row = len(rows)
+        tk.Button(
+            dialog,
+            text="Reset to preset",
+            command=lambda: self._fire_customization_changed(pane_index, "reset", None),
+        ).grid(row=button_row, column=0, padx=8, pady=(4, 10))
+        tk.Button(dialog, text="Close", command=dialog.destroy).grid(
+            row=button_row, column=1, padx=8, pady=(4, 10)
+        )
+
+    def _pick_color(self, pane_index: int, dialog: tk.Toplevel, field: str) -> None:
+        _rgb, hex_color = colorchooser.askcolor(parent=dialog)
+        if hex_color:
+            self._fire_customization_changed(pane_index, field, hex_color)
 
     def _on_refresh_now(self) -> None:
         if self.on_refresh_requested is not None:
