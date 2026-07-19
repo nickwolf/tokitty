@@ -456,3 +456,22 @@ def test_multiple_config_dirs_get_independent_sessions_dirs(monkeypatch, tmp_pat
     assert str(dir_a) in cmd_a
     assert str(dir_b) in cmd_b
     assert cmd_a != cmd_b
+
+
+def test_local_config_path_translates_unc_on_posix(monkeypatch):
+    from tokitty import hooks_install
+
+    monkeypatch.setattr(hooks_install.sys, "platform", "linux")
+    assert (
+        hooks_install._local_config_path("\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude")
+        == "/home/u/.claude"
+    )
+    assert hooks_install._local_config_path("/home/u/.claude") == "/home/u/.claude"
+
+
+def test_local_config_path_keeps_unc_on_windows(monkeypatch):
+    from tokitty import hooks_install
+
+    monkeypatch.setattr(hooks_install.sys, "platform", "win32")
+    unc = "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude"
+    assert hooks_install._local_config_path(unc) == unc
