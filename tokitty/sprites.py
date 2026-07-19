@@ -40,6 +40,7 @@ BASE_PALETTE: Dict[str, str] = {
     "B": "#c8f2ff",  # laptop screen glow, bright (typing pulse)
     "f": "#ff3fa4",  # flag cloth -- hot magenta, distinct from every accent
     "d": "#c9a15a",  # flag pole -- light wood, reads against dark backdrops
+    "G": "#5a4632",  # ground line -- fixed earth tone, never varies with coat
 }
 
 # Coat presets: each defines the same region keys. "c" is the patch
@@ -316,28 +317,29 @@ def _shift_up(template: List[str], n: int) -> List[str]:
 
 # Happy completion hop -- two templates, one per frame, so the WHOLE
 # cat translates upward when airborne instead of just losing its feet.
-# Both share a persistent ground line (literal "s") at the bottom row;
+# Both share a persistent ground line (literal "G") at the bottom row;
 # the airborne frame is the sitting cat shifted up two rows, leaving a
 # real clearance gap above the unbroken ground, with bright motion
-# dashes (literal "B") in the gap under the paws.
+# dashes (literal "B") in the gap under the paws. "G" is a dedicated
+# non-coat char (BASE_PALETTE) so the earth never recolors with the coat.
 DONE_HOP_GROUNDED_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
     # ground line flanking the seated cat
-    (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s", (25, 7): "s",
-    (25, 8): "s",
-    (25, 18): "s", (25, 19): "s", (25, 20): "s", (25, 21): "s",
-    (25, 22): "s", (25, 23): "s", (25, 24): "s",
+    (25, 3): "G", (25, 4): "G", (25, 5): "G", (25, 6): "G", (25, 7): "G",
+    (25, 8): "G",
+    (25, 18): "G", (25, 19): "G", (25, 20): "G", (25, 21): "G",
+    (25, 22): "G", (25, 23): "G", (25, 24): "G",
 })
 
 DONE_HOP_AIRBORNE_TEMPLATE: List[str] = _overlay(
     _shift_up(SITTING_TEMPLATE, 2), {
         # unbroken ground line: the cat now ends at row 23, so rows
         # 24-25 read as clear air between paws and ground
-        (25, 3): "s", (25, 4): "s", (25, 5): "s", (25, 6): "s",
-        (25, 7): "s", (25, 8): "s", (25, 9): "s", (25, 10): "s",
-        (25, 11): "s", (25, 12): "s", (25, 13): "s", (25, 14): "s",
-        (25, 15): "s", (25, 16): "s", (25, 17): "s", (25, 18): "s",
-        (25, 19): "s", (25, 20): "s", (25, 21): "s", (25, 22): "s",
-        (25, 23): "s", (25, 24): "s",
+        (25, 3): "G", (25, 4): "G", (25, 5): "G", (25, 6): "G",
+        (25, 7): "G", (25, 8): "G", (25, 9): "G", (25, 10): "G",
+        (25, 11): "G", (25, 12): "G", (25, 13): "G", (25, 14): "G",
+        (25, 15): "G", (25, 16): "G", (25, 17): "G", (25, 18): "G",
+        (25, 19): "G", (25, 20): "G", (25, 21): "G", (25, 22): "G",
+        (25, 23): "G", (25, 24): "G",
         # bright motion dashes in the clearance gap under the paws
         (24, 9): "B", (24, 10): "B", (24, 15): "B", (24, 16): "B",
     })
