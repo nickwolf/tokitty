@@ -1,4 +1,5 @@
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from tokitty.__main__ import (
@@ -260,3 +261,25 @@ def test_initial_label_explicit_stored_label_wins_dual():
 def test_initial_label_dual_mode_no_account_defaults_empty():
     custom = Customization()
     assert initial_label(None, custom, dual=True) == ""
+
+
+def test_label_field_roundtrips_through_dataclasses_replace():
+    # Mirrors handle_customization_changed's "label" branch: a rename
+    # dialog result is stored via dataclasses.replace(custom, label=value).
+    custom = Customization(coat="calico", overrides={"card_bg": "#112233"})
+    renamed = replace(custom, label="Whiskers")
+    assert renamed.label == "Whiskers"
+    assert renamed.coat == "calico"
+    assert renamed.overrides == {"card_bg": "#112233"}
+
+
+def test_label_field_can_be_cleared_back_to_empty():
+    custom = Customization(label="Whiskers")
+    cleared = replace(custom, label="")
+    assert cleared.label == ""
+    # Clearing the stored label falls back to the dual-mode account-name
+    # default (or blank in single mode) via initial_label -- "" stored
+    # means "use default", consistent with its existing tested semantics.
+    account = Account(name="Work", config_dir="/x")
+    assert initial_label(account, cleared, dual=True) == "Work"
+    assert initial_label(None, cleared, dual=False) == ""

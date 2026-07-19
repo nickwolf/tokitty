@@ -8,7 +8,7 @@ import json
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import colorchooser
+from tkinter import colorchooser, simpledialog
 from typing import Callable, Optional
 
 from tokitty.display import bar_color
@@ -258,6 +258,10 @@ class TokittyWindow:
         self._drag_offset = (0, 0)
         self._always_on_top = tk.BooleanVar(value=True)
         self.on_refresh_requested = None  # set externally by __main__.py
+        # (pane_index, field, value) -- set externally by __main__.py. field
+        # is one of "coat", "coat_base", "coat_shade", "card_bg", "bar_fill",
+        # "label", or "reset" (value ignored for "reset"). For "label", an
+        # empty string clears the stored name back to its default.
         self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
         self._menu_pane_index = 0
         self._coat_var = tk.StringVar(value="orange_tabby")
@@ -332,6 +336,7 @@ class TokittyWindow:
             )
         self.menu.add_cascade(label="Coat", menu=coat_menu)
         self.menu.add_command(label="Customize…", command=self._open_customize_dialog)
+        self.menu.add_command(label="Rename…", command=self._open_rename_dialog)
         self.menu.add_separator()
 
         self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
@@ -388,6 +393,15 @@ class TokittyWindow:
         tk.Button(dialog, text="Close", command=dialog.destroy).grid(
             row=button_row, column=1, padx=8, pady=(4, 10)
         )
+
+    def _open_rename_dialog(self) -> None:
+        pane_index = self._menu_pane_index
+        pane = self.panes[pane_index]
+        result = simpledialog.askstring(
+            "Rename", "Cat name:", parent=self.root, initialvalue=pane._label
+        )
+        if result is not None:
+            self._fire_customization_changed(pane_index, "label", result)
 
     def _pick_color(self, pane_index: int, dialog: tk.Toplevel, field: str) -> None:
         _rgb, hex_color = colorchooser.askcolor(parent=dialog)

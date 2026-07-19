@@ -374,7 +374,7 @@ def run_gui() -> int:
         pane.set_appearance(label=label)
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
-                      "last_good": None, "key": key})
+                      "last_good": None, "key": key, "account": account})
 
     def refresh_all():
         for unit in units:
@@ -397,12 +397,18 @@ def run_gui() -> int:
                 overrides = dict(custom.overrides)
                 overrides[field] = value
                 custom = replace(custom, overrides=overrides)
+        elif field == "label":
+            if value is not None:
+                custom = replace(custom, label=value)
         else:
             return
 
         customization_store[key] = custom
         save_customization(state_dir, customization_store)
         apply_customization(unit["pane"], custom)
+        if field == "label":
+            label = initial_label(unit["account"], custom, dual)
+            unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
     if warning:
