@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
+from tokitty.accounts import Account
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
@@ -18,12 +20,14 @@ from tokitty.credentials import (
     load_credentials,
     resolve_credentials_source,
 )
+from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
 from tokitty.display import format_countdown, format_reset_day, format_reset_time
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
 from tokitty.pose import resolve_pose
 from tokitty.poller import PollResult, Poller
+from tokitty import sprites
 
 # tkinter (and tokitty.ui, which imports it) is deliberately NOT imported
 # at module level -- --debug-print must keep working on systems without a
@@ -276,10 +280,33 @@ def _next_last_good(latest: PollResult, last_good: Optional[PollResult]) -> Opti
     return latest if latest.status == "ok" else last_good
 
 
+def initial_customization(account: Optional[Account], stored: Optional[Customization]) -> Customization:
+    """Resolve the Customization to open a pane with. Stored (loaded from
+    customization.json) always wins when present; otherwise seed from the
+    account's accounts.json `coat` field when it names a valid preset,
+    else fall back to the Customization() default (orange_tabby)."""
+    if stored is not None:
+        return stored
+    coat = account.coat if account is not None else None
+    if isinstance(coat, str) and coat in sprites.COATS:
+        return Customization(coat=coat)
+    return Customization()
+
+
+def initial_label(account: Optional[Account], custom: Customization, dual: bool) -> str:
+    """Default label: an explicit stored label always wins; otherwise dual
+    mode defaults to the account name (single mode stays blank)."""
+    if custom.label:
+        return custom.label
+    if dual and account is not None:
+        return account.name
+    return ""
+
+
 def run_gui() -> int:
     import tkinter as tk
 
-    from tokitty.ui import TokittyWindow
+    from tokitty.ui import BG_COLOR, TokittyWindow
 
     state_dir = get_state_dir()
     lock = SingleInstanceLock(state_dir)
@@ -317,20 +344,67 @@ def run_gui() -> int:
         lock.release()
         return 0
 
+    customization_store = load_customization(state_dir)
+    dual = bool(accounts) and len(accounts) > 1
+
+    def customization_key(account: Optional[Account]) -> str:
+        return account.name if (dual and account is not None) else SINGLE_KEY
+
+    def apply_customization(pane, custom: Customization) -> None:
+        pane.set_appearance(
+            palette=effective_palette(custom),
+            card_bg=custom.overrides.get("card_bg", BG_COLOR),
+            bar_fill=custom.overrides.get("bar_fill", ""),
+            coat=custom.coat,
+        )
+
     units = []
     for index, account in enumerate(accounts or [None]):
         config_dir = account.config_dir if account else None
         poller = Poller(fetch_fn=build_fetch_fn(config_dir))
         sessions_dir, distro_name = resolve_activity_sessions(config_dir)
         watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
-        units.append({"pane": window.panes[index], "poller": poller,
-                      "watcher": watcher, "last_good": None})
+
+        key = customization_key(account)
+        custom = initial_customization(account, customization_store.get(key))
+        customization_store[key] = custom
+        label = initial_label(account, custom, dual)
+        pane = window.panes[index]
+        apply_customization(pane, custom)
+        pane.set_appearance(label=label)
+
+        units.append({"pane": pane, "poller": poller, "watcher": watcher,
+                      "last_good": None, "key": key})
 
     def refresh_all():
         for unit in units:
             unit["poller"].request_refresh()
 
     window.on_refresh_requested = refresh_all
+
+    def handle_customization_changed(pane_index: int, field: str, value: Optional[str]) -> None:
+        unit = units[pane_index]
+        key = unit["key"]
+        custom = customization_store[key]
+
+        if field == "coat":
+            if value in sprites.COATS:
+                custom = replace(custom, coat=value)
+        elif field == "reset":
+            custom = replace(custom, overrides={})
+        elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
+            if value:
+                overrides = dict(custom.overrides)
+                overrides[field] = value
+                custom = replace(custom, overrides=overrides)
+        else:
+            return
+
+        customization_store[key] = custom
+        save_customization(state_dir, customization_store)
+        apply_customization(unit["pane"], custom)
+
+    window.on_customization_changed = handle_customization_changed
     if warning:
         window.panes[0].render(state="confused", session_pct=0.0, weekly_pct=0.0,
                                session_reset_text="—", weekly_reset_text="—", driving_tag="",
