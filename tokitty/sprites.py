@@ -54,6 +54,42 @@ COATS: Dict[str, Dict[str, str]] = {
         "c": "#e8823c",  # patch region (matches coat on this preset)
         "p": "#f6b8c8",  # inner ear
     },
+    # Cool blue-gray, pushed bluer/lighter than the laptop chassis
+    # ("g" #9aa0ac) so cat and prop never merge in the working pose.
+    "gray_tabby": {
+        "o": "#a4aec2",  # coat
+        "O": "#818ba0",  # coat shading
+        "s": "#5f6879",  # tabby stripe -- clearly darker, stripes read
+        "c": "#a4aec2",  # patch region matches coat
+        "p": "#e3a9ba",  # inner ear, slightly cooled pink
+    },
+    # Dark charcoal with a violet cast -- visibly lighter than the
+    # k outline (#2b1a12) so edges and closed-eye lines stay readable.
+    "black": {
+        "o": "#4a4653",  # coat
+        "O": "#38343f",  # coat shading
+        "s": "#575263",  # tone-on-tone sheen stripe (subtle)
+        "c": "#4a4653",  # patch region matches coat
+        "p": "#a8798c",  # inner ear, muted rose against dark fur
+    },
+    # Warm off-white; shading carries the silhouette on the dark card
+    # (muzzle "w" #fff6ec melting into the coat is the point).
+    "white": {
+        "o": "#f1ebdf",  # coat
+        "O": "#c4bcae",  # coat shading -- strong enough to hold the pose
+        "s": "#ded6c6",  # tone-on-tone shade (subtle)
+        "c": "#f1ebdf",  # patch region matches coat
+        "p": "#f6b8c8",  # inner ear
+    },
+    # Classic tricolor: white-ish base, orange patches on "c", and the
+    # stripe region repurposed as near-black patches for the third color.
+    "calico": {
+        "o": "#f1ebdf",  # white base coat
+        "O": "#c4bcae",  # base shading
+        "s": "#453a33",  # dark patches (warm near-black, above outline)
+        "c": "#e8823c",  # orange patches (matches the tabby's coat)
+        "p": "#f6b8c8",  # inner ear
+    },
 }
 
 
