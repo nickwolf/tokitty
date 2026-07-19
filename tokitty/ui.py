@@ -38,37 +38,95 @@ def card_height(pane_count: int) -> int:
     return PANE_HEIGHT * pane_count
 
 
+def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
+    """Return the bar fill color: the override if set, else the
+    threshold-based bar_color(pct)."""
+    return override or bar_color(pct)
+
+
 class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label=""):
         self.parent = parent
         self._current_state = "sleeping"
         self._frame_index = 0
         self._driving_tag = ""
         self._tool_label = ""
         self._accent = False
+        self._palette = palette if palette is not None else PALETTE
+        self._card_bg = card_bg if card_bg is not None else BG_COLOR
+        self._bar_fill = bar_fill
+        self._label = label
         self._build_widgets()
 
+    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None) -> None:
+        """Live re-style without rebuilding widgets. Each parameter left as
+        None keeps that slot's current value unchanged -- to reset a slot
+        back to the preset/default, pass the preset's/default value
+        explicitly (e.g. module PALETTE, BG_COLOR, or "" for no label)."""
+        if palette is not None:
+            self._palette = palette
+        if card_bg is not None:
+            self._card_bg = card_bg
+        if bar_fill is not None:
+            self._bar_fill = bar_fill
+        if label is not None:
+            self._label = label
+
+        bg = ACCENT_BG if self._accent else self._card_bg
+        self.parent.configure(bg=bg)
+        self.canvas.configure(bg=bg)
+        for widget in (
+            self.session_label,
+            self.session_reset_label,
+            self.weekly_label,
+            self.weekly_reset_label,
+            self.status_label,
+            self.label_widget,
+        ):
+            widget.configure(bg=bg)
+
+        self.session_bar_bg.delete("fill")
+        self.session_bar_bg.create_rectangle(
+            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(self._last_session_pct, self._bar_fill),
+            width=0, tags="fill",
+        )
+        self.weekly_bar_bg.delete("fill")
+        self.weekly_bar_bg.create_rectangle(
+            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(self._last_weekly_pct, self._bar_fill),
+            width=0, tags="fill",
+        )
+
+        self._update_label()
+
+    def _update_label(self) -> None:
+        self.label_widget.configure(text=self._label, bg=self._card_bg if not self._accent else ACCENT_BG)
+
     def _build_widgets(self) -> None:
+        self._last_session_pct = 0.0
+        self._last_weekly_pct = 0.0
+        self._last_session_pct_px = 0
+        self._last_weekly_pct_px = 0
+
         self.canvas = tk.Canvas(
-            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=BG_COLOR, highlightthickness=0
+            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=self._card_bg, highlightthickness=0
         )
         self.canvas.place(x=8, y=8)
 
-        self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.session_label.place(x=STATS_X, y=12)
         self.session_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.session_bar_bg.place(x=STATS_X, y=30)
-        self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.session_reset_label.place(x=STATS_X, y=42)
 
-        self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=BG_COLOR, font=("Segoe UI", 9, "bold"))
+        self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.weekly_label.place(x=STATS_X, y=60)
         self.weekly_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.weekly_bar_bg.place(x=STATS_X, y=78)
-        self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8))
+        self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.weekly_reset_label.place(x=STATS_X, y=90)
 
         # One widget for both credits and the error hint -- _display_state_for
@@ -80,9 +138,16 @@ class Pane:
         # first character (the "$" in the credits line) -- found via a real
         # screenshot, not guessed.
         self.status_label = tk.Label(
-            self.parent, text="", fg=DIM_COLOR, bg=BG_COLOR, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
+            self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
         )
         self.status_label.place(x=STATS_X, y=108)
+
+        # Small dim label at the pane's top-right (cat name / identifier).
+        # Empty text renders as an empty Label -- takes no visible space.
+        self.label_widget = tk.Label(
+            self.parent, text=self._label, fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
+        )
+        self.label_widget.place(x=CARD_WIDTH - 6, y=4, anchor="ne")
 
     def render(
         self,
@@ -102,8 +167,12 @@ class Pane:
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
+        self._last_session_pct = session_pct
+        self._last_weekly_pct = weekly_pct
+        self._last_session_pct_px = BAR_WIDTH * min(session_pct, 100) / 100
+        self._last_weekly_pct_px = BAR_WIDTH * min(weekly_pct, 100) / 100
 
-        bg = ACCENT_BG if accent else BG_COLOR
+        bg = ACCENT_BG if accent else self._card_bg
         self.parent.configure(bg=bg)
         self.canvas.configure(bg=bg)
         for label in (
@@ -112,6 +181,7 @@ class Pane:
             self.weekly_label,
             self.weekly_reset_label,
             self.status_label,
+            self.label_widget,
         ):
             label.configure(bg=bg)
 
@@ -121,13 +191,13 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, BAR_WIDTH * min(session_pct, 100) / 100, 8, fill=bar_color(session_pct), width=0, tags="fill"
+            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(session_pct, self._bar_fill), width=0, tags="fill"
         )
         self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
 
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, BAR_WIDTH * min(weekly_pct, 100) / 100, 8, fill=bar_color(weekly_pct), width=0, tags="fill"
+            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(weekly_pct, self._bar_fill), width=0, tags="fill"
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
@@ -147,7 +217,7 @@ class Pane:
         y_off = max((CAT_CANVAS_SIZE - frame_h) // 2, 0)
         for row_index, row in enumerate(frame):
             for col_index, ch in enumerate(row):
-                color = PALETTE.get(ch, "")
+                color = self._palette.get(ch, "")
                 if not color:
                     continue
                 x0 = x_off + col_index * SCALE
