@@ -315,6 +315,8 @@ class TokittyWindow:
         """Rebuild the menu flat: pane-specific entries (Coat cascade,
         Customize...) for the clicked pane, followed by the fixed
         window-level entries. No "Settings" nesting -- owner decision."""
+        if getattr(self, "menu", None) is not None:
+            self.menu.destroy()
         self.menu = tk.Menu(self.root, tearoff=0)
 
         pane = self.panes[self._menu_pane_index]
