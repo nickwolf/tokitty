@@ -49,7 +49,7 @@ Right-click a pane to change how its cat looks. **Coat** is a submenu of five pr
 
 Every override you make is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Two accounts](#two-accounts) above for the exact path per OS), and reloaded on the next launch. In single-account mode the file has one entry keyed `"default"`; in dual-account mode it's keyed by account name, so each pane keeps its own coat and colors independently. `accounts.json`'s `coat` field (see above) is only ever a *seed* — it sets the coat the first time a pane appears with no stored customization yet. Once anything is saved to `customization.json`, that stored value wins over `accounts.json` from then on, even if you later edit `accounts.json`'s `coat`.
 
-Each pane also gets a label under the sprite: in dual-account mode it defaults to the account's `name` from `accounts.json`; single-account mode has no default label (blank, matching v1). There's no menu entry to edit labels yet — the field exists in `customization.json` and is honored if set (e.g. by hand), but nothing in the UI writes one for you yet.
+Each pane also gets a label under the sprite: in dual-account mode it defaults to the account's `name` from `accounts.json`; single-account mode has no default label (blank, matching v1). Right-click a pane and choose **Rename…** to set a custom name — it's saved to `customization.json` and persists across restarts. Clearing the name back to empty in the dialog reverts the pane to its default label (the account name in dual mode, blank in single mode).
 
 With no `accounts.json` and no `customization.json`, tokitty renders exactly as v1 did: one pane, `orange_tabby`, no overrides, no label.
 
