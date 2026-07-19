@@ -33,7 +33,7 @@ To turn it on, create `accounts.json` in tokitty's per-user state directory (the
 }
 ```
 
-Each entry's `config_dir` points at that account's Claude Code config directory (a WSL UNC path, a native path, whatever `--install-hooks` would target for that account). `coat` is parsed and stored but not yet rendered — coat customization lands in a later phase. If `accounts.json` is missing, empty, or fails to parse, tokitty falls straight back to v1's automatic single-account credential resolution — nothing in that path changes.
+Each entry's `config_dir` points at that account's Claude Code config directory (a WSL UNC path, a native path, whatever `--install-hooks` would target for that account). `coat` seeds that pane's initial coat preset (see [Customization](#customization) below for the five options and how overrides layer on top). If `accounts.json` is missing, empty, or fails to parse, tokitty falls straight back to v1's automatic single-account credential resolution — nothing in that path changes.
 
 `TOKITTY_CREDENTIALS` (see Configuration above) still works, but only for single-account mode. If both `TOKITTY_CREDENTIALS` and a valid `accounts.json` are present, `accounts.json` wins and the env var is ignored; tokitty prints a startup warning to stderr so the conflict doesn't pass silently.
 
@@ -43,9 +43,19 @@ After creating or editing `accounts.json`, re-run `python -m tokitty --install-h
 
 Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one in the resting look) without needing a real `accounts.json` or a second account — handy for checking layout changes.
 
+## Customization
+
+Right-click a pane to change how its cat looks. **Coat** is a submenu of five presets — `orange_tabby`, `gray_tabby`, `black`, `white`, `calico` — picking one applies immediately and persists. **Customize…** opens a small dialog with a color-chooser button per overridable piece (coat base, coat shading, card background, bar color); each pick live-previews on the pane right away, and **Reset to preset** clears all four overrides back to the selected coat's stock colors.
+
+Every override you make is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Two accounts](#two-accounts) above for the exact path per OS), and reloaded on the next launch. In single-account mode the file has one entry keyed `"default"`; in dual-account mode it's keyed by account name, so each pane keeps its own coat and colors independently. `accounts.json`'s `coat` field (see above) is only ever a *seed* — it sets the coat the first time a pane appears with no stored customization yet. Once anything is saved to `customization.json`, that stored value wins over `accounts.json` from then on, even if you later edit `accounts.json`'s `coat`.
+
+Each pane also gets a label under the sprite: in dual-account mode it defaults to the account's `name` from `accounts.json`; single-account mode has no default label (blank, matching v1). There's no menu entry to edit labels yet — the field exists in `customization.json` and is honored if set (e.g. by hand), but nothing in the UI writes one for you yet.
+
+With no `accounts.json` and no `customization.json`, tokitty renders exactly as v1 did: one pane, `orange_tabby`, no overrides, no label.
+
 ## Security & privacy
 
-Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position is the only thing Tokitty's core polling persists, and it's stored in your OS's normal per-user config directory, never inside this repo.
+Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position and, if you've customized any pane, coat/color/label choices (`position.json` and `customization.json`) are the only things Tokitty's core (non-live-activity) code persists, and both live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains preset names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu.
 
 The live-activity feature above is opt-in and changes this picture only if you turn it on:
 
