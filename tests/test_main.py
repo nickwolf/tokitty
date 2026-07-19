@@ -1,9 +1,19 @@
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from tokitty.__main__ import _display_state_for, _next_last_good, build_fetch_fn, resolve_activity_sessions
+from tokitty.__main__ import (
+    _display_state_for,
+    _next_last_good,
+    build_fetch_fn,
+    initial_customization,
+    initial_label,
+    resolve_activity_sessions,
+)
+from tokitty.accounts import Account
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.credentials import CredentialsError
+from tokitty.customize import Customization
 from tokitty.poller import PollResult
 
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
@@ -192,3 +202,84 @@ def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
     result = build_fetch_fn(config_dir="/home/u/.claude-work")()
     assert seen["config_dir"] == "/home/u/.claude-work"
     assert result.status == "credentials_unreachable"
+
+
+def test_initial_customization_no_stored_no_seed_defaults_orange_tabby():
+    account = Account(name="Work", config_dir="/x")
+    result = initial_customization(account, None)
+    assert result == Customization(coat="orange_tabby")
+
+
+def test_initial_customization_seeds_from_account_coat():
+    account = Account(name="Work", config_dir="/x", coat="black")
+    result = initial_customization(account, None)
+    assert result.coat == "black"
+
+
+def test_initial_customization_stored_beats_seed():
+    account = Account(name="Work", config_dir="/x", coat="black")
+    stored = Customization(coat="calico", label="Work Cat")
+    result = initial_customization(account, stored)
+    assert result == stored
+
+
+def test_initial_customization_invalid_seed_coat_falls_back_to_default():
+    account = Account(name="Work", config_dir="/x", coat="not_a_real_coat")
+    result = initial_customization(account, None)
+    assert result.coat == "orange_tabby"
+
+
+def test_initial_customization_no_account_no_stored_defaults():
+    result = initial_customization(None, None)
+    assert result == Customization(coat="orange_tabby")
+
+
+def test_initial_label_single_mode_defaults_empty():
+    account = Account(name="Work", config_dir="/x")
+    custom = Customization()
+    assert initial_label(account, custom, dual=False) == ""
+
+
+def test_initial_label_dual_mode_defaults_to_account_name():
+    account = Account(name="Work", config_dir="/x")
+    custom = Customization()
+    assert initial_label(account, custom, dual=True) == "Work"
+
+
+def test_initial_label_explicit_stored_label_wins_single():
+    account = Account(name="Work", config_dir="/x")
+    custom = Customization(label="Fluffy")
+    assert initial_label(account, custom, dual=False) == "Fluffy"
+
+
+def test_initial_label_explicit_stored_label_wins_dual():
+    account = Account(name="Work", config_dir="/x")
+    custom = Customization(label="Fluffy")
+    assert initial_label(account, custom, dual=True) == "Fluffy"
+
+
+def test_initial_label_dual_mode_no_account_defaults_empty():
+    custom = Customization()
+    assert initial_label(None, custom, dual=True) == ""
+
+
+def test_label_field_roundtrips_through_dataclasses_replace():
+    # Mirrors handle_customization_changed's "label" branch: a rename
+    # dialog result is stored via dataclasses.replace(custom, label=value).
+    custom = Customization(coat="calico", overrides={"card_bg": "#112233"})
+    renamed = replace(custom, label="Whiskers")
+    assert renamed.label == "Whiskers"
+    assert renamed.coat == "calico"
+    assert renamed.overrides == {"card_bg": "#112233"}
+
+
+def test_label_field_can_be_cleared_back_to_empty():
+    custom = Customization(label="Whiskers")
+    cleared = replace(custom, label="")
+    assert cleared.label == ""
+    # Clearing the stored label falls back to the dual-mode account-name
+    # default (or blank in single mode) via initial_label -- "" stored
+    # means "use default", consistent with its existing tested semantics.
+    account = Account(name="Work", config_dir="/x")
+    assert initial_label(account, cleared, dual=True) == "Work"
+    assert initial_label(None, cleared, dual=False) == ""
