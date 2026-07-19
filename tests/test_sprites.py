@@ -112,3 +112,27 @@ def test_black_coat_body_lighter_than_outline():
 
 def test_calico_patch_differs_from_coat():
     assert COATS["calico"]["c"] != COATS["calico"]["o"]
+
+
+def test_ground_line_is_not_coat_colored():
+    for frames in (get_frames("done_hop"),):
+        for frame in frames:
+            bottom_rows = frame[-3:]
+            joined = "".join("".join(r) for r in bottom_rows)
+            assert "G" in joined  # ground exists
+    # the ground char is defined in BASE_PALETTE, not any coat
+    assert "G" in BASE_PALETTE
+    for coat in COATS.values():
+        assert "G" not in coat
+
+
+def test_every_state_frame_char_is_in_every_coat_palette():
+    # No ALL_SPRITE_STATES constant exists; sprites.ALL_STATES enumerates
+    # every state get_frames knows, so we use that directly.
+    for coat in COATS:
+        palette = get_palette(coat)
+        for state in ALL_STATES:
+            for frame in get_frames(state):
+                for row in frame:
+                    for ch in row:
+                        assert ch in palette, (coat, state, ch)
