@@ -50,3 +50,33 @@ def test_resolve_bar_fill_falls_back_to_bar_color_when_no_override():
     from tokitty.display import bar_color
     assert ui.resolve_bar_fill(10, None) == bar_color(10)
     assert ui.resolve_bar_fill(90, None) == bar_color(90)
+
+
+def test_pane_index_at_first_pane():
+    from tokitty import ui
+    assert ui.pane_index_at(0, 3) == 0
+    assert ui.pane_index_at(127, 3) == 0
+
+
+def test_pane_index_at_second_pane():
+    from tokitty import ui
+    assert ui.pane_index_at(128, 3) == 1
+    assert ui.pane_index_at(255, 3) == 1
+
+
+def test_pane_index_at_clamps_beyond_bottom():
+    from tokitty import ui
+    assert ui.pane_index_at(10000, 3) == 2
+    assert ui.pane_index_at(384, 3) == 2
+
+
+def test_pane_index_at_clamps_negative_y():
+    from tokitty import ui
+    assert ui.pane_index_at(-50, 3) == 0
+
+
+def test_on_customization_changed_default_none_in_init_source():
+    from tokitty import ui
+    src = inspect.getsource(ui.TokittyWindow.__init__)
+    lines = [line.strip() for line in src.splitlines() if "self.on_customization_changed" in line]
+    assert lines and lines[0].endswith("= None")
