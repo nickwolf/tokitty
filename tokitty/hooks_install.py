@@ -55,6 +55,20 @@ def _wsl_native_path(config_dir: str) -> str:
     return config_dir
 
 
+def _local_config_path(config_dir: str) -> str:
+    """The path this process should use to reach config_dir's filesystem.
+
+    On Windows a \\\\wsl.localhost UNC dir is directly reachable, so it
+    passes through. On Linux/macOS that same accounts.json entry must be
+    translated to its in-distro posix form -- feeding the UNC string to
+    Path() there silently creates a literal './\\\\wsl.localhost\\...'
+    directory and reports success while touching nothing real (bug #35).
+    """
+    if sys.platform == "win32":
+        return config_dir
+    return _wsl_native_path(config_dir)
+
+
 def _is_windows_local_path(config_dir: str) -> bool:
     return len(config_dir) >= 2 and config_dir[1] == ":" and config_dir[0].isalpha()
 
@@ -180,7 +194,7 @@ class ConfigDirResult:
 
 
 def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
-    base = Path(config_dir)
+    base = Path(_local_config_path(config_dir))
     settings_path = base / "settings.json"
     local_settings_path = base / "settings.local.json"
 
@@ -236,7 +250,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 
 
 def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
-    base = Path(config_dir)
+    base = Path(_local_config_path(config_dir))
     settings_path = base / "settings.json"
     local_settings_path = base / "settings.local.json"
 
