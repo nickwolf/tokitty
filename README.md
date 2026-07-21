@@ -13,6 +13,10 @@
   <img src="docs/media/state-done_hop.png" alt="done hop" height="90">
 </p>
 
+<p align="center">
+  <a href="https://github.com/nickwolf/tokitty/actions/workflows/ci.yml"><img src="https://github.com/nickwolf/tokitty/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
 A cat-themed desktop widget that shows your live Claude Code usage (session %, weekly %, reset countdowns, and extra-usage credits) with a pixel cat whose mood reflects how close you are to the limit. When a limit is capped, the cat rests, then stirs, then wakes up as the reset approaches, then hops back to sleep once usage clears. Does not assist with boredom and existential dread upon hitting weekly limit.
 
 Once Tokitty has a snapshot, it keeps counting down using its own clock, no live connection needed to know when a known reset time arrives. If a poll fails (for example, the OAuth access token going stale between Claude Code sessions), Tokitty keeps showing that same cached countdown rather than blanking out, and only surfaces a small warning once the countdown should already be done and it still can't confirm the reset actually happened.

@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff==0.15.22"]
 
 [project.scripts]
 tokitty = "tokitty.__main__:main"
@@ -18,3 +18,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["tokitty*"]
+
+[tool.pytest.ini_options]
+# The `gui` marker guards tests that need a real Tk display (run under xvfb in
+# CI). Deselected by default so `pytest` stays headless-green everywhere.
+markers = ["gui: requires a live Tk display (run via `xvfb-run -a pytest -m gui`)"]
+addopts = "-m 'not gui'"
+
+[tool.ruff]
+target-version = "py310"
