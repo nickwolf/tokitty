@@ -66,7 +66,8 @@ def main() -> int:
     top = _raster(get_frames("working")[0], get_palette("orange_tabby"), args.scale, bg)
     bottom = _raster(get_frames("sleeping")[0], get_palette("gray_tabby"), args.scale, bg)
     width = max(len(top[0]), len(bottom[0]))
-    pad = lambda g: [row + [bg] * (width - len(row)) for row in g]
+    def pad(g):
+        return [row + [bg] * (width - len(row)) for row in g]
     gap = [[bg] * width for _ in range(2 * args.scale)]
     _png_from_grid(args.out / "dual-card.png", pad(top) + gap + pad(bottom))
     print("dual-card.png")
