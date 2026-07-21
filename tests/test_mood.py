@@ -1,6 +1,15 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
-from tokitty.mood import compute_mood
+from tokitty.api import LimitInfo, UsageSnapshot
+from tokitty.mood import (
+    compute_capped_substate,
+    compute_mood,
+    detect_activate,
+    is_capped,
+    select_binding_capped_limit,
+)
 
 
 @pytest.mark.parametrize(
@@ -24,17 +33,6 @@ def test_compute_mood_thresholds(session_pct, weekly_pct, expected_mood, expecte
 
     assert mood == expected_mood
     assert tag == expected_tag
-
-
-from datetime import datetime, timedelta, timezone
-
-from tokitty.api import LimitInfo, UsageSnapshot
-from tokitty.mood import (
-    compute_capped_substate,
-    detect_activate,
-    is_capped,
-    select_binding_capped_limit,
-)
 
 
 def _limit(kind="session", percent=100.0, severity="normal", is_active=True, resets_at=None):

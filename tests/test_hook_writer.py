@@ -14,7 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 SCRIPT = str(Path(__file__).resolve().parent.parent / "tokitty" / "hook_writer.py")
 

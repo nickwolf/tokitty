@@ -67,7 +67,7 @@ def test_parse_usage_response_extracts_limits():
     snapshot = parse_usage_response(FIXTURE)
 
     assert len(snapshot.limits) == 3
-    scoped = [l for l in snapshot.limits if l.kind == "weekly_scoped"][0]
+    scoped = [lim for lim in snapshot.limits if lim.kind == "weekly_scoped"][0]
     assert scoped.model_display_name == "Fable"
     assert scoped.percent == 33.0
 
@@ -98,10 +98,9 @@ def test_parse_usage_response_ignores_malformed_limit_entries():
 
 
 def test_fetch_usage_sends_bearer_token_and_beta_header():
-    import urllib.error
     from unittest.mock import MagicMock, patch
 
-    from tokitty.api import BASE_URL, ApiError, fetch_usage
+    from tokitty.api import BASE_URL, fetch_usage
 
     fake_response = MagicMock()
     fake_response.read.return_value = b'{"ok": true}'
