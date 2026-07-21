@@ -101,7 +101,11 @@ def resolve_activity_sessions(config_dir: Optional[str] = None) -> Tuple[Optiona
                 return sessions, distro
             return str(Path(config_dir) / "tokitty" / "sessions"), None
         base = unc[1] if unc is not None else config_dir
-        return str(Path(base) / "tokitty" / "sessions"), None
+        # This branch's result is always a Linux/WSL sessions path. Build it with
+        # explicit "/" rather than pathlib, which emits host-native separators
+        # (backslashes when Tokitty itself runs on Windows) -- mirroring the
+        # win32 branch above, which likewise concatenates its separators.
+        return base.rstrip("/") + "/tokitty/sessions", None
 
     if sys.platform != "win32":
         try:
