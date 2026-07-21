@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from tokitty import sprites
 from tokitty.customize import (

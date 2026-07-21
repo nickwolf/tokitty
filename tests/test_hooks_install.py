@@ -6,7 +6,6 @@ real ~/.claude or ~/.claude-work.
 import json
 from pathlib import Path
 
-import pytest
 
 from tokitty import hooks_install as hi
 

@@ -1,6 +1,17 @@
 import pytest
 
-from tokitty.sprites import ALL_STATES, BASE_PALETTE, COATS, PALETTE, get_frames, get_palette
+from tokitty.sprites import (
+    ALERT_TEMPLATE,
+    ALL_STATES,
+    BASE_PALETTE,
+    COATS,
+    FLOPPED_TEMPLATE,
+    PALETTE,
+    SCALE,
+    SITTING_TEMPLATE,
+    get_frames,
+    get_palette,
+)
 
 
 def test_all_states_have_at_least_two_frames():
@@ -34,10 +45,6 @@ def test_unknown_state_raises_key_error():
     with pytest.raises(KeyError):
         get_frames("nonexistent-mood")
 
-
-from tokitty.sprites import (
-    ALERT_TEMPLATE, FLOPPED_TEMPLATE, SCALE, SITTING_TEMPLATE,
-)
 
 CAT_CANVAS_SIZE = 112  # mirrors ui.py; sprites must fit it
 

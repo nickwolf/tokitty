@@ -54,10 +54,10 @@ def _wake_window_key(kind: str) -> str:
 def select_binding_capped_limit(limits: List[LimitInfo]) -> Optional[LimitInfo]:
     """Return the capped, active limit that resets soonest, or None if
     nothing is currently capped."""
-    candidates = [l for l in limits if l.is_active and is_capped(l) and l.resets_at is not None]
+    candidates = [lim for lim in limits if lim.is_active and is_capped(lim) and lim.resets_at is not None]
     if not candidates:
         return None
-    return min(candidates, key=lambda l: l.resets_at)
+    return min(candidates, key=lambda lim: lim.resets_at)
 
 
 @dataclass(frozen=True)
