@@ -86,10 +86,9 @@ Two-account mode (above) extends this picture the same way single-account mode a
 
 ## Platforms tested
 
-- **Windows 11, native Python 3.13 (`pythonw.exe`), with Claude Code running inside WSL2**: the primary, recommended setup, and the only platform verified end-to-end. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs clean against a real account, and the window itself (drag, always-on-top, sizing, text legibility, animation) has been visually confirmed on a real desktop across several rounds of screenshot-driven fixes. In daily use..
-- **Native Linux, macOS**: untested. Don't assume these work until someone actually runs it there, but it'll probably work just fine.
-
-*(Update this table as each platform is actually verified.)*
+- **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself — drag, always-on-top, sizing, text legibility, animation — is visually confirmed on a real desktop.
+- **Linux, macOS, Windows — automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic — credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering — and, on Linux, GUI construction are covered wherever the badge is green.
+- **Not yet hands-on:** interactive desktop use on native Linux and macOS (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
 
 ## Setup
 
