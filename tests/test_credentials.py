@@ -85,7 +85,9 @@ def test_load_credentials_raises_when_oauth_key_missing(tmp_path):
 
 def test_describe_source_for_local():
     source = LocalCredentialsSource(path=Path("/tmp/x.json"))
-    assert describe_source(source) == "/tmp/x.json"
+    # describe_source echoes the local path as its native string; assert against
+    # that (not a hardcoded POSIX literal) so the test holds on Windows too.
+    assert describe_source(source) == str(source.path)
 
 
 def test_is_token_expired_true_when_past():
