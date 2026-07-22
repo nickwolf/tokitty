@@ -82,3 +82,25 @@ def test_tray_item_present_with_seam():
     assert items["Show tray icon"].checkbox() is True
     items["Show tray icon"].action()
     assert calls["toggle_tray"] == 1
+
+
+def test_randomize_and_surprise_absent_without_seams():
+    kwargs, _, _ = _kwargs()
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert "Randomize" not in labels
+    assert "Surprise me" not in labels
+
+
+def test_randomize_and_surprise_present_with_seams():
+    kwargs, calls, state = _kwargs(
+        on_randomize=lambda: calls.__setitem__("rand", calls.get("rand", 0) + 1),
+        surprise_me=lambda: state.get("surprise", True),
+        on_toggle_surprise=lambda: calls.__setitem__("tsurp", calls.get("tsurp", 0) + 1),
+    )
+    items = {i.label: i for i in build_menu(**kwargs) if not i.separator}
+    assert "Randomize" in items and "Surprise me" in items
+    items["Randomize"].action()
+    assert calls["rand"] == 1
+    assert items["Surprise me"].checkbox() is True
+    items["Surprise me"].action()
+    assert calls["tsurp"] == 1

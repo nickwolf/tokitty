@@ -264,6 +264,9 @@ class TokittyWindow:
         self.on_quit: Callable[[], None] = self.root.destroy
         self.on_toggle_tray: Optional[Callable[[], None]] = None
         self.tray_enabled: Optional[Callable[[], bool]] = None
+        self.on_randomize: Optional[Callable[[int], None]] = None
+        self.surprise_me: Optional[Callable[[], bool]] = None
+        self.on_toggle_surprise: Optional[Callable[[], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # (pane_index, field, value) -- set externally by __main__.py. field
@@ -345,6 +348,9 @@ class TokittyWindow:
             on_quit=self.on_quit,
             tray_enabled=self.tray_enabled,
             on_toggle_tray=self.on_toggle_tray,
+            on_randomize=((lambda i=pane_index: self.on_randomize(i)) if self.on_randomize is not None else None),
+            surprise_me=self.surprise_me,
+            on_toggle_surprise=self.on_toggle_surprise,
         )
 
     def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:
