@@ -96,7 +96,7 @@ def test_build_menu_model_reads_shadow_state():
             model = window.build_menu_model(0)
             labels = [i.label for i in model if not i.separator]
             # No tray seam wired by default -> no "Show tray icon".
-            assert labels == ["Coat", "Customize…", "Rename…",
+            assert labels == ["Colorway", "Pattern", "Customize…", "Rename…",
                               "Refresh now", "Always in front", "Exit"]
             # always_on_top getter reads the plain-Python shadow, not a tk Var.
             aot = {i.label: i for i in model if not i.separator}["Always in front"]

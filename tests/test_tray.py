@@ -26,9 +26,10 @@ def _managers(tmp_path, **overrides):
         root=root,
         menu_provider=lambda: ["model"],
         state_dir=tmp_path,
-        coat="orange_tabby",
+        colorway="orange",
+        pattern="tabby",
         icon_factory=icon_factory,
-        image_factory=lambda coat: f"image:{coat}",
+        image_factory=lambda colorway, pattern: f"image:{colorway}:{pattern}",
     )
     kwargs.update(overrides)
     return TrayManager(**kwargs), root, icons
@@ -75,7 +76,7 @@ def test_set_enabled_persists_and_toggles(tmp_path):
 
 
 def test_guard_image_factory_raises(tmp_path):
-    def boom(coat):
+    def boom(colorway, pattern):
         raise RuntimeError("no PIL")
     mgr, _, icons = _managers(tmp_path, image_factory=boom)
     assert mgr.available is False
