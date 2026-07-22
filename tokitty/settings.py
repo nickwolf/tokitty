@@ -17,6 +17,7 @@ SETTINGS_FILENAME = "settings.json"
 @dataclass(frozen=True)
 class Settings:
     tray_enabled: bool = True
+    surprise_me: bool = False
 
 
 def load_settings(state_dir) -> Settings:
@@ -32,7 +33,10 @@ def load_settings(state_dir) -> Settings:
     tray_enabled = data.get("tray_enabled", True)
     if not isinstance(tray_enabled, bool):
         tray_enabled = True
-    return Settings(tray_enabled=tray_enabled)
+    surprise_me = data.get("surprise_me", False)
+    if not isinstance(surprise_me, bool):
+        surprise_me = False
+    return Settings(tray_enabled=tray_enabled, surprise_me=surprise_me)
 
 
 def save_settings(state_dir, settings: Settings) -> None:
