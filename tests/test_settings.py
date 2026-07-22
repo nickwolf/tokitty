@@ -23,3 +23,17 @@ def test_wrong_shape_defaults(tmp_path):
 def test_non_bool_value_defaults(tmp_path):
     (tmp_path / "settings.json").write_text('{"tray_enabled": "yes"}', encoding="utf-8")
     assert load_settings(tmp_path).tray_enabled is True
+
+
+def test_surprise_me_default_false(tmp_path):
+    assert load_settings(tmp_path).surprise_me is False
+
+
+def test_surprise_me_roundtrip(tmp_path):
+    save_settings(tmp_path, Settings(tray_enabled=True, surprise_me=True))
+    assert load_settings(tmp_path).surprise_me is True
+
+
+def test_surprise_me_non_bool_defaults(tmp_path):
+    (tmp_path / "settings.json").write_text('{"surprise_me": "yes"}', encoding="utf-8")
+    assert load_settings(tmp_path).surprise_me is False
