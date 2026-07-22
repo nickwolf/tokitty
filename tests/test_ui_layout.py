@@ -143,3 +143,23 @@ def test_tray_seam_adds_show_tray_item():
             assert "Show tray icon" in labels
     finally:
         root.destroy()
+
+
+@pytest.mark.gui
+def test_randomize_and_surprise_seams_add_items():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            window.on_randomize = lambda i: None
+            window.surprise_me = lambda: True
+            window.on_toggle_surprise = lambda: None
+            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
+            assert "Randomize" in labels and "Surprise me" in labels
+    finally:
+        root.destroy()
