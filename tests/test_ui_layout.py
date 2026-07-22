@@ -80,3 +80,66 @@ def test_on_customization_changed_default_none_in_init_source():
     src = inspect.getsource(ui.TokittyWindow.__init__)
     lines = [line.strip() for line in src.splitlines() if "self.on_customization_changed" in line]
     assert lines and lines[0].endswith("= None")
+
+
+@pytest.mark.gui
+def test_build_menu_model_reads_shadow_state():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            model = window.build_menu_model(0)
+            labels = [i.label for i in model if not i.separator]
+            # No tray seam wired by default -> no "Show tray icon".
+            assert labels == ["Coat", "Customize…", "Rename…",
+                              "Refresh now", "Always in front", "Exit"]
+            # always_on_top getter reads the plain-Python shadow, not a tk Var.
+            aot = {i.label: i for i in model if not i.separator}["Always in front"]
+            assert aot.checkbox() == window._always_on_top_bool
+            # Exit action is the on_quit seam (default root.destroy).
+            assert {i.label: i for i in model if not i.separator}["Exit"].action == window.on_quit
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_toggle_always_on_top_flips_shadow():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            before = window._always_on_top_bool
+            window._toggle_always_on_top()
+            assert window._always_on_top_bool is (not before)
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_tray_seam_adds_show_tray_item():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            state = {"enabled": True}
+            window.tray_enabled = lambda: state["enabled"]
+            window.on_toggle_tray = lambda: None
+            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
+            assert "Show tray icon" in labels
+    finally:
+        root.destroy()
