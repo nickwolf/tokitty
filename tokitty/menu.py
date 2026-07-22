@@ -39,6 +39,9 @@ def build_menu(
     on_quit: Callable[[], None],
     tray_enabled: Optional[Callable[[], bool]] = None,
     on_toggle_tray: Optional[Callable[[], None]] = None,
+    on_randomize: Optional[Callable[[], None]] = None,
+    surprise_me: Optional[Callable[[], bool]] = None,
+    on_toggle_surprise: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
     colorway_items = [
         MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
@@ -53,6 +56,10 @@ def build_menu(
     items: List[MenuItem] = [
         MenuItem(label="Colorway", submenu=colorway_items),
         MenuItem(label="Pattern", submenu=pattern_items),
+    ]
+    if on_randomize is not None:
+        items.append(MenuItem(label="Randomize", action=on_randomize))
+    items += [
         MenuItem(label="Customize…", action=on_customize),
         MenuItem(label="Rename…", action=on_rename),
         MenuItem(separator=True),
@@ -61,6 +68,8 @@ def build_menu(
     ]
     if on_toggle_tray is not None and tray_enabled is not None:
         items.append(MenuItem(label="Show tray icon", action=on_toggle_tray, checkbox=tray_enabled))
+    if on_toggle_surprise is not None and surprise_me is not None:
+        items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
     items.append(MenuItem(separator=True))
     items.append(MenuItem(label="Exit", action=on_quit))
     return items
