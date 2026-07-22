@@ -18,7 +18,7 @@ spec's roadmap for further art passes.
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
 
@@ -92,6 +92,56 @@ COATS: Dict[str, Dict[str, str]] = {
         "p": "#f6b8c8",  # inner ear
     },
 }
+
+
+# --- colorway x pattern model (replaces the bundled COATS in Task 2) ---
+# A colorway is a tone palette; a pattern maps each coat-driven char to a
+# tone token ("coat"/"shade"/"mark"/"light"/"white") or a literal #rrggbb.
+COLORWAYS: Dict[str, Dict[str, str]] = {
+    "orange": {"coat": "#e8823c", "shade": "#c26a2c", "mark": "#a8541f", "light": "#f7e0c0", "ear": "#f6b8c8"},
+    "gray":   {"coat": "#a4aec2", "shade": "#818ba0", "mark": "#5f6879", "light": "#e4e8ef", "ear": "#e3a9ba"},
+    "black":  {"coat": "#4a4653", "shade": "#38343f", "mark": "#575263", "light": "#c9c6cf", "ear": "#a8798c"},
+    "white":  {"coat": "#f1ebdf", "shade": "#c4bcae", "mark": "#ded6c6", "light": "#f6f2ea", "ear": "#f6b8c8"},
+}
+
+# Which template chars a pattern controls. Grows in Task 8 with the new
+# regions (m paws, x points, y tail, u belly).
+REGION_CHARS: Tuple[str, ...] = ("o", "O", "s", "c")
+
+PATTERNS: Dict[str, Dict[str, str]] = {
+    "solid":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat"},
+    "tabby":       {"o": "coat", "O": "shade", "s": "mark", "c": "coat"},
+    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "white"},
+    "tabby_white": {"o": "coat", "O": "shade", "s": "mark", "c": "white"},
+    "calico":      {"o": "coat", "O": "shade", "s": "#453a33", "c": "#e8823c"},
+}
+
+# Old bundled coat names -> (colorway, pattern). Legacy black/white carried a
+# subtle tone-on-tone sheen (a mark-tone stripe), so they map to +tabby, not
+# +solid, to reproduce that exactly; users can switch to solid for a flat look.
+LEGACY_COAT_MAP: Dict[str, Tuple[str, str]] = {
+    "orange_tabby": ("orange", "tabby"),
+    "gray_tabby":   ("gray", "tabby"),
+    "black":        ("black", "tabby"),
+    "white":        ("white", "tabby"),
+    "calico":       ("white", "calico"),
+}
+
+
+def resolve_palette(colorway: str = "orange", pattern: str = "tabby") -> Dict[str, str]:
+    """Full char->color map for one colorway x pattern. The colorway supplies
+    the tone slots; the pattern maps each coat-driven char to a tone token or a
+    literal hex. Every other char is BASE_PALETTE unchanged."""
+    cw = COLORWAYS[colorway]
+    tones = {
+        "coat": cw["coat"], "shade": cw["shade"], "mark": cw["mark"],
+        "light": cw["light"], "white": BASE_PALETTE["w"],
+    }
+    merged = dict(BASE_PALETTE)
+    merged["p"] = cw["ear"]
+    for char, src in PATTERNS[pattern].items():
+        merged[char] = tones.get(src, src)  # tone token -> tone, else literal hex
+    return merged
 
 
 def get_palette(coat: str = "orange_tabby") -> Dict[str, str]:
