@@ -206,31 +206,30 @@ def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
 def test_initial_customization_no_stored_no_seed_defaults_orange_tabby():
     account = Account(name="Work", config_dir="/x")
     result = initial_customization(account, None)
-    assert result == Customization(coat="orange_tabby")
+    assert (result.colorway, result.pattern) == ("orange", "tabby")
 
 
 def test_initial_customization_seeds_from_account_coat():
     account = Account(name="Work", config_dir="/x", coat="black")
     result = initial_customization(account, None)
-    assert result.coat == "black"
+    assert (result.colorway, result.pattern) == ("black", "tabby")
 
 
 def test_initial_customization_stored_beats_seed():
     account = Account(name="Work", config_dir="/x", coat="black")
-    stored = Customization(coat="calico", label="Work Cat")
-    result = initial_customization(account, stored)
-    assert result == stored
+    stored = Customization(colorway="white", pattern="calico", label="Work Cat")
+    assert initial_customization(account, stored) == stored
 
 
 def test_initial_customization_invalid_seed_coat_falls_back_to_default():
     account = Account(name="Work", config_dir="/x", coat="not_a_real_coat")
     result = initial_customization(account, None)
-    assert result.coat == "orange_tabby"
+    assert (result.colorway, result.pattern) == ("orange", "tabby")
 
 
 def test_initial_customization_no_account_no_stored_defaults():
     result = initial_customization(None, None)
-    assert result == Customization(coat="orange_tabby")
+    assert (result.colorway, result.pattern) == ("orange", "tabby")
 
 
 def test_initial_label_single_mode_defaults_empty():
@@ -265,10 +264,11 @@ def test_initial_label_dual_mode_no_account_defaults_empty():
 def test_label_field_roundtrips_through_dataclasses_replace():
     # Mirrors handle_customization_changed's "label" branch: a rename
     # dialog result is stored via dataclasses.replace(custom, label=value).
-    custom = Customization(coat="calico", overrides={"card_bg": "#112233"})
+    custom = Customization(colorway="white", pattern="calico", overrides={"card_bg": "#112233"})
     renamed = replace(custom, label="Whiskers")
     assert renamed.label == "Whiskers"
-    assert renamed.coat == "calico"
+    assert renamed.colorway == "white"
+    assert renamed.pattern == "calico"
     assert renamed.overrides == {"card_bg": "#112233"}
 
 

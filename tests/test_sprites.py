@@ -4,7 +4,6 @@ from tokitty.sprites import (
     ALERT_TEMPLATE,
     ALL_STATES,
     BASE_PALETTE,
-    COATS,
     COLORWAYS,
     FLOPPED_TEMPLATE,
     LEGACY_COAT_MAP,
@@ -97,33 +96,8 @@ def test_get_palette_unknown_coat_raises_key_error():
         get_palette("nonexistent-coat")
 
 
-def test_every_coat_defines_exactly_the_coat_keys():
-    for name, coat in COATS.items():
-        assert set(coat) == {"o", "O", "s", "c", "p"}, name
-
-
 def test_palette_covers_pattern_char():
     assert PALETTE["c"] == PALETTE["o"]  # invisible on the default coat
-
-
-def test_all_coats_define_identical_region_keys():
-    expected = set(COATS["orange_tabby"].keys())
-    assert set(COATS.keys()) == {"orange_tabby", "gray_tabby", "black", "white", "calico"}
-    for name, coat in COATS.items():
-        assert set(coat.keys()) == expected, name
-        for char, color in coat.items():
-            assert color.startswith("#") and len(color) == 7, (name, char)
-
-
-def test_black_coat_body_lighter_than_outline():
-    def lum(hex_color):
-        r, g, b = (int(hex_color[i:i+2], 16) for i in (1, 3, 5))
-        return 0.299 * r + 0.587 * g + 0.114 * b
-    assert lum(COATS["black"]["o"]) > lum(BASE_PALETTE["k"]) + 15
-
-
-def test_calico_patch_differs_from_coat():
-    assert COATS["calico"]["c"] != COATS["calico"]["o"]
 
 
 def test_ground_line_is_not_coat_colored():
@@ -132,26 +106,17 @@ def test_ground_line_is_not_coat_colored():
             bottom_rows = frame[-3:]
             joined = "".join("".join(r) for r in bottom_rows)
             assert "G" in joined  # ground exists
-    # the ground char is defined in BASE_PALETTE, not any coat
+    # the ground char is defined in BASE_PALETTE, and no colorway x pattern
+    # combination ever recolors it -- it's not one of the region chars.
     assert "G" in BASE_PALETTE
-    for coat in COATS.values():
-        assert "G" not in coat
-
-
-def test_every_state_frame_char_is_in_every_coat_palette():
-    # No ALL_SPRITE_STATES constant exists; sprites.ALL_STATES enumerates
-    # every state get_frames knows, so we use that directly.
-    for coat in COATS:
-        palette = get_palette(coat)
-        for state in ALL_STATES:
-            for frame in get_frames(state):
-                for row in frame:
-                    for ch in row:
-                        assert ch in palette, (coat, state, ch)
+    assert "G" not in REGION_CHARS
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            assert resolve_palette(colorway, pattern)["G"] == BASE_PALETTE["G"]
 
 
 # Frozen snapshot of the five legacy coats' region colors (o,O,s,c,p),
-# captured so this proof survives COATS being deleted in Task 2.
+# captured so this proof survives the bundled coat presets being deleted.
 _LEGACY_REGIONS = {
     "orange_tabby": {"o": "#e8823c", "O": "#c26a2c", "s": "#a8541f", "c": "#e8823c", "p": "#f6b8c8"},
     "gray_tabby":   {"o": "#a4aec2", "O": "#818ba0", "s": "#5f6879", "c": "#a4aec2", "p": "#e3a9ba"},

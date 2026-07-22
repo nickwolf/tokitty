@@ -2,13 +2,16 @@ from tokitty.menu import build_menu
 
 
 def _kwargs(**overrides):
-    calls = {"coat": [], "customize": 0, "rename": 0, "refresh": 0,
-             "toggle_aot": 0, "quit": 0, "toggle_tray": 0}
-    state = {"coat": "gray_tabby", "aot": True, "tray": True}
+    calls = {"colorway": [], "pattern": [], "customize": 0, "rename": 0,
+             "refresh": 0, "toggle_aot": 0, "quit": 0, "toggle_tray": 0}
+    state = {"colorway": "gray", "pattern": "tabby", "aot": True, "tray": True}
     base = dict(
-        coats=["orange_tabby", "gray_tabby", "black"],
-        current_coat=lambda: state["coat"],
-        on_coat=lambda c: calls["coat"].append(c),
+        colorways=["orange", "gray", "black"],
+        patterns=["solid", "tabby", "calico"],
+        current_colorway=lambda: state["colorway"],
+        current_pattern=lambda: state["pattern"],
+        on_colorway=lambda c: calls["colorway"].append(c),
+        on_pattern=lambda p: calls["pattern"].append(p),
         on_customize=lambda: calls.__setitem__("customize", calls["customize"] + 1),
         on_rename=lambda: calls.__setitem__("rename", calls["rename"] + 1),
         on_refresh=lambda: calls.__setitem__("refresh", calls["refresh"] + 1),
@@ -24,21 +27,19 @@ def test_structure_and_labels():
     kwargs, _, _ = _kwargs()
     items = build_menu(**kwargs)
     labels = [i.label for i in items if not i.separator]
-    assert labels == ["Coat", "Customize…", "Rename…", "Refresh now",
-                      "Always in front", "Exit"]
-    coat = items[0]
-    assert coat.submenu is not None
-    assert [c.label for c in coat.submenu] == ["orange_tabby", "gray_tabby", "black"]
-    assert all(c.radio_selected is not None for c in coat.submenu)
+    assert labels == ["Colorway", "Pattern", "Customize…", "Rename…",
+                      "Refresh now", "Always in front", "Exit"]
+    assert [c.label for c in items[0].submenu] == ["orange", "gray", "black"]
+    assert [p.label for p in items[1].submenu] == ["solid", "tabby", "calico"]
 
 
-def test_radio_reflects_current_coat():
+def test_radio_reflects_current_selection():
     kwargs, _, state = _kwargs()
-    coat = build_menu(**kwargs)[0]
-    selected = [c.label for c in coat.submenu if c.radio_selected()]
-    assert selected == ["gray_tabby"]
-    state["coat"] = "black"
-    assert [c.label for c in coat.submenu if c.radio_selected()] == ["black"]
+    items = build_menu(**kwargs)
+    assert [c.label for c in items[0].submenu if c.radio_selected()] == ["gray"]
+    assert [p.label for p in items[1].submenu if p.radio_selected()] == ["tabby"]
+    state["pattern"] = "calico"
+    assert [p.label for p in build_menu(**kwargs)[1].submenu if p.radio_selected()] == ["calico"]
 
 
 def test_action_wiring():
@@ -51,8 +52,10 @@ def test_action_wiring():
     items["Exit"].action()
     assert (calls["customize"], calls["rename"], calls["refresh"],
             calls["toggle_aot"], calls["quit"]) == (1, 1, 1, 1, 1)
-    build_menu(**kwargs)[0].submenu[1].action()
-    assert calls["coat"] == ["gray_tabby"]
+    build_menu(**kwargs)[0].submenu[1].action()   # colorway "gray"
+    build_menu(**kwargs)[1].submenu[2].action()   # pattern "calico"
+    assert calls["colorway"] == ["gray"]
+    assert calls["pattern"] == ["calico"]
 
 
 def test_always_on_front_checkbox_getter():
