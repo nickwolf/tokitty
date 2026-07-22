@@ -5,12 +5,17 @@ from tokitty.sprites import (
     ALL_STATES,
     BASE_PALETTE,
     COATS,
+    COLORWAYS,
     FLOPPED_TEMPLATE,
+    LEGACY_COAT_MAP,
     PALETTE,
+    PATTERNS,
+    REGION_CHARS,
     SCALE,
     SITTING_TEMPLATE,
     get_frames,
     get_palette,
+    resolve_palette,
 )
 
 
@@ -143,3 +148,56 @@ def test_every_state_frame_char_is_in_every_coat_palette():
                 for row in frame:
                     for ch in row:
                         assert ch in palette, (coat, state, ch)
+
+
+# Frozen snapshot of the five legacy coats' region colors (o,O,s,c,p),
+# captured so this proof survives COATS being deleted in Task 2.
+_LEGACY_REGIONS = {
+    "orange_tabby": {"o": "#e8823c", "O": "#c26a2c", "s": "#a8541f", "c": "#e8823c", "p": "#f6b8c8"},
+    "gray_tabby":   {"o": "#a4aec2", "O": "#818ba0", "s": "#5f6879", "c": "#a4aec2", "p": "#e3a9ba"},
+    "black":        {"o": "#4a4653", "O": "#38343f", "s": "#575263", "c": "#4a4653", "p": "#a8798c"},
+    "white":        {"o": "#f1ebdf", "O": "#c4bcae", "s": "#ded6c6", "c": "#f1ebdf", "p": "#f6b8c8"},
+    "calico":       {"o": "#f1ebdf", "O": "#c4bcae", "s": "#453a33", "c": "#e8823c", "p": "#f6b8c8"},
+}
+
+
+@pytest.mark.parametrize("legacy_name, regions", list(_LEGACY_REGIONS.items()))
+def test_resolve_palette_reproduces_legacy_byte_identical(legacy_name, regions):
+    colorway, pattern = LEGACY_COAT_MAP[legacy_name]
+    palette = resolve_palette(colorway, pattern)
+    for char, color in regions.items():          # region chars match legacy exactly
+        assert palette[char] == color, (legacy_name, char)
+    for char, color in BASE_PALETTE.items():      # every other char is untouched BASE_PALETTE
+        if char in ("o", "O", "s", "c", "p"):
+            continue
+        assert palette[char] == color, (legacy_name, char)
+
+
+def test_every_pattern_covers_region_chars():
+    for name, pat in PATTERNS.items():
+        assert set(pat.keys()) == set(REGION_CHARS), name
+
+
+def test_colorways_define_all_tone_slots():
+    for name, cw in COLORWAYS.items():
+        assert set(cw.keys()) == {"coat", "shade", "mark", "light", "ear"}, name
+        for k, v in cw.items():
+            assert v.startswith("#") and len(v) == 7, (name, k)
+
+
+def test_black_colorway_body_lighter_than_outline():
+    def lum(h):
+        r, g, b = (int(h[i:i + 2], 16) for i in (1, 3, 5))
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    assert lum(COLORWAYS["black"]["coat"]) > lum(BASE_PALETTE["k"]) + 15
+
+
+def test_every_state_char_defined_for_every_look():
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            for state in ALL_STATES:
+                for frame in get_frames(state):
+                    for row in frame:
+                        for ch in row:
+                            assert ch in palette, (colorway, pattern, state, ch)
