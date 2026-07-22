@@ -415,6 +415,23 @@ def run_gui() -> int:
             unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
+    from tokitty.settings import load_settings
+    from tokitty.tray import TrayManager
+
+    settings = load_settings(state_dir)
+    pane0_coat = window.panes[0]._coat
+    tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir, coat=pane0_coat)
+
+    window.on_quit = lambda: (tray.stop(), root.destroy())
+    if tray.available:
+        tray_state = {"enabled": settings.tray_enabled}
+        window.tray_enabled = lambda: tray_state["enabled"]
+
+        def toggle_tray():
+            tray_state["enabled"] = not tray_state["enabled"]
+            tray.set_enabled(tray_state["enabled"])
+
+        window.on_toggle_tray = toggle_tray
     if warning:
         window.panes[0].render(state="confused", session_pct=0.0, weekly_pct=0.0,
                                session_reset_text="—", weekly_reset_text="—", driving_tag="",
@@ -438,11 +455,14 @@ def run_gui() -> int:
     for unit in units:
         unit["poller"].start()
         unit["watcher"].start()
+    if tray.available and settings.tray_enabled:
+        tray.start()
     root.after(UI_REFRESH_MS, tick)
 
     try:
         root.mainloop()
     finally:
+        tray.stop()
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()
