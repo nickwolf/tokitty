@@ -9,10 +9,11 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from tokitty.display import bar_color
 from tokitty.geometry import clamp_position
+from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COATS, PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
@@ -256,7 +257,11 @@ class TokittyWindow:
         self._height = card_height(pane_count)
         self._position_path = state_dir / POSITION_FILENAME
         self._drag_offset = (0, 0)
-        self._always_on_top = tk.BooleanVar(value=True)
+        self._always_on_top_bool = True
+        self.on_quit: Callable[[], None] = self.root.destroy
+        self.on_toggle_tray: Optional[Callable[[], None]] = None
+        self.tray_enabled: Optional[Callable[[], bool]] = None
+        self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # (pane_index, field, value) -- set externally by __main__.py. field
         # is one of "coat", "coat_base", "coat_shade", "card_bg", "bar_fill",
@@ -264,7 +269,6 @@ class TokittyWindow:
         # empty string clears the stored name back to its default.
         self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
         self._menu_pane_index = 0
-        self._coat_var = tk.StringVar(value="orange_tabby")
 
         self._configure_window()
         self.panes = []
@@ -315,34 +319,57 @@ class TokittyWindow:
         self._rebuild_context_menu()
         self.root.bind_all("<Button-3>", self._show_context_menu)
 
+    def build_menu_model(self, pane_index: int) -> List[MenuItem]:
+        """The single-source menu model for a given pane. Rendered here as
+        a tk.Menu and (for pane 0) by tray.py as a pystray menu. Getters
+        read plain-Python shadow state so tray.py may evaluate them off the
+        main thread; `on_toggle_tray`/`tray_enabled` are None unless a tray
+        backend is available, which omits the "Show tray icon" item."""
+        pane = self.panes[pane_index]
+        return build_menu(
+            coats=list(COATS.keys()),
+            current_coat=(lambda p=pane: p._coat),
+            on_coat=(lambda name, i=pane_index: self._select_coat(i, name)),
+            on_customize=(lambda i=pane_index: self._open_customize_dialog(i)),
+            on_rename=(lambda i=pane_index: self._open_rename_dialog(i)),
+            on_refresh=self._on_refresh_now,
+            always_on_top=(lambda: self._always_on_top_bool),
+            on_toggle_always_on_top=self._toggle_always_on_top,
+            on_quit=self.on_quit,
+            tray_enabled=self.tray_enabled,
+            on_toggle_tray=self.on_toggle_tray,
+        )
+
+    def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:
+        radio_var: Optional[tk.StringVar] = None
+        for item in items:
+            if item.separator:
+                menu.add_separator()
+            elif item.submenu is not None:
+                child = tk.Menu(menu, tearoff=0)
+                self._render_tk_menu(child, item.submenu)
+                menu.add_cascade(label=item.label, menu=child)
+            elif item.radio_selected is not None:
+                if radio_var is None:
+                    radio_var = tk.StringVar()
+                    self._menu_vars.append(radio_var)
+                if item.radio_selected():
+                    radio_var.set(item.label)
+                menu.add_radiobutton(label=item.label, value=item.label,
+                                     variable=radio_var, command=item.action)
+            elif item.checkbox is not None:
+                var = tk.BooleanVar(value=item.checkbox())
+                self._menu_vars.append(var)
+                menu.add_checkbutton(label=item.label, variable=var, command=item.action)
+            else:
+                menu.add_command(label=item.label, command=item.action)
+
     def _rebuild_context_menu(self) -> None:
-        """Rebuild the menu flat: pane-specific entries (Coat cascade,
-        Customize...) for the clicked pane, followed by the fixed
-        window-level entries. No "Settings" nesting -- owner decision."""
         if getattr(self, "menu", None) is not None:
             self.menu.destroy()
+        self._menu_vars = []
         self.menu = tk.Menu(self.root, tearoff=0)
-
-        pane = self.panes[self._menu_pane_index]
-        self._coat_var = tk.StringVar(value=pane._coat)
-
-        coat_menu = tk.Menu(self.menu, tearoff=0)
-        for coat_name in COATS:
-            coat_menu.add_radiobutton(
-                label=coat_name,
-                variable=self._coat_var,
-                value=coat_name,
-                command=lambda name=coat_name: self._on_coat_selected(name),
-            )
-        self.menu.add_cascade(label="Coat", menu=coat_menu)
-        self.menu.add_command(label="Customize…", command=self._open_customize_dialog)
-        self.menu.add_command(label="Rename…", command=self._open_rename_dialog)
-        self.menu.add_separator()
-
-        self.menu.add_command(label="Refresh now", command=self._on_refresh_now)
-        self.menu.add_checkbutton(label="Always in front", variable=self._always_on_top, command=self._toggle_always_on_top)
-        self.menu.add_separator()
-        self.menu.add_command(label="Exit", command=self.root.destroy)
+        self._render_tk_menu(self.menu, self.build_menu_model(self._menu_pane_index))
 
     def _show_context_menu(self, event: tk.Event) -> None:
         y_relative = event.y_root - self.root.winfo_rooty()
@@ -350,15 +377,14 @@ class TokittyWindow:
         self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
 
-    def _on_coat_selected(self, coat_name: str) -> None:
-        self._fire_customization_changed(self._menu_pane_index, "coat", coat_name)
+    def _select_coat(self, pane_index: int, coat_name: str) -> None:
+        self._fire_customization_changed(pane_index, "coat", coat_name)
 
     def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
         if self.on_customization_changed is not None:
             self.on_customization_changed(pane_index, field, value)
 
-    def _open_customize_dialog(self) -> None:
-        pane_index = self._menu_pane_index
+    def _open_customize_dialog(self, pane_index: int) -> None:
         pane = self.panes[pane_index]
         label = pane._label or f"Cat {pane_index + 1}"
 
@@ -394,8 +420,7 @@ class TokittyWindow:
             row=button_row, column=1, padx=8, pady=(4, 10)
         )
 
-    def _open_rename_dialog(self) -> None:
-        pane_index = self._menu_pane_index
+    def _open_rename_dialog(self, pane_index: int) -> None:
         pane = self.panes[pane_index]
         result = simpledialog.askstring(
             "Rename", "Cat name:", parent=self.root, initialvalue=pane._label
@@ -413,7 +438,8 @@ class TokittyWindow:
             self.on_refresh_requested()
 
     def _toggle_always_on_top(self) -> None:
-        self.root.attributes("-topmost", self._always_on_top.get())
+        self._always_on_top_bool = not self._always_on_top_bool
+        self.root.attributes("-topmost", self._always_on_top_bool)
 
     def _restore_position(self) -> None:
         screen_w = self.root.winfo_screenwidth()
