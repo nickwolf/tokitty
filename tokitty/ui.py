@@ -14,7 +14,7 @@ from typing import Callable, List, Optional
 from tokitty.display import bar_color
 from tokitty.geometry import clamp_position
 from tokitty.menu import MenuItem, build_menu
-from tokitty.sprites import COATS, PALETTE, SCALE, get_frames
+from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
 
 CARD_WIDTH = 300
 PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
@@ -57,7 +57,7 @@ class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label="", coat=None):
+    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label="", colorway=None, pattern=None):
         self.parent = parent
         self._current_state = "sleeping"
         self._frame_index = 0
@@ -68,10 +68,11 @@ class Pane:
         self._card_bg = card_bg if card_bg is not None else BG_COLOR
         self._bar_fill = bar_fill
         self._label = label
-        self._coat = coat if coat is not None else "orange_tabby"
+        self._colorway = colorway if colorway is not None else "orange"
+        self._pattern = pattern if pattern is not None else "tabby"
         self._build_widgets()
 
-    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, coat=None) -> None:
+    def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, colorway=None, pattern=None) -> None:
         """Live re-style without rebuilding widgets. Each parameter left as
         None keeps that slot's current value unchanged -- to reset a slot
         back to the preset/default, pass the preset's/default value
@@ -84,8 +85,10 @@ class Pane:
             self._bar_fill = bar_fill
         if label is not None:
             self._label = label
-        if coat is not None:
-            self._coat = coat
+        if colorway is not None:
+            self._colorway = colorway
+        if pattern is not None:
+            self._pattern = pattern
 
         bg = ACCENT_BG if self._accent else self._card_bg
         self.parent.configure(bg=bg)
@@ -264,9 +267,10 @@ class TokittyWindow:
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # (pane_index, field, value) -- set externally by __main__.py. field
-        # is one of "coat", "coat_base", "coat_shade", "card_bg", "bar_fill",
-        # "label", or "reset" (value ignored for "reset"). For "label", an
-        # empty string clears the stored name back to its default.
+        # is one of "colorway", "pattern", "coat_base", "coat_shade",
+        # "card_bg", "bar_fill", "label", or "reset" (value ignored for
+        # "reset"). For "label", an empty string clears the stored name
+        # back to its default.
         self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
         self._menu_pane_index = 0
 
@@ -327,9 +331,12 @@ class TokittyWindow:
         backend is available, which omits the "Show tray icon" item."""
         pane = self.panes[pane_index]
         return build_menu(
-            coats=list(COATS.keys()),
-            current_coat=(lambda p=pane: p._coat),
-            on_coat=(lambda name, i=pane_index: self._select_coat(i, name)),
+            colorways=list(COLORWAYS.keys()),
+            patterns=list(PATTERNS.keys()),
+            current_colorway=(lambda p=pane: p._colorway),
+            current_pattern=(lambda p=pane: p._pattern),
+            on_colorway=(lambda name, i=pane_index: self._select_colorway(i, name)),
+            on_pattern=(lambda name, i=pane_index: self._select_pattern(i, name)),
             on_customize=(lambda i=pane_index: self._open_customize_dialog(i)),
             on_rename=(lambda i=pane_index: self._open_rename_dialog(i)),
             on_refresh=self._on_refresh_now,
@@ -377,8 +384,11 @@ class TokittyWindow:
         self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
 
-    def _select_coat(self, pane_index: int, coat_name: str) -> None:
-        self._fire_customization_changed(pane_index, "coat", coat_name)
+    def _select_colorway(self, pane_index: int, name: str) -> None:
+        self._fire_customization_changed(pane_index, "colorway", name)
+
+    def _select_pattern(self, pane_index: int, name: str) -> None:
+        self._fire_customization_changed(pane_index, "pattern", name)
 
     def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
         if self.on_customization_changed is not None:

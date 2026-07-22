@@ -1,4 +1,4 @@
-"""Persistence for per-account coat, color overrides, and labels.
+"""Persistence for per-account colorway/pattern, color overrides, and labels.
 
 Lives in the same per-user state dir as position.json and accounts.json
 (see paths.py). customization.json is optional: absent or unparseable
@@ -34,7 +34,8 @@ _HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 @dataclass(frozen=True)
 class Customization:
-    coat: str = "orange_tabby"
+    colorway: str = "orange"
+    pattern: str = "tabby"
     overrides: Dict[str, str] = field(default_factory=dict)
     label: str = ""
 
@@ -52,6 +53,25 @@ def _clean_overrides(raw) -> Dict[str, str]:
     return cleaned
 
 
+def _resolve_colorway_pattern(entry: dict) -> "tuple[str, str]":
+    """New files carry colorway+pattern; legacy files carry a single `coat`
+    name. Invalid/missing values fall back through legacy translation to the
+    orange+tabby default."""
+    colorway = entry.get("colorway")
+    pattern = entry.get("pattern")
+    if not (isinstance(colorway, str) and colorway in sprites.COLORWAYS):
+        colorway = None
+    if not (isinstance(pattern, str) and pattern in sprites.PATTERNS):
+        pattern = None
+    if colorway is None or pattern is None:
+        coat = entry.get("coat")
+        if isinstance(coat, str) and coat in sprites.LEGACY_COAT_MAP:
+            legacy_cw, legacy_pat = sprites.LEGACY_COAT_MAP[coat]
+            colorway = colorway or legacy_cw
+            pattern = pattern or legacy_pat
+    return colorway or "orange", pattern or "tabby"
+
+
 def load_customization(state_dir: Path) -> Dict[str, Customization]:
     path = Path(state_dir) / CUSTOMIZATION_FILENAME
     if not path.is_file():
@@ -67,14 +87,13 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
     for key, entry in data.items():
         if not isinstance(entry, dict):
             continue
-        coat = entry.get("coat")
-        if not isinstance(coat, str) or coat not in sprites.COATS:
-            coat = "orange_tabby"
+        colorway, pattern = _resolve_colorway_pattern(entry)
         label = entry.get("label")
         if not isinstance(label, str):
             label = ""
         result[key] = Customization(
-            coat=coat,
+            colorway=colorway,
+            pattern=pattern,
             overrides=_clean_overrides(entry.get("overrides")),
             label=label,
         )
@@ -90,8 +109,7 @@ def save_customization(state_dir: Path, data: Dict[str, Customization]) -> None:
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:
-    palette = sprites.get_palette(custom.coat)
-    palette = dict(palette)
+    palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern))
     if "coat_base" in custom.overrides:
         palette["o"] = custom.overrides["coat_base"]
     if "coat_shade" in custom.overrides:

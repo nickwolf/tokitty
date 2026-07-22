@@ -284,16 +284,22 @@ def _next_last_good(latest: PollResult, last_good: Optional[PollResult]) -> Opti
     return latest if latest.status == "ok" else last_good
 
 
+def _seed_from_account(account: Optional[Account]) -> Tuple[Optional[str], Optional[str]]:
+    """Translate a legacy accounts.json `coat` seed to (colorway, pattern)."""
+    coat = account.coat if account is not None else None
+    if isinstance(coat, str) and coat in sprites.LEGACY_COAT_MAP:
+        return sprites.LEGACY_COAT_MAP[coat]
+    return None, None
+
+
 def initial_customization(account: Optional[Account], stored: Optional[Customization]) -> Customization:
-    """Resolve the Customization to open a pane with. Stored (loaded from
-    customization.json) always wins when present; otherwise seed from the
-    account's accounts.json `coat` field when it names a valid preset,
-    else fall back to the Customization() default (orange_tabby)."""
+    """Stored (customization.json) always wins; else seed from the account's
+    legacy `coat` when it names a known preset, else the orange+tabby default."""
     if stored is not None:
         return stored
-    coat = account.coat if account is not None else None
-    if isinstance(coat, str) and coat in sprites.COATS:
-        return Customization(coat=coat)
+    colorway, pattern = _seed_from_account(account)
+    if colorway is not None:
+        return Customization(colorway=colorway, pattern=pattern)
     return Customization()
 
 
@@ -359,7 +365,7 @@ def run_gui() -> int:
             palette=effective_palette(custom),
             card_bg=custom.overrides.get("card_bg", BG_COLOR),
             bar_fill=custom.overrides.get("bar_fill", ""),
-            coat=custom.coat,
+            colorway=custom.colorway, pattern=custom.pattern,
         )
 
     units = []
@@ -391,9 +397,12 @@ def run_gui() -> int:
         key = unit["key"]
         custom = customization_store[key]
 
-        if field == "coat":
-            if value in sprites.COATS:
-                custom = replace(custom, coat=value)
+        if field == "colorway":
+            if value in sprites.COLORWAYS:
+                custom = replace(custom, colorway=value)
+        elif field == "pattern":
+            if value in sprites.PATTERNS:
+                custom = replace(custom, pattern=value)
         elif field == "reset":
             custom = replace(custom, overrides={})
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
@@ -419,8 +428,9 @@ def run_gui() -> int:
     from tokitty.tray import TrayManager
 
     settings = load_settings(state_dir)
-    pane0_coat = window.panes[0]._coat
-    tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir, coat=pane0_coat)
+    pane0 = window.panes[0]
+    tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir,
+                       colorway=pane0._colorway, pattern=pane0._pattern)
 
     window.on_quit = lambda: (tray.stop(), root.destroy())
     if tray.available:

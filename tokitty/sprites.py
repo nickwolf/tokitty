@@ -34,7 +34,7 @@ BASE_PALETTE: Dict[str, str] = {
     "?": "#e8c23c",  # confused accent
     "h": "#f2d675",  # activate/happy sparkle accent
     # Prop colors (task 8 activity sprites). Non-coat: props must not
-    # change with coat, so these live in BASE_PALETTE, not COATS.
+    # change with coat, so these live in BASE_PALETTE, not the coat presets.
     "g": "#9aa0ac",  # laptop chassis
     "b": "#7fd8f0",  # laptop screen glow, dim
     "B": "#c8f2ff",  # laptop screen glow, bright (typing pulse)
@@ -43,58 +43,7 @@ BASE_PALETTE: Dict[str, str] = {
     "G": "#5a4632",  # ground line -- fixed earth tone, never varies with coat
 }
 
-# Coat presets: each defines the same region keys. "c" is the patch
-# region -- distinct cells in the grids that only some coats color
-# differently (calico patches); on the default orange tabby it matches
-# the coat so the pattern plumbing is invisible until Phase 4 uses it.
-COATS: Dict[str, Dict[str, str]] = {
-    "orange_tabby": {
-        "o": "#e8823c",  # coat
-        "O": "#c26a2c",  # coat shading
-        "s": "#a8541f",  # tabby stripe
-        "c": "#e8823c",  # patch region (matches coat on this preset)
-        "p": "#f6b8c8",  # inner ear
-    },
-    # Cool blue-gray, pushed bluer/lighter than the laptop chassis
-    # ("g" #9aa0ac) so cat and prop never merge in the working pose.
-    "gray_tabby": {
-        "o": "#a4aec2",  # coat
-        "O": "#818ba0",  # coat shading
-        "s": "#5f6879",  # tabby stripe -- clearly darker, stripes read
-        "c": "#a4aec2",  # patch region matches coat
-        "p": "#e3a9ba",  # inner ear, slightly cooled pink
-    },
-    # Dark charcoal with a violet cast -- visibly lighter than the
-    # k outline (#2b1a12) so edges and closed-eye lines stay readable.
-    "black": {
-        "o": "#4a4653",  # coat
-        "O": "#38343f",  # coat shading
-        "s": "#575263",  # tone-on-tone sheen stripe (subtle)
-        "c": "#4a4653",  # patch region matches coat
-        "p": "#a8798c",  # inner ear, muted rose against dark fur
-    },
-    # Warm off-white; shading carries the silhouette on the dark card
-    # (muzzle "w" #fff6ec melting into the coat is the point).
-    "white": {
-        "o": "#f1ebdf",  # coat
-        "O": "#c4bcae",  # coat shading -- strong enough to hold the pose
-        "s": "#ded6c6",  # tone-on-tone shade (subtle)
-        "c": "#f1ebdf",  # patch region matches coat
-        "p": "#f6b8c8",  # inner ear
-    },
-    # Classic tricolor: white-ish base, orange patches on "c", and the
-    # stripe region repurposed as near-black patches for the third color.
-    "calico": {
-        "o": "#f1ebdf",  # white base coat
-        "O": "#c4bcae",  # base shading
-        "s": "#453a33",  # dark patches (warm near-black, above outline)
-        "c": "#e8823c",  # orange patches (matches the tabby's coat)
-        "p": "#f6b8c8",  # inner ear
-    },
-}
-
-
-# --- colorway x pattern model (replaces the bundled COATS in Task 2) ---
+# --- colorway x pattern model (replaces the old bundled coat presets) ---
 # A colorway is a tone palette; a pattern maps each coat-driven char to a
 # tone token ("coat"/"shade"/"mark"/"light"/"white") or a literal #rrggbb.
 COLORWAYS: Dict[str, Dict[str, str]] = {
@@ -145,13 +94,13 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby") -> Dict[st
 
 
 def get_palette(coat: str = "orange_tabby") -> Dict[str, str]:
-    """Full character->color mapping for one coat preset."""
-    merged = dict(BASE_PALETTE)
-    merged.update(COATS[coat])
-    return merged
+    """Legacy shim: a bundled coat name -> resolve_palette. New code calls
+    resolve_palette(colorway, pattern) directly. Kept so scripts and any other
+    legacy callers keep working until they migrate."""
+    return resolve_palette(*LEGACY_COAT_MAP[coat])
 
 
-PALETTE: Dict[str, str] = get_palette()
+PALETTE: Dict[str, str] = resolve_palette("orange", "tabby")
 
 # Sitting, calm pose -- ears relaxed. L/R are the eye cells, A is a
 # single accent cell (nose by default, repainted per state).

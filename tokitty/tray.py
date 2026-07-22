@@ -18,14 +18,14 @@ from tokitty.settings import Settings, save_settings
 TRAY_ICON_SCALE = 2  # 28x26 content sprite -> 56x52, padded to a 56x56 square
 
 
-def _default_image_factory(coat: str):
+def _default_image_factory(colorway: str, pattern: str):
     from PIL import Image
 
     from tokitty.sprite_raster import raster_rgba
-    from tokitty.sprites import get_frames, get_palette
+    from tokitty.sprites import get_frames, resolve_palette
 
     frame = get_frames("content")[0]
-    width, height, raw = raster_rgba(frame, get_palette(coat), TRAY_ICON_SCALE)
+    width, height, raw = raster_rgba(frame, resolve_palette(colorway, pattern), TRAY_ICON_SCALE)
     sprite = Image.frombytes("RGBA", (width, height), raw)
     side = max(width, height)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
@@ -61,11 +61,12 @@ def _default_icon_factory(image, menu_model, wrap, title):
 
 class TrayManager:
     def __init__(self, root, menu_provider: Callable[[], List], state_dir,
-                 coat: str = "orange_tabby", icon_factory=None, image_factory=None):
+                 colorway: str = "orange", pattern: str = "tabby", icon_factory=None, image_factory=None):
         self._root = root
         self._menu_provider = menu_provider
         self._state_dir = state_dir
-        self._coat = coat
+        self._colorway = colorway
+        self._pattern = pattern
         self._title = "Tokitty"
         self._icon_factory = icon_factory or _default_icon_factory
         self._image_factory = image_factory or _default_image_factory
@@ -80,7 +81,7 @@ class TrayManager:
         and pystray backend selection are guarded up front -- not just the
         `import`. Any failure => tray unavailable, cleanly."""
         try:
-            self._image = self._image_factory(self._coat)
+            self._image = self._image_factory(self._colorway, self._pattern)
             self._icon_factory(self._image, [], self._wrap, self._title)
             return True
         except Exception:

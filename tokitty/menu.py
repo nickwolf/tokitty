@@ -25,9 +25,12 @@ class MenuItem:
 
 def build_menu(
     *,
-    coats: List[str],
-    current_coat: Callable[[], str],
-    on_coat: Callable[[str], None],
+    colorways: List[str],
+    patterns: List[str],
+    current_colorway: Callable[[], str],
+    current_pattern: Callable[[], str],
+    on_colorway: Callable[[str], None],
+    on_pattern: Callable[[str], None],
     on_customize: Callable[[], None],
     on_rename: Callable[[], None],
     on_refresh: Callable[[], None],
@@ -37,16 +40,19 @@ def build_menu(
     tray_enabled: Optional[Callable[[], bool]] = None,
     on_toggle_tray: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
-    coat_items = [
-        MenuItem(
-            label=name,
-            action=(lambda n=name: on_coat(n)),
-            radio_selected=(lambda n=name: current_coat() == n),
-        )
-        for name in coats
+    colorway_items = [
+        MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
+                 radio_selected=(lambda n=n: current_colorway() == n))
+        for n in colorways
+    ]
+    pattern_items = [
+        MenuItem(label=n, action=(lambda n=n: on_pattern(n)),
+                 radio_selected=(lambda n=n: current_pattern() == n))
+        for n in patterns
     ]
     items: List[MenuItem] = [
-        MenuItem(label="Coat", submenu=coat_items),
+        MenuItem(label="Colorway", submenu=colorway_items),
+        MenuItem(label="Pattern", submenu=pattern_items),
         MenuItem(label="Customize…", action=on_customize),
         MenuItem(label="Rename…", action=on_rename),
         MenuItem(separator=True),

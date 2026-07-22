@@ -15,7 +15,7 @@ import types
 
 from tokitty.menu import build_menu
 from tokitty.sprite_raster import raster_rgba
-from tokitty.sprites import get_frames, get_palette
+from tokitty.sprites import get_frames, resolve_palette
 from tokitty.tray import TRAY_ICON_SCALE, _default_icon_factory, _default_image_factory
 
 
@@ -79,12 +79,15 @@ def _shadow_model():
     so getters can be driven *after* the model -- and the icon built from
     it -- already exist. That ordering is what would catch a late-binding
     closure bug in to_entries."""
-    state = {"coat": "gray_tabby", "aot": True, "tray": True}
+    state = {"colorway": "gray", "pattern": "tabby", "aot": True, "tray": True}
 
     model = build_menu(
-        coats=["orange_tabby", "gray_tabby", "black"],
-        current_coat=lambda: state["coat"],
-        on_coat=lambda name: None,
+        colorways=["orange", "gray", "black"],
+        patterns=["solid", "tabby", "calico"],
+        current_colorway=lambda: state["colorway"],
+        current_pattern=lambda: state["pattern"],
+        on_colorway=lambda name: None,
+        on_pattern=lambda name: None,
         on_customize=_noop,
         on_rename=_noop,
         on_refresh=_noop,
@@ -124,7 +127,7 @@ def test_icon_factory_maps_menu_model_to_pystray_entries(monkeypatch):
 
     non_sep_labels = [item.label for item in model if not item.separator]
     assert non_sep_labels == [
-        "Coat", "Customize…", "Rename…", "Refresh now",
+        "Colorway", "Pattern", "Customize…", "Rename…", "Refresh now",
         "Always in front", "Show tray icon", "Exit",
     ]
 
@@ -155,27 +158,41 @@ def test_icon_factory_maps_menu_model_to_pystray_entries(monkeypatch):
                 assert entry.radio is False
                 assert entry.checked is None
 
-    # Coat submenu: each coat is a radio MenuItem with a checked getter.
-    coat_item = items_by_label["Coat"]
-    coat_entries = entries_by_label["Coat"].action.entries
-    assert len(coat_entries) == len(coat_item.submenu) == 3
-    for entry, sub_item in zip(coat_entries, coat_item.submenu):
+    # Colorway/Pattern submenus: each entry is a radio MenuItem with a
+    # checked getter.
+    colorway_item = items_by_label["Colorway"]
+    colorway_entries = entries_by_label["Colorway"].action.entries
+    assert len(colorway_entries) == len(colorway_item.submenu) == 3
+    for entry, sub_item in zip(colorway_entries, colorway_item.submenu):
         assert entry.text == sub_item.label
         assert entry.radio is True
         assert entry.action == ("WRAPPED", sub_item.action)
         assert callable(entry.checked)
 
-    # wrap() fires for every actionable entry, in traversal order (coat
+    pattern_item = items_by_label["Pattern"]
+    pattern_entries = entries_by_label["Pattern"].action.entries
+    assert len(pattern_entries) == len(pattern_item.submenu) == 3
+    for entry, sub_item in zip(pattern_entries, pattern_item.submenu):
+        assert entry.text == sub_item.label
+        assert entry.radio is True
+        assert entry.action == ("WRAPPED", sub_item.action)
+        assert callable(entry.checked)
+
+    # wrap() fires for every actionable entry, in traversal order (each
     # submenu resolved inline before its parent's siblings), and never for
-    # a separator or the Coat submenu parent (whose own action is None).
-    expected_wrap_order = [c.action for c in coat_item.submenu] + [
-        items_by_label["Customize…"].action,
-        items_by_label["Rename…"].action,
-        items_by_label["Refresh now"].action,
-        items_by_label["Always in front"].action,
-        items_by_label["Show tray icon"].action,
-        items_by_label["Exit"].action,
-    ]
+    # a separator or a submenu parent itself (whose own action is None).
+    expected_wrap_order = (
+        [c.action for c in colorway_item.submenu]
+        + [p.action for p in pattern_item.submenu]
+        + [
+            items_by_label["Customize…"].action,
+            items_by_label["Rename…"].action,
+            items_by_label["Refresh now"].action,
+            items_by_label["Always in front"].action,
+            items_by_label["Show tray icon"].action,
+            items_by_label["Exit"].action,
+        ]
+    )
     assert wrap_calls == expected_wrap_order
     assert None not in wrap_calls
 
@@ -186,27 +203,31 @@ def test_icon_factory_checked_getters_track_live_shadow_state(monkeypatch):
     items_by_label = {item.label: item for item in model if not item.separator}
     entries_by_label = _entries_by_label(model, entries)
 
-    coat_entries = entries_by_label["Coat"].action.entries
-    coat_items = items_by_label["Coat"].submenu
+    colorway_entries = entries_by_label["Colorway"].action.entries
+    colorway_items = items_by_label["Colorway"].submenu
+    pattern_entries = entries_by_label["Pattern"].action.entries
+    pattern_items = items_by_label["Pattern"].submenu
 
     dummy_item = object()  # pystray calls checked() with one positional MenuItem.
 
-    def selected_coats():
-        return {sub.label for entry, sub in zip(coat_entries, coat_items)
-                 if entry.checked(dummy_item)}
+    def _selected(entries, items):
+        return {sub.label for entry, sub in zip(entries, items) if entry.checked(dummy_item)}
 
-    assert selected_coats() == {"gray_tabby"}
+    assert _selected(colorway_entries, colorway_items) == {"gray"}
+    assert _selected(pattern_entries, pattern_items) == {"tabby"}
     assert entries_by_label["Always in front"].checked(dummy_item) is True
     assert entries_by_label["Show tray icon"].checked(dummy_item) is True
 
     # Flip the shadow state after the model/icon were already built: a
     # late-binding closure bug would freeze these on the values captured at
     # build time instead of re-reading state on every call.
-    state["coat"] = "black"
+    state["colorway"] = "black"
+    state["pattern"] = "calico"
     state["aot"] = False
     state["tray"] = False
 
-    assert selected_coats() == {"black"}
+    assert _selected(colorway_entries, colorway_items) == {"black"}
+    assert _selected(pattern_entries, pattern_items) == {"calico"}
     assert entries_by_label["Always in front"].checked(dummy_item) is False
     assert entries_by_label["Show tray icon"].checked(dummy_item) is False
 
@@ -215,10 +236,10 @@ def test_image_factory_produces_square_transparent_rgba_icon():
     # Derive the expected side from the same lower-level calls
     # _default_image_factory makes, rather than hardcoding sprite pixels.
     frame = get_frames("content")[0]
-    width, height, _raw = raster_rgba(frame, get_palette("orange_tabby"), TRAY_ICON_SCALE)
+    width, height, _raw = raster_rgba(frame, resolve_palette("orange", "tabby"), TRAY_ICON_SCALE)
     expected_side = max(width, height)
 
-    img = _default_image_factory("orange_tabby")
+    img = _default_image_factory("orange", "tabby")
 
     assert img.mode == "RGBA"
     assert img.size == (expected_side, expected_side)
