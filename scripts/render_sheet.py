@@ -4,8 +4,10 @@ Stdlib-only (struct + zlib hand-rolled PNG, 8-bit RGB, single IDAT).
 Exists because this repo's dev environment has no GUI: art review
 happens by eyeballing the emitted PNG, not a live tkinter window.
 
-Usage: python3 scripts/render_sheet.py --out sheet.png [--scale 8] [--coat orange_tabby]
-Prints one state name per line: the row legend, top to bottom.
+Usage: python3 scripts/render_sheet.py --out sheet.png [--scale 8] [--colorway orange] [--pattern tabby]
+       python3 scripts/render_sheet.py --grid --out grid.png [--scale 6]
+Prints one state name per line (row legend, top to bottom); with --grid,
+prints one "colorway/pattern" label per cell, row-major.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tokitty.sprites import ALL_STATES, get_frames, get_palette
+from tokitty.sprites import ALL_STATES, COLORWAYS, PATTERNS, get_frames, resolve_palette
 
 BG = "#1c1c22"  # ui.py card background
 GAP = 4  # background pixels between sprites, in device px
@@ -40,8 +42,9 @@ def _write_png(path: Path, rows: List[bytes], width: int) -> None:
                      + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def render_sheet(out_path: Path, scale: int = 8, coat: str = "orange_tabby") -> List[str]:
-    palette = get_palette(coat)
+def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
+                 pattern: str = "tabby") -> List[str]:
+    palette = resolve_palette(colorway, pattern)
     bg = _hex_to_rgb(BG)
     states = list(ALL_STATES)
     all_frames = {s: get_frames(s) for s in states}
@@ -71,14 +74,53 @@ def render_sheet(out_path: Path, scale: int = 8, coat: str = "orange_tabby") -> 
     return states
 
 
+def render_grid(out_path: Path, scale: int = 6) -> List[str]:
+    """One 'content' cat per colorway x pattern, laid out as a matrix.
+    Returns the row-major cell legend ("colorway/pattern")."""
+    from tokitty.sprites import _apply, SITTING_TEMPLATE
+    pose = _apply(SITTING_TEMPLATE, {"L": "e", "R": "e", "A": "n"})
+    rows_n, cols_n = len(pose), len(pose[0])
+    cell_w, cell_h = cols_n * scale, rows_n * scale
+    colorways, patterns = list(COLORWAYS), list(PATTERNS)
+    width = GAP + len(patterns) * (cell_w + GAP)
+    height = GAP + len(colorways) * (cell_h + GAP)
+    bg = _hex_to_rgb(BG)
+    grid = [[bg] * width for _ in range(height)]
+    legend: List[str] = []
+    for r, cw in enumerate(colorways):
+        for c, pat in enumerate(patterns):
+            palette = resolve_palette(cw, pat)
+            x0 = GAP + c * (cell_w + GAP)
+            y0 = GAP + r * (cell_h + GAP)
+            for ry, row in enumerate(pose):
+                for cx, ch in enumerate(row):
+                    color = palette.get(ch, "")
+                    if not color:
+                        continue
+                    px = _hex_to_rgb(color)
+                    for dy in range(scale):
+                        for dx in range(scale):
+                            grid[y0 + ry * scale + dy][x0 + cx * scale + dx] = px
+            legend.append(f"{cw}/{pat}")
+    _write_png(out_path, [b"".join(row) for row in grid], width)
+    return legend
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--scale", type=int, default=8)
-    parser.add_argument("--coat", default="orange_tabby")
+    parser.add_argument("--colorway", default="orange")
+    parser.add_argument("--pattern", default="tabby")
+    parser.add_argument("--grid", action="store_true")
     args = parser.parse_args()
-    for state in render_sheet(args.out, scale=args.scale, coat=args.coat):
-        print(state)
+    if args.grid:
+        for label in render_grid(args.out, scale=args.scale):
+            print(label)
+    else:
+        for state in render_sheet(args.out, scale=args.scale, colorway=args.colorway,
+                                   pattern=args.pattern):
+            print(state)
     return 0
 
 
