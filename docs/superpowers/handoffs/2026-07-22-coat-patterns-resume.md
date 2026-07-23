@@ -33,12 +33,12 @@ Fresh **Sonnet** implementer subagent per task; **NO per-task reviewer**; contro
 
 ## 🔴 OPEN DECISION — settle FIRST before Task 8
 
-**Who executes the Task 8–9 pixel art?** Three inputs conflict:
-1. The task brief I was given scoped Tasks 8–9 art as **"Nick's owner-only work, never delegated."**
-2. Nick (2026-07-22): **"Traditionally, Fable has done the art."**
-3. Memory note `reference_fable_retired.md`: **Fable retired 2026-07-19** ("never dispatch model:fable") — BUT this session's environment lists a **"Fable 5" (`claude-fable-5`)** as a current model, so availability is genuinely unclear.
+**Who executes the Task 8–9 pixel art?**
+- Traditionally (Phases 2 & 4) art candidates came from a **Fable subagent**, with Nick reviewing/approving PNGs + the live widget.
+- **Fable is out by Nick's choice, not availability:** Fable 5 is the top-tier model and *is* available, but it was paygated behind usage credits on 2026-07-19 and Nick is declining to use it (protest) until it's in his plan. **Reversible** — if Nick says Fable's now in-plan, it's back on the table.
+- This task's brief tightened art to **"Nick's owner-only work, never delegated"** (i.e. Nick does the pixels himself).
 
-**Resolve before touching Task 8:** Nick decides art-execution path — by hand / Fable 5 (if it's really back) / Opus — and whether to relax the "never delegated" constraint. Do not assume.
+**Resolve before touching Task 8 (do not assume):** with Fable off the table, the realistic paths are **Nick-by-hand** or an **Opus subagent generating candidates for Nick's approval** — and whether to keep or relax this task's "never delegated" framing.
 
 ## Task 8 — new template regions (paws `m` / points `x` / tail `y` / belly `u`) + tail go/no-go
 
