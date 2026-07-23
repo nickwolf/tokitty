@@ -39,3 +39,11 @@ def test_idat_decompresses_to_rgb_scanlines(tmp_path):
     raw = zlib.decompress(data[idat_start:idat_start + idat_len])
     w, h = _png_size(out)
     assert len(raw) == h * (1 + w * 3)
+
+
+def test_render_grid_writes_png(tmp_path):
+    from scripts.render_sheet import render_grid
+    out = tmp_path / "grid.png"
+    labels = render_grid(out, scale=2)
+    assert out.is_file() and out.stat().st_size > 0
+    assert labels  # non-empty legend
