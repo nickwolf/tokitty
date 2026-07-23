@@ -1,3 +1,4 @@
+import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,7 @@ from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.credentials import CredentialsError
 from tokitty.customize import Customization
 from tokitty.poller import PollResult
+from tokitty.sprites import COLORWAYS, PATTERNS
 
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -203,12 +205,6 @@ def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
     assert result.status == "credentials_unreachable"
 
 
-def test_initial_customization_no_stored_no_seed_defaults_orange_tabby():
-    account = Account(name="Work", config_dir="/x")
-    result = initial_customization(account, None)
-    assert (result.colorway, result.pattern) == ("orange", "tabby")
-
-
 def test_initial_customization_seeds_from_account_coat():
     account = Account(name="Work", config_dir="/x", coat="black")
     result = initial_customization(account, None)
@@ -221,15 +217,21 @@ def test_initial_customization_stored_beats_seed():
     assert initial_customization(account, stored) == stored
 
 
-def test_initial_customization_invalid_seed_coat_falls_back_to_default():
+def test_initial_customization_no_stored_no_seed_rolls_random():
+    account = Account(name="Work", config_dir="/x")
+    result = initial_customization(account, None, rng=random.Random(0))
+    assert result.colorway in COLORWAYS and result.pattern in PATTERNS
+
+
+def test_initial_customization_invalid_seed_coat_rolls_random():
     account = Account(name="Work", config_dir="/x", coat="not_a_real_coat")
-    result = initial_customization(account, None)
-    assert (result.colorway, result.pattern) == ("orange", "tabby")
+    result = initial_customization(account, None, rng=random.Random(0))
+    assert result.colorway in COLORWAYS and result.pattern in PATTERNS
 
 
-def test_initial_customization_no_account_no_stored_defaults():
-    result = initial_customization(None, None)
-    assert (result.colorway, result.pattern) == ("orange", "tabby")
+def test_initial_customization_no_account_no_stored_rolls_random():
+    result = initial_customization(None, None, rng=random.Random(0))
+    assert result.colorway in COLORWAYS and result.pattern in PATTERNS
 
 
 def test_initial_label_single_mode_defaults_empty():
