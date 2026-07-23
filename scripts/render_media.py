@@ -16,7 +16,7 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tokitty.sprites import get_frames, get_palette
+from tokitty.sprites import LEGACY_COAT_MAP, get_frames, resolve_palette
 from render_sheet import BG, _hex_to_rgb, _write_png
 from tokitty.sprite_raster import raster_frame
 
@@ -40,7 +40,7 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
 
     bg = _hex_to_rgb(BG)
-    palette = get_palette()
+    palette = resolve_palette("orange", "tabby")
 
     for state in STILL_STATES:
         frame = get_frames(state)[0]
@@ -50,8 +50,10 @@ def main() -> int:
     # Dual-cat card: personal orange tabby over work gray tabby, echoing
     # the two-pane layout (the real card also shows bars; this is the cat
     # half, which is what the README is selling).
-    top = raster_frame(get_frames("working")[0], get_palette("orange_tabby"), args.scale, bg)
-    bottom = raster_frame(get_frames("sleeping")[0], get_palette("gray_tabby"), args.scale, bg)
+    top = raster_frame(get_frames("working")[0], resolve_palette(*LEGACY_COAT_MAP["orange_tabby"]),
+                        args.scale, bg)
+    bottom = raster_frame(get_frames("sleeping")[0], resolve_palette(*LEGACY_COAT_MAP["gray_tabby"]),
+                           args.scale, bg)
     width = max(len(top[0]), len(bottom[0]))
     def pad(g):
         return [row + [bg] * (width - len(row)) for row in g]
