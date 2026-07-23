@@ -27,6 +27,7 @@ from tokitty.mood import compute_capped_substate, compute_mood, detect_activate,
 from tokitty.paths import get_state_dir
 from tokitty.pose import resolve_pose
 from tokitty.poller import PollResult, Poller
+from tokitty.randomize import random_look
 from tokitty import sprites
 
 # tkinter (and tokitty.ui, which imports it) is deliberately NOT imported
@@ -292,15 +293,18 @@ def _seed_from_account(account: Optional[Account]) -> Tuple[Optional[str], Optio
     return None, None
 
 
-def initial_customization(account: Optional[Account], stored: Optional[Customization]) -> Customization:
+def initial_customization(account: Optional[Account], stored: Optional[Customization],
+                          rng=None) -> Customization:
     """Stored (customization.json) always wins; else seed from the account's
-    legacy `coat` when it names a known preset, else the orange+tabby default."""
+    legacy `coat`; else roll a random curated look so a fresh install/account
+    gets a unique cat (only-if-unset -- never overrides an explicit pick)."""
     if stored is not None:
         return stored
     colorway, pattern = _seed_from_account(account)
     if colorway is not None:
         return Customization(colorway=colorway, pattern=pattern)
-    return Customization()
+    colorway, pattern = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS), rng=rng)
+    return Customization(colorway=colorway, pattern=pattern)
 
 
 def initial_label(account: Optional[Account], custom: Customization, dual: bool) -> str:
@@ -386,6 +390,12 @@ def run_gui() -> int:
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
                       "last_good": None, "key": key, "account": account})
 
+    # Persist first-run seeds (and re-write loaded entries idempotently) so a
+    # random seed becomes a STABLE identity instead of re-rolling each launch.
+    # Creates customization.json on first run -- intended; it is the per-account
+    # look file, never accounts.json, so there is no credential-mode impact.
+    save_customization(state_dir, customization_store)
+
     def refresh_all():
         for unit in units:
             unit["poller"].request_refresh()
@@ -403,6 +413,9 @@ def run_gui() -> int:
         elif field == "pattern":
             if value in sprites.PATTERNS:
                 custom = replace(custom, pattern=value)
+        elif field == "randomize":
+            cw, pat = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
+            custom = replace(custom, colorway=cw, pattern=pat)
         elif field == "reset":
             custom = replace(custom, overrides={})
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
@@ -428,6 +441,31 @@ def run_gui() -> int:
     from tokitty.tray import TrayManager
 
     settings = load_settings(state_dir)
+
+    from tokitty.settings import Settings, save_settings
+
+    surprise_state = {"on": settings.surprise_me}
+    window.surprise_me = lambda: surprise_state["on"]
+
+    def randomize(pane_index: int) -> None:
+        handle_customization_changed(pane_index, "randomize", None)
+
+    window.on_randomize = randomize
+
+    def toggle_surprise() -> None:
+        surprise_state["on"] = not surprise_state["on"]
+        save_settings(state_dir, Settings(tray_enabled=settings.tray_enabled,
+                                          surprise_me=surprise_state["on"]))
+        if surprise_state["on"]:
+            for i in range(len(units)):
+                handle_customization_changed(i, "randomize", None)
+
+    window.on_toggle_surprise = toggle_surprise
+
+    if settings.surprise_me:
+        for index in range(len(units)):
+            handle_customization_changed(index, "randomize", None)
+
     pane0 = window.panes[0]
     tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir,
                        colorway=pane0._colorway, pattern=pane0._pattern)
