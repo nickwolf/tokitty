@@ -33,12 +33,12 @@ Fresh **Sonnet** implementer subagent per task; **NO per-task reviewer**; contro
 
 ## 🔴 OPEN DECISION — settle FIRST before Task 8
 
-**Who executes the Task 8–9 pixel art?**
-- Traditionally (Phases 2 & 4) art candidates came from a **Fable subagent**, with Nick reviewing/approving PNGs + the live widget.
-- **Fable is out by Nick's choice, not availability:** Fable 5 is the top-tier model and *is* available, but it was paygated behind usage credits on 2026-07-19 and Nick is declining to use it (protest) until it's in his plan. **Reversible** — if Nick says Fable's now in-plan, it's back on the table.
-- This task's brief tightened art to **"Nick's owner-only work, never delegated"** (i.e. Nick does the pixels himself).
+**Who executes the Task 8–9 pixel art? — DECIDED (Nick, 2026-07-22):**
+- **NOT by hand** — Nick will not draw the pixels. So the task brief's "Nick's owner-only work, never delegated" framing is **superseded**: art execution IS delegated; Nick reviews/approves the PNG contact sheets + the live widget (his usual precise iterative feedback loop).
+- **NOT Fable** — Fable 5 is top-tier and available but was paygated behind usage credits 2026-07-19; Nick is declining it on principle until it's in his plan (reversible; see the `fable-paygated` memory).
+- **Two live options:** an **Opus subagent** generating candidate art (this session can dispatch that directly), **OR Claude Design** (an Anthropic tool — Nick's path; NOT wired into the Claude Code session as a callable tool, so it's Nick-driven or a future-session capability).
 
-**Resolve before touching Task 8 (do not assume):** with Fable off the table, the realistic paths are **Nick-by-hand** or an **Opus subagent generating candidates for Nick's approval** — and whether to keep or relax this task's "never delegated" framing.
+**Open sub-choice for next session:** pick Opus-subagent vs Claude Design for the actual pixels. Either way Nick approves before commit; art + the ready-to-paste scaffolding below land as one green commit.
 
 ## Task 8 — new template regions (paws `m` / points `x` / tail `y` / belly `u`) + tail go/no-go
 
