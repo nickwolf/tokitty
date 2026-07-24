@@ -48,21 +48,40 @@ BASE_PALETTE: Dict[str, str] = {
 # tone token ("coat"/"shade"/"mark"/"light"/"white") or a literal #rrggbb.
 COLORWAYS: Dict[str, Dict[str, str]] = {
     "orange": {"coat": "#e8823c", "shade": "#c26a2c", "mark": "#a8541f", "light": "#f7e0c0", "ear": "#f6b8c8"},
-    "gray":   {"coat": "#a4aec2", "shade": "#818ba0", "mark": "#5f6879", "light": "#e4e8ef", "ear": "#e3a9ba"},
-    "black":  {"coat": "#4a4653", "shade": "#38343f", "mark": "#575263", "light": "#c9c6cf", "ear": "#a8798c"},
-    "white":  {"coat": "#f1ebdf", "shade": "#c4bcae", "mark": "#ded6c6", "light": "#f6f2ea", "ear": "#f6b8c8"},
+    "gray":   {"coat": "#a4aec2", "shade": "#818ba0", "mark": "#5f6879", "light": "#e2e7f0", "ear": "#e3a9ba"},
+    "black":  {"coat": "#4a4653", "shade": "#38343f", "mark": "#575263", "light": "#cfccd9", "ear": "#a8798c"},
+    "white":  {"coat": "#f1ebdf", "shade": "#c4bcae", "mark": "#ded6c6", "light": "#f8f4ec", "ear": "#f6b8c8"},
+    "cream":  {"coat": "#e9d9bd", "shade": "#cdb894", "mark": "#a98d63", "light": "#f7efdd", "ear": "#f0c4cf"},
+    "brown":  {"coat": "#8a5a3c", "shade": "#6d452d", "mark": "#4f3020", "light": "#d9c4ab", "ear": "#d69aa6"},
 }
 
-# Which template chars a pattern controls. Grows in Task 8 with the new
-# regions (m paws, x points, y tail, u belly).
-REGION_CHARS: Tuple[str, ...] = ("o", "O", "s", "c")
+# Which template chars a pattern controls: the base fill/shade plus the four
+# body regions -- m paws, x points (outer ears + face mask), y tail, u belly.
+# Closed set: every PATTERNS entry must define exactly these keys.
+REGION_CHARS: Tuple[str, ...] = ("o", "O", "s", "c", "m", "x", "y", "u")
 
 PATTERNS: Dict[str, Dict[str, str]] = {
-    "solid":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat"},
-    "tabby":       {"o": "coat", "O": "shade", "s": "mark", "c": "coat"},
-    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "white"},
-    "tabby_white": {"o": "coat", "O": "shade", "s": "mark", "c": "white"},
-    "calico":      {"o": "coat", "O": "shade", "s": "#453a33", "c": "#e8823c"},
+    "solid":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "coat", "x": "coat", "y": "shade", "u": "coat"},
+    "tabby":       {"o": "coat", "O": "shade", "s": "mark", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "white"},
+    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "white",
+                    "m": "white", "x": "coat", "y": "shade", "u": "white"},
+    "tabby_white": {"o": "coat", "O": "shade", "s": "mark", "c": "white",
+                    "m": "white", "x": "coat", "y": "shade", "u": "white"},
+    "calico":      {"o": "coat", "O": "shade", "s": "#453a33", "c": "#e8823c",
+                    "m": "white", "x": "coat", "y": "shade", "u": "white"},
+    # Silhouette patterns -- these use the new regions to change the cat's
+    # read, not just tint it. colorpoint/van pale the body toward the
+    # colorway's `light` tone, so they only sing on light colorways.
+    "tuxedo":      {"o": "coat", "O": "shade", "s": "coat", "c": "white",
+                    "m": "white", "x": "coat", "y": "shade", "u": "white"},
+    "socks":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat"},
+    "colorpoint":  {"o": "light", "O": "light", "s": "light", "c": "light",
+                    "m": "mark", "x": "mark", "y": "mark", "u": "light"},
+    "van":         {"o": "white", "O": "shade", "s": "white", "c": "white",
+                    "m": "white", "x": "coat", "y": "coat", "u": "white"},
 }
 
 # Old bundled coat names -> (colorway, pattern). Legacy black/white carried a
@@ -106,61 +125,61 @@ PALETTE: Dict[str, str] = resolve_palette("orange", "tabby")
 # single accent cell (nose by default, repainted per state).
 SITTING_TEMPLATE: List[str] = [
     "............................",
-    "........o.........o.........",
-    ".......ooo...o...ooo........",
-    "......ooooooooooooooo.......",
-    "......oopoosssssoopoo.......",
+    "........x.........x.........",
+    ".......xxx...o...xxx........",
+    "......xxxxoooooooxxxx.......",
+    "......xxpxxsssssxxpxx.......",
     ".....ooocccoooooooooOO......",
     ".......occsssosssoOO........",
     ".......oooooooooooOO........",
-    "......ooooLoooooRooOO.......",
-    ".......oooooowooooOO........",
-    ".......oooowwAwwooOO........",
-    ".......ooowwwwwwwoOO........",
-    "........ooowwwwwoOO.........",
-    ".........oooowooOO..........",
-    "........ooooooooooo..OO.....",
-    ".......ooooooooooooo..OO....",
-    "......ooooooooooooooo..OO...",
-    "......osssooowooooooo..OO...",
-    "......ooooowwwwwooooo...OO..",
-    ".....osssowwwwwwwcccoo..OO..",
-    "......oooowwwwwwwccco...OO..",
-    "......ooowwwwwwwwwcco..OO...",
-    "......oooowwwwwwwoooo.OO....",
-    ".......ooowwwwwwwooo.OO.....",
-    "........oowwwwwwwOO.........",
+    "......ooooLxxxxxRooOO.......",
+    ".......ooooxxwxxooOO........",
+    ".......ooxxwwAwwxxOO........",
+    ".......oxxwwwwwwwxOO........",
+    "........oxxwwwwwxOO.........",
+    ".........ooxxwxxOO..........",
+    "........ooooooooooo..yy.....",
+    ".......ooooooooooooo..yy....",
+    "......ooooooooooooooo..yy...",
+    "......osssooowooooooo..yy...",
+    "......ooooouuuuuooooo...yy..",
+    ".....osssouuuuuuucccoo..yy..",
+    "......oooouuuuuuuccco...yy..",
+    "......ooouuuuuuuuucco..yy...",
+    "......oooouuuuuuuoooo.yy....",
+    ".......ooouuuuuuuooo.yy.....",
+    "........oommmmmmmOO.........",
     ".........oooooooOO..........",
 ]
 
 # Sitting, alert pose -- ears sharply perked, upright posture. Same
 # placeholder cells as SITTING_TEMPLATE.
 ALERT_TEMPLATE: List[str] = [
-    "........o.........o.........",
-    "........o....o....o.........",
-    ".......opooooooooopo........",
-    "......oopoosssssoopoo.......",
-    "......oocccoooooooooo.......",
+    "........x.........x.........",
+    "........x....o....x.........",
+    ".......xpooooooooopx........",
+    "......xxpxxsssssxxpxx.......",
+    "......xxcccoooooooxxo.......",
     ".......occsssosssoOO........",
     ".......oooooooooooOO........",
-    "......ooooLoooooRooOO.......",
-    ".......oooooowooooOO........",
-    ".......oooowwAwwooOO........",
-    ".......ooowwwwwwwoOO........",
-    "........ooowwwwwoOO.........",
+    "......ooooLxxxxxRooOO.......",
+    ".......ooooxxwxxooOO........",
+    ".......ooxxwwAwwxxOO........",
+    ".......oxxwwwwwwwxOO........",
+    "........oxxwwwwwxOO.........",
     "..........ooowoOO...........",
     "..........oooooOO...........",
-    ".........ooooooooo...OO.....",
-    "........ooooooooooo...OO....",
-    ".......ooooooooooooo...OO...",
-    ".......sssooowoooooo...OO...",
-    ".......oooowwwwwoooo....OO..",
-    "......sssowwwwwwwccco...OO..",
-    ".......ooowwwwwwwccc....OO..",
-    ".......oowwwwwwwwwcc...OO...",
-    ".......ooowwwwwwwooo..OO....",
-    "........oowwwwwwwoo..OO.....",
-    ".........OwwwwwwwO..........",
+    ".........ooooooooo...yy.....",
+    "........ooooooooooo...yy....",
+    ".......ooooooooooooo...yy...",
+    ".......sssooowoooooo...yy...",
+    ".......oooouuuuuoooo....yy..",
+    "......sssouuuuuuuccco...yy..",
+    ".......ooouuuuuuuccc....yy..",
+    ".......oouuuuuuuuucc...yy...",
+    ".......ooouuuuuuuooo..yy....",
+    "........oouuuuuuuoo..yy.....",
+    ".........OmmmmmmmO..........",
     "..........oooooOO...........",
 ]
 
@@ -170,27 +189,27 @@ FLOPPED_TEMPLATE: List[str] = [
     "............................",
     "............................",
     "............................",
-    "....oo......oo..............",
-    "...oopo...opoo..............",
-    "...oopooooopoo..............",
+    "....xx......xx..............",
+    "...xxpx...xpxx..............",
+    "...xxpooooopxx..............",
     "...ooooooooooo..............",
     "...oooosssoooo..............",
     "..ooooooooooooo.............",
     "..oossooooossoo.............",
     "..ooooooooooooo.............",
     "..oooLooookkooo.............",
-    "..oooooonoooooo........1..23",
-    "..oooowwwwwoooo........11223",
-    "...ooowwwwwooooossoooo..1453",
-    "....ooowwwooooooooossoo.1453",
-    ".....oOOOOOoooooooooooss.4oo",
-    "......OOOOOooooooooOoooo..oo",
-    "...wwoooooooooooooOooooo..oo",
-    "..wwooooooooowwwwwOoccooooo.",
-    "...........owwwwwwOccccooo..",
-    "..wwoooooooowwwwwwwOoccoo...",
-    "..wwoooooooowwwwwwwoooooooww",
-    "........................ooww",
+    "..oooxxxnxxxooo........1..23",
+    "..ooxxwwwwwxxoo........11223",
+    "...oxxwwwwwxxooossoooo..1453",
+    "....oxxwwwxxooooooossoo.1453",
+    ".....oOOOOOoooooooooooss.4yy",
+    "......OOOOOooooooooOoooo..yy",
+    "...mmoooooooooooooOooooo.yyy",
+    "..mmooooooooouuuuuOoccoooyy.",
+    "...........ouuuuuuOccccooy..",
+    "..mmoooooooouuuuuuuOoccoo...",
+    "..mmoooooooouuuuuuuooooooomm",
+    "........................oomm",
     "............................",
     "............................",
 ]
@@ -360,10 +379,11 @@ ALERT_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
 # The flopped tail wags through three 2px-thick positions. Template
 # markers: "1"/"2"/"3" = cells unique to sweep pose 1/2/3; "4" = cells
 # shared by poses 1+2; "5" = shared by poses 2+3. Each frame paints its
-# pose's cells with coat color and blanks the rest.
-_TAIL_POSE_1 = {"1": "o", "4": "o", "2": ".", "5": ".", "3": "."}
-_TAIL_POSE_2 = {"2": "o", "4": "o", "5": "o", "1": ".", "3": "."}
-_TAIL_POSE_3 = {"3": "o", "5": "o", "1": ".", "2": ".", "4": "."}
+# pose's cells with the tail region char "y" -- so the swept tail takes the
+# pattern's tail tone, matching the resting curl -- and blanks the rest.
+_TAIL_POSE_1 = {"1": "y", "4": "y", "2": ".", "5": ".", "3": "."}
+_TAIL_POSE_2 = {"2": "y", "4": "y", "5": "y", "1": ".", "3": "."}
+_TAIL_POSE_3 = {"3": "y", "5": "y", "1": ".", "2": ".", "4": "."}
 
 FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
     # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
