@@ -166,3 +166,58 @@ def test_every_state_char_defined_for_every_look():
                     for row in frame:
                         for ch in row:
                             assert ch in palette, (colorway, pattern, state, ch)
+
+
+def test_new_regions_present_and_covered():
+    for ch in ("m", "x", "y", "u"):
+        assert ch in REGION_CHARS
+    # every pattern defines every region (closed set)
+    for name, pat in PATTERNS.items():
+        assert set(pat.keys()) == set(REGION_CHARS), name
+    # the new chars actually appear in the base template art
+    for name, template in (("sitting", SITTING_TEMPLATE), ("alert", ALERT_TEMPLATE),
+                           ("flopped", FLOPPED_TEMPLATE)):
+        joined = "".join(template)
+        for ch in ("m", "x", "y", "u"):
+            assert ch in joined, (name, ch)
+
+
+def test_inner_ear_pink_preserved_and_symmetric():
+    """Points (x) must not eat the inner-ear pink cells. Carving x over a p
+    cell de-pinks one ear asymmetrically, and no palette-level test catches
+    it -- p is colorway-driven, so only the template shape reveals it."""
+    for name, template in (("sitting", SITTING_TEMPLATE), ("alert", ALERT_TEMPLATE),
+                           ("flopped", FLOPPED_TEMPLATE)):
+        cols_by_row = {}
+        for r, row in enumerate(template):
+            for c, ch in enumerate(row):
+                if ch == "p":
+                    cols_by_row.setdefault(r, []).append(c)
+        assert cols_by_row, name
+        for r, cols in cols_by_row.items():
+            assert len(cols) == 2, (name, r, cols)
+
+
+def test_flopped_tail_sweep_paints_tail_region():
+    """The wag sweep must paint the tail char so it takes the pattern's tail
+    tone; painting it "o" leaves a two-tone tail under van/colorpoint."""
+    from tokitty.sprites import FLOPPED_FRAME_SPECS
+
+    for state, specs in FLOPPED_FRAME_SPECS.items():
+        for spec in specs:
+            painted = {v for k, v in spec.items() if k in "12345" and v != "."}
+            assert painted <= {"y"}, (state, painted)
+
+
+def test_silhouette_patterns_present_and_covered():
+    for name in ("tuxedo", "socks", "colorpoint", "van"):
+        assert name in PATTERNS
+        assert set(PATTERNS[name].keys()) == set(REGION_CHARS), name
+    for name in ("cream", "brown"):
+        assert name in COLORWAYS
+    # colorpoint pales the body and darkens the extremities
+    cp = PATTERNS["colorpoint"]
+    assert cp["o"] == "light" and cp["x"] == "mark" and cp["m"] == "mark"
+    # van: white body, colored ears + tail
+    van = PATTERNS["van"]
+    assert van["o"] == "white" and van["x"] == "coat" and van["y"] == "coat"
