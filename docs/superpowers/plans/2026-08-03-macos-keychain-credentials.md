@@ -1198,12 +1198,9 @@ Expected: no second dialog. If one appears per poll, the cache is not holding �
 
 - [ ] **Step 5: Exercise the denial path**
 
-Remove the ACL entry so the prompt returns, then deny it:
-```bash
-security delete-generic-password -s "Claude Code-credentials" -a "$USER" 2>/dev/null || true
-```
+**No command in this step. Do not attempt a CLI route to revoke Keychain access** — the closest one, `security delete-generic-password`, *deletes the credential item itself* and signs Claude Code out. There is no supported CLI to revoke only an ACL entry.
 
-**Do not run that command.** It *deletes the credential item*, which signs Claude Code out. Instead, revoke just the stored authorization through **Keychain Access.app** ▸ search `Claude Code-credentials` ▸ Get Info ▸ Access Control ▸ remove `security` from the allowed list. Then restart tokitty and click **Deny**.
+Revoke the stored authorization through the GUI: **Keychain Access.app** ▸ search `Claude Code-credentials` ▸ double-click ▸ **Access Control** ▸ select `security` in the allowed list ▸ **Remove** ▸ Save Changes. Then restart tokitty and click **Deny** on the prompt.
 
 Expected: the cat shows "Keychain denied, Refresh to retry", and **no further dialog appears** while blocked — this is the prompt-storm gate, so watch for at least 2 minutes.
 
