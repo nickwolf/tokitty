@@ -179,7 +179,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) — phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, autostart, tray icon, per-model bars, click-to-pet, burn-rate projection, and more). Tracked as GitHub milestones/issues on this repo.
+See [docs/ROADMAP.md](docs/ROADMAP.md) — phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, autostart, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
 
 ## License
 

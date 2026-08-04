@@ -186,6 +186,42 @@ def test_project_returns_none_when_resets_at_is_missing():
     assert tracker.project(NOW + timedelta(seconds=600)) is None
 
 
+def test_project_decays_when_polls_stop_succeeding_and_add_is_no_longer_called():
+    """Regression guard for finding 1: the window is the decay time even
+    when tick() stops calling add() because polls are failing. project()
+    must filter by its own `now`, not rely on add()'s trim, which freezes
+    once add() stops being called."""
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    live_now = NOW + timedelta(seconds=600)
+    projection = tracker.project(live_now)
+    assert projection == Projection(kind="session", caps_at=NOW + timedelta(seconds=1800))
+
+    stale_now = live_now + timedelta(seconds=WINDOW_SECONDS + 1)
+    assert tracker.project(stale_now) is None
+
+
+def test_project_walk_back_respects_the_clock_filter_not_just_add_times_trim():
+    """The trap in finding 1: filtering in project() but leaving the
+    walk-back over the raw internal buffer still reaches an aged-out
+    sample, inflating elapsed and deflating the measured rate.
+
+    Three samples span 900s (more than WINDOW_SECONDS=600), but none of
+    them get dropped by add()'s own trim (each is within 600s of the
+    newest at the time it was added). Only project()'s own clock filter
+    -- using a `now` later than the newest sample -- excludes the oldest.
+    """
+    tracker = _tracker_with([(350, 45.0, 5.0), (600, 50.0, 5.0), (900, 65.0, 5.0)])
+    assert len(tracker.samples) == 3  # add()'s trim never aged any of these out
+
+    now = NOW + timedelta(seconds=1200)  # cutoff = NOW+600: ages out the offset-350 sample
+    projection = tracker.project(now)
+    # Windowed rate (offset 600 -> 900 only): (65-50)/300 = 0.05 %/s,
+    # 35 remaining -> caps 700s after the newest sample (NOW+900) = NOW+1600.
+    # Including the aged-out offset-350 sample instead gives (65-45)/550 =
+    # 0.0364 %/s -- a measurably lower rate -- and a different caps_at.
+    assert projection == Projection(kind="session", caps_at=NOW + timedelta(seconds=1600))
+
+
 def test_min_span_seconds_is_five_minutes():
     assert MIN_SPAN_SECONDS == 300
 

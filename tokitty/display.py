@@ -8,6 +8,7 @@ Windows C runtime, and Windows is Tokitty's primary target platform.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
 GREEN = "#4caf6b"
 AMBER = "#e0a838"
@@ -59,7 +60,9 @@ def format_projection(kind: str, caps_at: datetime) -> str:
     return f"week caps ~{caps_at.astimezone().strftime('%a')} {when}"
 
 
-def resolve_status_text(hint_text, credits_text, projection_text) -> str:
+def resolve_status_text(
+    hint_text: Optional[str], credits_text: Optional[str], projection_text: Optional[str]
+) -> str:
     """Pick what the single shared status line shows. An error hint always
     wins, then credits, then the burn projection."""
     return hint_text or credits_text or projection_text or ""

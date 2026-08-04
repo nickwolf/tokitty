@@ -42,9 +42,8 @@ debug-state harness, in `docs/media/`. Gates the public glamour pass.
 5. Idle wandering across the card
 6. Per-model weekly bars
 7. Click-to-pet + purr
-8. Burn-rate projection
-9. PNG sprite upgrade (only if vector rects become limiting)
-10. PySide6 transparent-cat rewrite (separate project decision)
+8. PNG sprite upgrade (only if vector rects become limiting)
+9. PySide6 transparent-cat rewrite (separate project decision)
 
 ## Inspiration
 
