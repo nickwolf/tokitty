@@ -102,8 +102,15 @@ any process running as you can afterwards read that token by shelling out to
 `security`, without a prompt. That is a property of how Keychain authorization
 works, not something tokitty can tighten — a narrower grant would require
 tokitty to be a signed app bundle with a stable identity rather than a Python
-script. Choosing **Allow** instead of **Always Allow** keeps the grant to a
-single read, at the cost of a prompt roughly once per token lifetime.
+script. Choosing **Allow** instead of **Always Allow** grants a single read,
+and while the token stays valid tokitty's cache means that's roughly one
+prompt per token lifetime. But the cache is invalidated the moment the token
+expires — deliberately, since that's how tokitty notices Claude Code has
+refreshed it — so once nothing is refreshing the token (the idle-account
+resting look above, e.g. outside work hours), every retry on the 30s→600s
+backoff is a cache miss and re-prompts: on the order of fifty prompts
+overnight, not one. If you leave tokitty running unattended, use
+**Always Allow**.
 
 Two-account mode (above) extends this picture the same way single-account mode already worked, just twice: with `accounts.json` present, tokitty reads OAuth credentials and (if hooks are installed) hook/session state from a second Claude Code config dir in addition to the default one. Nothing about what's read, persisted, or transmitted changes — it's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains account names, config-dir paths, and coat choices you type in yourself.
 
