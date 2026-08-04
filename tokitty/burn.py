@@ -26,6 +26,20 @@ WINDOW_SECONDS = 10 * 60
 MIN_SAMPLES = 2
 MIN_SPAN_SECONDS = 5 * 60
 
+# The usage endpoint derives resets_at from its own per-request clock, so the
+# same unchanged window reports a slightly different timestamp on every poll
+# (21:00:00.104399, then 21:00:00.936780). Exact equality read every poll as a
+# new window, collapsed the walk-back to a single sample, and suppressed every
+# projection forever. A real reset moves resets_at by the whole window length --
+# 5 hours or 7 days -- so a minute of slack cannot confuse the two.
+SAME_WINDOW_TOLERANCE_SECONDS = 60
+
+
+def _same_window(a: Optional[datetime], b: Optional[datetime]) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs((a - b).total_seconds()) <= SAME_WINDOW_TOLERANCE_SECONDS
+
 
 @dataclass(frozen=True)
 class Sample:
@@ -123,7 +137,7 @@ class BurnTracker:
         # boundary would read as a large negative burn.
         oldest = newest
         for sample in reversed(recent[:-1]):
-            if _reset(sample, kind) != resets_at:
+            if not _same_window(_reset(sample, kind), resets_at):
                 break
             oldest = sample
 
