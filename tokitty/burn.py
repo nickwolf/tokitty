@@ -88,24 +88,32 @@ class BurnTracker:
 
     def project(self, now: datetime) -> Optional[Projection]:
         """Return the nearer of the session/weekly cap projections, or
-        None when no cap is credibly coming before the window resets."""
-        if len(self._samples) < MIN_SAMPLES:
+        None when no cap is credibly coming before the window resets.
+
+        The window IS the decay time (see WINDOW_SECONDS above), so this
+        filters by the caller's clock on every call -- not just at add()
+        time -- so a projection decays even when polls stop succeeding
+        and add() is no longer being called.
+        """
+        cutoff = now - timedelta(seconds=self._window_seconds)
+        recent = [s for s in self._samples if s.fetched_at >= cutoff]
+        if len(recent) < MIN_SAMPLES:
             return None
 
-        newest = self._samples[-1]
+        newest = recent[-1]
         if newest.capped:
             return None
 
         candidates = [
             projection
-            for projection in (self._project_kind(kind, newest, now) for kind in ("session", "weekly"))
+            for projection in (self._project_kind(kind, recent, newest, now) for kind in ("session", "weekly"))
             if projection is not None
         ]
         if not candidates:
             return None
         return min(candidates, key=lambda projection: projection.caps_at)
 
-    def _project_kind(self, kind: str, newest: Sample, now: datetime) -> Optional[Projection]:
+    def _project_kind(self, kind: str, recent: List[Sample], newest: Sample, now: datetime) -> Optional[Projection]:
         resets_at = _reset(newest, kind)
         if resets_at is None:
             return None
@@ -114,7 +122,7 @@ class BurnTracker:
         # resets_at means this limit reset, and measuring across that
         # boundary would read as a large negative burn.
         oldest = newest
-        for sample in reversed(self._samples[:-1]):
+        for sample in reversed(recent[:-1]):
             if _reset(sample, kind) != resets_at:
                 break
             oldest = sample

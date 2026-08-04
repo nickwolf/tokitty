@@ -871,7 +871,7 @@ Two things that look like bugs here but are not:
 - The projected time **drifts later** while you sit idle. `caps_at` is anchored to the newest sample, so each flat poll pushes it forward. Expected.
 - The line does **not** clear at the first idle poll. The window is the decay time; there is no faster path by design.
 
-If it has not cleared by ~12 minutes, that is a real defect — check that `add` is trimming on `snapshot.fetched_at` rather than wall-clock `now`.
+If it has not cleared by ~12 minutes, that is a real defect — check that `project()` is filtering `self._samples` against its own `now` argument (not just relying on `add()`'s trim, which freezes once polls stop succeeding and `add()` stops being called).
 
 - [ ] **Step 4: Report the result**
 
