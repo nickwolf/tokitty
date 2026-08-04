@@ -102,8 +102,10 @@ def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsS
 
     With an explicit config_dir (from accounts.json), that dir's
     .credentials.json is used directly -- a WSL UNC dir on Windows maps to
-    a wsl.exe-read source so we never open the UNC path from Python.
-    Without one: v1 resolution order (env override, home-relative, WSL probe).
+    a wsl.exe-read source so we never open the UNC path from Python. This
+    path is file-only: two-account mode never resolves to the Keychain.
+    Without one: env override, home-relative, Keychain (darwin), WSL probe
+    (win32).
     """
     if config_dir:
         from tokitty.accounts import parse_wsl_unc
