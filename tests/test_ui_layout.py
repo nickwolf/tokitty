@@ -163,3 +163,25 @@ def test_randomize_and_surprise_seams_add_items():
             assert "Randomize" in labels and "Surprise me" in labels
     finally:
         root.destroy()
+
+
+def test_pane_render_accepts_projection_text_defaulting_to_none():
+    from tokitty import ui
+    sig = inspect.signature(ui.Pane.render)
+    assert "projection_text" in sig.parameters
+    assert sig.parameters["projection_text"].default is None
+
+
+def test_ui_uses_the_shared_status_priority_helper():
+    """The status line must go through display.resolve_status_text rather
+    than re-implementing the hint > credits > projection order.
+
+    Asserted by source inspection because the behaviour it guards lives
+    inside a tk.Label configure call -- checking it any other way needs a
+    live display, which would force this test into the `gui` marker and
+    out of the default headless run. Same trade the signature-inspection
+    tests above already make.
+    """
+    from tokitty import ui
+    source = inspect.getsource(ui.Pane.render)
+    assert "resolve_status_text" in source
