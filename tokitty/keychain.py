@@ -25,6 +25,17 @@ KEYCHAIN_SERVICE = "Claude Code-credentials"
 # `security` exits 44 (errSecItemNotFound) when no matching item exists.
 EXIT_ITEM_NOT_FOUND = 44
 
+# The existence probe never prompts, and runs on every poll -- keep it snappy.
+PROBE_TIMEOUT = 10
+
+# The secret read is different in kind: `security -w` blocks while a macOS
+# authorization dialog waits for a *human*. This started at 10s (copied from
+# wsl_probe.py, whose subprocess never waits on a person) and produced a real
+# prompt storm in live testing: the timeout killed the subprocess before the
+# user could click, so their answer never counted, and the poller re-prompted
+# every ~40s forever. Give a person time to notice a dialog and respond.
+SECRET_TIMEOUT = 120
+
 
 def _base_command(service: str, account: Optional[str]) -> List[str]:
     cmd = ["security", "find-generic-password", "-s", service]
@@ -42,7 +53,7 @@ def keychain_item_exists(service: str, account: Optional[str] = None, run: Calla
     would send the caller down the misleading "can't find credentials" path.
     """
     try:
-        result = run(_base_command(service, account), capture_output=True, timeout=10, check=False)
+        result = run(_base_command(service, account), capture_output=True, timeout=PROBE_TIMEOUT, check=False)
     except (OSError, subprocess.TimeoutExpired):
         # No `security` binary, or it hung: we cannot claim the item exists.
         return False
@@ -52,9 +63,17 @@ def keychain_item_exists(service: str, account: Optional[str] = None, run: Calla
 def read_keychain_secret(service: str, account: Optional[str] = None, run: Callable = subprocess.run) -> str:
     """Return the item's secret. May raise a macOS authorization dialog."""
     try:
-        result = run(_base_command(service, account) + ["-w"], capture_output=True, timeout=10, check=False)
+        result = run(
+            _base_command(service, account) + ["-w"],
+            capture_output=True,
+            timeout=SECRET_TIMEOUT,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise CredentialsError(f"Could not run `security` to read the Keychain: {exc}") from exc
+        # Sticky, not transient. Both mean "we could not obtain the secret",
+        # and retrying re-prompts -- which is exactly the storm the sticky
+        # block exists to stop. Only exit 44 below stays transient.
+        raise KeychainAccessError(f"Could not run `security` to read the Keychain: {exc}") from exc
 
     if result.returncode == EXIT_ITEM_NOT_FOUND:
         raise CredentialsError(f"No '{service}' item in the login Keychain")
