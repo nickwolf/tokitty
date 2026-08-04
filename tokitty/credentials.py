@@ -20,6 +20,13 @@ class AmbiguousCredentialsError(CredentialsError):
     """Raised when more than one candidate credentials file is found."""
 
 
+class KeychainAccessError(CredentialsError):
+    """Raised when a macOS Keychain item exists but its secret could not be
+    read -- user denied the prompt, keychain locked, or any other non-
+    "item not found" failure. Distinct from CredentialsError because it is
+    the only failure mode that re-prompts, so callers make it sticky."""
+
+
 @dataclass(frozen=True)
 class LocalCredentialsSource:
     path: Path
