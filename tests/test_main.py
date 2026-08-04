@@ -284,3 +284,55 @@ def test_label_field_can_be_cleared_back_to_empty():
     account = Account(name="Work", config_dir="/x")
     assert initial_label(account, cleared, dual=True) == "Work"
     assert initial_label(None, cleared, dual=False) == ""
+
+
+def test_build_fetch_fn_reports_keychain_denied(monkeypatch):
+    from tokitty.credentials import KeychainAccessError, KeychainCredentialsSource
+
+    source = KeychainCredentialsSource(service="Claude Code-credentials")
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+    monkeypatch.setattr(
+        "tokitty.__main__.load_credentials",
+        lambda src: (_ for _ in ()).throw(KeychainAccessError("denied")),
+    )
+
+    result = build_fetch_fn()()
+
+    # Not credentials_unreachable: the credentials were found, access was
+    # refused. Its hint ("can't find credentials") would be the wrong remedy.
+    assert result.status == "keychain_denied"
+
+
+def test_build_fetch_fn_uses_the_injected_loader(monkeypatch):
+    from tokitty.credentials import CredentialLoader, KeychainCredentialsSource
+
+    source = KeychainCredentialsSource(service="Claude Code-credentials")
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+    monkeypatch.setattr(
+        "tokitty.__main__.load_credentials",
+        lambda src: {"expiresAt": 0},  # expired -> stops before any API call
+    )
+
+    loader = CredentialLoader()
+    result = build_fetch_fn(loader=loader)()
+
+    assert result.status == "stale_token"
+
+
+def test_keychain_denied_has_hint_text_in_both_dicts():
+    from tokitty.__main__ import _STALE_HINTS
+
+    assert "keychain_denied" in _STALE_HINTS
+    # The user-facing hint must name the recovery action, since PollResult.message
+    # is never rendered anywhere in the UI.
+    display = _display_state_for(_error("keychain_denied"), previous=None, now=NOW)
+    assert "Refresh" in display["hint_text"]
+
+
+def test_keychain_denied_falls_back_to_cached_countdown(monkeypatch):
+    # A denied Keychain is a transient fetch failure like a stale token: the
+    # cached countdown should keep showing rather than blanking out.
+    good = _ok(_snapshot(session_pct=42.0, weekly_pct=20.0))
+    display = _display_state_for(_error("keychain_denied"), previous=good, now=NOW)
+
+    assert display["session_pct"] == 42.0
