@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tokitty.api import LimitInfo, UsageSnapshot
-from tokitty.burn import BurnTracker, Sample
+from tokitty.burn import BurnTracker, MIN_SPAN_SECONDS, WINDOW_SECONDS, Projection, Sample
 
 NOW = datetime(2026, 8, 4, 12, 0, 0, tzinfo=timezone.utc)
 SESSION_RESET = NOW + timedelta(hours=3)
@@ -81,3 +81,116 @@ def test_sample_is_frozen():
     assert isinstance(sample, Sample)
     with pytest.raises(dataclasses.FrozenInstanceError):
         sample.session_pct = 99.0
+
+
+def _tracker_with(points, **snapshot_kwargs):
+    """points = [(offset_seconds, session_pct, weekly_pct), ...]"""
+    tracker = BurnTracker()
+    for offset, session_pct, weekly_pct in points:
+        tracker.add(_snapshot(offset_seconds=offset, session_pct=session_pct,
+                              weekly_pct=weekly_pct, **snapshot_kwargs))
+    return tracker
+
+
+def test_project_returns_none_with_a_single_sample():
+    tracker = _tracker_with([(0, 10.0, 5.0)])
+    assert tracker.project(NOW) is None
+
+
+def test_project_returns_none_before_the_minimum_span():
+    tracker = _tracker_with([(0, 10.0, 5.0), (60, 20.0, 5.0)])
+    assert tracker.project(NOW + timedelta(seconds=60)) is None
+
+
+def test_project_extrapolates_the_session_cap_from_the_measured_rate():
+    # 10% -> 40% over 600s = 0.05 %/s. 60% remains -> 1200s past the last
+    # sample, i.e. 30 minutes after NOW+600.
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    projection = tracker.project(NOW + timedelta(seconds=600))
+    assert projection == Projection(
+        kind="session", caps_at=NOW + timedelta(seconds=1800)
+    )
+
+
+def test_project_returns_none_when_the_rate_is_flat():
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 10.0, 5.0)])
+    assert tracker.project(NOW + timedelta(seconds=600)) is None
+
+
+def test_project_returns_none_when_usage_went_down():
+    tracker = _tracker_with([(0, 40.0, 5.0), (600, 10.0, 5.0)])
+    assert tracker.project(NOW + timedelta(seconds=600)) is None
+
+
+def test_project_returns_none_when_the_cap_lands_after_the_reset():
+    # 10% -> 11% over 600s is slow enough to coast past SESSION_RESET (+3h).
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 11.0, 5.0)])
+    assert tracker.project(NOW + timedelta(seconds=600)) is None
+
+
+def test_project_returns_none_when_already_capped():
+    capped = LimitInfo(kind="session", percent=100.0, severity="exceeded",
+                       resets_at=SESSION_RESET, is_active=True)
+    tracker = BurnTracker()
+    tracker.add(_snapshot(offset_seconds=0, session_pct=10.0))
+    tracker.add(_snapshot(offset_seconds=600, session_pct=40.0, limits=[capped]))
+    assert tracker.project(NOW + timedelta(seconds=600)) is None
+
+
+def test_project_returns_none_when_the_projected_cap_is_already_past():
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    assert tracker.project(NOW + timedelta(seconds=99999)) is None
+
+
+def test_project_picks_the_nearer_of_two_live_projections():
+    # BOTH limits project a real cap before their own reset, so this
+    # exercises the min() and not just one candidate being suppressed:
+    #   session 10 -> 30 over 600s = 0.0333 %/s, 70 left -> caps at +2700s
+    #   weekly  90 -> 95 over 600s = 0.00833 %/s, 5 left -> caps at +1200s
+    tracker = _tracker_with([(0, 10.0, 90.0), (600, 30.0, 95.0)])
+    projection = tracker.project(NOW + timedelta(seconds=600))
+    assert projection == Projection(
+        kind="weekly", caps_at=NOW + timedelta(seconds=1200)
+    )
+
+
+def test_project_ignores_samples_from_before_a_window_reset():
+    """A changed resets_at means the limit reset; spanning that boundary
+    would read as a large negative burn and suppress a real projection.
+
+    All three samples are inside WINDOW_SECONDS (600) of the newest, so
+    the pre-reset sample is excluded by the resets_at walk-back and NOT
+    merely aged out by the window -- otherwise this passes for the wrong
+    reason.
+    """
+    tracker = BurnTracker()
+    old_reset = SESSION_RESET - timedelta(hours=5)
+    tracker.add(_snapshot(offset_seconds=0, session_pct=80.0,
+                          session_resets_at=old_reset))
+    tracker.add(_snapshot(offset_seconds=100, session_pct=5.0))
+    tracker.add(_snapshot(offset_seconds=600, session_pct=55.0))
+    assert len(tracker.samples) == 3
+    projection = tracker.project(NOW + timedelta(seconds=600))
+    # Measured across the two post-reset samples only: 5 -> 55 over 500s
+    # = 0.1 %/s, 45 left -> caps 450s after the newest sample.
+    assert projection == Projection(
+        kind="session", caps_at=NOW + timedelta(seconds=1050)
+    )
+
+
+def test_project_returns_none_when_resets_at_is_missing():
+    """A work account with no session window reports session_resets_at
+    None -- without it there is no way to know a cap precedes the reset."""
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)],
+                            session_resets_at=None, weekly_resets_at=None)
+    assert tracker.project(NOW + timedelta(seconds=600)) is None
+
+
+def test_min_span_seconds_is_five_minutes():
+    assert MIN_SPAN_SECONDS == 300
+
+
+def test_window_seconds_is_ten_minutes():
+    """The window is the decay time -- how long a stale projection lingers
+    after you stop. Changing this is a product decision, not a tuning knob."""
+    assert WINDOW_SECONDS == 600

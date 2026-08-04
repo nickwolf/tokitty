@@ -37,6 +37,20 @@ class Sample:
     capped: bool
 
 
+@dataclass(frozen=True)
+class Projection:
+    kind: str  # "session" | "weekly"
+    caps_at: datetime
+
+
+def _pct(sample: Sample, kind: str) -> float:
+    return sample.session_pct if kind == "session" else sample.weekly_pct
+
+
+def _reset(sample: Sample, kind: str) -> Optional[datetime]:
+    return sample.session_resets_at if kind == "session" else sample.weekly_resets_at
+
+
 class BurnTracker:
     """A per-account rolling buffer of usage samples. Memory-only by
     design: a restart re-enters warm-up rather than adding a file to the
@@ -71,3 +85,53 @@ class BurnTracker:
 
         cutoff = snapshot.fetched_at - timedelta(seconds=self._window_seconds)
         self._samples = [s for s in self._samples if s.fetched_at >= cutoff]
+
+    def project(self, now: datetime) -> Optional[Projection]:
+        """Return the nearer of the session/weekly cap projections, or
+        None when no cap is credibly coming before the window resets."""
+        if len(self._samples) < MIN_SAMPLES:
+            return None
+
+        newest = self._samples[-1]
+        if newest.capped:
+            return None
+
+        candidates = [
+            projection
+            for projection in (self._project_kind(kind, newest, now) for kind in ("session", "weekly"))
+            if projection is not None
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda projection: projection.caps_at)
+
+    def _project_kind(self, kind: str, newest: Sample, now: datetime) -> Optional[Projection]:
+        resets_at = _reset(newest, kind)
+        if resets_at is None:
+            return None
+
+        # Walk back only through samples from the SAME window. A changed
+        # resets_at means this limit reset, and measuring across that
+        # boundary would read as a large negative burn.
+        oldest = newest
+        for sample in reversed(self._samples[:-1]):
+            if _reset(sample, kind) != resets_at:
+                break
+            oldest = sample
+
+        elapsed = (newest.fetched_at - oldest.fetched_at).total_seconds()
+        if elapsed < MIN_SPAN_SECONDS:
+            return None
+
+        rate = (_pct(newest, kind) - _pct(oldest, kind)) / elapsed
+        if rate <= 0:
+            return None
+
+        remaining = 100.0 - _pct(newest, kind)
+        if remaining <= 0:
+            return None
+
+        caps_at = newest.fetched_at + timedelta(seconds=remaining / rate)
+        if caps_at >= resets_at or caps_at <= now:
+            return None
+        return Projection(kind=kind, caps_at=caps_at)
