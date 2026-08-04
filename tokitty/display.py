@@ -43,3 +43,23 @@ def format_reset_time(dt: datetime) -> str:
 def format_reset_day(dt: datetime) -> str:
     local = dt.astimezone()
     return f"{local.strftime('%a')} {local.strftime('%b')} {local.day}"
+
+
+def format_projection(kind: str, caps_at: datetime) -> str:
+    """Render a cap projection for the pane's status line.
+
+    The weekly form deliberately carries the weekday only -- adding the
+    month and day-of-month pushes the string past status_label's 160px
+    wrap width, and a wrapped second line falls below the pane's bottom
+    edge. A weekday is unambiguous inside a 7-day window.
+    """
+    when = format_reset_time(caps_at)
+    if kind == "session":
+        return f"session caps ~{when}"
+    return f"week caps ~{caps_at.astimezone().strftime('%a')} {when}"
+
+
+def resolve_status_text(hint_text, credits_text, projection_text) -> str:
+    """Pick what the single shared status line shows. An error hint always
+    wins, then credits, then the burn projection."""
+    return hint_text or credits_text or projection_text or ""
