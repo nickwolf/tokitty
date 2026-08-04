@@ -53,7 +53,10 @@ Approved product decisions (do not re-litigate):
 Create `tests/test_burn.py`:
 
 ```python
+import dataclasses
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.burn import BurnTracker, Sample
@@ -131,11 +134,8 @@ def test_sample_is_frozen():
     tracker.add(_snapshot())
     sample = tracker.samples[0]
     assert isinstance(sample, Sample)
-    try:
+    with pytest.raises(dataclasses.FrozenInstanceError):
         sample.session_pct = 99.0
-    except Exception:
-        return
-    raise AssertionError("Sample should be immutable")
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -612,7 +612,14 @@ def test_pane_render_accepts_projection_text_defaulting_to_none():
 
 def test_ui_uses_the_shared_status_priority_helper():
     """The status line must go through display.resolve_status_text rather
-    than re-implementing the hint > credits > projection order."""
+    than re-implementing the hint > credits > projection order.
+
+    Asserted by source inspection because the behaviour it guards lives
+    inside a tk.Label configure call -- checking it any other way needs a
+    live display, which would force this test into the `gui` marker and
+    out of the default headless run. Same trade the signature-inspection
+    tests above already make.
+    """
     from tokitty import ui
     source = inspect.getsource(ui.Pane.render)
     assert "resolve_status_text" in source
