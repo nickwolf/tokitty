@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from tokitty.__main__ import (
     _display_state_for,
     _next_last_good,
+    _projection_text_for,
     build_fetch_fn,
     initial_customization,
     initial_label,
@@ -12,6 +13,7 @@ from tokitty.__main__ import (
 )
 from tokitty.accounts import Account
 from tokitty.api import LimitInfo, UsageSnapshot
+from tokitty.burn import BurnTracker
 from tokitty.credentials import CredentialsError
 from tokitty.customize import Customization
 from tokitty.poller import PollResult
@@ -367,3 +369,48 @@ def test_keychain_denied_falls_back_to_cached_countdown(monkeypatch):
     # never render as a normal, healthy-looking card.
     assert display["hint_text"] == "Keychain denied, Refresh to retry"
     assert display["dimmed"] is True
+
+
+def _usage(offset_seconds=0, session_pct=10.0, weekly_pct=5.0):
+    return UsageSnapshot(
+        session_pct=session_pct,
+        session_resets_at=NOW + timedelta(hours=3),
+        weekly_pct=weekly_pct,
+        weekly_resets_at=NOW + timedelta(days=4),
+        limits=[],
+        fetched_at=NOW + timedelta(seconds=offset_seconds),
+    )
+
+
+def _burning_tracker():
+    tracker = BurnTracker()
+    tracker.add(_usage(offset_seconds=0, session_pct=10.0))
+    tracker.add(_usage(offset_seconds=600, session_pct=40.0))
+    return tracker
+
+
+def test_projection_text_for_formats_a_live_projection():
+    text = _projection_text_for(_burning_tracker(), {"dimmed": False},
+                                NOW + timedelta(seconds=600))
+    assert text is not None
+    assert text.startswith("session caps ~")
+
+
+def test_projection_text_for_is_none_when_the_display_is_dimmed():
+    """Dimmed means we cannot confirm the numbers -- do not layer a
+    confident prediction on top of them."""
+    text = _projection_text_for(_burning_tracker(), {"dimmed": True},
+                                NOW + timedelta(seconds=600))
+    assert text is None
+
+
+def test_projection_text_for_is_none_during_warm_up():
+    tracker = BurnTracker()
+    tracker.add(_usage(offset_seconds=0, session_pct=10.0))
+    text = _projection_text_for(tracker, {"dimmed": False}, NOW)
+    assert text is None
+
+
+def test_projection_text_for_tolerates_a_display_without_a_dimmed_key():
+    text = _projection_text_for(_burning_tracker(), {}, NOW + timedelta(seconds=600))
+    assert text is not None
