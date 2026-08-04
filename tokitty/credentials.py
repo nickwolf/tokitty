@@ -81,6 +81,22 @@ def _posix_from_unc_or_same(config_dir: str) -> str:
     return unc[1] if unc is not None else config_dir
 
 
+def _keychain_source() -> Optional[KeychainCredentialsSource]:
+    """The macOS Keychain source, or None off-darwin / when no item exists.
+
+    Uses the attribute-only existence probe, never the secret read: this runs
+    on every poll and must not raise a macOS authorization dialog.
+    """
+    if sys.platform != "darwin":
+        return None
+
+    from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
+
+    if not keychain_item_exists(KEYCHAIN_SERVICE):
+        return None
+    return KeychainCredentialsSource(service=KEYCHAIN_SERVICE)
+
+
 def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsSource:
     """Return the credentials source to use.
 
@@ -98,7 +114,13 @@ def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsS
             return WslDistroCredentialsSource(distro=distro, wsl_path=f"{posix_dir}/.credentials.json")
         candidate = Path(_posix_from_unc_or_same(config_dir)) / ".credentials.json"
         if not candidate.is_file():
-            raise CredentialsError(f"No credentials file at {candidate} (from accounts.json)")
+            message = f"No credentials file at {candidate} (from accounts.json)"
+            if sys.platform == "darwin":
+                message += (
+                    ". Two-account mode requires credential files; macOS Keychain "
+                    "resolution is single-account only."
+                )
+            raise CredentialsError(message)
         return LocalCredentialsSource(path=candidate)
 
     override = _override_source()
@@ -111,11 +133,24 @@ def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsS
     if home_relative is not None:
         return home_relative
 
+    keychain = _keychain_source()
+    if keychain is not None:
+        return keychain
+
     if sys.platform == "win32":
         from tokitty.wsl_probe import find_wsl_credentials
 
         distro, wsl_path = find_wsl_credentials()
         return WslDistroCredentialsSource(distro=distro, wsl_path=wsl_path)
+
+    if sys.platform == "darwin":
+        from tokitty.keychain import KEYCHAIN_SERVICE
+
+        raise CredentialsError(
+            "No Claude Code credentials found: no ~/.claude/.credentials.json and no "
+            f"'{KEYCHAIN_SERVICE}' item in your login Keychain. Open Claude Code to sign "
+            f"in, or set {ENV_OVERRIDE} to a credentials file."
+        )
 
     raise CredentialsError(
         "No Claude Code credentials found at ~/.claude/.credentials.json. "
