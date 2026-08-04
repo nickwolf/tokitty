@@ -230,3 +230,64 @@ def test_window_seconds_is_ten_minutes():
     """The window is the decay time -- how long a stale projection lingers
     after you stop. Changing this is a product decision, not a tuning knob."""
     assert WINDOW_SECONDS == 600
+
+
+def test_project_walk_back_survives_per_poll_jitter_in_resets_at():
+    """Regression guard: the usage endpoint derives resets_at from its own
+    per-request clock, so an unchanged window reports a slightly different
+    sub-second resets_at on every poll (observed live: 21:00:00.104399,
+    then 21:00:00.936780). Exact equality in the walk-back read every poll
+    as a new window, collapsed `oldest` to `newest`, pinned elapsed at 0.0,
+    and suppressed every projection forever. This MUST fail against the
+    pre-fix exact-equality comparison.
+    """
+    tracker = BurnTracker()
+    tracker.add(_snapshot(
+        offset_seconds=0, session_pct=10.0, weekly_pct=5.0,
+        session_resets_at=SESSION_RESET + timedelta(microseconds=104399),
+        weekly_resets_at=WEEKLY_RESET + timedelta(microseconds=104426),
+    ))
+    tracker.add(_snapshot(
+        offset_seconds=300, session_pct=25.0, weekly_pct=5.0,
+        session_resets_at=SESSION_RESET + timedelta(microseconds=936780),
+        weekly_resets_at=WEEKLY_RESET + timedelta(microseconds=936805),
+    ))
+    tracker.add(_snapshot(
+        offset_seconds=600, session_pct=40.0, weekly_pct=5.0,
+        session_resets_at=SESSION_RESET + timedelta(microseconds=51234),
+        weekly_resets_at=WEEKLY_RESET + timedelta(microseconds=51260),
+    ))
+    projection = tracker.project(NOW + timedelta(seconds=600))
+    # Walk-back now spans all three samples: 10 -> 40 over 600s = 0.05 %/s,
+    # 60 remaining -> caps 1200s after the newest sample (NOW+600) = NOW+1800.
+    # Weekly stays flat at 5.0 across all samples, so it yields no candidate.
+    assert projection == Projection(
+        kind="session", caps_at=NOW + timedelta(seconds=1800)
+    )
+
+
+def test_project_still_detects_a_real_reset_despite_jitter_tolerance():
+    """Proves the jitter tolerance did not defeat the walk-back's actual
+    purpose: a genuine window reset (resets_at moves by the whole window
+    length) must still break the walk-back, even though both post-reset
+    samples carry their own sub-second jitter.
+    """
+    tracker = BurnTracker()
+    old_reset = SESSION_RESET - timedelta(hours=5)
+    tracker.add(_snapshot(offset_seconds=0, session_pct=80.0,
+                          session_resets_at=old_reset))
+    tracker.add(_snapshot(
+        offset_seconds=100, session_pct=5.0,
+        session_resets_at=SESSION_RESET + timedelta(microseconds=104399),
+    ))
+    tracker.add(_snapshot(
+        offset_seconds=600, session_pct=55.0,
+        session_resets_at=SESSION_RESET + timedelta(microseconds=936780),
+    ))
+    assert len(tracker.samples) == 3
+    projection = tracker.project(NOW + timedelta(seconds=600))
+    # Measured across the two post-reset samples only: 5 -> 55 over 500s
+    # = 0.1 %/s, 45 left -> caps 450s after the newest sample.
+    assert projection == Projection(
+        kind="session", caps_at=NOW + timedelta(seconds=1050)
+    )
