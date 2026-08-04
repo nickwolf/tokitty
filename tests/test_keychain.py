@@ -5,6 +5,8 @@ import pytest
 from tokitty.credentials import CredentialsError, KeychainAccessError
 from tokitty.keychain import (
     KEYCHAIN_SERVICE,
+    PROBE_TIMEOUT,
+    SECRET_TIMEOUT,
     keychain_item_exists,
     read_keychain_secret,
 )
@@ -131,8 +133,63 @@ def test_keychain_calls_pass_a_timeout():
 
     read_keychain_secret(KEYCHAIN_SERVICE, run=fake_run)
 
-    assert seen["timeout"] == 10
+    assert seen["timeout"] == SECRET_TIMEOUT
     assert seen["capture_output"] is True
     assert seen["check"] is False
     # creationflags is Windows-only and raises ValueError on POSIX.
     assert "creationflags" not in seen
+
+
+# --- Regression: the prompt storm found in live macOS testing (2026-08-04) ---
+#
+# `security -w` blocks while a macOS dialog waits for a *human*. A 10s timeout
+# killed the subprocess before the user could answer, and the resulting
+# TimeoutExpired was re-raised as a plain CredentialsError -- the one class
+# CredentialLoader deliberately does NOT make sticky (exit 44 is transient).
+# So every poll re-read, re-prompted, and the sticky block never engaged:
+# a dialog roughly every 40s regardless of whether the user clicked Allow.
+
+
+def test_secret_read_allows_time_for_a_human_to_answer_the_dialog():
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return FakeCompletedProcess(stdout=b"{}")
+
+    read_keychain_secret(KEYCHAIN_SERVICE, run=fake_run)
+
+    # 10s is what wsl_probe uses, and it is wrong here: that subprocess never
+    # waits on a person. This one does.
+    assert seen["timeout"] == SECRET_TIMEOUT >= 60
+
+
+def test_existence_probe_keeps_a_short_timeout():
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return FakeCompletedProcess(returncode=0)
+
+    keychain_item_exists(KEYCHAIN_SERVICE, run=fake_run)
+
+    # This one never prompts, runs on every poll, and must stay snappy.
+    assert seen["timeout"] == PROBE_TIMEOUT <= 10
+
+
+def test_secret_read_timeout_is_sticky_not_transient():
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="security", timeout=120)
+
+    with pytest.raises(KeychainAccessError):
+        read_keychain_secret(KEYCHAIN_SERVICE, run=fake_run)
+
+
+def test_secret_read_os_error_is_sticky_not_transient():
+    def fake_run(cmd, **kwargs):
+        raise OSError("no such binary")
+
+    # Both failure modes here mean "we could not obtain the secret", which is
+    # what re-prompts. Only exit 44 stays transient.
+    with pytest.raises(KeychainAccessError):
+        read_keychain_secret(KEYCHAIN_SERVICE, run=fake_run)
