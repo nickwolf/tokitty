@@ -118,7 +118,12 @@ Two-account mode (above) extends this picture the same way single-account mode a
 
 - **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself — drag, always-on-top, sizing, text legibility, animation — is visually confirmed on a real desktop.
 - **Linux, macOS, Windows — automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic — credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering — and, on Linux, GUI construction are covered wherever the badge is green.
-- **Not yet hands-on:** interactive desktop use on native Linux and macOS (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
+- **macOS 15 (Apple silicon, python.org Python 3.14 + Tk 9.0) — hands-on, with caveats:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) confirmed by hand on 2026-08-04. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. Two caveats, both tracked:
+  - **The tray icon crashes tokitty on macOS** ([#45](https://github.com/nickwolf/tokitty/issues/45)) — pystray calls `NSApplication.run()` off the main thread and AppKit aborts. Set `"tray_enabled": false` in `settings.json` until that is fixed.
+  - **The system menu bar stays.** Removing it needs a real `.app` bundle with `LSUIElement=1`; no runtime call can do it, because Tk owns and rebuilds that menu ([#44](https://github.com/nickwolf/tokitty/issues/44)).
+
+  One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live.
+- **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
 
 ## Setup
 
