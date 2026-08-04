@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 ENV_OVERRIDE = "TOKITTY_CREDENTIALS"
 
@@ -196,3 +196,61 @@ def is_token_expired(creds: dict, now_ms: Optional[int] = None) -> bool:
     if now_ms is None:
         now_ms = int(time.time() * 1000)
     return now_ms >= expires_at
+
+
+class CredentialLoader:
+    """Loads credentials, caching Keychain reads until the access token expires.
+
+    File and WSL sources are read through on every call, exactly as before.
+    The cache exists because a Keychain read may raise a macOS authorization
+    dialog, which a file read never does -- and because the Windows+WSL2 path
+    is the one verified end-to-end by hand, so this change should be provably
+    inert there rather than uniformly applied.
+
+    Expiry doubles as cache invalidation and as the stale_token trigger: an
+    expired cached token forces a re-read *before* the caller evaluates
+    is_token_expired(), so a token still expired afterward genuinely means
+    Claude Code has not refreshed it.
+
+    Not thread-safe, and does not need to be: fetch() is only ever called from
+    Poller._poll_once() on a single daemon thread, and request_refresh() wakes
+    that same thread rather than calling fetch itself.
+    """
+
+    def __init__(self) -> None:
+        self._key: Optional[str] = None
+        self._creds: Optional[dict] = None
+        self._blocked: Optional[KeychainAccessError] = None
+
+    def clear_block(self) -> None:
+        """Drop a sticky access failure so the next load retries the Keychain.
+        Wired to the "Refresh now" menu item, which is what keeps the sticky
+        block from ever trapping the user."""
+        self._blocked = None
+
+    def load(
+        self,
+        source: CredentialsSource,
+        load_fn: Callable[[CredentialsSource], dict] = load_credentials,
+        now_ms: Optional[int] = None,
+    ) -> dict:
+        if not isinstance(source, KeychainCredentialsSource):
+            return load_fn(source)
+
+        if self._blocked is not None:
+            # Re-raise without touching the Keychain: the poller retries every
+            # 30s-600s on failure, and each real read would re-prompt.
+            raise self._blocked
+
+        key = describe_source(source)
+        if self._key == key and self._creds is not None and not is_token_expired(self._creds, now_ms):
+            return self._creds
+
+        try:
+            creds = load_fn(source)
+        except KeychainAccessError as exc:
+            self._blocked = exc
+            raise
+
+        self._key, self._creds = key, creds
+        return creds
