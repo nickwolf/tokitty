@@ -11,7 +11,7 @@ from pathlib import Path
 from tkinter import colorchooser, simpledialog
 from typing import Callable, List, Optional
 
-from tokitty.display import bar_color
+from tokitty.display import bar_color, resolve_status_text
 from tokitty.geometry import clamp_position
 from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
@@ -177,6 +177,7 @@ class Pane:
         dimmed: bool,
         tool_label: str = "",
         accent: bool = False,
+        projection_text: Optional[str] = None,
     ) -> None:
         self._current_state = state
         self._driving_tag = driving_tag
@@ -216,7 +217,7 @@ class Pane:
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
-        self.status_label.configure(text=hint_text if hint_text else (credits_text or ""))
+        self.status_label.configure(text=resolve_status_text(hint_text, credits_text, projection_text))
 
     def draw_next_frame(self) -> None:
         frames = get_frames(self._current_state)
