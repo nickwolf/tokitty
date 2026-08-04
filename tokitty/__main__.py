@@ -181,6 +181,13 @@ _STALE_HINTS = {
     "keychain_denied": "can't confirm, Keychain denied",
 }
 
+# Unlike every other status, a Keychain denial cannot self-heal: once
+# CredentialLoader._blocked is set, every subsequent poll short-circuits
+# without touching the Keychain until "Refresh now" calls clear_block(). So
+# wherever this status is shown, the hint must always name that recovery
+# action -- never fall back to a "healthy" or silent look.
+_KEYCHAIN_DENIED_HINT = "Keychain denied, Refresh to retry"
+
 
 def _display_from_snapshot(snapshot, now: datetime) -> dict:
     """Compute state/percentages/reset text/credits from a snapshot as of
@@ -254,6 +261,13 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         if overdue:
             display["hint_text"] = _STALE_HINTS.get(result.status, "can't confirm, reconnect")
             display["dimmed"] = True
+        elif result.status == "keychain_denied":
+            # Not self-healing like the statuses that fall through to the
+            # `else` below: the loader stays sticky-blocked until "Refresh
+            # now" is used, so the cached numbers must stay visibly dimmed
+            # with a hint that names the recovery action, not look healthy.
+            display["hint_text"] = _KEYCHAIN_DENIED_HINT
+            display["dimmed"] = True
         elif result.status == "stale_token" and binding is None:
             # Resting look: a work account's token expires ~1h after that
             # account's Claude Code last ran, so outside work hours this is
@@ -273,7 +287,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         "credentials_unreachable": "can't find credentials",
         "ambiguous_credentials": "multiple installs, set TOKITTY_CREDENTIALS",
         "api_error": "API hiccup, retrying",
-        "keychain_denied": "Keychain denied, Refresh to retry",
+        "keychain_denied": _KEYCHAIN_DENIED_HINT,
     }
     return {
         "state": "confused",
