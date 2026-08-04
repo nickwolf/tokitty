@@ -38,12 +38,23 @@ class WslDistroCredentialsSource:
     wsl_path: str
 
 
-CredentialsSource = Union[LocalCredentialsSource, WslDistroCredentialsSource]
+@dataclass(frozen=True)
+class KeychainCredentialsSource:
+    """macOS login Keychain. `account` is optional: Claude Code stores one item
+    per macOS user, so the service name alone is unambiguous in practice."""
+
+    service: str
+    account: Optional[str] = None
+
+
+CredentialsSource = Union[LocalCredentialsSource, WslDistroCredentialsSource, KeychainCredentialsSource]
 
 
 def describe_source(source: CredentialsSource) -> str:
     if isinstance(source, LocalCredentialsSource):
         return str(source.path)
+    if isinstance(source, KeychainCredentialsSource):
+        return f"Keychain:{source.service}"
     return f"WSL:{source.distro}:{source.wsl_path}"
 
 
@@ -119,6 +130,10 @@ def load_credentials(source: CredentialsSource) -> dict:
             raw = source.path.read_text(encoding="utf-8")
         except OSError as exc:
             raise CredentialsError(f"Could not read credentials file at {source.path}: {exc}") from exc
+    elif isinstance(source, KeychainCredentialsSource):
+        from tokitty.keychain import read_keychain_secret
+
+        raw = read_keychain_secret(source.service, account=source.account)
     else:
         from tokitty.wsl_probe import read_wsl_credentials
 

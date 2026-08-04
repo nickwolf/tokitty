@@ -133,3 +133,39 @@ def test_no_config_dir_keeps_v1_override_behavior(tmp_path, monkeypatch):
     source = resolve_credentials_source()
     assert isinstance(source, LocalCredentialsSource)
     assert source.path == creds
+
+
+def test_describe_source_for_keychain():
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+    assert describe_source(source) == "Keychain:Claude Code-credentials"
+
+
+def test_load_credentials_reads_from_keychain(monkeypatch):
+    monkeypatch.setattr(
+        "tokitty.keychain.read_keychain_secret",
+        lambda service, account=None: json.dumps({"claudeAiOauth": {"accessToken": "kc"}}),
+    )
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+
+    assert load_credentials(source) == {"accessToken": "kc"}
+
+
+def test_load_credentials_from_keychain_raises_on_invalid_json(monkeypatch):
+    monkeypatch.setattr("tokitty.keychain.read_keychain_secret", lambda service, account=None: "not json")
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+
+    with pytest.raises(CredentialsError):
+        load_credentials(source)
+
+
+def test_load_credentials_from_keychain_passes_account(monkeypatch):
+    seen = {}
+
+    def fake_read(service, account=None):
+        seen["service"], seen["account"] = service, account
+        return json.dumps({"claudeAiOauth": {}})
+
+    monkeypatch.setattr("tokitty.keychain.read_keychain_secret", fake_read)
+    load_credentials(credentials.KeychainCredentialsSource(service="svc", account="acct"))
+
+    assert seen == {"service": "svc", "account": "acct"}
