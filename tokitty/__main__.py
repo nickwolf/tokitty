@@ -14,7 +14,9 @@ from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
 from tokitty.credentials import (
     AmbiguousCredentialsError,
+    CredentialLoader,
     CredentialsError,
+    KeychainAccessError,
     describe_source,
     is_token_expired,
     load_credentials,
@@ -39,7 +41,11 @@ DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 UI_REFRESH_MS = 500
 
 
-def build_fetch_fn(config_dir: Optional[str] = None):
+def build_fetch_fn(config_dir: Optional[str] = None, loader: Optional[CredentialLoader] = None):
+    # One loader per closure, i.e. per account: it caches that account's
+    # Keychain reads and holds its sticky-denial state.
+    loader = loader if loader is not None else CredentialLoader()
+
     def fetch() -> PollResult:
         now = datetime.now(timezone.utc)
         try:
@@ -50,7 +56,10 @@ def build_fetch_fn(config_dir: Optional[str] = None):
             return PollResult(status="credentials_unreachable", snapshot=None, message=str(exc), fetched_at=now)
 
         try:
-            creds = load_credentials(source)
+            creds = loader.load(source, load_fn=load_credentials)
+        except KeychainAccessError as exc:
+            # Must precede the CredentialsError branch -- it is a subclass.
+            return PollResult(status="keychain_denied", snapshot=None, message=str(exc), fetched_at=now)
         except CredentialsError as exc:
             return PollResult(status="credentials_unreachable", snapshot=None, message=str(exc), fetched_at=now)
 
@@ -169,7 +178,15 @@ _STALE_HINTS = {
     "credentials_unreachable": "can't confirm, credentials unreachable",
     "ambiguous_credentials": "can't confirm, set TOKITTY_CREDENTIALS",
     "api_error": "can't confirm, API hiccup",
+    "keychain_denied": "can't confirm, Keychain denied",
 }
+
+# Unlike every other status, a Keychain denial cannot self-heal: once
+# CredentialLoader._blocked is set, every subsequent poll short-circuits
+# without touching the Keychain until "Refresh now" calls clear_block(). So
+# wherever this status is shown, the hint must always name that recovery
+# action -- never fall back to a "healthy" or silent look.
+_KEYCHAIN_DENIED_HINT = "Keychain denied, Refresh to retry"
 
 
 def _display_from_snapshot(snapshot, now: datetime) -> dict:
@@ -244,6 +261,13 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         if overdue:
             display["hint_text"] = _STALE_HINTS.get(result.status, "can't confirm, reconnect")
             display["dimmed"] = True
+        elif result.status == "keychain_denied":
+            # Not self-healing like the statuses that fall through to the
+            # `else` below: the loader stays sticky-blocked until "Refresh
+            # now" is used, so the cached numbers must stay visibly dimmed
+            # with a hint that names the recovery action, not look healthy.
+            display["hint_text"] = _KEYCHAIN_DENIED_HINT
+            display["dimmed"] = True
         elif result.status == "stale_token" and binding is None:
             # Resting look: a work account's token expires ~1h after that
             # account's Claude Code last ran, so outside work hours this is
@@ -263,6 +287,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         "credentials_unreachable": "can't find credentials",
         "ambiguous_credentials": "multiple installs, set TOKITTY_CREDENTIALS",
         "api_error": "API hiccup, retrying",
+        "keychain_denied": _KEYCHAIN_DENIED_HINT,
     }
     return {
         "state": "confused",
@@ -375,7 +400,8 @@ def run_gui() -> int:
     units = []
     for index, account in enumerate(accounts or [None]):
         config_dir = account.config_dir if account else None
-        poller = Poller(fetch_fn=build_fetch_fn(config_dir))
+        cred_loader = CredentialLoader()
+        poller = Poller(fetch_fn=build_fetch_fn(config_dir, loader=cred_loader))
         sessions_dir, distro_name = resolve_activity_sessions(config_dir)
         watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
 
@@ -388,7 +414,8 @@ def run_gui() -> int:
         pane.set_appearance(label=label)
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
-                      "last_good": None, "key": key, "account": account})
+                      "last_good": None, "key": key, "account": account,
+                      "cred_loader": cred_loader})
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -398,6 +425,10 @@ def run_gui() -> int:
 
     def refresh_all():
         for unit in units:
+            # Clearing first means "Refresh now" is the recovery path after a
+            # denied Keychain prompt: grant access, click Refresh, done. No
+            # restart needed, which is what makes the sticky block safe.
+            unit["cred_loader"].clear_block()
             unit["poller"].request_refresh()
 
     window.on_refresh_requested = refresh_all

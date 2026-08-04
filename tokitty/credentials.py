@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 ENV_OVERRIDE = "TOKITTY_CREDENTIALS"
 
@@ -18,6 +18,13 @@ class CredentialsError(Exception):
 
 class AmbiguousCredentialsError(CredentialsError):
     """Raised when more than one candidate credentials file is found."""
+
+
+class KeychainAccessError(CredentialsError):
+    """Raised when a macOS Keychain item exists but its secret could not be
+    read -- user denied the prompt, keychain locked, or any other non-
+    "item not found" failure. Distinct from CredentialsError because it is
+    the only failure mode that re-prompts, so callers make it sticky."""
 
 
 @dataclass(frozen=True)
@@ -31,12 +38,23 @@ class WslDistroCredentialsSource:
     wsl_path: str
 
 
-CredentialsSource = Union[LocalCredentialsSource, WslDistroCredentialsSource]
+@dataclass(frozen=True)
+class KeychainCredentialsSource:
+    """macOS login Keychain. `account` is optional: Claude Code stores one item
+    per macOS user, so the service name alone is unambiguous in practice."""
+
+    service: str
+    account: Optional[str] = None
+
+
+CredentialsSource = Union[LocalCredentialsSource, WslDistroCredentialsSource, KeychainCredentialsSource]
 
 
 def describe_source(source: CredentialsSource) -> str:
     if isinstance(source, LocalCredentialsSource):
         return str(source.path)
+    if isinstance(source, KeychainCredentialsSource):
+        return f"Keychain:{source.service}"
     return f"WSL:{source.distro}:{source.wsl_path}"
 
 
@@ -63,13 +81,31 @@ def _posix_from_unc_or_same(config_dir: str) -> str:
     return unc[1] if unc is not None else config_dir
 
 
+def _keychain_source() -> Optional[KeychainCredentialsSource]:
+    """The macOS Keychain source, or None off-darwin / when no item exists.
+
+    Uses the attribute-only existence probe, never the secret read: this runs
+    on every poll and must not raise a macOS authorization dialog.
+    """
+    if sys.platform != "darwin":
+        return None
+
+    from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
+
+    if not keychain_item_exists(KEYCHAIN_SERVICE):
+        return None
+    return KeychainCredentialsSource(service=KEYCHAIN_SERVICE)
+
+
 def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsSource:
     """Return the credentials source to use.
 
     With an explicit config_dir (from accounts.json), that dir's
     .credentials.json is used directly -- a WSL UNC dir on Windows maps to
-    a wsl.exe-read source so we never open the UNC path from Python.
-    Without one: v1 resolution order (env override, home-relative, WSL probe).
+    a wsl.exe-read source so we never open the UNC path from Python. This
+    path is file-only: two-account mode never resolves to the Keychain.
+    Without one: env override, home-relative, Keychain (darwin), WSL probe
+    (win32).
     """
     if config_dir:
         from tokitty.accounts import parse_wsl_unc
@@ -80,7 +116,13 @@ def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsS
             return WslDistroCredentialsSource(distro=distro, wsl_path=f"{posix_dir}/.credentials.json")
         candidate = Path(_posix_from_unc_or_same(config_dir)) / ".credentials.json"
         if not candidate.is_file():
-            raise CredentialsError(f"No credentials file at {candidate} (from accounts.json)")
+            message = f"No credentials file at {candidate} (from accounts.json)"
+            if sys.platform == "darwin":
+                message += (
+                    ". Two-account mode requires credential files; macOS Keychain "
+                    "resolution is single-account only."
+                )
+            raise CredentialsError(message)
         return LocalCredentialsSource(path=candidate)
 
     override = _override_source()
@@ -93,11 +135,24 @@ def resolve_credentials_source(config_dir: Optional[str] = None) -> CredentialsS
     if home_relative is not None:
         return home_relative
 
+    keychain = _keychain_source()
+    if keychain is not None:
+        return keychain
+
     if sys.platform == "win32":
         from tokitty.wsl_probe import find_wsl_credentials
 
         distro, wsl_path = find_wsl_credentials()
         return WslDistroCredentialsSource(distro=distro, wsl_path=wsl_path)
+
+    if sys.platform == "darwin":
+        from tokitty.keychain import KEYCHAIN_SERVICE
+
+        raise CredentialsError(
+            "No Claude Code credentials found: no ~/.claude/.credentials.json and no "
+            f"'{KEYCHAIN_SERVICE}' item in your login Keychain. Open Claude Code to sign "
+            f"in, or set {ENV_OVERRIDE} to a credentials file."
+        )
 
     raise CredentialsError(
         "No Claude Code credentials found at ~/.claude/.credentials.json. "
@@ -112,6 +167,10 @@ def load_credentials(source: CredentialsSource) -> dict:
             raw = source.path.read_text(encoding="utf-8")
         except OSError as exc:
             raise CredentialsError(f"Could not read credentials file at {source.path}: {exc}") from exc
+    elif isinstance(source, KeychainCredentialsSource):
+        from tokitty.keychain import read_keychain_secret
+
+        raw = read_keychain_secret(source.service, account=source.account)
     else:
         from tokitty.wsl_probe import read_wsl_credentials
 
@@ -137,3 +196,61 @@ def is_token_expired(creds: dict, now_ms: Optional[int] = None) -> bool:
     if now_ms is None:
         now_ms = int(time.time() * 1000)
     return now_ms >= expires_at
+
+
+class CredentialLoader:
+    """Loads credentials, caching Keychain reads until the access token expires.
+
+    File and WSL sources are read through on every call, exactly as before.
+    The cache exists because a Keychain read may raise a macOS authorization
+    dialog, which a file read never does -- and because the Windows+WSL2 path
+    is the one verified end-to-end by hand, so this change should be provably
+    inert there rather than uniformly applied.
+
+    Expiry doubles as cache invalidation and as the stale_token trigger: an
+    expired cached token forces a re-read *before* the caller evaluates
+    is_token_expired(), so a token still expired afterward genuinely means
+    Claude Code has not refreshed it.
+
+    Not thread-safe, and does not need to be: fetch() is only ever called from
+    Poller._poll_once() on a single daemon thread, and request_refresh() wakes
+    that same thread rather than calling fetch itself.
+    """
+
+    def __init__(self) -> None:
+        self._key: Optional[str] = None
+        self._creds: Optional[dict] = None
+        self._blocked: Optional[KeychainAccessError] = None
+
+    def clear_block(self) -> None:
+        """Drop a sticky access failure so the next load retries the Keychain.
+        Wired to the "Refresh now" menu item, which is what keeps the sticky
+        block from ever trapping the user."""
+        self._blocked = None
+
+    def load(
+        self,
+        source: CredentialsSource,
+        load_fn: Callable[[CredentialsSource], dict] = load_credentials,
+        now_ms: Optional[int] = None,
+    ) -> dict:
+        if not isinstance(source, KeychainCredentialsSource):
+            return load_fn(source)
+
+        if self._blocked is not None:
+            # Re-raise without touching the Keychain: the poller retries every
+            # 30s-600s on failure, and each real read would re-prompt.
+            raise self._blocked
+
+        key = describe_source(source)
+        if self._key == key and self._creds is not None and not is_token_expired(self._creds, now_ms):
+            return self._creds
+
+        try:
+            creds = load_fn(source)
+        except KeychainAccessError as exc:
+            self._blocked = exc
+            raise
+
+        self._key, self._creds = key, creds
+        return creds
