@@ -19,7 +19,7 @@ BACKOFF_JITTER = 0.2
 
 @dataclass(frozen=True)
 class PollResult:
-    status: str  # "ok" | "stale_token" | "credentials_unreachable" | "ambiguous_credentials" | "api_error"
+    status: str  # "ok" | "stale_token" | "credentials_unreachable" | "ambiguous_credentials" | "keychain_denied" | "api_error"
     snapshot: Optional[UsageSnapshot]
     message: Optional[str]
     fetched_at: datetime

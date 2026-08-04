@@ -133,3 +133,137 @@ def test_no_config_dir_keeps_v1_override_behavior(tmp_path, monkeypatch):
     source = resolve_credentials_source()
     assert isinstance(source, LocalCredentialsSource)
     assert source.path == creds
+
+
+def test_describe_source_for_keychain():
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+    assert describe_source(source) == "Keychain:Claude Code-credentials"
+
+
+def test_load_credentials_reads_from_keychain(monkeypatch):
+    monkeypatch.setattr(
+        "tokitty.keychain.read_keychain_secret",
+        lambda service, account=None: json.dumps({"claudeAiOauth": {"accessToken": "kc"}}),
+    )
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+
+    assert load_credentials(source) == {"accessToken": "kc"}
+
+
+def test_load_credentials_from_keychain_raises_on_invalid_json(monkeypatch):
+    monkeypatch.setattr("tokitty.keychain.read_keychain_secret", lambda service, account=None: "not json")
+    source = credentials.KeychainCredentialsSource(service="Claude Code-credentials")
+
+    with pytest.raises(CredentialsError):
+        load_credentials(source)
+
+
+def test_load_credentials_from_keychain_passes_account(monkeypatch):
+    seen = {}
+
+    def fake_read(service, account=None):
+        seen["service"], seen["account"] = service, account
+        return json.dumps({"claudeAiOauth": {}})
+
+    monkeypatch.setattr("tokitty.keychain.read_keychain_secret", fake_read)
+    load_credentials(credentials.KeychainCredentialsSource(service="svc", account="acct"))
+
+    assert seen == {"service": "svc", "account": "acct"}
+
+
+def _no_files(monkeypatch, tmp_path):
+    """Neither credential file exists, so resolution reaches the platform steps."""
+    monkeypatch.delenv(ENV_OVERRIDE, raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+
+def test_resolve_uses_keychain_on_darwin_when_no_files(monkeypatch, tmp_path):
+    _no_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", lambda service, account=None: True)
+
+    source = resolve_credentials_source()
+
+    assert isinstance(source, credentials.KeychainCredentialsSource)
+    assert source.service == "Claude Code-credentials"
+
+
+def test_resolve_prefers_credentials_file_over_keychain_on_darwin(monkeypatch, tmp_path):
+    monkeypatch.delenv(ENV_OVERRIDE, raising=False)
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / ".credentials.json").write_text('{"claudeAiOauth": {}}', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+
+    def boom(service, account=None):
+        raise AssertionError("Keychain must not be consulted when the file exists")
+
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", boom)
+
+    source = resolve_credentials_source()
+
+    assert isinstance(source, LocalCredentialsSource)
+
+
+def test_resolve_prefers_env_override_over_keychain_on_darwin(monkeypatch, tmp_path):
+    creds = tmp_path / "c.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(ENV_OVERRIDE, str(creds))
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+
+    def boom(service, account=None):
+        raise AssertionError("Keychain must not be consulted when the env override is set")
+
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", boom)
+
+    assert isinstance(resolve_credentials_source(), LocalCredentialsSource)
+
+
+def test_resolve_raises_on_darwin_when_keychain_item_absent(monkeypatch, tmp_path):
+    _no_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", lambda service, account=None: False)
+
+    with pytest.raises(CredentialsError) as excinfo:
+        resolve_credentials_source()
+
+    message = str(excinfo.value)
+    # The message must name both misses; the pre-existing text cited only a
+    # file path that can never exist on macOS.
+    assert "Keychain" in message
+    assert ".credentials.json" in message
+
+
+def test_resolve_does_not_consult_keychain_on_linux(monkeypatch, tmp_path):
+    _no_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(credentials.sys, "platform", "linux")
+
+    def boom(service, account=None):
+        raise AssertionError("Keychain is macOS-only")
+
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", boom)
+
+    with pytest.raises(CredentialsError):
+        resolve_credentials_source()
+
+
+def test_config_dir_message_mentions_files_on_darwin(monkeypatch, tmp_path):
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+
+    with pytest.raises(CredentialsError) as excinfo:
+        resolve_credentials_source(config_dir=str(tmp_path / "nope"))
+
+    assert "single-account" in str(excinfo.value)
+
+
+def test_config_dir_never_resolves_to_keychain_on_darwin(monkeypatch, tmp_path):
+    monkeypatch.setattr(credentials.sys, "platform", "darwin")
+
+    def boom(service, account=None):
+        raise AssertionError("accounts.json entries are file-only")
+
+    monkeypatch.setattr("tokitty.keychain.keychain_item_exists", boom)
+
+    with pytest.raises(CredentialsError):
+        resolve_credentials_source(config_dir=str(tmp_path / "nope"))

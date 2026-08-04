@@ -284,3 +284,86 @@ def test_label_field_can_be_cleared_back_to_empty():
     account = Account(name="Work", config_dir="/x")
     assert initial_label(account, cleared, dual=True) == "Work"
     assert initial_label(None, cleared, dual=False) == ""
+
+
+def test_build_fetch_fn_reports_keychain_denied(monkeypatch):
+    from tokitty.credentials import KeychainAccessError, KeychainCredentialsSource
+
+    source = KeychainCredentialsSource(service="Claude Code-credentials")
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+    monkeypatch.setattr(
+        "tokitty.__main__.load_credentials",
+        lambda src: (_ for _ in ()).throw(KeychainAccessError("denied")),
+    )
+
+    result = build_fetch_fn()()
+
+    # Not credentials_unreachable: the credentials were found, access was
+    # refused. Its hint ("can't find credentials") would be the wrong remedy.
+    assert result.status == "keychain_denied"
+
+
+def test_build_fetch_fn_uses_the_injected_loader_and_caches_across_calls(monkeypatch):
+    from tokitty.api import ApiError
+    from tokitty.credentials import CredentialLoader, KeychainCredentialsSource
+
+    source = KeychainCredentialsSource(service="Claude Code-credentials")
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+
+    load_calls = []
+
+    def counting_load(src):
+        load_calls.append(src)
+        # Far-future expiresAt -> not expired, so the second fetch() call is
+        # a cache hit rather than a fresh Keychain read.
+        return {"expiresAt": 4102444800000, "accessToken": "tok"}
+
+    monkeypatch.setattr("tokitty.__main__.load_credentials", counting_load)
+    # Stops the poll right after the token check, so no real network call is
+    # made -- getting past that check is all this test needs from fetch_usage.
+    monkeypatch.setattr(
+        "tokitty.__main__.fetch_usage",
+        lambda token: (_ for _ in ()).throw(ApiError("boom", status_code=500)),
+    )
+
+    loader = CredentialLoader()
+    fetch = build_fetch_fn(loader=loader)
+
+    first = fetch()
+    second = fetch()
+
+    # Both calls reach the API-call stage, proving neither was short-circuited
+    # by an unrelated early return.
+    assert first.status == "api_error"
+    assert second.status == "api_error"
+    # This is what the test name promises: the loader passed into
+    # build_fetch_fn is the one actually used inside fetch(), and it caches
+    # -- a second call must not re-read the Keychain. If `loader = ...`
+    # ever moved inside fetch() (silently disabling caching and reintroducing
+    # a macOS prompt on every poll), this would catch it by failing here.
+    assert len(load_calls) == 1
+
+
+def test_keychain_denied_has_hint_text_in_both_dicts():
+    from tokitty.__main__ import _STALE_HINTS
+
+    assert "keychain_denied" in _STALE_HINTS
+    # The user-facing hint must name the recovery action, since PollResult.message
+    # is never rendered anywhere in the UI.
+    display = _display_state_for(_error("keychain_denied"), previous=None, now=NOW)
+    assert "Refresh" in display["hint_text"]
+
+
+def test_keychain_denied_falls_back_to_cached_countdown(monkeypatch):
+    # A denied Keychain is a transient fetch failure like a stale token: the
+    # cached countdown should keep showing rather than blanking out.
+    good = _ok(_snapshot(session_pct=42.0, weekly_pct=20.0))
+    display = _display_state_for(_error("keychain_denied"), previous=good, now=NOW)
+
+    assert display["session_pct"] == 42.0
+    # Unlike a stale token (which self-heals and can rest as "healthy"),
+    # keychain_denied is sticky until "Refresh now" is used -- so the cached
+    # numbers must stay dimmed with a hint naming that recovery action,
+    # never render as a normal, healthy-looking card.
+    assert display["hint_text"] == "Keychain denied, Refresh to retry"
+    assert display["dimmed"] is True

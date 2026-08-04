@@ -58,6 +58,13 @@ Each entry's `config_dir` points at that account's Claude Code config directory 
 
 After creating or editing `accounts.json`, re-run `python -m tokitty --install-hooks` — the installer reads the same file and installs hooks into every listed account's config dir, not just the default one. As with any hook change, restart any Claude Code sessions that are already open; hook registration isn't hot-reloaded into a running session.
 
+**Two-account mode requires credential *files*.** Each `config_dir` entry is
+read as `<config_dir>/.credentials.json`, so on macOS — where Claude Code stores
+credentials in the login Keychain — `accounts.json` cannot resolve them. The
+Keychain holds one item per macOS user with no per-account identity to key on,
+so Keychain resolution is single-account only, and tokitty says so explicitly
+rather than silently showing the same numbers in both panes.
+
 Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one in the resting look) without needing a real `accounts.json` or a second account — handy for checking layout changes.
 
 ## Customization
@@ -86,13 +93,37 @@ The live-activity feature above is opt-in and changes this picture only if you t
 - **Failure behavior.** The hook script never writes to stdout and never exits non-zero, under any input — Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing it does can ever interfere with your actual session. This is covered by tests, not just a claim.
 - **Nothing leaves your machine.** None of this activity data is transmitted anywhere; it's read locally by tokitty's own watcher to drive the sprite.
 
+**macOS Keychain.** On macOS the credentials are read from the login Keychain
+instead of a file. Tokitty's access stays read-only — it never writes to the
+item and never touches the refresh token. One thing worth knowing before you
+click **Always Allow**: macOS Keychain ACLs are per-*binary*, and the binary
+being authorized is `/usr/bin/security`. So granting it persistent access means
+any process running as you can afterwards read that token by shelling out to
+`security`, without a prompt. That is a property of how Keychain authorization
+works, not something tokitty can tighten — a narrower grant would require
+tokitty to be a signed app bundle with a stable identity rather than a Python
+script. Choosing **Allow** instead of **Always Allow** grants a single read,
+and while the token stays valid tokitty's cache means that's roughly one
+prompt per token lifetime. But the cache is invalidated the moment the token
+expires — deliberately, since that's how tokitty notices Claude Code has
+refreshed it — so once nothing is refreshing the token (the idle-account
+resting look above, e.g. outside work hours), every retry on the 30s→600s
+backoff is a cache miss and re-prompts: on the order of fifty prompts
+overnight, not one. If you leave tokitty running unattended, use
+**Always Allow**.
+
 Two-account mode (above) extends this picture the same way single-account mode already worked, just twice: with `accounts.json` present, tokitty reads OAuth credentials and (if hooks are installed) hook/session state from a second Claude Code config dir in addition to the default one. Nothing about what's read, persisted, or transmitted changes — it's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains account names, config-dir paths, and coat choices you type in yourself.
 
 ## Platforms tested
 
 - **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself — drag, always-on-top, sizing, text legibility, animation — is visually confirmed on a real desktop.
 - **Linux, macOS, Windows — automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic — credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering — and, on Linux, GUI construction are covered wherever the badge is green.
-- **Not yet hands-on:** interactive desktop use on native Linux and macOS (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
+- **macOS 15 (Apple silicon, python.org Python 3.14 + Tk 9.0) — hands-on, with caveats:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) confirmed by hand on 2026-08-04. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. Two caveats, both tracked:
+  - **The tray icon crashes tokitty on macOS** ([#45](https://github.com/nickwolf/tokitty/issues/45)) — pystray calls `NSApplication.run()` off the main thread and AppKit aborts. Set `"tray_enabled": false` in `settings.json` until that is fixed.
+  - **The system menu bar stays.** Removing it needs a real `.app` bundle with `LSUIElement=1`; no runtime call can do it, because Tk owns and rebuilds that menu ([#44](https://github.com/nickwolf/tokitty/issues/44)).
+
+  One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live.
+- **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
 
 ## Setup
 
@@ -112,8 +143,17 @@ Same as above: `resolve_credentials_source()` finds `~/.claude/.credentials.json
 
 ### macOS
 
-1. Install Python from [python.org](https://www.python.org/) (recommended over Apple's system Python or some Homebrew builds, which can have flaky Tcl/Tk).
+1. Install Python from [python.org](https://www.python.org/) (recommended over
+   Apple's system Python — which is 3.9 and below this project's 3.10 floor —
+   or some Homebrew builds, which can have flaky Tcl/Tk).
 2. `python3 -m tokitty`
+
+Claude Code on macOS keeps its OAuth credentials in your **login Keychain**, not
+in `~/.claude/.credentials.json`, so tokitty reads them from there. The first
+read raises a macOS authorization prompt; choose **Always Allow** unless you
+want to re-authorize roughly once an hour. If you deny it, the cat shows
+"Keychain denied, Refresh to retry" and stops asking — grant access, then
+right-click ▸ **Refresh now** to recover. No restart needed.
 
 ## Configuration
 
