@@ -12,6 +12,7 @@ from tokitty.accounts import Account
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
+from tokitty.burn import BurnTracker
 from tokitty.credentials import (
     AmbiguousCredentialsError,
     CredentialLoader,
@@ -23,7 +24,7 @@ from tokitty.credentials import (
     resolve_credentials_source,
 )
 from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
-from tokitty.display import format_countdown, format_reset_day, format_reset_time
+from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
@@ -310,6 +311,22 @@ def _next_last_good(latest: PollResult, last_good: Optional[PollResult]) -> Opti
     return latest if latest.status == "ok" else last_good
 
 
+def _projection_text_for(tracker: BurnTracker, display: dict, now: datetime) -> Optional[str]:
+    """Format the burn projection for a pane, or None to leave the status
+    line to credits/hints.
+
+    Gated on `dimmed` -- the app's existing "these numbers are not
+    confirmed" signal -- rather than on poll status, so an ordinary
+    transient API hiccup does not make the line blink off.
+    """
+    if display.get("dimmed"):
+        return None
+    projection = tracker.project(now)
+    if projection is None:
+        return None
+    return format_projection(projection.kind, projection.caps_at)
+
+
 def _seed_from_account(account: Optional[Account]) -> Tuple[Optional[str], Optional[str]]:
     """Translate a legacy accounts.json `coat` seed to (colorway, pattern)."""
     coat = account.coat if account is not None else None
@@ -415,7 +432,7 @@ def run_gui() -> int:
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
                       "last_good": None, "key": key, "account": account,
-                      "cred_loader": cred_loader})
+                      "cred_loader": cred_loader, "burn": BurnTracker()})
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -522,6 +539,11 @@ def run_gui() -> int:
             if latest is None:
                 continue
             display = _display_state_for(latest, unit["last_good"])
+            if latest.status == "ok" and latest.snapshot is not None:
+                unit["burn"].add(latest.snapshot)
+            display["projection_text"] = _projection_text_for(
+                unit["burn"], display, datetime.now(timezone.utc)
+            )
             activity = unit["watcher"].get_latest()
             pose = resolve_pose(display["state"], activity)
             display["state"] = pose["sprite_state"]
