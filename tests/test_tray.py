@@ -1,7 +1,19 @@
+import sys
 from unittest.mock import Mock
+
+import pytest
 
 from tokitty.settings import load_settings
 from tokitty.tray import TrayManager
+
+
+@pytest.fixture(autouse=True)
+def supported_platform(monkeypatch):
+    """Pin a platform whose tray backend is usable. darwin is treated as
+    unavailable outright (#45), so leaving this to the host would make every
+    tray-available assertion below fail on a macOS runner. The darwin tests
+    re-patch this themselves."""
+    monkeypatch.setattr(sys, "platform", "linux")
 
 
 class FakeRoot:
@@ -90,3 +102,29 @@ def test_guard_icon_factory_raises(tmp_path):
     mgr, _, _ = _managers(tmp_path, icon_factory=boom)
     assert mgr.available is False
     mgr.start()  # no crash
+
+
+def test_unavailable_on_darwin(tmp_path, monkeypatch):
+    """On macOS pystray imports fine but icon.run() reaches -[NSApplication
+    run] off the main thread and aborts the process (#45). The backend is
+    available but not usable, so the probe must not even reach it."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    mgr, _, icons = _managers(tmp_path)
+    assert mgr.available is False
+    assert icons == []       # probe short-circuited before the backend
+    mgr.start()
+    assert mgr._icon is None  # and start stays a no-op
+    assert mgr._thread is None
+    assert icons == []
+
+
+def test_darwin_beats_tray_enabled_setting(tmp_path, monkeypatch):
+    """The platform check outranks the user's setting: opting in explicitly
+    on macOS must still not start a tray, because starting one crashes."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    mgr, _, icons = _managers(tmp_path)
+    mgr.set_enabled(True)
+    assert load_settings(tmp_path).tray_enabled is True
+    assert mgr.available is False
+    assert mgr._icon is None
+    assert icons == []

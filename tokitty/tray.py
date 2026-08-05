@@ -5,11 +5,18 @@ marshaled back to the main thread with root.after(0, ...), because tkinter
 is not thread-safe. All pystray/PIL access lives inside the injectable
 `icon_factory` / `image_factory` (lazy imports), so this module -- and its
 tests -- import neither at module scope. Where the backend is unavailable
-(headless, missing libs), construction is guarded and `available` is False;
-the app then runs with no tray and no crash.
+(headless, missing libs, macOS), construction is guarded and `available` is
+False; the app then runs with no tray and no crash. Menu content stays
+reachable through the window's right-click menu.
+
+macOS is excluded outright: pystray's darwin backend imports fine but its
+run() reaches -[NSApplication run], which AppKit permits only on the main
+thread -- and Tk's mainloop() already owns it, so the process aborts on
+launch rather than raising (#45). Available is not the same as usable.
 """
 from __future__ import annotations
 
+import sys
 import threading
 from typing import Callable, List, Optional
 
@@ -79,7 +86,12 @@ class TrayManager:
     def _probe(self) -> bool:
         """Build the icon image and a throwaway icon so both the PIL import
         and pystray backend selection are guarded up front -- not just the
-        `import`. Any failure => tray unavailable, cleanly."""
+        `import`. Any failure => tray unavailable, cleanly.
+
+        darwin never reaches the backend: running it there is fatal, not
+        merely broken, so the platform outranks the `tray_enabled` setting."""
+        if sys.platform == "darwin":
+            return False
         try:
             self._image = self._image_factory(self._colorway, self._pattern)
             self._icon_factory(self._image, [], self._wrap, self._title)
