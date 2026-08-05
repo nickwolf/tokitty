@@ -2,6 +2,9 @@
 
 Work is tracked on GitHub — one milestone per phase, one issue per work item.
 Each phase is built on its own feature branch and lands on `main` via a PR.
+
+**Phases 1–5 are complete and shipped.** They are kept below as the record of how
+Tokitty was built; ongoing work is in the backlog at the end of this file.
 Full design: [docs/superpowers/specs/2026-07-13-tokitty-v2-design.md](superpowers/specs/2026-07-13-tokitty-v2-design.md).
 
 ## [Phase 1 — Finer cat](https://github.com/nickwolf/tokitty/milestone/1) (`feat/sprite-upgrade`)
@@ -33,17 +36,16 @@ Coat presets (orange tabby, gray tabby, black, white, calico), full color picker
 README screenshots and a GIF of the flag/wake animations, captured via the
 debug-state harness, in `docs/media/`. Gates the public glamour pass.
 
-## [Backlog](https://github.com/nickwolf/tokitty/issues?q=is%3Aissue+is%3Aopen+label%3Abacklog)
+## Backlog
 
-1. CI matrix (GitHub Actions, ubuntu/macos/windows)
-2. ntfy threshold notifications
-3. Autostart per OS
-4. Tray icon (`pystray`, native path only)
-5. Idle wandering across the card
-6. Per-model weekly bars
-7. Click-to-pet + purr
-8. PNG sprite upgrade (only if vector rects become limiting)
-9. PySide6 transparent-cat rewrite (separate project decision)
+The backlog lives on the [Tokitty backlog board](https://github.com/users/nickwolf/projects/1),
+where drag order is the ranking and each item carries a size. The open items are also
+listed by the [`backlog` label](https://github.com/nickwolf/tokitty/issues?q=is%3Aissue+is%3Aopen+label%3Abacklog).
+
+This section used to duplicate that list by hand, which meant it quietly went stale
+every time something shipped — CI matrix, the tray icon, and burn-rate projection all
+sat here as "planned" well after they landed. A link that can't drift is worth more
+than a list that does.
 
 ## Inspiration
 
