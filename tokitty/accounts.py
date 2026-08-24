@@ -76,6 +76,24 @@ def env_conflict_warning(accounts: Optional[List[Account]]) -> Optional[str]:
     return None
 
 
+def save_accounts(state_dir: Path, accounts: List[Account]) -> None:
+    """First writer accounts.json has ever had. Never writes the legacy
+    "coat" key -- see Account.coat's docstring: it is parsed for
+    backward compatibility only, translated via sprites.LEGACY_COAT_MAP
+    on read, and this writer's job is to persist the new identity-slug
+    scheme's accounts, not to round-trip legacy coats."""
+    path = Path(state_dir) / ACCOUNTS_FILENAME
+    payload = {
+        "accounts": [
+            {"name": account.name, "config_dir": account.config_dir}
+            for account in accounts
+        ]
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def parse_wsl_unc(config_dir: str) -> Optional[Tuple[str, str]]:
     """(distro, posix_path) for \\\\wsl.localhost\\<d>\\... and \\\\wsl$\\<d>\\...
     UNC forms (either slash direction); None for anything else."""

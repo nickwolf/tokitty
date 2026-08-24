@@ -1,9 +1,10 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from tokitty.accounts import Account, AccountsLoadResult, env_conflict_warning, load_accounts, load_accounts_result, parse_wsl_unc
+from tokitty.accounts import Account, AccountsLoadResult, env_conflict_warning, load_accounts, load_accounts_result, parse_wsl_unc, save_accounts
 
 
 def write_accounts(tmp_path: Path, payload) -> Path:
@@ -109,3 +110,46 @@ def test_load_accounts_result_valid_non_empty_three_accounts(tmp_path):
     result = load_accounts_result(tmp_path)
     assert result.state == "valid_non_empty"
     assert [a.name for a in result.accounts] == ["a", "b", "c"]
+
+
+def test_save_accounts_round_trip_n1(tmp_path):
+    accounts = [Account(name="solo", config_dir="/home/u/.claude")]
+    save_accounts(tmp_path, accounts)
+    assert load_accounts(tmp_path) == accounts
+
+
+def test_save_accounts_round_trip_n3(tmp_path):
+    accounts = [
+        Account(name="a", config_dir="/home/u/.claude-a"),
+        Account(name="b", config_dir="/home/u/.claude-b"),
+        Account(name="c", config_dir="/home/u/.claude-c"),
+    ]
+    save_accounts(tmp_path, accounts)
+    assert load_accounts(tmp_path) == accounts
+
+
+def test_save_accounts_round_trip_n5(tmp_path):
+    accounts = [Account(name=f"acct{i}", config_dir=f"/home/u/.claude-{i}") for i in range(5)]
+    save_accounts(tmp_path, accounts)
+    assert load_accounts(tmp_path) == accounts
+
+
+def test_save_accounts_never_writes_coat_key(tmp_path):
+    save_accounts(tmp_path, [Account(name="a", config_dir="/home/u/.claude", coat="orange_tabby")])
+    raw = (tmp_path / "accounts.json").read_text(encoding="utf-8")
+    assert "coat" not in raw
+
+
+def test_save_accounts_uses_tmp_file_and_replace(tmp_path, monkeypatch):
+    calls = []
+    real_replace = os.replace
+
+    def spy_replace(src, dst):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("tokitty.accounts.os.replace", spy_replace)
+    save_accounts(tmp_path, [Account(name="a", config_dir="/home/u/.claude")])
+    assert len(calls) == 1
+    assert calls[0][0].endswith("accounts.json.tmp")
+    assert calls[0][1].endswith("accounts.json")
