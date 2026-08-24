@@ -4,12 +4,14 @@ import pytest
 
 from tokitty.credentials import AmbiguousCredentialsError, CredentialsError
 from tokitty.wsl_probe import (
+    find_all_wsl_credentials,
     find_wsl_credentials,
     list_running_distros,
     list_wsl_distros,
     read_wsl_credentials,
     wsl_config_dir_from_credentials,
     wsl_sessions_dir_from_credentials,
+    _CHECK_SCRIPT,
 )
 
 
@@ -196,3 +198,35 @@ def test_wsl_config_dir_from_credentials_handles_other_usernames():
     config_dir = wsl_config_dir_from_credentials("Debian", "/home/someone-else/.claude/.credentials.json")
 
     assert config_dir == "\\\\wsl.localhost\\Debian\\home\\someone-else\\.claude"
+
+
+def test_find_all_wsl_credentials_empty():
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["wsl.exe", "-l", "-q"]:
+            return FakeCompletedProcess(stdout="Ubuntu\n".encode("utf-16-le"))
+        return FakeCompletedProcess(stdout=b"")
+
+    assert find_all_wsl_credentials(run=fake_run) == []
+
+
+def test_find_all_wsl_credentials_returns_every_match_across_distros():
+    def fake_run(cmd, **kwargs):
+        if cmd[:3] == ["wsl.exe", "-l", "-q"]:
+            return FakeCompletedProcess(stdout="Ubuntu\nDebian\n".encode("utf-16-le"))
+        distro = cmd[2]
+        if distro == "Ubuntu":
+            out = "/home/nick/.claude/.credentials.json\n/home/nick/.claude-work/.credentials.json\n"
+        else:
+            out = "/home/dana/.claude/.credentials.json\n"
+        return FakeCompletedProcess(stdout=out.encode("utf-8"))
+
+    matches = find_all_wsl_credentials(run=fake_run)
+    assert set(matches) == {
+        ("Ubuntu", "/home/nick/.claude/.credentials.json"),
+        ("Ubuntu", "/home/nick/.claude-work/.credentials.json"),
+        ("Debian", "/home/dana/.claude/.credentials.json"),
+    }
+
+
+def test_check_script_globs_dot_claude_star():
+    assert "/home/*/.claude*/.credentials.json" in _CHECK_SCRIPT

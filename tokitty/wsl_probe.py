@@ -13,7 +13,7 @@ from typing import Callable, List, Tuple
 
 from tokitty.credentials import ENV_OVERRIDE, AmbiguousCredentialsError, CredentialsError
 
-_CHECK_SCRIPT = 'for u in /home/*; do f="$u/.claude/.credentials.json"; [ -f "$f" ] && echo "$f"; done'
+_CHECK_SCRIPT = 'for f in /home/*/.claude*/.credentials.json; do [ -f "$f" ] && echo "$f"; done'
 
 # wsl.exe is a console app; spawning it from a GUI process (pythonw.exe has
 # no console of its own) without this flag flashes a visible terminal
@@ -113,6 +113,21 @@ def find_wsl_credentials(run: Callable = subprocess.run) -> Tuple[str, str]:
         "No Claude Code credentials found in any WSL distro. "
         f"Set {ENV_OVERRIDE} to the correct path."
     )
+
+
+def find_all_wsl_credentials(run: Callable = subprocess.run) -> List[Tuple[str, str]]:
+    """Return every (distro, wsl_side_path) credentials match across all
+    installed WSL distros, without collapsing to one and without raising
+    on zero or many matches. Used by the Accounts manager's discovery,
+    which needs the full set; find_wsl_credentials keeps its
+    single-match/raise contract for the existing single-account
+    resolution callers."""
+    distros = list_wsl_distros(run=run)
+    matches: List[Tuple[str, str]] = []
+    for distro in distros:
+        for path in _credentials_paths_in_distro(distro, run=run):
+            matches.append((distro, path))
+    return matches
 
 
 def _wsl_config_dir_windows_style(wsl_credentials_path: str) -> str:
