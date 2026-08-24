@@ -474,3 +474,41 @@ def test_local_config_path_keeps_unc_on_windows(monkeypatch):
     monkeypatch.setattr(hooks_install.sys, "platform", "win32")
     unc = "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude"
     assert hooks_install._local_config_path(unc) == unc
+
+
+# ---------------------------------------------------------------------------
+# _write_settings atomicity
+# ---------------------------------------------------------------------------
+
+def test_write_settings_uses_tmp_file_and_replace(tmp_path, monkeypatch):
+    import os
+    calls = []
+    real_replace = os.replace
+
+    def spy_replace(src, dst):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("tokitty.hooks_install.os.replace", spy_replace)
+    path = tmp_path / "settings.json"
+    hi._write_settings(path, {"a": 1})
+    assert len(calls) == 1
+    assert calls[0][0].endswith("settings.json.tmp")
+    assert calls[0][1].endswith("settings.json")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": 1}
+
+
+def test_write_settings_failed_write_does_not_truncate_original(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    path.write_text('{"original": true}\n', encoding="utf-8")
+
+    def raising_write_text(self, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pathlib.Path.write_text", raising_write_text)
+    try:
+        hi._write_settings(path, {"new": True})
+    except OSError:
+        pass
+    monkeypatch.undo()
+    assert json.loads(path.read_text(encoding="utf-8")) == {"original": True}

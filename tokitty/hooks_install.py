@@ -10,6 +10,7 @@ restart to pick up hook edits.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import time
@@ -157,9 +158,9 @@ def _load_settings(path: Path):
 
 
 def _write_settings(path: Path, data) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _is_tokitty_entry(entry) -> bool:
