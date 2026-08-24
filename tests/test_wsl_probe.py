@@ -154,10 +154,30 @@ def test_list_running_distros_suppresses_console_window():
     assert captured.get("creationflags") == EXPECTED_CREATIONFLAGS
 
 
+def test_wsl_config_dir_from_credentials_dot_claude():
+    result = wsl_config_dir_from_credentials("Ubuntu", "/home/nick/.claude/.credentials.json")
+    assert result == "\\\\wsl.localhost\\Ubuntu\\home\\nick\\.claude"
+
+
+def test_wsl_config_dir_from_credentials_dot_claude_work():
+    result = wsl_config_dir_from_credentials("Ubuntu", "/home/nick/.claude-work/.credentials.json")
+    assert result == "\\\\wsl.localhost\\Ubuntu\\home\\nick\\.claude-work"
+
+
+def test_wsl_sessions_dir_from_credentials_dot_claude():
+    result = wsl_sessions_dir_from_credentials("Ubuntu", "/home/nick/.claude/.credentials.json")
+    assert result == "\\\\wsl.localhost\\Ubuntu\\home\\nick\\.claude\\tokitty\\sessions"
+
+
+def test_wsl_sessions_dir_from_credentials_dot_claude_work():
+    result = wsl_sessions_dir_from_credentials("Ubuntu", "/home/nick/.claude-work/.credentials.json")
+    assert result == "\\\\wsl.localhost\\Ubuntu\\home\\nick\\.claude-work\\tokitty\\sessions"
+
+
 def test_wsl_sessions_dir_from_credentials_derives_username_from_path():
     sessions_dir = wsl_sessions_dir_from_credentials("Ubuntu", "/home/u/.claude/.credentials.json")
 
-    assert sessions_dir == "\\\\wsl.localhost\\Ubuntu\\home\\<user>\\.claude\\tokitty\\sessions"
+    assert sessions_dir == "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude\\tokitty\\sessions"
 
 
 def test_wsl_sessions_dir_from_credentials_handles_other_usernames():
@@ -169,7 +189,7 @@ def test_wsl_sessions_dir_from_credentials_handles_other_usernames():
 def test_wsl_config_dir_from_credentials_derives_username_from_path():
     config_dir = wsl_config_dir_from_credentials("Ubuntu", "/home/u/.claude/.credentials.json")
 
-    assert config_dir == "\\\\wsl.localhost\\Ubuntu\\home\\<user>\\.claude"
+    assert config_dir == "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude"
 
 
 def test_wsl_config_dir_from_credentials_handles_other_usernames():
