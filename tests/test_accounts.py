@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tokitty.accounts import Account, env_conflict_warning, load_accounts, parse_wsl_unc
+from tokitty.accounts import Account, AccountsLoadResult, env_conflict_warning, load_accounts, load_accounts_result, parse_wsl_unc
 
 
 def write_accounts(tmp_path: Path, payload) -> Path:
@@ -72,3 +72,40 @@ def test_parse_wsl_unc_matches(unc, expected):
 @pytest.mark.parametrize("not_unc", ["/home/u/.claude", "C:\\Users\\u\\.claude", ""])
 def test_parse_wsl_unc_passthrough(not_unc):
     assert parse_wsl_unc(not_unc) is None
+
+
+def test_load_accounts_result_absent(tmp_path):
+    result = load_accounts_result(tmp_path)
+    assert result.state == "absent"
+    assert result.accounts == []
+
+
+def test_load_accounts_result_malformed_json(tmp_path):
+    (tmp_path / "accounts.json").write_text("{not json", encoding="utf-8")
+    result = load_accounts_result(tmp_path)
+    assert result.state == "malformed"
+    assert result.accounts == []
+
+
+def test_load_accounts_result_accounts_not_a_list(tmp_path):
+    write_accounts(tmp_path, {"accounts": "nope"})
+    result = load_accounts_result(tmp_path)
+    assert result.state == "malformed"
+
+
+def test_load_accounts_result_valid_but_empty(tmp_path):
+    write_accounts(tmp_path, {"accounts": [{"name": "x"}]})  # no config_dir
+    result = load_accounts_result(tmp_path)
+    assert result.state == "valid_empty"
+    assert result.accounts == []
+
+
+def test_load_accounts_result_valid_non_empty_three_accounts(tmp_path):
+    write_accounts(tmp_path, {"accounts": [
+        {"name": "a", "config_dir": "/home/u/.claude-a"},
+        {"name": "b", "config_dir": "/home/u/.claude-b"},
+        {"name": "c", "config_dir": "/home/u/.claude-c"},
+    ]})
+    result = load_accounts_result(tmp_path)
+    assert result.state == "valid_non_empty"
+    assert [a.name for a in result.accounts] == ["a", "b", "c"]

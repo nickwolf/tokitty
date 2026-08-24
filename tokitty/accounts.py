@@ -23,17 +23,23 @@ class Account:
     coat: Optional[str] = None  # parsed now, rendered in Phase 4
 
 
-def load_accounts(state_dir: Path) -> Optional[List[Account]]:
+@dataclass(frozen=True)
+class AccountsLoadResult:
+    state: str  # "absent" | "valid_non_empty" | "valid_empty" | "malformed"
+    accounts: List[Account]
+
+
+def load_accounts_result(state_dir: Path) -> AccountsLoadResult:
     path = Path(state_dir) / ACCOUNTS_FILENAME
     if not path.is_file():
-        return None
+        return AccountsLoadResult(state="absent", accounts=[])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
+        return AccountsLoadResult(state="malformed", accounts=[])
     entries = data.get("accounts") if isinstance(data, dict) else None
     if not isinstance(entries, list):
-        return None
+        return AccountsLoadResult(state="malformed", accounts=[])
 
     accounts: List[Account] = []
     for index, entry in enumerate(entries, start=1):
@@ -46,7 +52,19 @@ def load_accounts(state_dir: Path) -> Optional[List[Account]]:
                 coat=entry.get("coat"),
             )
         )
-    return accounts or None
+    if not accounts:
+        return AccountsLoadResult(state="valid_empty", accounts=[])
+    return AccountsLoadResult(state="valid_non_empty", accounts=accounts)
+
+
+def load_accounts(state_dir: Path) -> Optional[List[Account]]:
+    """Backward-compatible accessor: every existing caller keeps seeing
+    None for absent, malformed, and valid-but-empty files, and the
+    account list only for valid_non_empty. New code that needs to tell
+    those apart (customization_key's migration, first-run auto-open)
+    calls load_accounts_result directly."""
+    result = load_accounts_result(state_dir)
+    return result.accounts if result.state == "valid_non_empty" else None
 
 
 def env_conflict_warning(accounts: Optional[List[Account]]) -> Optional[str]:
