@@ -95,6 +95,39 @@ def test_failed_refresh_invalidates_a_previously_confirmed_result():
     assert second.distros == frozenset()
 
 
+def test_failure_backoff_avoids_a_second_call_within_window():
+    calls = []
+    fake_time = {"now": 0.0}
+
+    def fake_run(cmd, **kwargs):
+        calls.append(1)
+        raise OSError("wsl.exe not found")
+
+    probe = RunningDistroProbe(run=fake_run, time_fn=lambda: fake_time["now"], failure_backoff=20.0)
+    first = probe.get_result()
+    assert first.status == ProbeStatus.UNKNOWN
+    assert len(calls) == 1
+    fake_time["now"] += 5.0
+    second = probe.get_result()
+    assert second.status == ProbeStatus.UNKNOWN
+    assert len(calls) == 1
+
+
+def test_failure_backoff_expiry_triggers_a_fresh_call():
+    calls = []
+    fake_time = {"now": 0.0}
+
+    def fake_run(cmd, **kwargs):
+        calls.append(1)
+        raise OSError("wsl.exe not found")
+
+    probe = RunningDistroProbe(run=fake_run, time_fn=lambda: fake_time["now"], failure_backoff=20.0)
+    probe.get_result()
+    fake_time["now"] += 21.0
+    probe.get_result()
+    assert len(calls) == 2
+
+
 def test_single_flight_coalesces_concurrent_callers():
     call_count = {"n": 0}
     release = threading.Event()
