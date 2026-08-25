@@ -46,11 +46,21 @@ def grid_size(pane_count: int) -> Tuple[int, int, int]:
     return CARD_WIDTH * cols, PANE_HEIGHT * rows, cols
 
 
-def pane_index_at(y: int, pane_count: int) -> int:
-    """Map a y coordinate (relative to the window's top edge) to a pane
-    index, clamped to the valid range [0, pane_count - 1]."""
-    y = max(y, 0)
-    return min(y // PANE_HEIGHT, pane_count - 1)
+def pane_index_at(x: int, y: int, pane_count: int, cols: int) -> Optional[int]:
+    """Map root-relative (x, y) to a pane index in row-major grid order,
+    or None for a blank cell in a ragged final row (e.g. N=5, cols=2:
+    index 4 exists but index 5 does not -- that cell shows only global
+    menu actions, never falls back to the nearest real pane)."""
+    if x < 0 or y < 0:
+        return None
+    col = x // CARD_WIDTH
+    row = y // PANE_HEIGHT
+    if col >= cols:
+        return None
+    index = row * cols + col
+    if index >= pane_count:
+        return None
+    return index
 
 
 def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
@@ -259,6 +269,9 @@ class Pane:
             )
 
 
+_PANE_SPECIFIC_LABELS = frozenset({"Colorway", "Pattern", "Randomize", "Customize…", "Rename…"})
+
+
 class TokittyWindow:
     def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1):
         self.root = root
@@ -282,7 +295,7 @@ class TokittyWindow:
         # "reset"). For "label", an empty string clears the stored name
         # back to its default.
         self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
-        self._menu_pane_index = 0
+        self._menu_pane_index: Optional[int] = 0
 
         self._configure_window()
         self.panes = []
@@ -390,11 +403,16 @@ class TokittyWindow:
             self.menu.destroy()
         self._menu_vars = []
         self.menu = tk.Menu(self.root, tearoff=0)
-        self._render_tk_menu(self.menu, self.build_menu_model(self._menu_pane_index))
+        if self._menu_pane_index is None:
+            model = [item for item in self.build_menu_model(0) if item.label not in _PANE_SPECIFIC_LABELS]
+        else:
+            model = self.build_menu_model(self._menu_pane_index)
+        self._render_tk_menu(self.menu, model)
 
     def _show_context_menu(self, event: tk.Event) -> None:
+        x_relative = event.x_root - self.root.winfo_rootx()
         y_relative = event.y_root - self.root.winfo_rooty()
-        self._menu_pane_index = pane_index_at(y_relative, len(self.panes))
+        self._menu_pane_index = pane_index_at(x_relative, y_relative, len(self.panes), self._cols)
         self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
 

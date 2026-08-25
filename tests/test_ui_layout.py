@@ -78,25 +78,52 @@ def test_resolve_bar_fill_falls_back_to_bar_color_when_no_override():
 
 def test_pane_index_at_first_pane():
     from tokitty import ui
-    assert ui.pane_index_at(0, 3) == 0
-    assert ui.pane_index_at(127, 3) == 0
+    assert ui.pane_index_at(0, 0, 3, 1) == 0
+    assert ui.pane_index_at(0, 127, 3, 1) == 0
 
 
 def test_pane_index_at_second_pane():
     from tokitty import ui
-    assert ui.pane_index_at(128, 3) == 1
-    assert ui.pane_index_at(255, 3) == 1
+    assert ui.pane_index_at(0, 128, 3, 1) == 1
+    assert ui.pane_index_at(0, 255, 3, 1) == 1
 
 
-def test_pane_index_at_clamps_beyond_bottom():
+def test_pane_index_at_beyond_pane_count_returns_none():
+    # Single column (cols=1): rows 3+ don't exist for pane_count=3, so
+    # there is no clamping to the last real pane anymore -- out-of-range
+    # rows are blank grid cells, not the bottom pane.
     from tokitty import ui
-    assert ui.pane_index_at(10000, 3) == 2
-    assert ui.pane_index_at(384, 3) == 2
+    assert ui.pane_index_at(0, 10000, 3, 1) is None
+    assert ui.pane_index_at(0, 384, 3, 1) is None
 
 
-def test_pane_index_at_clamps_negative_y():
+def test_pane_index_at_negative_coordinates_return_none_not_clamped():
     from tokitty import ui
-    assert ui.pane_index_at(-50, 3) == 0
+    assert ui.pane_index_at(0, -50, 3, 1) is None
+    assert ui.pane_index_at(-50, 0, 3, 1) is None
+
+
+def test_pane_index_at_n5_x350_y50_selects_pane_1_not_0():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(350, 50, pane_count=5, cols=2) == 1
+
+
+def test_pane_index_at_n5_x50_y50_selects_pane_0():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(50, 50, pane_count=5, cols=2) == 0
+
+
+def test_pane_index_at_n5_ragged_last_row_blank_cell_is_none():
+    # N=5, cols=2 -> 3 rows, row 2 has only column 0 filled (index 4);
+    # row 2 column 1 would be index 5, which does not exist.
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(350, 300, pane_count=5, cols=2) is None
+
+
+def test_pane_index_at_negative_coordinates_return_none():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(-1, 50, pane_count=5, cols=2) is None
+    assert pane_index_at(50, -1, pane_count=5, cols=2) is None
 
 
 def test_on_customization_changed_default_none_in_init_source():
