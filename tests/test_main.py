@@ -236,33 +236,34 @@ def test_initial_customization_no_account_no_stored_rolls_random():
     assert result.colorway in COLORWAYS and result.pattern in PATTERNS
 
 
-def test_initial_label_single_mode_defaults_empty():
+def test_initial_label_defaults_empty():
     account = Account(name="Work", config_dir="/x")
     custom = Customization()
-    assert initial_label(account, custom, dual=False) == ""
+    assert initial_label(account, custom) == ""
 
 
-def test_initial_label_dual_mode_defaults_to_account_name():
-    account = Account(name="Work", config_dir="/x")
+def test_initial_label_never_falls_back_to_account_name():
+    # Since the identity slug scheme, account.name is an opaque
+    # SHA-256-derived string and must never be shown to the user.
+    account = Account(name="acct-v1-deadbeef", config_dir="/x")
     custom = Customization()
-    assert initial_label(account, custom, dual=True) == "Work"
+    assert initial_label(account, custom) == ""
 
 
-def test_initial_label_explicit_stored_label_wins_single():
+def test_initial_label_explicit_stored_label_wins():
     account = Account(name="Work", config_dir="/x")
     custom = Customization(label="Fluffy")
-    assert initial_label(account, custom, dual=False) == "Fluffy"
+    assert initial_label(account, custom) == "Fluffy"
 
 
-def test_initial_label_explicit_stored_label_wins_dual():
-    account = Account(name="Work", config_dir="/x")
+def test_initial_label_explicit_stored_label_wins_no_account():
     custom = Customization(label="Fluffy")
-    assert initial_label(account, custom, dual=True) == "Fluffy"
+    assert initial_label(None, custom) == "Fluffy"
 
 
-def test_initial_label_dual_mode_no_account_defaults_empty():
+def test_initial_label_no_account_defaults_empty():
     custom = Customization()
-    assert initial_label(None, custom, dual=True) == ""
+    assert initial_label(None, custom) == ""
 
 
 def test_label_field_roundtrips_through_dataclasses_replace():
@@ -280,12 +281,11 @@ def test_label_field_can_be_cleared_back_to_empty():
     custom = Customization(label="Whiskers")
     cleared = replace(custom, label="")
     assert cleared.label == ""
-    # Clearing the stored label falls back to the dual-mode account-name
-    # default (or blank in single mode) via initial_label -- "" stored
-    # means "use default", consistent with its existing tested semantics.
+    # Clearing the stored label returns to blank -- initial_label never
+    # falls back to account.name, regardless of account.
     account = Account(name="Work", config_dir="/x")
-    assert initial_label(account, cleared, dual=True) == "Work"
-    assert initial_label(None, cleared, dual=False) == ""
+    assert initial_label(account, cleared) == ""
+    assert initial_label(None, cleared) == ""
 
 
 def test_build_fetch_fn_reports_keychain_denied(monkeypatch):

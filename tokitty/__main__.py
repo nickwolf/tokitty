@@ -349,14 +349,12 @@ def initial_customization(account: Optional[Account], stored: Optional[Customiza
     return Customization(colorway=colorway, pattern=pattern)
 
 
-def initial_label(account: Optional[Account], custom: Customization, dual: bool) -> str:
-    """Default label: an explicit stored label always wins; otherwise dual
-    mode defaults to the account name (single mode stays blank)."""
-    if custom.label:
-        return custom.label
-    if dual and account is not None:
-        return account.name
-    return ""
+def initial_label(account: Optional[Account], custom: Customization) -> str:
+    """Default label: an explicit stored label always wins; otherwise
+    blank. Never falls back to account.name -- since the identity slug
+    scheme, account.name is an opaque SHA-256-derived string and must
+    never be shown to the user."""
+    return custom.label
 
 
 def run_gui() -> int:
@@ -401,10 +399,13 @@ def run_gui() -> int:
         return 0
 
     customization_store = load_customization(state_dir)
-    dual = bool(accounts) and len(accounts) > 1
+
+    from tokitty.migration import migrate_default_customization
+
+    customization_store = migrate_default_customization(state_dir, accounts, customization_store)
 
     def customization_key(account: Optional[Account]) -> str:
-        return account.name if (dual and account is not None) else SINGLE_KEY
+        return account.name if account is not None else SINGLE_KEY
 
     def apply_customization(pane, custom: Customization) -> None:
         pane.set_appearance(
@@ -425,7 +426,7 @@ def run_gui() -> int:
         key = customization_key(account)
         custom = initial_customization(account, customization_store.get(key))
         customization_store[key] = custom
-        label = initial_label(account, custom, dual)
+        label = initial_label(account, custom)
         pane = window.panes[index]
         apply_customization(pane, custom)
         pane.set_appearance(label=label)
@@ -481,7 +482,7 @@ def run_gui() -> int:
         save_customization(state_dir, customization_store)
         apply_customization(unit["pane"], custom)
         if field == "label":
-            label = initial_label(unit["account"], custom, dual)
+            label = initial_label(unit["account"], custom)
             unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
