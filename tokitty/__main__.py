@@ -25,6 +25,7 @@ from tokitty.credentials import (
 )
 from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
 from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
+from tokitty.distro_probe import RunningDistroProbe
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
@@ -415,13 +416,18 @@ def run_gui() -> int:
             colorway=custom.colorway, pattern=custom.pattern,
         )
 
+    distro_probe = RunningDistroProbe()
+
     units = []
     for index, account in enumerate(accounts or [None]):
         config_dir = account.config_dir if account else None
         cred_loader = CredentialLoader()
         poller = Poller(fetch_fn=build_fetch_fn(config_dir, loader=cred_loader))
         sessions_dir, distro_name = resolve_activity_sessions(config_dir)
-        watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+        watcher = ActivityWatcher(
+            sessions_dir, ActivityTracker(), distro_name=distro_name,
+            list_running_distros_fn=distro_probe.get_running,
+        )
 
         key = customization_key(account)
         custom = initial_customization(account, customization_store.get(key))
