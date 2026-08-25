@@ -75,7 +75,14 @@ def validate_manual_path(
             return wsl_result
     else:
         path = Path(candidate)
-        if not path.is_absolute():
+        # On real Windows, `Path` is `WindowsPath`, and a leading-slash
+        # path with no drive letter (e.g. "/home/nick/.claude-work") is
+        # NOT considered absolute by pathlib -- even though the spec
+        # explicitly requires this exact POSIX-shaped input to be
+        # accepted and routed to local validation, since only \\wsl$\ /
+        # \\wsl.localhost\ UNC forms are recognized as WSL. Fall back to
+        # a plain leading-separator check so this shape still passes.
+        if not (path.is_absolute() or candidate.startswith(("/", "\\"))):
             return PathValidationResult(
                 ok=False,
                 error=f"'{raw}' is not an absolute path. Enter a full Claude config directory.",
