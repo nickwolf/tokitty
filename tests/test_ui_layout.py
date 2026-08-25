@@ -216,6 +216,45 @@ def test_randomize_and_surprise_seams_add_items():
         root.destroy()
 
 
+@pytest.mark.gui
+def test_none_pane_index_rebuilds_menu_with_only_global_items():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow, _PANE_SPECIFIC_LABELS
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=5)
+            # Wire every optional seam so all five global items are present.
+            window.on_randomize = lambda i: None
+            window.surprise_me = lambda: True
+            window.on_toggle_surprise = lambda: None
+            window.tray_enabled = lambda: True
+            window.on_toggle_tray = lambda: None
+
+            window._menu_pane_index = None
+            window._rebuild_context_menu()
+
+            end = window.menu.index("end")
+            labels = []
+            for i in range(end + 1):
+                try:
+                    labels.append(window.menu.entrycget(i, "label"))
+                except tk.TclError:
+                    pass  # separator: no label to read
+            label_set = set(labels)
+
+            # Pane-specific items must be fully omitted, not just disabled.
+            assert label_set.isdisjoint(_PANE_SPECIFIC_LABELS)
+            # Global items must all be present.
+            assert {"Refresh now", "Always in front", "Show tray icon",
+                    "Surprise me", "Exit"} <= label_set
+    finally:
+        root.destroy()
+
+
 def test_pane_render_accepts_projection_text_defaulting_to_none():
     from tokitty import ui
     sig = inspect.signature(ui.Pane.render)
