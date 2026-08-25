@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from tokitty.accounts import Account, save_accounts
 from tokitty.paths import get_state_dir
 
 MARKER = "tokitty"
@@ -297,6 +298,77 @@ def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     if warn_local:
         msg += " (note: tokitty-marked entries found in settings.local.json, left untouched)"
     return ConfigDirResult(config_dir, True, msg, installed_events=removed)
+
+
+PENDING_HOOK_OP_FILENAME = "pending_hook_op.json"
+
+
+def save_pending_hook_op(state_dir: Path, op: str, config_dir: str) -> None:
+    path = Path(state_dir) / PENDING_HOOK_OP_FILENAME
+    payload = {"op": op, "config_dir": config_dir}
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def load_pending_hook_op(state_dir: Path) -> Optional[dict]:
+    path = Path(state_dir) / PENDING_HOOK_OP_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("op") not in ("install", "remove") or not data.get("config_dir"):
+        return None
+    return {"op": data["op"], "config_dir": data["config_dir"]}
+
+
+def clear_pending_hook_op(state_dir: Path) -> None:
+    path = Path(state_dir) / PENDING_HOOK_OP_FILENAME
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def apply_account_mutation(
+    state_dir: Path,
+    accounts: List[Account],
+    op: str,
+    config_dir: str,
+    install_fn=install_hooks_for_dir,
+    uninstall_fn=uninstall_hooks_for_dir,
+) -> ConfigDirResult:
+    """accounts.json first (durable desired state), then a pending hook
+    op record, then the hook side effect, clearing the record only on
+    success. Call this off the Tk thread (see accounts_ui.py, Task 13) --
+    a slow filesystem or a stuck wsl.exe call must not freeze the UI.
+    result.ok is False and a raised exception are both treated as "did
+    not complete": both leave the pending-op record in place for
+    retry_pending_hook_op to pick up."""
+    save_accounts(state_dir, accounts)
+    save_pending_hook_op(state_dir, op, config_dir)
+    fn = install_fn if op == "install" else uninstall_fn
+    result = fn(config_dir)
+    if result.ok:
+        clear_pending_hook_op(state_dir)
+    return result
+
+
+def retry_pending_hook_op(
+    state_dir: Path, install_fn=install_hooks_for_dir, uninstall_fn=uninstall_hooks_for_dir
+) -> Optional[ConfigDirResult]:
+    """Called at next startup, or the next time the manager is opened.
+    Returns None if there was nothing pending."""
+    pending = load_pending_hook_op(state_dir)
+    if pending is None:
+        return None
+    fn = install_fn if pending["op"] == "install" else uninstall_fn
+    result = fn(pending["config_dir"])
+    if result.ok:
+        clear_pending_hook_op(state_dir)
+    return result
 
 
 def install_hooks() -> int:

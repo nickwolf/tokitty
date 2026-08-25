@@ -512,3 +512,115 @@ def test_write_settings_failed_write_does_not_truncate_original(tmp_path, monkey
         pass
     monkeypatch.undo()
     assert json.loads(path.read_text(encoding="utf-8")) == {"original": True}
+
+
+# ---------------------------------------------------------------------------
+# Pending hook op journal + apply_account_mutation / retry_pending_hook_op
+# ---------------------------------------------------------------------------
+
+from tokitty.accounts import Account
+from tokitty.hooks_install import (
+    ConfigDirResult,
+    apply_account_mutation,
+    clear_pending_hook_op,
+    load_pending_hook_op,
+    retry_pending_hook_op,
+    save_pending_hook_op,
+)
+
+
+def test_pending_hook_op_round_trip(tmp_path):
+    save_pending_hook_op(tmp_path, "install", "/home/u/.claude")
+    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
+    clear_pending_hook_op(tmp_path)
+    assert load_pending_hook_op(tmp_path) is None
+
+
+def test_load_pending_hook_op_missing_file_returns_none(tmp_path):
+    assert load_pending_hook_op(tmp_path) is None
+
+
+def test_apply_account_mutation_writes_accounts_before_pending_op_before_hook(tmp_path):
+    order = []
+    accounts = [Account(name="a", config_dir="/home/u/.claude")]
+
+    def fake_save_accounts(state_dir, accts):
+        order.append("save_accounts")
+
+    def fake_install(config_dir):
+        order.append("hook_call")
+        return ConfigDirResult(config_dir, True, "installed")
+
+    import tokitty.hooks_install as hi
+    real_save = hi.save_accounts if hasattr(hi, "save_accounts") else None
+
+    class _Spy:
+        def __call__(self, state_dir, accts):
+            fake_save_accounts(state_dir, accts)
+
+    original_save_pending = hi.save_pending_hook_op
+
+    def spy_save_pending(state_dir, op, config_dir):
+        order.append("save_pending")
+        return original_save_pending(state_dir, op, config_dir)
+
+    import tokitty.accounts as accounts_mod
+    monkeypatched_save_accounts = accounts_mod.save_accounts
+
+    def spy_save_accounts(state_dir, accts):
+        order.append("save_accounts")
+        return monkeypatched_save_accounts(state_dir, accts)
+
+    hi.save_accounts = spy_save_accounts
+    hi.save_pending_hook_op = spy_save_pending
+    try:
+        apply_account_mutation(tmp_path, accounts, "install", "/home/u/.claude", install_fn=fake_install)
+    finally:
+        hi.save_accounts = monkeypatched_save_accounts
+        hi.save_pending_hook_op = original_save_pending
+
+    assert order == ["save_accounts", "save_pending", "hook_call"]
+
+
+def test_apply_account_mutation_clears_pending_op_on_success(tmp_path):
+    accounts = [Account(name="a", config_dir="/home/u/.claude")]
+    apply_account_mutation(
+        tmp_path, accounts, "install", "/home/u/.claude",
+        install_fn=lambda cd: ConfigDirResult(cd, True, "installed"),
+    )
+    assert load_pending_hook_op(tmp_path) is None
+
+
+def test_apply_account_mutation_leaves_pending_op_on_ok_false(tmp_path):
+    accounts = [Account(name="a", config_dir="/home/u/.claude")]
+    apply_account_mutation(
+        tmp_path, accounts, "install", "/home/u/.claude",
+        install_fn=lambda cd: ConfigDirResult(cd, False, "aborted"),
+    )
+    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
+
+
+def test_apply_account_mutation_leaves_pending_op_on_raised_exception(tmp_path):
+    accounts = [Account(name="a", config_dir="/home/u/.claude")]
+
+    def raising_install(config_dir):
+        raise OSError("disk full")
+
+    try:
+        apply_account_mutation(tmp_path, accounts, "install", "/home/u/.claude", install_fn=raising_install)
+    except OSError:
+        pass
+    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
+
+
+def test_retry_pending_hook_op_clears_on_success(tmp_path):
+    save_pending_hook_op(tmp_path, "remove", "/home/u/.claude")
+    result = retry_pending_hook_op(
+        tmp_path, uninstall_fn=lambda cd: ConfigDirResult(cd, True, "uninstalled")
+    )
+    assert result.ok
+    assert load_pending_hook_op(tmp_path) is None
+
+
+def test_retry_pending_hook_op_returns_none_when_nothing_pending(tmp_path):
+    assert retry_pending_hook_op(tmp_path) is None
