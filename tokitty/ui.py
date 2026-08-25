@@ -5,11 +5,12 @@ only module in this package that imports tkinter.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.geometry import clamp_position
@@ -36,8 +37,13 @@ POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
 
 
-def card_height(pane_count: int) -> int:
-    return PANE_HEIGHT * pane_count
+def grid_size(pane_count: int) -> Tuple[int, int, int]:
+    """(width, height, cols) for pane_count panes filled row-major,
+    capped at 4 rows: cols = ceil(N/4), rows = ceil(N/cols). Height
+    never exceeds 512px (4 * PANE_HEIGHT); width grows instead."""
+    cols = math.ceil(pane_count / 4)
+    rows = math.ceil(pane_count / cols)
+    return CARD_WIDTH * cols, PANE_HEIGHT * rows, cols
 
 
 def pane_index_at(y: int, pane_count: int) -> int:
@@ -258,7 +264,7 @@ class TokittyWindow:
         self.root = root
         self.state_dir = state_dir
         self._pane_count = pane_count
-        self._height = card_height(pane_count)
+        self._width, self._height, self._cols = grid_size(pane_count)
         self._position_path = state_dir / POSITION_FILENAME
         self._drag_offset = (0, 0)
         self._always_on_top_bool = True
@@ -281,8 +287,9 @@ class TokittyWindow:
         self._configure_window()
         self.panes = []
         for i in range(pane_count):
+            row, col = divmod(i, self._cols)
             frame = tk.Frame(root, width=CARD_WIDTH, height=PANE_HEIGHT, bg=BG_COLOR)
-            frame.place(x=0, y=i * PANE_HEIGHT)
+            frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
             self.panes.append(Pane(frame))
         self._restore_position()
         self._bind_drag()
@@ -293,7 +300,7 @@ class TokittyWindow:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.configure(bg=BG_COLOR)
-        self.root.geometry(f"{CARD_WIDTH}x{self._height}")
+        self.root.geometry(f"{self._width}x{self._height}")
 
         if sys.platform == "win32":
             try:
@@ -461,16 +468,16 @@ class TokittyWindow:
     def _restore_position(self) -> None:
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        x, y = screen_w - CARD_WIDTH - 24, screen_h - self._height - 24
+        x, y = screen_w - self._width - 24, screen_h - self._height - 24
 
         if self._position_path.is_file():
             try:
                 saved = json.loads(self._position_path.read_text(encoding="utf-8"))
-                x, y = clamp_position(int(saved["x"]), int(saved["y"]), CARD_WIDTH, self._height, screen_w, screen_h)
+                x, y = clamp_position(int(saved["x"]), int(saved["y"]), self._width, self._height, screen_w, screen_h)
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 pass
 
-        self.root.geometry(f"{CARD_WIDTH}x{self._height}+{x}+{y}")
+        self.root.geometry(f"{self._width}x{self._height}+{x}+{y}")
 
     def _save_position(self) -> None:
         try:

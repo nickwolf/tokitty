@@ -13,10 +13,34 @@ def test_pane_height_and_card_width_constants():
     assert ui.CARD_WIDTH == 300
 
 
-def test_window_height_scales_with_pane_count():
-    from tokitty import ui
-    assert ui.card_height(1) == 128
-    assert ui.card_height(2) == 256
+def test_grid_size_n1():
+    from tokitty.ui import grid_size
+    assert grid_size(1) == (300, 128, 1)
+
+
+def test_grid_size_n4():
+    from tokitty.ui import grid_size
+    assert grid_size(4) == (300, 512, 1)
+
+
+def test_grid_size_n5():
+    from tokitty.ui import grid_size
+    assert grid_size(5) == (600, 384, 2)
+
+
+def test_grid_size_n8():
+    from tokitty.ui import grid_size
+    assert grid_size(8) == (600, 512, 2)
+
+
+def test_grid_size_n9():
+    from tokitty.ui import grid_size
+    assert grid_size(9) == (900, 384, 3)
+
+
+def test_grid_size_n12():
+    from tokitty.ui import grid_size
+    assert grid_size(12) == (900, 512, 3)
 
 
 def test_pane_init_signature_has_appearance_kwargs_with_none_defaults():
