@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
-from tokitty.accounts import Account
+from tokitty.accounts import Account, load_accounts_result
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
@@ -26,6 +27,7 @@ from tokitty.credentials import (
 from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
 from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
 from tokitty.distro_probe import RunningDistroProbe
+from tokitty.hooks_install import retry_pending_hook_op
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
@@ -385,6 +387,54 @@ def run_gui() -> int:
     window = TokittyWindow(root, state_dir, pane_count=pane_count)
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
+
+    # First-run auto-open + the pending-hook-op retry both belong here, not in
+    # TokittyWindow.__init__: they must run only after tk.Tk() has succeeded
+    # (a headless launch should fail for lack of a display before ever
+    # probing WSL), and the 5 gui-marked tests that construct TokittyWindow
+    # directly (never through run_gui) must keep seeing zero WSL calls.
+    from tokitty.startup import should_auto_open
+
+    discovery_result = {"wsl_matches": [], "done": False}
+
+    def maybe_auto_open() -> None:
+        accounts_result = load_accounts_result(state_dir)
+        env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
+        home_relative_exists = (Path.home() / ".claude" / ".credentials.json").is_file()
+        keychain_available = False
+        if sys.platform == "darwin":
+            from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
+
+            keychain_available = keychain_item_exists(KEYCHAIN_SERVICE)
+        if should_auto_open(
+            accounts_state=accounts_result.state,
+            env_override_set=env_override_set,
+            home_relative_exists=home_relative_exists,
+            keychain_available=keychain_available,
+            platform=sys.platform,
+            wsl_match_count=len(discovery_result["wsl_matches"]),
+        ):
+            from tokitty.accounts_ui import AccountsManager
+
+            AccountsManager.open(root, state_dir)
+
+    def run_discovery() -> None:
+        # Best-effort, silent unless it matters (see hooks_install.py's
+        # pending-op journal): retries a hook install/uninstall left
+        # incomplete by a prior crash. Runs here, off the Tk thread,
+        # alongside WSL discovery -- not in the TOKITTY_DEBUG_ACCOUNTS
+        # branch, which bypasses normal account resolution entirely.
+        retry_pending_hook_op(state_dir)
+        if sys.platform == "win32":
+            from tokitty.wsl_probe import find_all_wsl_credentials
+
+            discovery_result["wsl_matches"] = find_all_wsl_credentials()
+        discovery_result["done"] = True
+        root.after(0, maybe_auto_open)
+
+    if not (debug_state or debug_accounts == "2"):
+        threading.Thread(target=run_discovery, daemon=True).start()
+
     if debug_state or debug_accounts == "2":
         fake = dict(
             state=debug_state or "content", session_pct=37.0, weekly_pct=62.0,

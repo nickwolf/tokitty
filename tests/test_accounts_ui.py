@@ -359,3 +359,37 @@ def test_on_rename_updates_label_by_slug_only(tmp_path, monkeypatch):
         assert accounts[0].config_dir == str(dir_a)
     finally:
         root.destroy()
+
+
+@pytest.mark.gui
+def test_init_retries_pending_hook_op_before_rows_are_built(tmp_path, monkeypatch):
+    """Controller ruling on Task 15's brief: retry_pending_hook_op
+    (hooks_install.py, Task 8/12) was never wired into the manager's open
+    path through Task 14 -- confirmed by grep. Opening the manager must
+    give a leftover pending hook op from a prior crash one more chance to
+    complete, before the rows are first built."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+
+    call_order = []
+    monkeypatch.setattr(
+        accounts_ui, "retry_pending_hook_op",
+        lambda state_dir: call_order.append(("retry", state_dir)),
+    )
+    real_refresh_rows = AccountsManager._refresh_rows
+
+    def spy_refresh_rows(self):
+        call_order.append(("refresh_rows", None))
+        return real_refresh_rows(self)
+
+    monkeypatch.setattr(AccountsManager, "_refresh_rows", spy_refresh_rows)
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        assert call_order[0] == ("retry", tmp_path)
+        assert call_order[1][0] == "refresh_rows"
+    finally:
+        mgr._on_close()
+        root.destroy()

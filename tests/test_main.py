@@ -1,6 +1,9 @@
 import random
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from tokitty.__main__ import (
     _display_state_for,
@@ -436,3 +439,102 @@ def test_projection_text_for_is_none_during_warm_up():
 def test_projection_text_for_tolerates_a_display_without_a_dimmed_key():
     text = _projection_text_for(_burning_tracker(), {}, NOW + timedelta(seconds=600))
     assert text is not None
+
+
+def _capture_spawned_threads(monkeypatch):
+    """Subclass threading.Thread for the duration of the test so every
+    background thread run_gui spawns (discovery, pollers, watchers) is
+    recorded without changing its real behavior -- same technique as
+    test_accounts_ui.py's _run_and_wait_for_mutation."""
+    real_thread_cls = threading.Thread
+    spawned = []
+
+    class _RecordingThread(real_thread_cls):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            spawned.append(self)
+
+    monkeypatch.setattr(threading, "Thread", _RecordingThread)
+    return spawned
+
+
+def _silence_afterloop_race(monkeypatch):
+    """run_discovery ends with root.after(0, maybe_auto_open), called from
+    a background thread. Tk's cross-thread after() hand-off only succeeds
+    while the main thread is genuinely inside mainloop() (see
+    test_accounts_ui.py's _is_expected_afterloop_race); this test replaces
+    mainloop with a no-op so run_gui returns immediately, so that handoff
+    can raise "main thread is not in main loop" here too. Confirmed benign
+    -- in the real app root.mainloop() runs continuously, so the call has
+    an active loop to dispatch into and this cannot occur."""
+    original_hook = threading.excepthook
+
+    def _filtering_hook(args):
+        if args.exc_type is RuntimeError and "main thread is not in main loop" in str(args.exc_value):
+            return
+        original_hook(args)
+
+    monkeypatch.setattr(threading, "excepthook", _filtering_hook)
+
+
+@pytest.mark.gui
+def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
+    """Controller ruling on Task 15's brief: retry_pending_hook_op
+    (hooks_install.py, Task 8/12) was never wired into run_gui through
+    Task 14 -- confirmed by grep. It must fire once from the startup
+    sequence, off the Tk thread alongside WSL discovery."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    _silence_afterloop_race(monkeypatch)
+
+    calls = []
+    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    result = main_module.run_gui()
+    assert result == 0
+
+    discovery_threads = [
+        t for t in spawned
+        if getattr(t, "_target", None) is not None and t._target.__name__ == "run_discovery"
+    ]
+    assert len(discovery_threads) == 1, "expected exactly one discovery thread"
+    discovery_threads[0].join(timeout=5.0)
+    assert not discovery_threads[0].is_alive(), "discovery thread did not finish in time"
+
+    assert calls == [tmp_path]
+
+
+@pytest.mark.gui
+def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeypatch):
+    """TOKITTY_DEBUG_ACCOUNTS bypasses should_auto_open and discovery
+    entirely (acceptance criteria); the retry call rides along with that
+    same bypass since debug mode already skips normal account
+    resolution -- verified here rather than assumed."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setenv("TOKITTY_DEBUG_ACCOUNTS", "2")
+
+    calls = []
+    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    result = main_module.run_gui()
+    assert result == 0
+
+    discovery_threads = [
+        t for t in spawned
+        if getattr(t, "_target", None) is not None and t._target.__name__ == "run_discovery"
+    ]
+    assert discovery_threads == [], "debug-accounts mode must not launch the discovery thread"
+    assert calls == [], "debug-accounts mode must not retry the pending hook op"

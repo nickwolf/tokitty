@@ -6,9 +6,10 @@ See docs/superpowers/specs/2026-08-24-accounts-setup-ui-design.md.
 """
 from __future__ import annotations
 
+import sys
 import threading
 import tkinter as tk
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import messagebox, simpledialog
 from typing import Dict, List
@@ -21,8 +22,8 @@ from tokitty.accounts import (
     save_identity_history,
     assign_identity_slug,
 )
-from tokitty.customize import Customization, rename_account, load_customization, save_customization
-from tokitty.hooks_install import apply_account_mutation
+from tokitty.customize import Customization, SINGLE_KEY, rename_account, load_customization, save_customization
+from tokitty.hooks_install import apply_account_mutation, retry_pending_hook_op
 from tokitty.manual_path import validate_manual_path
 from tokitty.migration import absorb_implicit_default
 from tokitty.randomize import random_look
@@ -87,6 +88,11 @@ class AccountsManager:
         self.toplevel.transient(root)
         self.toplevel.resizable(False, False)
         self.toplevel.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Best-effort, silent unless it matters: retries a hook
+        # install/uninstall left incomplete by a prior crash, one more
+        # chance to complete whenever the user opens the manager. Must
+        # run before the rows are first built below.
+        retry_pending_hook_op(state_dir)
         self._build()
 
     @classmethod
@@ -112,12 +118,28 @@ class AccountsManager:
             text="Tokitty restart needed for new panes. Claude Code session restart needed for hooks.",
             wraplength=360, justify="left",
         ).pack(padx=8, pady=(4, 10))
-        tk.Button(self.toplevel, text="Add…", command=self._on_add).pack(padx=8, pady=(0, 10))
+        # Add… is disabled on the virtual-row path: there is nothing to
+        # add to on macOS when the only account is the Keychain itself.
+        if not self._showing_virtual_macos_row():
+            tk.Button(self.toplevel, text="Add…", command=self._on_add).pack(padx=8, pady=(0, 10))
+
+    def _showing_virtual_macos_row(self) -> bool:
+        return (
+            load_accounts(self.state_dir) is None
+            and sys.platform == "darwin"
+            and not self._has_local_credentials_file()
+        )
+
+    def _has_local_credentials_file(self) -> bool:
+        return (Path.home() / ".claude" / ".credentials.json").is_file()
 
     def _refresh_rows(self) -> None:
         for child in self.toplevel.winfo_children():
             if getattr(child, "_accounts_row", False):
                 child.destroy()
+        if self._showing_virtual_macos_row():
+            self._render_virtual_macos_row()
+            return
         accounts = load_accounts(self.state_dir) or []
         store = load_customization(self.state_dir)
         for row in build_row_specs(accounts, store):
@@ -129,6 +151,24 @@ class AccountsManager:
             tk.Button(frame, text="Remove", state=remove_state,
                       command=lambda s=row.slug, c=row.config_dir: self._on_remove(s, c)).pack(side="left")
             frame.pack(fill="x", padx=8, pady=2)
+
+    def _render_virtual_macos_row(self) -> None:
+        frame = tk.Frame(self.toplevel)
+        frame._accounts_row = True
+        tk.Label(frame, text="Default macOS account (Keychain)").pack(side="left", padx=4)
+        tk.Button(frame, text="Rename…", command=self._on_rename_default_key).pack(side="left")
+        tk.Button(frame, text="Remove", state="disabled").pack(side="left")
+        frame.pack(fill="x", padx=8, pady=2)
+
+    def _on_rename_default_key(self) -> None:
+        result = simpledialog.askstring("Rename", "Cat name:", parent=self.toplevel)
+        if result is None:
+            return
+        store = load_customization(self.state_dir)
+        current = store.get(SINGLE_KEY, Customization())
+        store[SINGLE_KEY] = replace(current, label=result)
+        save_customization(self.state_dir, store)
+        self._refresh_rows()
 
     def _on_rename(self, slug: str) -> None:
         result = simpledialog.askstring("Rename", "Cat name:", parent=self.toplevel)
