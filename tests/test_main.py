@@ -1,5 +1,6 @@
 import random
 import threading
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -445,36 +446,26 @@ def _capture_spawned_threads(monkeypatch):
     """Subclass threading.Thread for the duration of the test so every
     background thread run_gui spawns (discovery, pollers, watchers) is
     recorded without changing its real behavior -- same technique as
-    test_accounts_ui.py's _run_and_wait_for_mutation."""
+    test_accounts_ui.py's _run_and_wait_for_mutation.
+
+    Identifies each thread by its target's __name__, captured at
+    construction time rather than read back afterward: CPython's
+    Thread.run() does `del self._target, self._args, self._kwargs` in a
+    finally clause once the target returns, so a completed thread's
+    _target is already gone by the time a test gets around to inspecting
+    it -- capturing the name up front avoids that race entirely."""
     real_thread_cls = threading.Thread
     spawned = []
 
     class _RecordingThread(real_thread_cls):
         def __init__(self, *a, **k):
             super().__init__(*a, **k)
+            target = k.get("target") if "target" in k else (a[0] if a else None)
+            self.recorded_target_name = getattr(target, "__name__", None)
             spawned.append(self)
 
     monkeypatch.setattr(threading, "Thread", _RecordingThread)
     return spawned
-
-
-def _silence_afterloop_race(monkeypatch):
-    """run_discovery ends with root.after(0, maybe_auto_open), called from
-    a background thread. Tk's cross-thread after() hand-off only succeeds
-    while the main thread is genuinely inside mainloop() (see
-    test_accounts_ui.py's _is_expected_afterloop_race); this test replaces
-    mainloop with a no-op so run_gui returns immediately, so that handoff
-    can raise "main thread is not in main loop" here too. Confirmed benign
-    -- in the real app root.mainloop() runs continuously, so the call has
-    an active loop to dispatch into and this cannot occur."""
-    original_hook = threading.excepthook
-
-    def _filtering_hook(args):
-        if args.exc_type is RuntimeError and "main thread is not in main loop" in str(args.exc_value):
-            return
-        original_hook(args)
-
-    monkeypatch.setattr(threading, "excepthook", _filtering_hook)
 
 
 @pytest.mark.gui
@@ -482,7 +473,7 @@ def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
     """Controller ruling on Task 15's brief: retry_pending_hook_op
     (hooks_install.py, Task 8/12) was never wired into run_gui through
     Task 14 -- confirmed by grep. It must fire once from the startup
-    sequence, off the Tk thread alongside WSL discovery."""
+    sequence, off the Tk thread alongside WSL discovery (run_discovery)."""
     tk = pytest.importorskip("tkinter")
     from tokitty import __main__ as main_module
     from tokitty.settings import Settings, save_settings
@@ -490,7 +481,6 @@ def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
     save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
     monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
     monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
-    _silence_afterloop_race(monkeypatch)
 
     calls = []
     monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
@@ -499,10 +489,7 @@ def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
     result = main_module.run_gui()
     assert result == 0
 
-    discovery_threads = [
-        t for t in spawned
-        if getattr(t, "_target", None) is not None and t._target.__name__ == "run_discovery"
-    ]
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
     assert len(discovery_threads) == 1, "expected exactly one discovery thread"
     discovery_threads[0].join(timeout=5.0)
     assert not discovery_threads[0].is_alive(), "discovery thread did not finish in time"
@@ -532,9 +519,183 @@ def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeyp
     result = main_module.run_gui()
     assert result == 0
 
-    discovery_threads = [
-        t for t in spawned
-        if getattr(t, "_target", None) is not None and t._target.__name__ == "run_discovery"
-    ]
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
     assert discovery_threads == [], "debug-accounts mode must not launch the discovery thread"
     assert calls == [], "debug-accounts mode must not retry the pending hook op"
+
+
+@pytest.mark.gui
+def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(tmp_path, monkeypatch):
+    """Reviewer-confirmed Finding 1 (CRITICAL): the original implementation
+    called root.after(0, maybe_auto_open) from run_discovery's background
+    thread. root.after() called from a non-Tk thread before root.mainloop()
+    has actually started raises "main thread is not in main loop" --
+    reproduced directly -- and the scheduled callback is silently DROPPED
+    FOREVER, not merely delayed, even once mainloop() eventually starts.
+    Since run_discovery starts (well) before the synchronous unit-building
+    loop even begins, it is entirely plausible for discovery to finish
+    before mainloop() is reached on a real launch.
+
+    The fix: run_discovery only ever writes discovery_result under a lock;
+    maybe_auto_open is invoked exclusively from tick(), which polls that
+    flag on the Tk thread via its own self-rescheduling
+    root.after(UI_REFRESH_MS, tick) -- the same mechanism this file
+    already uses for Poller/ActivityWatcher results.
+
+    This test proves the fix holds under the *exact* adversarial ordering
+    Finding 1 describes, deterministically rather than hoping a race lands
+    right: threading.Thread is patched so specifically run_discovery's
+    thread executes synchronously, in-place, the instant .start() is
+    called -- i.e. discovery_result["done"] becomes True before run_gui()
+    even reaches the unit-building loop, let alone root.mainloop(). Every
+    other thread run_gui spawns (Poller, ActivityWatcher) still runs as a
+    real background thread -- only run_discovery's target is forced
+    synchronous, identified by name at Thread construction time, same
+    technique as _capture_spawned_threads. should_auto_open is forced to
+    return True (bypassing the real accounts.json/WSL-count precedence
+    logic covered separately by test_startup.py) and AccountsManager.open
+    is replaced with a spy, so this test only has to prove the wiring --
+    discovery-finishes-first still reaches AccountsManager.open() -- once
+    mainloop() actually starts pumping real Tcl events."""
+    tk = pytest.importorskip("tkinter")
+
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager, "open",
+        classmethod(lambda cls, root, state_dir: opened.append(state_dir)),
+    )
+
+    # threading.Thread is deliberately left real (not patched to run
+    # synchronously): the bug this test guards against is specifically a
+    # *cross-thread* Tk call, so run_discovery has to actually run on a
+    # genuinely different OS thread than the one that will call
+    # mainloop() for this test to mean anything. It gets there first on
+    # its own in practice -- its real work here (a mocked retry, no win32
+    # branch on this platform) is a handful of dict/lock operations,
+    # while the main thread still has substantial synchronous setup left
+    # (load_customization, migrate_default_customization, building one
+    # Poller/ActivityWatcher/CredentialLoader per account, save_settings,
+    # TrayManager) before it ever reaches root.mainloop() below.
+
+    def _pumping_mainloop(self):
+        # A real (bounded) event pump, not a no-op: tick()'s first
+        # self-scheduled root.after(UI_REFRESH_MS, tick) has to actually
+        # fire for this test to mean anything.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], "maybe_auto_open must still fire via tick() once mainloop starts pumping"
+
+
+def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
+    """Shared setup for the two exception-containment tests below: forces
+    should_auto_open to True and spies on AccountsManager.open, so
+    "discovery_result['done'] got set and tick() consumed it" can be
+    observed indirectly (there's no other seam into run_gui's locals).
+    Returns the `opened` list -- non-empty means maybe_auto_open fired."""
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager, "open",
+        classmethod(lambda cls, root, state_dir: opened.append(state_dir)),
+    )
+
+    def _pumping_mainloop(self):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+    return main_module, opened
+
+
+@pytest.mark.gui
+def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypatch):
+    """Finding 2 (important, entangled with Finding 1): retry_pending_hook_op
+    can raise raw OSError/PermissionError from the underlying hook
+    install/uninstall functions (documented in the design spec's Write
+    ordering and crash consistency section -- they don't convert
+    filesystem exceptions to a result object). Uncaught, this would abort
+    run_discovery's thread before discovery_result["done"] is ever set --
+    worse than the original bug, since then auto-open would silently
+    never fire for the whole launch, not just misfire once. Confirms the
+    thread survives and discovery_result["done"] still gets set (proven
+    indirectly: maybe_auto_open still fires via tick())."""
+    tk = pytest.importorskip("tkinter")
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op",
+        lambda state_dir: (_ for _ in ()).throw(OSError("disk on fire")),
+    )
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], (
+        "discovery_result['done'] must still get set despite retry_pending_hook_op raising OSError"
+    )
+
+
+@pytest.mark.gui
+def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, monkeypatch):
+    """Finding 2: find_all_wsl_credentials can raise CredentialsError (a
+    real, common case: wsl.exe missing from PATH entirely, i.e. a
+    native-Windows Claude Code install with no WSL at all). Uncaught, this
+    would abort run_discovery's thread before discovery_result["done"] is
+    ever set, mirroring the exact "resolution failure means run without
+    it, never a crash" philosophy resolve_activity_sessions already
+    applies to this same exception (__main__.py's existing
+    `except CredentialsError: return None, None`).
+
+    sys.platform is forced globally to "win32" here (there's no narrower
+    seam -- every win32 branch in this codebase reads the real sys module
+    directly), which also flips SingleInstanceLock.acquire()/release()
+    onto their msvcrt path; msvcrt doesn't exist on this non-Windows test
+    runner, so the lock is stubbed out here too. Every other sys.platform
+    check reachable from run_gui on this path (resolve_activity_sessions's
+    own WSL branch, ui.py's DPI-awareness call, TrayManager._probe) is
+    already independently guarded against exactly this (verified by
+    reading each) -- only the lock is not, since acquire()'s ImportError
+    isn't a subclass of the OSError it already catches."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty.lock import SingleInstanceLock
+
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials",
+        lambda: (_ for _ in ()).throw(CredentialsError("wsl.exe not found on PATH")),
+    )
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], (
+        "discovery_result['done'] must still get set despite the WSL scan raising CredentialsError"
+    )

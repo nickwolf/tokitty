@@ -362,12 +362,22 @@ def test_on_rename_updates_label_by_slug_only(tmp_path, monkeypatch):
 
 
 @pytest.mark.gui
-def test_init_retries_pending_hook_op_before_rows_are_built(tmp_path, monkeypatch):
-    """Controller ruling on Task 15's brief: retry_pending_hook_op
-    (hooks_install.py, Task 8/12) was never wired into the manager's open
-    path through Task 14 -- confirmed by grep. Opening the manager must
-    give a leftover pending hook op from a prior crash one more chance to
-    complete, before the rows are first built."""
+def test_init_retries_pending_hook_op_off_the_tk_thread(tmp_path, monkeypatch):
+    """Controller ruling (Finding 3, second review pass): retry_pending_hook_op
+    (hooks_install.py, Task 8/12) must run off the Tk thread from __init__,
+    not synchronously -- per the design spec, a stuck wsl.exe call or a slow
+    filesystem there must not freeze the UI, the same reason
+    apply_account_mutation already runs off-thread for add/remove.
+
+    Rows must build synchronously in __init__ (via _build() ->
+    _refresh_rows()) using whatever pre-retry state is already on disk,
+    strictly before the retry is even dispatched -- this ordering is not a
+    race: _build() is a plain statement that fully completes, in the Tk
+    thread, before the next statement starts the retry's background
+    thread, so refresh_rows can only ever be the first entry recorded.
+    retry_pending_hook_op itself is confirmed to actually run, off-thread,
+    by joining that thread -- same join-based technique the add/remove
+    tests above use via _run_and_wait_for_mutation."""
     tk = pytest.importorskip("tkinter")
     from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
@@ -386,10 +396,18 @@ def test_init_retries_pending_hook_op_before_rows_are_built(tmp_path, monkeypatc
     monkeypatch.setattr(AccountsManager, "_refresh_rows", spy_refresh_rows)
 
     root = tk.Tk()
+    holder = {}
     try:
-        mgr = AccountsManager(root, tmp_path)
-        assert call_order[0] == ("retry", tmp_path)
-        assert call_order[1][0] == "refresh_rows"
+        _run_and_wait_for_mutation(
+            lambda: holder.__setitem__("mgr", AccountsManager(root, tmp_path)),
+            root, monkeypatch,
+        )
+        assert call_order[0] == ("refresh_rows", None), (
+            "rows must build synchronously in __init__, before the retry is dispatched"
+        )
+        assert ("retry", tmp_path) in call_order, (
+            "retry_pending_hook_op must fire, off-thread, with the manager's state_dir"
+        )
     finally:
-        mgr._on_close()
+        holder["mgr"]._on_close()
         root.destroy()

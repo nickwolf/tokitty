@@ -391,11 +391,27 @@ def run_gui() -> int:
     # First-run auto-open + the pending-hook-op retry both belong here, not in
     # TokittyWindow.__init__: they must run only after tk.Tk() has succeeded
     # (a headless launch should fail for lack of a display before ever
-    # probing WSL), and the 5 gui-marked tests that construct TokittyWindow
+    # probing WSL), and the gui-marked tests that construct TokittyWindow
     # directly (never through run_gui) must keep seeing zero WSL calls.
     from tokitty.startup import should_auto_open
 
-    discovery_result = {"wsl_matches": [], "done": False}
+    # Written by run_discovery() on a background thread, read by tick() on
+    # the Tk thread -- discovery_lock guards every access from either side.
+    # maybe_auto_open() itself must only ever be called from the Tk thread
+    # (it can construct a Toplevel via AccountsManager.open()), which is why
+    # it is invoked from inside tick() rather than from run_discovery
+    # directly: calling anything Tk-related (root.after included) from a
+    # background thread before root.mainloop() has actually started raises
+    # "main thread is not in main loop" *and the call is silently dropped
+    # forever*, not merely delayed -- confirmed by direct reproduction.
+    # run_discovery starts (just below) before the synchronous unit-building
+    # loop below even begins, so it can easily finish before mainloop() is
+    # reached. tick()'s existing root.after(UI_REFRESH_MS, tick) polling
+    # loop is the Tk-thread-owned mechanism this file already uses for
+    # exactly this producer/consumer shape (Poller/ActivityWatcher results),
+    # so first-run auto-open reuses it instead of introducing a new one.
+    discovery_lock = threading.Lock()
+    discovery_result = {"wsl_matches": [], "done": False, "consumed": False}
 
     def maybe_auto_open() -> None:
         accounts_result = load_accounts_result(state_dir)
@@ -406,13 +422,15 @@ def run_gui() -> int:
             from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
 
             keychain_available = keychain_item_exists(KEYCHAIN_SERVICE)
+        with discovery_lock:
+            wsl_match_count = len(discovery_result["wsl_matches"])
         if should_auto_open(
             accounts_state=accounts_result.state,
             env_override_set=env_override_set,
             home_relative_exists=home_relative_exists,
             keychain_available=keychain_available,
             platform=sys.platform,
-            wsl_match_count=len(discovery_result["wsl_matches"]),
+            wsl_match_count=wsl_match_count,
         ):
             from tokitty.accounts_ui import AccountsManager
 
@@ -424,13 +442,42 @@ def run_gui() -> int:
         # incomplete by a prior crash. Runs here, off the Tk thread,
         # alongside WSL discovery -- not in the TOKITTY_DEBUG_ACCOUNTS
         # branch, which bypasses normal account resolution entirely.
-        retry_pending_hook_op(state_dir)
-        if sys.platform == "win32":
-            from tokitty.wsl_probe import find_all_wsl_credentials
+        #
+        # Every step below is wrapped so a failure here can never crash
+        # this thread silently before "done" is set: an OSError/
+        # PermissionError from retry_pending_hook_op (the underlying hook
+        # install/uninstall functions don't convert filesystem exceptions
+        # to a result object -- see the design spec's Write ordering and
+        # crash consistency section) and a CredentialsError from the WSL
+        # scan (e.g. wsl.exe missing from PATH entirely) both mean "nothing
+        # to report here", mirroring resolve_activity_sessions's existing
+        # philosophy of "resolution failure means run without it, never a
+        # crash" -- never "auto-open silently never evaluates again."
+        try:
+            try:
+                retry_pending_hook_op(state_dir)
+            except (OSError, PermissionError):
+                pass
 
-            discovery_result["wsl_matches"] = find_all_wsl_credentials()
-        discovery_result["done"] = True
-        root.after(0, maybe_auto_open)
+            wsl_matches = []
+            if sys.platform == "win32":
+                from tokitty.wsl_probe import find_all_wsl_credentials
+
+                try:
+                    wsl_matches = find_all_wsl_credentials()
+                except CredentialsError:
+                    wsl_matches = []
+
+            with discovery_lock:
+                discovery_result["wsl_matches"] = wsl_matches
+        finally:
+            # Unconditional: tick() below is waiting on this flag to decide
+            # when to call maybe_auto_open(), exactly once. If an
+            # unanticipated exception ever slipped past the narrower
+            # excepts above, leaving this unset would silently drop
+            # auto-open for the whole launch -- worse than never trying.
+            with discovery_lock:
+                discovery_result["done"] = True
 
     if not (debug_state or debug_accounts == "2"):
         threading.Thread(target=run_discovery, daemon=True).start()
@@ -598,6 +645,16 @@ def run_gui() -> int:
                                credits_text=None, hint_text=warning, dimmed=True)
 
     def tick():
+        # Consume run_discovery's result here, on the Tk thread, exactly
+        # once -- see the discovery_lock comment above for why this can't
+        # be done from run_discovery itself via root.after().
+        with discovery_lock:
+            ready = discovery_result["done"] and not discovery_result["consumed"]
+            if ready:
+                discovery_result["consumed"] = True
+        if ready:
+            maybe_auto_open()
+
         for unit in units:
             latest = unit["poller"].get_latest()
             if latest is None:

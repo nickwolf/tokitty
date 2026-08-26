@@ -31,6 +31,12 @@ from tokitty import sprites
 
 _manager_instances: Dict[int, "AccountsManager"] = {}
 
+# How often __init__'s Tk-thread-owned poll checks whether the background
+# pending-hook-op retry has finished (see AccountsManager.__init__). Short,
+# since this only gates a one-shot row-refresh right after the dialog opens,
+# not a continuous UI loop like __main__.py's UI_REFRESH_MS.
+_RETRY_POLL_MS = 100
+
 
 @dataclass(frozen=True)
 class RowSpec:
@@ -88,12 +94,55 @@ class AccountsManager:
         self.toplevel.transient(root)
         self.toplevel.resizable(False, False)
         self.toplevel.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._build()
         # Best-effort, silent unless it matters: retries a hook
         # install/uninstall left incomplete by a prior crash, one more
-        # chance to complete whenever the user opens the manager. Must
-        # run before the rows are first built below.
-        retry_pending_hook_op(state_dir)
-        self._build()
+        # chance to complete whenever the user opens the manager. Off the
+        # Tk thread -- per the design spec, a stuck wsl.exe call or a slow
+        # filesystem here must not freeze the UI -- so _build() above runs
+        # first with whatever pre-retry state is already on disk.
+        #
+        # The background thread below only ever writes _retry_state under
+        # a lock; it never touches Tk itself. A small Tk-thread-owned poll
+        # (_poll_retry_done, scheduled here via self.toplevel.after, which
+        # is always safe since it's called from the same thread that owns
+        # this Toplevel) picks up the result and refreshes rows once --
+        # the same producer/consumer shape __main__.py's run_gui uses for
+        # its own WSL-discovery result, and for the same reason: a
+        # background thread calling anything Tk-related itself (the
+        # original shape here was self.toplevel.after(0, self._refresh_rows)
+        # called from the worker) can race a *second* such thread -- e.g.
+        # apply_account_mutation's own off-thread add/remove below -- with
+        # no live mainloop to serialize the two, which reproduced as a
+        # hard interpreter abort (not a catchable exception) under this
+        # file's own test harness the moment both were in flight at once.
+        self._retry_lock = threading.Lock()
+        self._retry_state = {"done": False}
+        threading.Thread(target=self._run_retry_off_thread, daemon=True).start()
+        self.toplevel.after(_RETRY_POLL_MS, self._poll_retry_done)
+
+    def _run_retry_off_thread(self) -> None:
+        try:
+            retry_pending_hook_op(self.state_dir)
+        except (OSError, PermissionError):
+            # Same documented hazard as apply_account_mutation: the
+            # underlying hook install/uninstall functions don't convert
+            # filesystem exceptions to a result object. A failed retry
+            # just leaves the pending-op record in place for next time,
+            # exactly like any other failed retry_pending_hook_op call.
+            pass
+        with self._retry_lock:
+            self._retry_state["done"] = True
+
+    def _poll_retry_done(self) -> None:
+        if not self.toplevel.winfo_exists():
+            return  # manager was closed before the retry finished
+        with self._retry_lock:
+            done = self._retry_state["done"]
+        if done:
+            self._refresh_rows()
+        else:
+            self.toplevel.after(_RETRY_POLL_MS, self._poll_retry_done)
 
     @classmethod
     def open(cls, root: tk.Tk, state_dir: Path) -> "AccountsManager":
