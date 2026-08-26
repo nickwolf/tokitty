@@ -42,6 +42,7 @@ def build_menu(
     on_randomize: Optional[Callable[[], None]] = None,
     surprise_me: Optional[Callable[[], bool]] = None,
     on_toggle_surprise: Optional[Callable[[], None]] = None,
+    on_open_accounts: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
     colorway_items = [
         MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
@@ -62,6 +63,10 @@ def build_menu(
     items += [
         MenuItem(label="Customize…", action=on_customize),
         MenuItem(label="Rename…", action=on_rename),
+    ]
+    if on_open_accounts is not None:
+        items.append(MenuItem(label="Accounts…", action=on_open_accounts))
+    items += [
         MenuItem(separator=True),
         MenuItem(label="Refresh now", action=on_refresh),
         MenuItem(label="Always in front", action=on_toggle_always_on_top, checkbox=always_on_top),

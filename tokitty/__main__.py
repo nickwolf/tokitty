@@ -178,7 +178,7 @@ def debug_print() -> int:
 _STALE_HINTS = {
     "stale_token": "token expired, reopen Claude Code",
     "credentials_unreachable": "can't confirm, credentials unreachable",
-    "ambiguous_credentials": "can't confirm, set TOKITTY_CREDENTIALS",
+    "ambiguous_credentials": "can't confirm, use Accounts…",
     "api_error": "can't confirm, API hiccup",
     "keychain_denied": "can't confirm, Keychain denied",
 }
@@ -287,7 +287,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
     hints = {
         "stale_token": "token stale, open Claude Code",
         "credentials_unreachable": "can't find credentials",
-        "ambiguous_credentials": "multiple installs, set TOKITTY_CREDENTIALS",
+        "ambiguous_credentials": "multiple installs, use Accounts…",
         "api_error": "API hiccup, retrying",
         "keychain_denied": _KEYCHAIN_DENIED_HINT,
     }
@@ -516,6 +516,13 @@ def run_gui() -> int:
                 handle_customization_changed(i, "randomize", None)
 
     window.on_toggle_surprise = toggle_surprise
+
+    from tokitty.accounts_ui import AccountsManager
+
+    def open_accounts() -> None:
+        AccountsManager.open(root, state_dir)
+
+    window.on_open_accounts = open_accounts
 
     if settings.surprise_me:
         for index in range(len(units)):

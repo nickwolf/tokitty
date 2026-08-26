@@ -371,6 +371,28 @@ def test_keychain_denied_falls_back_to_cached_countdown(monkeypatch):
     assert display["dimmed"] is True
 
 
+def test_ambiguous_credentials_hint_without_cache_points_at_accounts_not_env_var():
+    # Cold start (no previous successful poll) reads the local `hints` dict
+    # inside _display_state_for.
+    display = _display_state_for(_error("ambiguous_credentials"), previous=None, now=NOW)
+    assert "TOKITTY_CREDENTIALS" not in display["hint_text"]
+    assert "Accounts" in display["hint_text"]
+
+
+def test_ambiguous_credentials_hint_overdue_cache_points_at_accounts_not_env_var():
+    # A cached countdown that's gone overdue reads _STALE_HINTS instead --
+    # same status, different dict, so both need repointing away from the
+    # now-removed env var advice.
+    capped_limit = _limit(kind="session", resets_at=NOW + timedelta(minutes=5))
+    previous = _ok(_snapshot(session_pct=100.0, limits=[capped_limit]))
+
+    later = NOW + timedelta(minutes=20)  # well past the cached reset time
+    display = _display_state_for(_error("ambiguous_credentials"), previous=previous, now=later)
+
+    assert "TOKITTY_CREDENTIALS" not in display["hint_text"]
+    assert "Accounts" in display["hint_text"]
+
+
 def _usage(offset_seconds=0, session_pct=10.0, weekly_pct=5.0):
     return UsageSnapshot(
         session_pct=session_pct,
