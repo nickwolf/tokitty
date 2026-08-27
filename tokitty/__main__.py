@@ -420,11 +420,13 @@ def run_gui() -> int:
     discovery_lock = threading.Lock()
     discovery_result = {"wsl_matches": [], "done": False, "consumed": False}
     discovery_accounts_state = load_accounts_result(state_dir).state
+    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
+    home_relative_exists = (
+        Path.home() / ".claude" / ".credentials.json"
+    ).is_file()
 
     def maybe_auto_open() -> None:
         accounts_result = load_accounts_result(state_dir)
-        env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
-        home_relative_exists = (Path.home() / ".claude" / ".credentials.json").is_file()
         keychain_available = False
         if sys.platform == "darwin":
             from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
@@ -469,7 +471,12 @@ def run_gui() -> int:
                 pass
 
             wsl_matches = []
-            if sys.platform == "win32" and discovery_accounts_state == "absent":
+            if (
+                sys.platform == "win32"
+                and discovery_accounts_state == "absent"
+                and not env_override_set
+                and not home_relative_exists
+            ):
                 from tokitty.wsl_probe import find_all_wsl_credentials
 
                 try:

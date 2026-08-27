@@ -720,6 +720,10 @@ def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, m
     monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
     monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
     monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    monkeypatch.setattr(
+        main_module.Path, "home", classmethod(lambda cls: tmp_path / "home")
+    )
     matches = [
         ("Ubuntu", "/home/a/.claude/.credentials.json"),
         ("Debian", "/home/b/.claude-work/.credentials.json"),
@@ -777,6 +781,63 @@ def test_run_discovery_skips_wsl_scan_when_accounts_file_is_present(tmp_path, mo
     discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
     assert len(discovery_threads) == 1
     discovery_threads[0].join(timeout=5.0)
+
+    assert scans == []
+    assert retries == [tmp_path]
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("credential_source", ["env_override", "home_relative"])
+def test_run_discovery_skips_wsl_scan_when_native_credentials_exist(
+    tmp_path, monkeypatch, credential_source
+):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    credentials_path = tmp_path / "home" / ".claude" / ".credentials.json"
+    credentials_path.parent.mkdir(parents=True)
+    credentials_path.write_text('{"claudeAiOauth": {}}', encoding="utf-8")
+
+    if credential_source == "env_override":
+        monkeypatch.setenv("TOKITTY_CREDENTIALS", str(credentials_path))
+    else:
+        monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+        monkeypatch.setattr(
+            main_module.Path,
+            "home",
+            classmethod(lambda cls: tmp_path / "home"),
+        )
+
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    scans = []
+    retries = []
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials",
+        lambda: scans.append(1) or [],
+    )
+    monkeypatch.setattr(
+        main_module,
+        "retry_pending_hook_op",
+        lambda state_dir: retries.append(state_dir),
+    )
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    assert main_module.run_gui() == 0
+    discovery_threads = [
+        thread
+        for thread in spawned
+        if thread.recorded_target_name == "run_discovery"
+    ]
+    assert len(discovery_threads) == 1
+    discovery_threads[0].join(timeout=5.0)
+    assert not discovery_threads[0].is_alive()
 
     assert scans == []
     assert retries == [tmp_path]
