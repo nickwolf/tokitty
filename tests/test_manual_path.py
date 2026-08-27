@@ -1,5 +1,6 @@
 import json
 import pathlib
+import sys
 
 from tokitty.accounts import canonicalize_locator
 from tokitty.manual_path import validate_manual_path
@@ -16,7 +17,11 @@ def test_relative_path_rejected():
 
 
 def test_unexpanded_tilde_is_expanded(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    # os.path.expanduser checks USERPROFILE before HOME on Windows, so
+    # only setting HOME there leaves it silently expanding against the
+    # real user profile instead of this fixture.
+    home_var = "USERPROFILE" if sys.platform == "win32" else "HOME"
+    monkeypatch.setenv(home_var, str(tmp_path))
     (tmp_path / ".claude-work").mkdir()
     (tmp_path / ".claude-work" / ".credentials.json").write_text(_oauth_json(), encoding="utf-8")
     result = validate_manual_path("~/.claude-work", active_config_dirs=[])
@@ -121,10 +126,14 @@ def test_posix_shaped_path_without_drive_letter_is_treated_as_windows_local_abso
     config_dir.mkdir()
     (config_dir / ".credentials.json").write_text(_oauth_json(), encoding="utf-8")
 
-    # Sanity-check the premise: this exact path shape is NOT absolute
-    # under real Windows pathlib semantics, which is why a bare
-    # `path.is_absolute()` check alone rejected it.
-    assert not pathlib.PureWindowsPath(str(config_dir)).is_absolute()
+    if sys.platform != "win32":
+        # Sanity-check the premise: this exact path shape is NOT absolute
+        # under real Windows pathlib semantics, which is why a bare
+        # `path.is_absolute()` check alone rejected it. On real Windows
+        # tmp_path is always drive-lettered, so this premise doesn't
+        # apply the same way there; the monkeypatched Path below is what
+        # actually exercises the fixed code path on every platform.
+        assert not pathlib.PureWindowsPath(str(config_dir)).is_absolute()
 
     result = validate_manual_path(str(config_dir), active_config_dirs=[])
     assert result.ok

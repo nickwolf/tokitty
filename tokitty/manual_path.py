@@ -23,9 +23,14 @@ class PathValidationResult:
 
 
 def _strip_credentials_filename(path: str) -> str:
+    """Drop a trailing .credentials.json, preserving whatever separator
+    style the input used. Detection has to normalize separators first
+    to catch both "...\\.credentials.json" and ".../.credentials.json",
+    but replace() never changes string length, so the cut position
+    found in the normalized copy applies unchanged to the original."""
     normalized = path.replace("\\", "/")
     if normalized.endswith("/.credentials.json"):
-        return normalized.rsplit("/", 1)[0]
+        return path[: len(normalized) - len("/.credentials.json")]
     return path
 
 

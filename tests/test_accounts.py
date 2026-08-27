@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -179,9 +180,19 @@ def test_canonicalize_locator_windows_local():
 
 
 def test_canonicalize_locator_posix(tmp_path):
-    real = tmp_path / ".claude"
-    real.mkdir()
-    assert canonicalize_locator(str(real)) == str(real.resolve())
+    if sys.platform == "win32":
+        # tmp_path is always drive-lettered on Windows, so a real
+        # directory under it can never reach canonicalize_locator's
+        # POSIX branch there (the drive-letter check routes it into
+        # the Windows-local branch first, same as it would in
+        # production). A driveless string reaches the POSIX branch on
+        # any platform, which is the actual thing under test here.
+        locator = "/not/a/real/path/.claude"
+        assert canonicalize_locator(locator) == os.path.realpath(locator)
+    else:
+        real = tmp_path / ".claude"
+        real.mkdir()
+        assert canonicalize_locator(str(real)) == str(real.resolve())
 
 
 def test_canonicalize_locator_rejects_relative_path():
