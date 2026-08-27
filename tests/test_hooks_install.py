@@ -6,8 +6,16 @@ real ~/.claude or ~/.claude-work.
 import json
 from pathlib import Path
 
-
 from tokitty import hooks_install as hi
+from tokitty.accounts import Account
+from tokitty.hooks_install import (
+    ConfigDirResult,
+    apply_account_mutation,
+    clear_pending_hook_op,
+    load_pending_hook_op,
+    retry_pending_hook_op,
+    save_pending_hook_op,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -518,17 +526,6 @@ def test_write_settings_failed_write_does_not_truncate_original(tmp_path, monkey
 # Pending hook op journal + apply_account_mutation / retry_pending_hook_op
 # ---------------------------------------------------------------------------
 
-from tokitty.accounts import Account
-from tokitty.hooks_install import (
-    ConfigDirResult,
-    apply_account_mutation,
-    clear_pending_hook_op,
-    load_pending_hook_op,
-    retry_pending_hook_op,
-    save_pending_hook_op,
-)
-
-
 def test_pending_hook_op_round_trip(tmp_path):
     save_pending_hook_op(tmp_path, "install", "/home/u/.claude")
     assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
@@ -552,7 +549,6 @@ def test_apply_account_mutation_writes_accounts_before_pending_op_before_hook(tm
         return ConfigDirResult(config_dir, True, "installed")
 
     import tokitty.hooks_install as hi
-    real_save = hi.save_accounts if hasattr(hi, "save_accounts") else None
 
     class _Spy:
         def __call__(self, state_dir, accts):
