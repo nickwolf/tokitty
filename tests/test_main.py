@@ -571,7 +571,9 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
     opened = []
     monkeypatch.setattr(
         accounts_ui_module.AccountsManager, "open",
-        classmethod(lambda cls, root, state_dir: opened.append(state_dir)),
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+        ),
     )
 
     # threading.Thread is deliberately left real (not patched to run
@@ -620,7 +622,9 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
     opened = []
     monkeypatch.setattr(
         accounts_ui_module.AccountsManager, "open",
-        classmethod(lambda cls, root, state_dir: opened.append(state_dir)),
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+        ),
     )
 
     def _pumping_mainloop(self):
@@ -699,3 +703,150 @@ def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, mon
     assert opened == [tmp_path], (
         "discovery_result['done'] must still get set despite the WSL scan raising CredentialsError"
     )
+
+
+@pytest.mark.gui
+def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    matches = [
+        ("Ubuntu", "/home/a/.claude/.credentials.json"),
+        ("Debian", "/home/b/.claude-work/.credentials.json"),
+    ]
+    monkeypatch.setattr("tokitty.wsl_probe.find_all_wsl_credentials", lambda: matches)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager,
+        "open",
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None:
+                opened.append((state_dir, list(discovered_matches or [])))
+        ),
+    )
+
+    def _pumping_mainloop(self):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+
+    assert main_module.run_gui() == 0
+    assert opened == [(tmp_path, matches)]
+
+
+@pytest.mark.gui
+def test_run_discovery_skips_wsl_scan_when_accounts_file_is_present(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.accounts import Account, save_accounts
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    save_accounts(tmp_path, [Account(name="acct-v1-a", config_dir=str(tmp_path / "claude"))])
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    scans = []
+    retries = []
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials", lambda: scans.append(1) or []
+    )
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op", lambda state_dir: retries.append(state_dir)
+    )
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    assert main_module.run_gui() == 0
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
+    assert len(discovery_threads) == 1
+    discovery_threads[0].join(timeout=5.0)
+
+    assert scans == []
+    assert retries == [tmp_path]
+
+
+@pytest.mark.gui
+def test_run_gui_persists_migration_before_marking_it_complete(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import migration
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    events = []
+    real_save = main_module.save_customization
+    real_mark = migration.mark_customization_migration_complete
+
+    def recording_save(state_dir, store):
+        events.append("save")
+        return real_save(state_dir, store)
+
+    def recording_mark(state_dir, key):
+        events.append(f"mark:{key}")
+        return real_mark(state_dir, key)
+
+    monkeypatch.setattr(main_module, "save_customization", recording_save)
+    monkeypatch.setattr(migration, "mark_customization_migration_complete", recording_mark)
+
+    assert main_module.run_gui() == 0
+    assert events[:3] == [
+        "save",
+        f"mark:{migration.CUSTOMIZATION_MIGRATION_KEY}",
+        f"mark:{migration.LEGACY_ACCOUNT_LABELS_MIGRATION_KEY}",
+    ]
+
+
+@pytest.mark.gui
+def test_live_customization_change_preserves_manager_added_key(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.customize import Customization, load_customization, save_customization
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        latest = load_customization(tmp_path)
+        latest["default"] = replace(latest["default"], label="Renamed in manager")
+        latest["acct-v1-added"] = Customization(
+            colorway="gray", pattern="solid", label="Added in manager"
+        )
+        save_customization(tmp_path, latest)
+        holder["window"].on_customization_changed(0, "randomize", None)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+
+    assert main_module.run_gui() == 0
+    stored = load_customization(tmp_path)
+    assert stored["default"].label == "Renamed in manager"
+    assert stored["acct-v1-added"].label == "Added in manager"

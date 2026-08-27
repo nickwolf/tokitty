@@ -12,22 +12,34 @@ import tkinter as tk
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import messagebox, simpledialog
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from tokitty.accounts import (
     Account,
+    AccountsLoadResult,
+    backfill_identity_history,
     canonicalize_locator,
-    load_accounts,
+    load_accounts_result,
     load_identity_history,
     save_identity_history,
     assign_identity_slug,
 )
-from tokitty.customize import Customization, SINGLE_KEY, rename_account, load_customization, save_customization
+from tokitty.customize import (
+    Customization,
+    SINGLE_KEY,
+    load_customization,
+    rename_account,
+    save_customization_entry,
+)
 from tokitty.hooks_install import apply_account_mutation, retry_pending_hook_op
 from tokitty.manual_path import validate_manual_path
 from tokitty.migration import absorb_implicit_default
 from tokitty.randomize import random_look
 from tokitty import sprites
+from tokitty.wsl_probe import (
+    wsl_config_dir_from_credentials,
+    wsl_sessions_dir_from_credentials,
+)
 
 _manager_instances: Dict[int, "AccountsManager"] = {}
 
@@ -36,6 +48,7 @@ _manager_instances: Dict[int, "AccountsManager"] = {}
 # since this only gates a one-shot row-refresh right after the dialog opens,
 # not a continuous UI loop like __main__.py's UI_REFRESH_MS.
 _RETRY_POLL_MS = 100
+_MUTATION_POLL_MS = 100
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,14 @@ class RowSpec:
     config_dir: str
     display_label: str
     remove_enabled: bool
+
+
+@dataclass(frozen=True)
+class DiscoveredPathSpec:
+    distro: str
+    credentials_path: str
+    config_dir: str
+    sessions_dir: str
 
 
 def _fallback_label(index: int) -> str:
@@ -65,35 +86,84 @@ def build_row_specs(accounts: List[Account], customization_store: Dict[str, Cust
     return rows
 
 
+def build_discovered_path_specs(
+    matches: Sequence[Tuple[str, str]],
+) -> List[DiscoveredPathSpec]:
+    """Convert discovery's WSL-side matches into manager-ready paths."""
+    return [
+        DiscoveredPathSpec(
+            distro=distro,
+            credentials_path=credentials_path,
+            config_dir=wsl_config_dir_from_credentials(distro, credentials_path),
+            sessions_dir=wsl_sessions_dir_from_credentials(distro, credentials_path),
+        )
+        for distro, credentials_path in matches
+    ]
+
+
 def reconcile_before_save(state_dir: Path, in_memory_accounts: List[Account]) -> List[Account]:
     """Reload accounts.json immediately before every save, so two
     independently opened dialogs cannot silently clobber each other's
     changes with a stale in-memory list."""
-    on_disk = load_accounts(state_dir)
-    return on_disk if on_disk is not None else in_memory_accounts
+    result = load_accounts_result(state_dir)
+    if result.state == "malformed":
+        raise ValueError("accounts.json became malformed before it could be saved")
+    if result.state in ("valid_empty", "valid_non_empty"):
+        return result.accounts
+    return in_memory_accounts
 
 
 def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
                               config_dir: str, on_done) -> None:
     def worker():
-        result = apply_account_mutation(state_dir, accounts, op, config_dir)
-        on_done(result)
+        try:
+            outcome = apply_account_mutation(state_dir, accounts, op, config_dir)
+        except Exception as exc:
+            outcome = exc
+        on_done(outcome)
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _run_retry_off_thread(state_dir: Path, retry_lock, retry_state) -> None:
+    try:
+        outcome = retry_pending_hook_op(state_dir)
+    except (OSError, PermissionError) as exc:
+        # A failed retry leaves the pending-op record in place for next time,
+        # exactly like any other failed retry_pending_hook_op call.
+        outcome = exc
+    with retry_lock:
+        retry_state["outcome"] = outcome
+        retry_state["done"] = True
 
 
 class AccountsManager:
     """Singleton Toplevel per root: AccountsManager.open() raises the
     existing dialog instead of creating a second one."""
 
-    def __init__(self, root: tk.Tk, state_dir: Path):
+    def __init__(
+        self,
+        root: tk.Tk,
+        state_dir: Path,
+        discovered_matches: Optional[Sequence[Tuple[str, str]]] = None,
+    ):
         self.root = root
         self.state_dir = state_dir
+        self._mutation_in_flight = False
+        self._retry_in_flight = True
+        self._pending_hook_failure = False
+        self._retry_after_id = None
+        self._mutation_after_id = None
+        self._discovered_paths = build_discovered_path_specs(discovered_matches or [])
+        initial_accounts = load_accounts_result(state_dir)
+        if initial_accounts.state != "malformed":
+            backfill_identity_history(state_dir, initial_accounts.accounts)
         self.toplevel = tk.Toplevel(root)
         self.toplevel.title("Accounts")
         self.toplevel.transient(root)
         self.toplevel.resizable(False, False)
         self.toplevel.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.toplevel.bind("<Destroy>", self._on_toplevel_destroy, add="+")
         self._build()
         # Best-effort, silent unless it matters: retries a hook
         # install/uninstall left incomplete by a prior crash, one more
@@ -118,47 +188,84 @@ class AccountsManager:
         # file's own test harness the moment both were in flight at once.
         self._retry_lock = threading.Lock()
         self._retry_state = {"done": False}
-        threading.Thread(target=self._run_retry_off_thread, daemon=True).start()
-        self.toplevel.after(_RETRY_POLL_MS, self._poll_retry_done)
-
-    def _run_retry_off_thread(self) -> None:
-        try:
-            retry_pending_hook_op(self.state_dir)
-        except (OSError, PermissionError):
-            # Same documented hazard as apply_account_mutation: the
-            # underlying hook install/uninstall functions don't convert
-            # filesystem exceptions to a result object. A failed retry
-            # just leaves the pending-op record in place for next time,
-            # exactly like any other failed retry_pending_hook_op call.
-            pass
-        with self._retry_lock:
-            self._retry_state["done"] = True
+        threading.Thread(
+            target=_run_retry_off_thread,
+            args=(self.state_dir, self._retry_lock, self._retry_state),
+            daemon=True,
+        ).start()
+        self._retry_after_id = self.toplevel.after(
+            _RETRY_POLL_MS, self._poll_retry_done
+        )
 
     def _poll_retry_done(self) -> None:
+        self._retry_after_id = None
         if not self.toplevel.winfo_exists():
             return  # manager was closed before the retry finished
         with self._retry_lock:
             done = self._retry_state["done"]
         if done:
+            with self._retry_lock:
+                outcome = self._retry_state.get("outcome")
+            self._retry_in_flight = False
+            self._pending_hook_failure = (
+                isinstance(outcome, Exception)
+                or (outcome is not None and not outcome.ok)
+            )
             self._refresh_rows()
+            if self._pending_hook_failure:
+                detail = str(outcome) if isinstance(outcome, Exception) else outcome.message
+                messagebox.showerror(
+                    "Accounts",
+                    "A pending hook update could not be completed. "
+                    f"Reopen Accounts to retry it before making another change. {detail}",
+                    parent=self.toplevel,
+                )
         else:
-            self.toplevel.after(_RETRY_POLL_MS, self._poll_retry_done)
+            self._retry_after_id = self.toplevel.after(
+                _RETRY_POLL_MS, self._poll_retry_done
+            )
 
     @classmethod
-    def open(cls, root: tk.Tk, state_dir: Path) -> "AccountsManager":
+    def open(
+        cls,
+        root: tk.Tk,
+        state_dir: Path,
+        discovered_matches: Optional[Sequence[Tuple[str, str]]] = None,
+    ) -> "AccountsManager":
         key = id(root)
         existing = _manager_instances.get(key)
         if existing is not None and existing.toplevel.winfo_exists():
+            if discovered_matches is not None:
+                existing._discovered_paths = build_discovered_path_specs(discovered_matches)
+                existing._refresh_rows()
             existing.toplevel.lift()
             existing.toplevel.focus_force()
             return existing
-        manager = cls(root, state_dir)
+        manager = cls(root, state_dir, discovered_matches=discovered_matches)
         _manager_instances[key] = manager
         return manager
 
     def _on_close(self) -> None:
-        _manager_instances.pop(id(self.root), None)
         self.toplevel.destroy()
+
+    def _cancel_pending_callback(self, attribute: str) -> None:
+        after_id = getattr(self, attribute, None)
+        if after_id is None:
+            return
+        setattr(self, attribute, None)
+        try:
+            self.toplevel.after_cancel(after_id)
+        except tk.TclError:
+            # Destruction may already have removed the Tcl command.  The
+            # callback identifier is still cleared so cleanup is idempotent.
+            pass
+
+    def _on_toplevel_destroy(self, event) -> None:
+        if event.widget is not self.toplevel:
+            return
+        self._cancel_pending_callback("_retry_after_id")
+        self._cancel_pending_callback("_mutation_after_id")
+        _manager_instances.pop(id(self.root), None)
 
     def _build(self) -> None:
         self._refresh_rows()
@@ -170,11 +277,15 @@ class AccountsManager:
         # Add… is disabled on the virtual-row path: there is nothing to
         # add to on macOS when the only account is the Keychain itself.
         if not self._showing_virtual_macos_row():
-            tk.Button(self.toplevel, text="Add…", command=self._on_add).pack(padx=8, pady=(0, 10))
+            button = tk.Button(self.toplevel, text="Add by path…", command=self._on_add)
+            button._account_mutation_control = True
+            button._account_enabled = True
+            button.pack(padx=8, pady=(0, 10))
+        self._update_mutation_controls()
 
     def _showing_virtual_macos_row(self) -> bool:
         return (
-            load_accounts(self.state_dir) is None
+            load_accounts_result(self.state_dir).state == "absent"
             and sys.platform == "darwin"
             and not self._has_local_credentials_file()
         )
@@ -189,7 +300,12 @@ class AccountsManager:
         if self._showing_virtual_macos_row():
             self._render_virtual_macos_row()
             return
-        accounts = load_accounts(self.state_dir) or []
+        result = load_accounts_result(self.state_dir)
+        if result.state == "malformed":
+            self._render_malformed_row()
+            self._update_mutation_controls()
+            return
+        accounts = result.accounts
         store = load_customization(self.state_dir)
         for row in build_row_specs(accounts, store):
             frame = tk.Frame(self.toplevel)
@@ -197,9 +313,136 @@ class AccountsManager:
             tk.Label(frame, text=row.display_label).pack(side="left", padx=4)
             tk.Button(frame, text="Rename…", command=lambda s=row.slug: self._on_rename(s)).pack(side="left")
             remove_state = "normal" if row.remove_enabled else "disabled"
-            tk.Button(frame, text="Remove", state=remove_state,
-                      command=lambda s=row.slug, c=row.config_dir: self._on_remove(s, c)).pack(side="left")
+            remove = tk.Button(frame, text="Remove", state=remove_state,
+                               command=lambda s=row.slug, c=row.config_dir: self._on_remove(s, c))
+            remove._account_mutation_control = True
+            remove._account_enabled = row.remove_enabled
+            remove.pack(side="left")
             frame.pack(fill="x", padx=8, pady=2)
+        self._render_discovered_rows()
+        self._update_mutation_controls()
+
+    def _render_discovered_rows(self) -> None:
+        for discovered in self._discovered_paths:
+            frame = tk.Frame(self.toplevel)
+            frame._accounts_row = True
+            tk.Label(
+                frame,
+                text=f"Found in {discovered.distro}: {discovered.config_dir}",
+                wraplength=300,
+                justify="left",
+            ).pack(side="left", padx=4)
+            button = tk.Button(
+                frame,
+                text="Add",
+                command=lambda path=discovered.config_dir: self._on_add_discovered(path),
+            )
+            button._account_mutation_control = True
+            button._account_enabled = True
+            button.pack(side="left")
+            frame.pack(fill="x", padx=8, pady=2)
+
+    def _render_malformed_row(self) -> None:
+        frame = tk.Frame(self.toplevel)
+        frame._accounts_row = True
+        tk.Label(
+            frame,
+            text="accounts.json is malformed. Fix or delete it before managing accounts.",
+            wraplength=340,
+            justify="left",
+        ).pack(side="left", padx=4)
+        frame.pack(fill="x", padx=8, pady=2)
+
+    def _update_mutation_controls(self) -> None:
+        def visit(widget) -> None:
+            for child in widget.winfo_children():
+                if getattr(child, "_account_mutation_control", False):
+                    enabled = getattr(child, "_account_enabled", True)
+                    child.configure(
+                        state="normal"
+                        if enabled
+                        and not self._mutation_in_flight
+                        and not self._retry_in_flight
+                        and not self._pending_hook_failure
+                        else "disabled"
+                    )
+                visit(child)
+
+        visit(self.toplevel)
+
+    def _set_mutation_in_flight(self, in_flight: bool) -> None:
+        self._mutation_in_flight = in_flight
+        self._update_mutation_controls()
+
+    def _load_accounts_for_mutation(self) -> Optional[AccountsLoadResult]:
+        result = load_accounts_result(self.state_dir)
+        if result.state == "malformed":
+            messagebox.showerror(
+                "Accounts",
+                "accounts.json is malformed. Fix or delete it before adding or removing accounts.",
+                parent=self.toplevel,
+            )
+            return None
+        backfill_identity_history(self.state_dir, result.accounts)
+        return result
+
+    def _finish_mutation(self, outcome) -> None:
+        failed = isinstance(outcome, Exception) or not outcome.ok
+        self._mutation_in_flight = False
+        self._pending_hook_failure = failed
+        self._refresh_rows()
+        if isinstance(outcome, Exception):
+            messagebox.showerror(
+                "Accounts",
+                "The hook update failed. Reopen Accounts to retry it before "
+                f"making another change. {outcome}",
+                parent=self.toplevel,
+            )
+        elif not outcome.ok:
+            messagebox.showerror(
+                "Accounts",
+                "The hook update failed. Reopen Accounts to retry it before "
+                f"making another change. {outcome.message}",
+                parent=self.toplevel,
+            )
+
+    def _poll_mutation_done(self) -> None:
+        self._mutation_after_id = None
+        if not self.toplevel.winfo_exists():
+            return
+        with self._mutation_lock:
+            done = self._mutation_state["done"]
+            outcome = self._mutation_state.get("outcome")
+        if done:
+            self._finish_mutation(outcome)
+        else:
+            self._mutation_after_id = self.toplevel.after(
+                _MUTATION_POLL_MS, self._poll_mutation_done
+            )
+
+    def _start_mutation(
+        self, accounts: List[Account], op: str, config_dir: str
+    ) -> None:
+        if self._mutation_in_flight:
+            return
+        self._set_mutation_in_flight(True)
+
+        self._mutation_lock = threading.Lock()
+        self._mutation_state = {"done": False}
+        mutation_lock = self._mutation_lock
+        mutation_state = self._mutation_state
+
+        def on_done(outcome):
+            with mutation_lock:
+                mutation_state["outcome"] = outcome
+                mutation_state["done"] = True
+
+        _run_mutation_off_thread(
+            self.state_dir, accounts, op, config_dir, on_done
+        )
+        self._mutation_after_id = self.toplevel.after(
+            _MUTATION_POLL_MS, self._poll_mutation_done
+        )
 
     def _render_virtual_macos_row(self) -> None:
         frame = tk.Frame(self.toplevel)
@@ -215,8 +458,7 @@ class AccountsManager:
             return
         store = load_customization(self.state_dir)
         current = store.get(SINGLE_KEY, Customization())
-        store[SINGLE_KEY] = replace(current, label=result)
-        save_customization(self.state_dir, store)
+        save_customization_entry(self.state_dir, SINGLE_KEY, replace(current, label=result))
         self._refresh_rows()
 
     def _on_rename(self, slug: str) -> None:
@@ -226,48 +468,87 @@ class AccountsManager:
             self._refresh_rows()
 
     def _on_remove(self, slug: str, config_dir: str) -> None:
-        accounts = load_accounts(self.state_dir) or []
+        if (
+            self._retry_in_flight
+            or self._mutation_in_flight
+            or self._pending_hook_failure
+        ):
+            return
+        load_result = self._load_accounts_for_mutation()
+        if load_result is None:
+            return
+        accounts = load_result.accounts
         if len(accounts) <= 1:
             return
         remaining = [a for a in accounts if a.name != slug]
-        remaining = reconcile_before_save(self.state_dir, remaining)
+        try:
+            remaining = reconcile_before_save(self.state_dir, remaining)
+        except ValueError as exc:
+            messagebox.showerror("Accounts", str(exc), parent=self.toplevel)
+            return
         remaining = [a for a in remaining if a.name != slug]
 
-        def on_done(result):
-            self.toplevel.after(0, self._refresh_rows)
-
-        _run_mutation_off_thread(self.state_dir, remaining, "remove", config_dir, on_done)
+        self._start_mutation(remaining, "remove", config_dir)
 
     def _on_add(self) -> None:
+        if (
+            self._retry_in_flight
+            or self._mutation_in_flight
+            or self._pending_hook_failure
+        ):
+            return
+        load_result = self._load_accounts_for_mutation()
+        if load_result is None:
+            return
         raw = simpledialog.askstring("Add account", "Claude config directory:", parent=self.toplevel)
         if not raw:
             return
-        accounts = load_accounts(self.state_dir) or []
+        self._add_path(raw, load_result)
+
+    def _on_add_discovered(self, config_dir: str) -> None:
+        if (
+            self._retry_in_flight
+            or self._mutation_in_flight
+            or self._pending_hook_failure
+        ):
+            return
+        load_result = self._load_accounts_for_mutation()
+        if load_result is not None:
+            self._add_path(config_dir, load_result)
+
+    def _add_path(self, raw: str, load_result: AccountsLoadResult) -> None:
+        accounts = load_result.accounts
         active_dirs = [a.config_dir for a in accounts]
         validation = validate_manual_path(raw, active_config_dirs=active_dirs)
         if not validation.ok:
             messagebox.showerror("Add account", validation.error, parent=self.toplevel)
             return
 
+        try:
+            accounts = reconcile_before_save(self.state_dir, accounts)
+        except ValueError as exc:
+            messagebox.showerror("Accounts", str(exc), parent=self.toplevel)
+            return
+
         history = load_identity_history(self.state_dir)
         locator = canonicalize_locator(validation.config_dir)
-        taken = set(history.values())
+        taken = set(history.values()) | {account.name for account in accounts}
         slug, history = assign_identity_slug(locator, taken, history)
         save_identity_history(self.state_dir, history)
 
-        was_implicit_only = not accounts
+        was_implicit_only = load_result.state == "absent"
         new_account = Account(name=slug, config_dir=validation.config_dir)
-        new_accounts = reconcile_before_save(self.state_dir, accounts) + [new_account]
+        new_accounts = accounts + [new_account]
 
         store = load_customization(self.state_dir)
         if was_implicit_only:
-            store = absorb_implicit_default(store, slug)
-        else:
+            absorbed = absorb_implicit_default(store, slug)
+            if slug in absorbed:
+                save_customization_entry(self.state_dir, slug, absorbed[slug])
+        elif slug not in store:
             colorway, pattern = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
-            store[slug] = Customization(colorway=colorway, pattern=pattern)
-        save_customization(self.state_dir, store)
+            save_customization_entry(
+                self.state_dir, slug, Customization(colorway=colorway, pattern=pattern)
+            )
 
-        def on_done(result):
-            self.toplevel.after(0, self._refresh_rows)
-
-        _run_mutation_off_thread(self.state_dir, new_accounts, "install", validation.config_dir, on_done)
+        self._start_mutation(new_accounts, "install", validation.config_dir)

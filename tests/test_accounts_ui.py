@@ -1,70 +1,45 @@
 import json
 import threading
+import time
 
 import pytest
 
 from tokitty.accounts import Account
-from tokitty.accounts_ui import build_row_specs, reconcile_before_save
+from tokitty.accounts_ui import (
+    build_discovered_path_specs,
+    build_row_specs,
+    reconcile_before_save,
+)
 from tokitty.customize import Customization
 
 _VALID_CREDENTIALS = json.dumps({"claudeAiOauth": {}})
 
 
-def _is_expected_afterloop_race(args) -> bool:
-    """True for the one specific, confirmed-benign exception this test
-    file's background-thread tests can trigger: _run_mutation_off_thread's
-    worker calls self.toplevel.after(...) after apply_account_mutation
-    returns, and Tk's cross-thread after() hand-off only succeeds while
-    the main thread is genuinely inside mainloop(). Tests never run a
-    real mainloop() (needed to keep the test synchronous so it can make
-    assertions) -- a real mainloop() was tried and empirically produces
-    a much worse outcome, a hard "Fatal Python error: Aborted" crash
-    from the interaction between Tcl's event loop and a concurrently
-    running background thread doing real filesystem I/O, so that
-    approach was reverted. In the actual app (run_gui), the main thread
-    runs root.mainloop() continuously, so the equivalent call there has
-    an active loop to dispatch into and this exception cannot occur --
-    confirmed empirically by isolating the same after()-from-a-thread
-    call with a real mainloop() running in a plain, non-test script."""
-    return (
-        args.exc_type is RuntimeError
-        and "main thread is not in main loop" in str(args.exc_value)
-    )
+def _pump_until(root, predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        root.update()
+        if predicate():
+            return
+        time.sleep(0.01)
+    assert predicate(), "Tk-thread-polled background work did not finish in time"
 
 
-def _run_and_wait_for_mutation(action, root, monkeypatch, timeout=2.0):
+def _run_and_wait_for_mutation(
+    action, root, monkeypatch, timeout=2.0, manager=None
+):
     """Drive `action` (a call to _on_add/_on_remove), which spawns a
     daemon thread via _run_mutation_off_thread that calls
-    apply_account_mutation and then on_done(result) ->
-    toplevel.after(0, self._refresh_rows).
+    apply_account_mutation and publishes its result to a lock-protected
+    state object. The Tk thread polls that state and finishes the mutation.
 
     Captures that Thread object (by subclassing threading.Thread for
-    the duration of `action`) and joins it directly, rather than
-    polling for a side effect or guessing a settle time -- this is a
-    deterministic "has it fully finished" signal, including the
-    trailing on_done()/after() call, not an approximation of one.
-
-    Also installs a scoped threading.excepthook (restored automatically
-    by monkeypatch at test teardown) that swallows only the one
-    specific, confirmed-benign exception described in
-    _is_expected_afterloop_race. Because the thread is actually joined
-    here, before this function returns, that exception (if raised) is
-    guaranteed to be dispatched while this test's monkeypatch is still
-    in effect -- an earlier version of this helper only polled for a
-    side effect with a fixed settle window, which left a real gap: a
-    thread that happened to finish slightly late fired its exception
-    under a *different, later* test's default (unfiltered) hook,
-    producing PytestUnhandledThreadExceptionWarning attributed to
-    unrelated tests elsewhere in the suite (observed empirically across
-    repeated full-suite runs)."""
-    original_hook = threading.excepthook
-
-    def _filtering_hook(args):
-        if _is_expected_afterloop_race(args):
-            return
-        original_hook(args)
-
-    monkeypatch.setattr(threading, "excepthook", _filtering_hook)
+    the duration of `action`) and joins it directly. If a manager is
+    supplied, first let its independently spawned startup retry finish,
+    matching the disabled-button behavior of the real dialog and keeping
+    the two hook operations serialized."""
+    if manager is not None:
+        _pump_until(root, lambda: not manager._retry_in_flight, timeout)
 
     spawned = []
     real_thread_cls = threading.Thread
@@ -72,6 +47,7 @@ def _run_and_wait_for_mutation(action, root, monkeypatch, timeout=2.0):
     class _RecordingThread(real_thread_cls):
         def __init__(self, *a, **k):
             super().__init__(*a, **k)
+            self.submitted_target = k.get("target", a[1] if len(a) > 1 else None)
             spawned.append(self)
 
     monkeypatch.setattr(threading, "Thread", _RecordingThread)
@@ -82,14 +58,67 @@ def _run_and_wait_for_mutation(action, root, monkeypatch, timeout=2.0):
     spawned[0].join(timeout=timeout)
     assert not spawned[0].is_alive(), "background mutation thread did not finish in time"
 
-    # One more pump in case the after() call actually succeeded (it
-    # won't, under this harness -- see _is_expected_afterloop_race --
-    # but this costs nothing and keeps the helper correct if that ever
-    # changes).
-    try:
-        root.update()
-    except Exception:
-        pass
+    if manager is not None:
+        _pump_until(root, lambda: not manager._mutation_in_flight, timeout)
+    return spawned[0]
+
+
+def test_mutation_completion_is_polled_only_from_the_tk_thread(tmp_path, monkeypatch):
+    """A filesystem worker must never call any Tk API, including after()."""
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+
+    main_thread_id = threading.get_ident()
+
+    class FakeToplevel:
+        def __init__(self):
+            self.after_calls = []
+
+        def winfo_children(self):
+            return []
+
+        def winfo_exists(self):
+            return True
+
+        def after(self, delay, callback):
+            self.after_calls.append((threading.get_ident(), callback))
+
+    class Success:
+        ok = True
+        message = "installed"
+
+    monkeypatch.setattr(
+        accounts_ui,
+        "apply_account_mutation",
+        lambda *args: Success(),
+    )
+
+    spawned = []
+    real_thread_cls = threading.Thread
+
+    class RecordingThread(real_thread_cls):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+
+    monkeypatch.setattr(threading, "Thread", RecordingThread)
+
+    manager = AccountsManager.__new__(AccountsManager)
+    manager.state_dir = tmp_path
+    manager.toplevel = FakeToplevel()
+    manager._mutation_in_flight = False
+    manager._retry_in_flight = False
+    manager._pending_hook_failure = False
+    manager._refresh_rows = lambda: None
+
+    manager._start_mutation([], "install", str(tmp_path))
+    assert len(spawned) == 1
+    spawned[0].join(timeout=2.0)
+    assert not spawned[0].is_alive()
+
+    assert [thread_id for thread_id, _ in manager.toplevel.after_calls] == [main_thread_id]
+    manager.toplevel.after_calls[0][1]()
+    assert manager._mutation_in_flight is False
 
 
 def test_build_row_specs_remove_disabled_at_one_account():
@@ -121,6 +150,17 @@ def test_build_row_specs_uses_stored_label_when_present():
     assert rows[0].display_label == "Personal"
 
 
+def test_build_discovered_path_specs_converts_credentials_to_config_and_sessions_dirs():
+    specs = build_discovered_path_specs([
+        ("Ubuntu", "/home/nick/.claude-work/.credentials.json")
+    ])
+
+    assert specs[0].config_dir == r"\\wsl.localhost\Ubuntu\home\nick\.claude-work"
+    assert specs[0].sessions_dir == (
+        r"\\wsl.localhost\Ubuntu\home\nick\.claude-work\tokitty\sessions"
+    )
+
+
 def test_reconcile_before_save_reloads_from_disk(tmp_path):
     from tokitty.accounts import save_accounts
 
@@ -136,6 +176,14 @@ def test_reconcile_before_save_falls_back_to_in_memory_when_disk_empty(tmp_path)
     assert reconciled is stale_in_memory
 
 
+def test_reconcile_before_save_respects_present_valid_empty_file(tmp_path):
+    from tokitty.accounts import save_accounts
+
+    save_accounts(tmp_path, [])
+    stale_in_memory = [Account(name="acct-v1-a", config_dir="/home/u/.claude-a")]
+    assert reconcile_before_save(tmp_path, stale_in_memory) == []
+
+
 @pytest.mark.gui
 def test_accounts_manager_open_is_singleton_per_root(tmp_path):
     tk = pytest.importorskip("tkinter")
@@ -146,12 +194,49 @@ def test_accounts_manager_open_is_singleton_per_root(tmp_path):
     try:
         save_accounts(tmp_path, [Account(name="acct-v1-a", config_dir="/home/u/.claude-a")])
         first = AccountsManager.open(root, tmp_path)
-        second = AccountsManager.open(root, tmp_path)
+        second = AccountsManager.open(
+            root,
+            tmp_path,
+            discovered_matches=[("Ubuntu", "/home/u/.claude-b/.credentials.json")],
+        )
         assert first is second
+        assert first._discovered_paths[0].config_dir.endswith(r"\home\u\.claude-b")
         first._on_close()
         third = AccountsManager.open(root, tmp_path)
         assert third is not first
         third._on_close()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_discovered_match_renders_clickable_add_row(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty.accounts_ui import AccountsManager
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(
+            root,
+            tmp_path,
+            discovered_matches=[
+                ("Ubuntu", "/home/nick/.claude-work/.credentials.json")
+            ],
+        )
+        selected = []
+        monkeypatch.setattr(mgr, "_on_add_discovered", lambda path: selected.append(path))
+        discovered_buttons = [
+            child
+            for frame in mgr.toplevel.winfo_children()
+            for child in frame.winfo_children()
+            if isinstance(child, tk.Button) and child.cget("text") == "Add"
+        ]
+
+        assert len(discovered_buttons) == 1
+        mgr._retry_in_flight = False
+        mgr._update_mutation_controls()
+        discovered_buttons[0].invoke()
+        assert selected == [r"\\wsl.localhost\Ubuntu\home\nick\.claude-work"]
     finally:
         root.destroy()
 
@@ -184,7 +269,7 @@ def test_on_add_absorbs_implicit_default_when_no_prior_accounts(tmp_path, monkey
     try:
         mgr = AccountsManager(root, tmp_path)
         monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(config_dir))
-        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch)
+        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch, manager=mgr)
 
         accounts = load_accounts(tmp_path)
         assert len(accounts) == 1
@@ -208,11 +293,14 @@ def test_on_add_second_account_rolls_random_look_not_absorb(tmp_path, monkeypatc
     from tokitty import accounts_ui, sprites
     from tokitty.accounts_ui import AccountsManager
     from tokitty.accounts import save_accounts, load_accounts, Account
-    from tokitty.customize import load_customization
+    from tokitty.customize import Customization, load_customization, save_customization
 
     existing_dir = tmp_path / "existing-claude"
     existing_dir.mkdir()
     save_accounts(tmp_path, [Account(name="acct-v1-existing", config_dir=str(existing_dir))])
+    save_customization(tmp_path, {
+        "unrelated": Customization(colorway="gray", pattern="solid", label="Keep me")
+    })
 
     new_dir = tmp_path / "new-claude"
     new_dir.mkdir()
@@ -231,16 +319,183 @@ def test_on_add_second_account_rolls_random_look_not_absorb(tmp_path, monkeypatc
     try:
         mgr = AccountsManager(root, tmp_path)
         monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(new_dir))
-        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch)
+        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch, manager=mgr)
 
         accounts = load_accounts(tmp_path)
         new_slug = [a.name for a in accounts if a.name != "acct-v1-existing"][0]
 
         store = load_customization(tmp_path)
         assert new_slug in store
+        assert store["unrelated"].label == "Keep me"
         assert store[new_slug].colorway in sprites.COLORWAYS
         assert store[new_slug].pattern in sprites.PATTERNS
         assert not absorb_calls, "absorb_implicit_default must not fire when an account already existed"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_on_add_to_valid_empty_file_is_not_implicit_default_mode(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import load_accounts_result, save_accounts
+    from tokitty.customize import SINGLE_KEY, Customization, load_customization, save_customization
+
+    save_accounts(tmp_path, [])
+    save_customization(tmp_path, {
+        SINGLE_KEY: Customization(colorway="gray", pattern="solid")
+    })
+    config_dir = tmp_path / "new-claude"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(_VALID_CREDENTIALS, encoding="utf-8")
+    monkeypatch.setattr(accounts_ui, "random_look", lambda *a, **k: ("black", "tuxedo"))
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(config_dir))
+        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch, manager=mgr)
+
+        result = load_accounts_result(tmp_path)
+        assert result.state == "valid_non_empty"
+        custom = load_customization(tmp_path)[result.accounts[0].name]
+        assert (custom.colorway, custom.pattern) == ("black", "tuxedo")
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_malformed_accounts_file_blocks_add_without_overwriting(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+
+    path = tmp_path / "accounts.json"
+    path.write_text("{not json", encoding="utf-8")
+    errors = []
+    prompted = []
+    monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: prompted.append(1))
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        _pump_until(root, lambda: not mgr._retry_in_flight)
+        mgr._on_add()
+        mgr._on_remove("acct-v1-a", "/home/u/.claude")
+
+        assert len(errors) == 2
+        assert all("malformed" in error[1] for error in errors)
+        assert prompted == []
+        assert path.read_text(encoding="utf-8") == "{not json"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_mutation_guard_blocks_second_add_or_remove_until_completion(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import Account, save_accounts
+
+    accounts = [
+        Account(name="acct-a", config_dir="/home/u/.claude-a"),
+        Account(name="acct-b", config_dir="/home/u/.claude-b"),
+    ]
+    save_accounts(tmp_path, accounts)
+    started = []
+    monkeypatch.setattr(
+        accounts_ui,
+        "_run_mutation_off_thread",
+        lambda *args: started.append(args),
+    )
+    prompts = []
+    monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: prompts.append(1))
+    errors = []
+    monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+
+        mgr._on_remove("acct-b", "/home/u/.claude-b")
+        assert started == [], "mutations must wait for the startup hook retry"
+
+        _pump_until(root, lambda: not mgr._retry_in_flight)
+        mgr._on_remove("acct-b", "/home/u/.claude-b")
+
+        assert mgr._mutation_in_flight is True
+        assert len(started) == 1
+        controls = []
+        for frame in mgr.toplevel.winfo_children():
+            controls.extend(
+                child for child in frame.winfo_children()
+                if getattr(child, "_account_mutation_control", False)
+            )
+        controls.extend(
+            child for child in mgr.toplevel.winfo_children()
+            if getattr(child, "_account_mutation_control", False)
+        )
+        assert controls and all(control.cget("state") == "disabled" for control in controls)
+
+        mgr._on_add()
+        mgr._on_remove("acct-a", "/home/u/.claude-a")
+        assert len(started) == 1
+        assert prompts == []
+
+        class Success:
+            ok = True
+            message = "installed"
+
+        mgr._finish_mutation(Success())
+        assert mgr._mutation_in_flight is False
+
+        class Failure:
+            ok = False
+            message = "hook install failed"
+
+        mgr._finish_mutation(Failure())
+        assert mgr._mutation_in_flight is False
+        assert mgr._pending_hook_failure is True
+        mgr._on_add()
+        assert prompts == []
+        assert "hook install failed" in errors[-1][1]
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_readd_uses_backfilled_slug_and_preserves_orphaned_customization(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import Account, load_accounts, save_accounts, save_identity_history
+    from tokitty.customize import Customization, load_customization, save_customization
+
+    existing_dir = tmp_path / "existing"
+    existing_dir.mkdir()
+    readd_dir = tmp_path / "work"
+    readd_dir.mkdir()
+    (readd_dir / ".credentials.json").write_text(_VALID_CREDENTIALS, encoding="utf-8")
+    save_accounts(tmp_path, [Account(name="Personal", config_dir=str(existing_dir))])
+    from tokitty.accounts import canonicalize_locator
+    save_identity_history(tmp_path, {canonicalize_locator(str(readd_dir)): "Work"})
+    original = Customization(colorway="gray", pattern="solid", label="Work cat")
+    save_customization(tmp_path, {"Work": original})
+    random_calls = []
+    monkeypatch.setattr(accounts_ui, "random_look", lambda *a, **k: random_calls.append(1))
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(readd_dir))
+        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch, manager=mgr)
+
+        assert [account.name for account in load_accounts(tmp_path)] == ["Personal", "Work"]
+        assert load_customization(tmp_path)["Work"] == original
+        assert random_calls == []
     finally:
         root.destroy()
 
@@ -283,6 +538,7 @@ def test_on_add_duplicate_reports_already_added_without_crashing(tmp_path, monke
     root = tk.Tk()
     try:
         mgr = AccountsManager(root, tmp_path)
+        _pump_until(root, lambda: not mgr._retry_in_flight)
         monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(existing_dir))
         errors = []
         # Never let the real modal messagebox pop up -- under a live
@@ -302,7 +558,13 @@ def test_on_add_duplicate_reports_already_added_without_crashing(tmp_path, monke
 def test_on_remove_deletes_from_accounts_but_keeps_customization_orphaned(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     from tokitty.accounts_ui import AccountsManager
-    from tokitty.accounts import save_accounts, load_accounts, Account
+    from tokitty.accounts import (
+        Account,
+        canonicalize_locator,
+        load_accounts,
+        load_identity_history,
+        save_accounts,
+    )
     from tokitty.customize import Customization, save_customization, load_customization
 
     dir_a = tmp_path / "a"
@@ -321,9 +583,15 @@ def test_on_remove_deletes_from_accounts_but_keeps_customization_orphaned(tmp_pa
     root = tk.Tk()
     try:
         mgr = AccountsManager(root, tmp_path)
-        _run_and_wait_for_mutation(lambda: mgr._on_remove("acct-v1-b", str(dir_b)), root, monkeypatch)
+        _run_and_wait_for_mutation(
+            lambda: mgr._on_remove("acct-v1-b", str(dir_b)),
+            root,
+            monkeypatch,
+            manager=mgr,
+        )
 
         assert [a.name for a in (load_accounts(tmp_path) or [])] == ["acct-v1-a"]
+        assert load_identity_history(tmp_path)[canonicalize_locator(str(dir_b))] == "acct-v1-b"
         store = load_customization(tmp_path)
         assert store["acct-v1-b"].label == "Bee"
         assert store["acct-v1-b"].colorway == "gray"
@@ -398,9 +666,12 @@ def test_init_retries_pending_hook_op_off_the_tk_thread(tmp_path, monkeypatch):
     root = tk.Tk()
     holder = {}
     try:
-        _run_and_wait_for_mutation(
+        retry_thread = _run_and_wait_for_mutation(
             lambda: holder.__setitem__("mgr", AccountsManager(root, tmp_path)),
             root, monkeypatch,
+        )
+        assert getattr(retry_thread.submitted_target, "__self__", None) is not holder["mgr"], (
+            "the retry worker must not retain the Tk-owning AccountsManager"
         )
         assert call_order[0] == ("refresh_rows", None), (
             "rows must build synchronously in __init__, before the retry is dispatched"
@@ -411,3 +682,26 @@ def test_init_retries_pending_hook_op_off_the_tk_thread(tmp_path, monkeypatch):
     finally:
         holder["mgr"]._on_close()
         root.destroy()
+
+
+@pytest.mark.gui
+def test_destroying_root_cancels_pending_manager_callbacks(tmp_path):
+    """A manager may still be polling its retry worker when the app exits.
+
+    Tk does not cancel ``after`` timers when ``destroy`` removes the Python
+    command they target.  Leaving the timer behind makes a later Tcl event
+    pass invoke an invalid command, which is especially visible in the GUI
+    suite's repeated create/destroy-root lifecycle.
+    """
+    tk = pytest.importorskip("tkinter")
+    from tokitty.accounts_ui import AccountsManager
+
+    root = tk.Tk()
+    AccountsManager(root, tmp_path)
+    pending_before = set(root.tk.splitlist(root.tk.call("after", "info")))
+    assert pending_before, "manager construction must schedule its retry poll"
+
+    root.destroy()
+
+    pending_after = set(root.tk.splitlist(root.tk.call("after", "info")))
+    assert pending_before.isdisjoint(pending_after)

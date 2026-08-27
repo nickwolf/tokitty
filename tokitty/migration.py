@@ -11,11 +11,12 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from tokitty.accounts import Account
+from tokitty.accounts import Account, IDENTITY_PREFIX
 from tokitty.customize import Customization, SINGLE_KEY
 
 MIGRATION_STATE_FILENAME = "migration_state.json"
 CUSTOMIZATION_MIGRATION_KEY = "customization_default_key_v1"
+LEGACY_ACCOUNT_LABELS_MIGRATION_KEY = "legacy_account_labels_v1"
 
 
 def load_migration_state(state_dir: Path) -> Dict[str, bool]:
@@ -41,8 +42,10 @@ def migrate_default_customization(
     accounts: Optional[List[Account]],
     customization_store: Dict[str, Customization],
 ) -> Dict[str, Customization]:
-    """Run once (tracked by CUSTOMIZATION_MIGRATION_KEY in
-    migration_state.json, never by "does a slug entry already exist" --
+    """Compute the one-time transform when CUSTOMIZATION_MIGRATION_KEY is
+    not yet set in migration_state.json.  The caller persists this result
+    before marking the key complete; the transform never marks itself.
+    Never use "does a slug entry already exist" as the completion test --
     the 2-to-1 row shows that check is unsound, since a stale entry from
     a REMOVED account can already occupy a slug key that has nothing to
     do with the current singleton).
@@ -62,9 +65,46 @@ def migrate_default_customization(
         store[slug] = default_entry
         del store[SINGLE_KEY]
 
-    state[CUSTOMIZATION_MIGRATION_KEY] = True
-    save_migration_state(state_dir, state)
     return store
+
+
+def migrate_legacy_account_labels(
+    state_dir: Path,
+    accounts: Optional[List[Account]],
+    customization_store: Dict[str, Customization],
+) -> Dict[str, Customization]:
+    """Preserve the labels shown by the pre-slug multi-account UI.
+
+    Before ``initial_label`` stopped falling back to ``account.name``, a
+    legacy two-or-more-account configuration showed that name whenever its
+    stored label was blank.  Seed only those legacy, human-readable names;
+    new opaque identity slugs must never become visible labels.
+    """
+    state = load_migration_state(state_dir)
+    if state.get(LEGACY_ACCOUNT_LABELS_MIGRATION_KEY):
+        return customization_store
+
+    store = dict(customization_store)
+    if accounts and len(accounts) >= 2:
+        for account in accounts:
+            if account.name.startswith(IDENTITY_PREFIX):
+                continue
+            current = store.get(account.name, Customization())
+            if not current.label:
+                store[account.name] = Customization(
+                    colorway=current.colorway,
+                    pattern=current.pattern,
+                    overrides=dict(current.overrides),
+                    label=account.name,
+                )
+    return store
+
+
+def mark_customization_migration_complete(state_dir: Path, key: str) -> None:
+    """Durably mark one migration after its transformed store is saved."""
+    state = load_migration_state(state_dir)
+    state[key] = True
+    save_migration_state(state_dir, state)
 
 
 def absorb_implicit_default(

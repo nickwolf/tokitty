@@ -24,7 +24,14 @@ from tokitty.credentials import (
     load_credentials,
     resolve_credentials_source,
 )
-from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
+from tokitty.customize import (
+    Customization,
+    SINGLE_KEY,
+    effective_palette,
+    load_customization,
+    save_customization,
+    save_customization_entry,
+)
 from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
 from tokitty.distro_probe import RunningDistroProbe
 from tokitty.hooks_install import retry_pending_hook_op
@@ -412,6 +419,7 @@ def run_gui() -> int:
     # so first-run auto-open reuses it instead of introducing a new one.
     discovery_lock = threading.Lock()
     discovery_result = {"wsl_matches": [], "done": False, "consumed": False}
+    discovery_accounts_state = load_accounts_result(state_dir).state
 
     def maybe_auto_open() -> None:
         accounts_result = load_accounts_result(state_dir)
@@ -423,7 +431,8 @@ def run_gui() -> int:
 
             keychain_available = keychain_item_exists(KEYCHAIN_SERVICE)
         with discovery_lock:
-            wsl_match_count = len(discovery_result["wsl_matches"])
+            wsl_matches = list(discovery_result["wsl_matches"])
+            wsl_match_count = len(wsl_matches)
         if should_auto_open(
             accounts_state=accounts_result.state,
             env_override_set=env_override_set,
@@ -434,7 +443,7 @@ def run_gui() -> int:
         ):
             from tokitty.accounts_ui import AccountsManager
 
-            AccountsManager.open(root, state_dir)
+            AccountsManager.open(root, state_dir, discovered_matches=wsl_matches)
 
     def run_discovery() -> None:
         # Best-effort, silent unless it matters (see hooks_install.py's
@@ -460,7 +469,7 @@ def run_gui() -> int:
                 pass
 
             wsl_matches = []
-            if sys.platform == "win32":
+            if sys.platform == "win32" and discovery_accounts_state == "absent":
                 from tokitty.wsl_probe import find_all_wsl_credentials
 
                 try:
@@ -498,9 +507,22 @@ def run_gui() -> int:
 
     customization_store = load_customization(state_dir)
 
-    from tokitty.migration import migrate_default_customization
+    from tokitty.migration import (
+        CUSTOMIZATION_MIGRATION_KEY,
+        LEGACY_ACCOUNT_LABELS_MIGRATION_KEY,
+        mark_customization_migration_complete,
+        migrate_default_customization,
+        migrate_legacy_account_labels,
+    )
 
     customization_store = migrate_default_customization(state_dir, accounts, customization_store)
+    customization_store = migrate_legacy_account_labels(state_dir, accounts, customization_store)
+    # The transformed data must be durable before either migration marker.
+    # If the process stops after this save but before a marker, both
+    # transforms are safe to retry on the next launch.
+    save_customization(state_dir, customization_store)
+    mark_customization_migration_complete(state_dir, CUSTOMIZATION_MIGRATION_KEY)
+    mark_customization_migration_complete(state_dir, LEGACY_ACCOUNT_LABELS_MIGRATION_KEY)
 
     def customization_key(account: Optional[Account]) -> str:
         return account.name if account is not None else SINGLE_KEY
@@ -557,7 +579,10 @@ def run_gui() -> int:
     def handle_customization_changed(pane_index: int, field: str, value: Optional[str]) -> None:
         unit = units[pane_index]
         key = unit["key"]
-        custom = customization_store[key]
+        # Start from this identity's latest persisted value, not the
+        # process-lifetime startup snapshot.  Accounts... may have changed
+        # its label (or added other identities) since run_gui initialized.
+        custom = load_customization(state_dir).get(key, customization_store[key])
 
         if field == "colorway":
             if value in sprites.COLORWAYS:
@@ -582,7 +607,7 @@ def run_gui() -> int:
             return
 
         customization_store[key] = custom
-        save_customization(state_dir, customization_store)
+        save_customization_entry(state_dir, key, custom)
         apply_customization(unit["pane"], custom)
         if field == "label":
             label = initial_label(unit["account"], custom)
@@ -617,7 +642,9 @@ def run_gui() -> int:
     from tokitty.accounts_ui import AccountsManager
 
     def open_accounts() -> None:
-        AccountsManager.open(root, state_dir)
+        with discovery_lock:
+            matches = list(discovery_result["wsl_matches"])
+        AccountsManager.open(root, state_dir, discovered_matches=matches)
 
     window.on_open_accounts = open_accounts
 

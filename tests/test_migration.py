@@ -4,8 +4,12 @@ from tokitty.accounts import Account
 from tokitty.customize import Customization, SINGLE_KEY
 from tokitty.migration import (
     CUSTOMIZATION_MIGRATION_KEY,
+    LEGACY_ACCOUNT_LABELS_MIGRATION_KEY,
     absorb_implicit_default,
+    load_migration_state,
+    mark_customization_migration_complete,
     migrate_default_customization,
+    migrate_legacy_account_labels,
 )
 
 
@@ -75,3 +79,53 @@ def test_migration_is_idempotent_across_repeated_calls(tmp_path):
     edited["acct-v1-abc"] = replace(edited["acct-v1-abc"], label="Personal")
     second = migrate_default_customization(tmp_path, accounts, edited)
     assert second["acct-v1-abc"].label == "Personal"
+
+
+def test_default_migration_does_not_mark_itself_before_caller_persists(tmp_path):
+    store = {SINGLE_KEY: Customization(colorway="black", pattern="tuxedo")}
+    accounts = [Account(name="acct-v1-abc", config_dir="/home/u/.claude")]
+
+    migrated = migrate_default_customization(tmp_path, accounts, store)
+
+    assert migrated["acct-v1-abc"] == store[SINGLE_KEY]
+    assert load_migration_state(tmp_path) == {}
+    mark_customization_migration_complete(tmp_path, CUSTOMIZATION_MIGRATION_KEY)
+    assert load_migration_state(tmp_path)[CUSTOMIZATION_MIGRATION_KEY] is True
+
+
+def test_legacy_multi_account_migration_seeds_blank_visible_labels(tmp_path):
+    accounts = [
+        Account(name="Personal", config_dir="/home/u/.claude-personal"),
+        Account(name="Work", config_dir="/home/u/.claude-work"),
+    ]
+    store = {
+        "Personal": Customization(colorway="gray", pattern="solid"),
+        "Work": Customization(colorway="black", pattern="tuxedo", label="Office"),
+    }
+
+    migrated = migrate_legacy_account_labels(tmp_path, accounts, store)
+
+    assert migrated["Personal"].label == "Personal"
+    assert migrated["Personal"].colorway == "gray"
+    assert migrated["Work"].label == "Office"
+    assert load_migration_state(tmp_path) == {}
+
+
+def test_legacy_label_migration_is_independently_marked_and_skips_opaque_slugs(tmp_path):
+    accounts = [
+        Account(name="acct-v1-abc", config_dir="/home/u/.claude-a"),
+        Account(name="Legacy", config_dir="/home/u/.claude-b"),
+    ]
+    store = {
+        "acct-v1-abc": Customization(),
+        "Legacy": Customization(),
+    }
+
+    migrated = migrate_legacy_account_labels(tmp_path, accounts, store)
+    assert migrated["acct-v1-abc"].label == ""
+    assert migrated["Legacy"].label == "Legacy"
+
+    mark_customization_migration_complete(tmp_path, LEGACY_ACCOUNT_LABELS_MIGRATION_KEY)
+    edited = dict(migrated)
+    edited["Legacy"] = replace(edited["Legacy"], label="")
+    assert migrate_legacy_account_labels(tmp_path, accounts, edited)["Legacy"].label == ""

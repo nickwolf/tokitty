@@ -7,8 +7,8 @@ import pytest
 
 from tokitty.accounts import (
     Account,
-    AccountsLoadResult,
     assign_identity_slug,
+    backfill_identity_history,
     canonicalize_locator,
     env_conflict_warning,
     load_accounts,
@@ -235,3 +235,19 @@ def test_identity_history_round_trip(tmp_path):
 
 def test_identity_history_absent_file_returns_empty(tmp_path):
     assert load_identity_history(tmp_path) == {}
+
+
+def test_backfill_identity_history_registers_existing_accounts_and_preserves_history(tmp_path):
+    existing = Account(name="Work", config_dir="/home/u/.claude-work")
+    already_registered = Account(name="Personal", config_dir="/home/u/.claude-personal")
+    save_identity_history(tmp_path, {
+        canonicalize_locator(already_registered.config_dir): already_registered.name,
+        "wsl:ubuntu:/home/removed/.claude": "Removed",
+    })
+
+    result = backfill_identity_history(tmp_path, [existing, already_registered])
+
+    assert result[canonicalize_locator(existing.config_dir)] == "Work"
+    assert result[canonicalize_locator(already_registered.config_dir)] == "Personal"
+    assert result["wsl:ubuntu:/home/removed/.claude"] == "Removed"
+    assert load_identity_history(tmp_path) == result

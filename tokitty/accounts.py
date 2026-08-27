@@ -185,3 +185,31 @@ def save_identity_history(state_dir: Path, history: dict) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def backfill_identity_history(state_dir: Path, accounts: List[Account]) -> dict:
+    """Register the stable names of accounts created before identity
+    history existed.
+
+    An active account is authoritative for its locator.  Recording it before
+    remove/add mutations lets a later re-add recover the same customization
+    key instead of allocating a new hash-derived slug.
+    """
+    history = load_identity_history(state_dir)
+    covered_names = set(history.values())
+    updated = dict(history)
+    for account in accounts:
+        if account.name in covered_names:
+            continue
+        try:
+            locator = canonicalize_locator(account.config_dir)
+        except ValueError:
+            # Existing hand-written files predate manual-path validation;
+            # do not make the manager unusable because one legacy locator
+            # cannot be made stable safely.
+            continue
+        updated[locator] = account.name
+        covered_names.add(account.name)
+    if updated != history:
+        save_identity_history(state_dir, updated)
+    return updated
