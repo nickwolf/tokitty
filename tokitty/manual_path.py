@@ -99,6 +99,12 @@ def validate_manual_path(
             return PathValidationResult(
                 ok=False, error=f"{creds} is not a valid Claude Code credentials file."
             )
+        # os.path.expanduser only substitutes the "~" segment; it leaves
+        # whatever separator style followed it untouched, so "~/foo" on
+        # Windows becomes a mixed "C:\Users\you/foo". Route the local
+        # branch's result through Path's own string form so the stored
+        # config_dir always comes out in the platform's native style.
+        candidate = str(path)
 
     try:
         locator = canonicalize_locator(candidate)

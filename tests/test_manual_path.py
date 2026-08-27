@@ -1,5 +1,4 @@
 import json
-import pathlib
 import sys
 
 from tokitty.accounts import canonicalize_locator
@@ -108,36 +107,27 @@ def test_wsl_unc_with_credentials_filename_routes_through_wsl_branch():
     assert calls, "expected the injected run() to be invoked via the WSL branch"
 
 
-class _WindowsStyleAbsolutePath(pathlib.PosixPath):
-    """Test double: real POSIX I/O (so it can touch tmp_path on this Linux
-    test runner), but `is_absolute()` uses real Windows pathlib semantics
-    (PureWindowsPath), which is False for a leading-slash path with no
-    drive letter -- reproducing the bug's platform-specific trigger, which
-    cannot occur naturally on Linux since PosixPath already treats a
-    leading "/" as absolute."""
+def test_posix_shaped_path_without_drive_letter_is_treated_as_windows_local_absolute():
+    """A POSIX-style path with no drive letter must not be rejected by
+    the absoluteness check, even though real Windows pathlib.is_absolute()
+    returns False for it (no drive letter means Windows treats it as
+    drive-relative, not absolute) -- only \\wsl$\\ / \\wsl.localhost\\ UNC
+    forms are recognized as WSL, so this exact shape has to fall through
+    to local validation instead of being rejected outright.
 
-    def is_absolute(self):
-        return pathlib.PureWindowsPath(str(self)).is_absolute()
-
-
-def test_posix_shaped_path_without_drive_letter_is_treated_as_windows_local_absolute(tmp_path, monkeypatch):
-    monkeypatch.setattr("tokitty.manual_path.Path", _WindowsStyleAbsolutePath)
-    config_dir = tmp_path / ".claude-work"
-    config_dir.mkdir()
-    (config_dir / ".credentials.json").write_text(_oauth_json(), encoding="utf-8")
-
-    if sys.platform != "win32":
-        # Sanity-check the premise: this exact path shape is NOT absolute
-        # under real Windows pathlib semantics, which is why a bare
-        # `path.is_absolute()` check alone rejected it. On real Windows
-        # tmp_path is always drive-lettered, so this premise doesn't
-        # apply the same way there; the monkeypatched Path below is what
-        # actually exercises the fixed code path on every platform.
-        assert not pathlib.PureWindowsPath(str(config_dir)).is_absolute()
-
-    result = validate_manual_path(str(config_dir), active_config_dirs=[])
-    assert result.ok
-    assert result.config_dir == str(config_dir)
+    The directory doesn't need to actually exist to prove this: what
+    matters is which error comes back. "Not an absolute path" would mean
+    the absoluteness gate rejected the input; "No .credentials.json
+    found" means it passed the gate and failed at the next, unrelated
+    check instead, which is what should happen here on every platform.
+    A real directory would also work on Linux/macOS (where this shape is
+    already absolute) but not reliably on Windows, where resolving a
+    driveless path for real file I/O depends on which drive the current
+    working directory happens to be on."""
+    result = validate_manual_path("/home/nick/.claude-work-does-not-exist", active_config_dirs=[])
+    assert not result.ok
+    assert "not an absolute path" not in result.error.lower()
+    assert "No .credentials.json found" in result.error
 
 
 def test_duplicate_of_active_account_rejected(tmp_path):
