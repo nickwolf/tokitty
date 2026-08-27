@@ -467,6 +467,86 @@ def test_mutation_guard_blocks_second_add_or_remove_until_completion(tmp_path, m
 
 
 @pytest.mark.gui
+def test_mutation_guard_survives_close_and_reopen(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import Account, save_accounts
+
+    accounts = [
+        Account(name="acct-a", config_dir="/home/u/.claude-a"),
+        Account(name="acct-b", config_dir="/home/u/.claude-b"),
+    ]
+    save_accounts(tmp_path, accounts)
+
+    mutation_started = threading.Event()
+    release_mutation = threading.Event()
+    mutation_calls = []
+    retry_calls = []
+
+    class Success:
+        ok = True
+        message = "installed"
+
+    def blocking_mutation(*args):
+        mutation_calls.append(args)
+        mutation_started.set()
+        assert release_mutation.wait(timeout=5.0)
+        return Success()
+
+    monkeypatch.setattr(accounts_ui, "apply_account_mutation", blocking_mutation)
+    monkeypatch.setattr(
+        accounts_ui,
+        "retry_pending_hook_op",
+        lambda state_dir: retry_calls.append(state_dir),
+    )
+    prompts = []
+    monkeypatch.setattr(
+        accounts_ui.simpledialog,
+        "askstring",
+        lambda *args, **kwargs: prompts.append(1),
+    )
+
+    root = tk.Tk()
+    second = None
+    try:
+        first = AccountsManager.open(root, tmp_path)
+        _pump_until(root, lambda: not first._retry_in_flight)
+        first._on_remove("acct-b", "/home/u/.claude-b")
+        assert mutation_started.wait(timeout=2.0)
+
+        first._on_close()
+        second = AccountsManager.open(root, tmp_path)
+
+        assert second is not first
+        assert second._mutation_in_flight is True
+        assert second._retry_in_flight is False
+        assert retry_calls == [tmp_path]
+
+        second._on_add()
+        second._on_remove("acct-a", "/home/u/.claude-a")
+        assert prompts == []
+        assert len(mutation_calls) == 1
+
+        add_button = next(
+            child
+            for child in second.toplevel.winfo_children()
+            if isinstance(child, tk.Button) and child.cget("text") == "Add by path…"
+        )
+        assert add_button.cget("state") == "disabled"
+
+        release_mutation.set()
+        _pump_until(root, lambda: not second._mutation_in_flight)
+        assert add_button.cget("state") == "normal"
+        assert len(mutation_calls) == 1
+    finally:
+        release_mutation.set()
+        if second is not None and second.toplevel.winfo_exists():
+            second._on_close()
+        root.destroy()
+
+
+@pytest.mark.gui
 def test_readd_uses_backfilled_slug_and_preserves_orphaned_customization(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     from tokitty import accounts_ui

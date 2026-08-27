@@ -43,6 +43,17 @@ from tokitty.wsl_probe import (
 
 _manager_instances: Dict[int, "AccountsManager"] = {}
 
+
+@dataclass
+class _InFlightOperation:
+    kind: str
+    lock: threading.Lock
+    state: Dict[str, object]
+
+
+_in_flight_operations: Dict[Path, _InFlightOperation] = {}
+_in_flight_operations_lock = threading.Lock()
+
 # How often __init__'s Tk-thread-owned poll checks whether the background
 # pending-hook-op retry has finished (see AccountsManager.__init__). Short,
 # since this only gates a one-shot row-refresh right after the dialog opens,
@@ -113,6 +124,42 @@ def reconcile_before_save(state_dir: Path, in_memory_accounts: List[Account]) ->
     return in_memory_accounts
 
 
+def _state_dir_key(state_dir: Path) -> Path:
+    return state_dir.resolve()
+
+
+def _claim_operation(
+    state_dir: Path, kind: str
+) -> Tuple[Path, _InFlightOperation, bool]:
+    """Claim the single process-wide hook-operation slot for state_dir."""
+    key = _state_dir_key(state_dir)
+    with _in_flight_operations_lock:
+        existing = _in_flight_operations.get(key)
+        if existing is not None:
+            return key, existing, False
+        operation = _InFlightOperation(
+            kind=kind,
+            lock=threading.Lock(),
+            state={"done": False},
+        )
+        _in_flight_operations[key] = operation
+        return key, operation, True
+
+
+def _complete_operation(
+    key: Path, operation: _InFlightOperation, outcome: object
+) -> None:
+    """Publish an outcome and release the shared slot from the worker."""
+    with operation.lock:
+        if operation.state["done"]:
+            return
+        operation.state["outcome"] = outcome
+        operation.state["done"] = True
+    with _in_flight_operations_lock:
+        if _in_flight_operations.get(key) is operation:
+            _in_flight_operations.pop(key)
+
+
 def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
                               config_dir: str, on_done) -> None:
     def worker():
@@ -125,16 +172,14 @@ def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _run_retry_off_thread(state_dir: Path, retry_lock, retry_state) -> None:
+def _run_retry_off_thread(state_dir: Path, on_done) -> None:
     try:
         outcome = retry_pending_hook_op(state_dir)
-    except (OSError, PermissionError) as exc:
+    except Exception as exc:
         # A failed retry leaves the pending-op record in place for next time,
         # exactly like any other failed retry_pending_hook_op call.
         outcome = exc
-    with retry_lock:
-        retry_state["outcome"] = outcome
-        retry_state["done"] = True
+    on_done(outcome)
 
 
 class AccountsManager:
@@ -149,8 +194,6 @@ class AccountsManager:
     ):
         self.root = root
         self.state_dir = state_dir
-        self._mutation_in_flight = False
-        self._retry_in_flight = True
         self._pending_hook_failure = False
         self._retry_after_id = None
         self._mutation_after_id = None
@@ -164,6 +207,10 @@ class AccountsManager:
         self.toplevel.resizable(False, False)
         self.toplevel.protocol("WM_DELETE_WINDOW", self._on_close)
         self.toplevel.bind("<Destroy>", self._on_toplevel_destroy, add="+")
+        state_key, operation, claimed = _claim_operation(state_dir, "retry")
+        self._state_key = state_key
+        self._mutation_in_flight = operation.kind == "mutation"
+        self._retry_in_flight = operation.kind == "retry"
         self._build()
         # Best-effort, silent unless it matters: retries a hook
         # install/uninstall left incomplete by a prior crash, one more
@@ -186,16 +233,40 @@ class AccountsManager:
         # no live mainloop to serialize the two, which reproduced as a
         # hard interpreter abort (not a catchable exception) under this
         # file's own test harness the moment both were in flight at once.
-        self._retry_lock = threading.Lock()
-        self._retry_state = {"done": False}
-        threading.Thread(
-            target=_run_retry_off_thread,
-            args=(self.state_dir, self._retry_lock, self._retry_state),
-            daemon=True,
-        ).start()
-        self._retry_after_id = self.toplevel.after(
-            _RETRY_POLL_MS, self._poll_retry_done
-        )
+        if claimed:
+            def on_done(outcome):
+                _complete_operation(state_key, operation, outcome)
+
+            try:
+                threading.Thread(
+                    target=_run_retry_off_thread,
+                    args=(self.state_dir, on_done),
+                    daemon=True,
+                ).start()
+            except Exception as exc:
+                _complete_operation(state_key, operation, exc)
+        self._watch_operation(operation)
+
+    def _watch_operation(self, operation: _InFlightOperation) -> None:
+        """Poll an operation, including one started by an old dialog."""
+        self._mutation_in_flight = operation.kind == "mutation"
+        self._retry_in_flight = operation.kind == "retry"
+        if operation.kind == "mutation":
+            self._mutation_operation = operation
+            self._mutation_lock = operation.lock
+            self._mutation_state = operation.state
+            if getattr(self, "_mutation_after_id", None) is None:
+                self._mutation_after_id = self.toplevel.after(
+                    _MUTATION_POLL_MS, self._poll_mutation_done
+                )
+        else:
+            self._retry_lock = operation.lock
+            self._retry_state = operation.state
+            if getattr(self, "_retry_after_id", None) is None:
+                self._retry_after_id = self.toplevel.after(
+                    _RETRY_POLL_MS, self._poll_retry_done
+                )
+        self._update_mutation_controls()
 
     def _poll_retry_done(self) -> None:
         self._retry_after_id = None
@@ -370,10 +441,6 @@ class AccountsManager:
 
         visit(self.toplevel)
 
-    def _set_mutation_in_flight(self, in_flight: bool) -> None:
-        self._mutation_in_flight = in_flight
-        self._update_mutation_controls()
-
     def _load_accounts_for_mutation(self) -> Optional[AccountsLoadResult]:
         result = load_accounts_result(self.state_dir)
         if result.state == "malformed":
@@ -387,6 +454,9 @@ class AccountsManager:
         return result
 
     def _finish_mutation(self, outcome) -> None:
+        operation = getattr(self, "_mutation_operation", None)
+        if operation is not None:
+            _complete_operation(self._state_key, operation, outcome)
         failed = isinstance(outcome, Exception) or not outcome.ok
         self._mutation_in_flight = False
         self._pending_hook_failure = failed
@@ -423,26 +493,23 @@ class AccountsManager:
     def _start_mutation(
         self, accounts: List[Account], op: str, config_dir: str
     ) -> None:
-        if self._mutation_in_flight:
+        if self._mutation_in_flight or self._retry_in_flight:
             return
-        self._set_mutation_in_flight(True)
-
-        self._mutation_lock = threading.Lock()
-        self._mutation_state = {"done": False}
-        mutation_lock = self._mutation_lock
-        mutation_state = self._mutation_state
+        state_key, operation, claimed = _claim_operation(self.state_dir, "mutation")
+        self._state_key = state_key
+        self._watch_operation(operation)
+        if not claimed:
+            return
 
         def on_done(outcome):
-            with mutation_lock:
-                mutation_state["outcome"] = outcome
-                mutation_state["done"] = True
+            _complete_operation(state_key, operation, outcome)
 
-        _run_mutation_off_thread(
-            self.state_dir, accounts, op, config_dir, on_done
-        )
-        self._mutation_after_id = self.toplevel.after(
-            _MUTATION_POLL_MS, self._poll_mutation_done
-        )
+        try:
+            _run_mutation_off_thread(
+                self.state_dir, accounts, op, config_dir, on_done
+            )
+        except Exception as exc:
+            _complete_operation(state_key, operation, exc)
 
     def _render_virtual_macos_row(self) -> None:
         frame = tk.Frame(self.toplevel)
