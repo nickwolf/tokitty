@@ -8,11 +8,12 @@ tests never invoke a real wsl.exe.
 from __future__ import annotations
 
 import subprocess
+from pathlib import PurePosixPath
 from typing import Callable, List, Tuple
 
 from tokitty.credentials import ENV_OVERRIDE, AmbiguousCredentialsError, CredentialsError
 
-_CHECK_SCRIPT = 'for u in /home/*; do f="$u/.claude/.credentials.json"; [ -f "$f" ] && echo "$f"; done'
+_CHECK_SCRIPT = 'for f in /home/*/.claude*/.credentials.json; do [ -f "$f" ] && echo "$f"; done'
 
 # wsl.exe is a console app; spawning it from a GUI process (pythonw.exe has
 # no console of its own) without this flag flashes a visible terminal
@@ -114,28 +115,52 @@ def find_wsl_credentials(run: Callable = subprocess.run) -> Tuple[str, str]:
     )
 
 
-def _wsl_home_windows_style(wsl_credentials_path: str) -> str:
-    home = wsl_credentials_path.rsplit("/.claude/", 1)[0]
-    return home.lstrip("/").replace("/", "\\")
+def find_all_wsl_credentials(run: Callable = subprocess.run) -> List[Tuple[str, str]]:
+    """Return every (distro, wsl_side_path) credentials match across all
+    installed WSL distros, without collapsing to one and without raising
+    on zero or many matches. Used by the Accounts manager's discovery,
+    which needs the full set; find_wsl_credentials keeps its
+    single-match/raise contract for the existing single-account
+    resolution callers."""
+    distros = list_wsl_distros(run=run)
+    matches: List[Tuple[str, str]] = []
+    for distro in distros:
+        for path in _credentials_paths_in_distro(distro, run=run):
+            matches.append((distro, path))
+    return matches
+
+
+def _wsl_config_dir_windows_style(wsl_credentials_path: str) -> str:
+    """Windows-style (backslash) relative path to the credentials file's
+    parent directory, independent of that directory's basename. Fixes
+    the old rsplit("/.claude/", 1) approach, which silently returned the
+    whole input unsplit whenever the basename wasn't literally ".claude"
+    (e.g. ".claude-work"), because str.rsplit returns the input
+    unchanged when the separator isn't found."""
+    config_posix = str(PurePosixPath(wsl_credentials_path).parent)
+    return config_posix.lstrip("/").replace("/", "\\")
+
+
+def wsl_config_dir_from_credentials(distro: str, wsl_credentials_path: str) -> str:
+    """Derive the \\\\wsl.localhost UNC path to the WSL-side Claude Code
+    config dir (the one containing settings.json) from a (distro,
+    wsl-side credentials path) pair returned by find_wsl_credentials --
+    never hardcode a username, always derive it from the actual
+    credentials path found."""
+    windows_style = _wsl_config_dir_windows_style(wsl_credentials_path)
+    # Backslash built outside the f-string expression on purpose:
+    # backslashes inside an f-string expression are a SyntaxError before
+    # Python 3.12, and the CI matrix runs 3.10.
+    unc_prefix = "\\\\wsl.localhost\\" + distro + "\\"
+    return unc_prefix + windows_style
 
 
 def wsl_sessions_dir_from_credentials(distro: str, wsl_credentials_path: str) -> str:
     """Derive the \\\\wsl.localhost UNC path to tokitty's sessions dir from
     a (distro, wsl-side credentials path) pair returned by
-    find_wsl_credentials -- never hardcode a username, always derive it
-    from the actual credentials path found."""
-    windows_style_home = _wsl_home_windows_style(wsl_credentials_path)
-    return f"\\\\wsl.localhost\\{distro}\\{windows_style_home}\\.claude\\tokitty\\sessions"
-
-
-def wsl_config_dir_from_credentials(distro: str, wsl_credentials_path: str) -> str:
-    """Derive the \\\\wsl.localhost UNC path to the WSL-side Claude Code
-    config dir (the one containing settings.json) from a (distro, wsl-side
-    credentials path) pair returned by find_wsl_credentials -- never
-    hardcode a username, always derive it from the actual credentials path
-    found."""
-    windows_style_home = _wsl_home_windows_style(wsl_credentials_path)
-    return f"\\\\wsl.localhost\\{distro}\\{windows_style_home}\\.claude"
+    find_wsl_credentials."""
+    config_dir = wsl_config_dir_from_credentials(distro, wsl_credentials_path)
+    return config_dir + "\\tokitty\\sessions"
 
 
 def read_wsl_credentials(distro: str, wsl_path: str, run: Callable = subprocess.run) -> str:

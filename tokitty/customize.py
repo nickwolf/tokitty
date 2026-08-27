@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
 from typing import Dict
 
@@ -106,6 +106,31 @@ def save_customization(state_dir: Path, data: Dict[str, Customization]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def save_customization_entry(
+    state_dir: Path, key: str, customization: Customization
+) -> Dict[str, Customization]:
+    """Merge one changed identity into the latest on-disk store.
+
+    The main window and Accounts manager keep separate in-memory views of
+    customization.json.  Single-account edits must not write either stale
+    whole-file snapshot back over changes made by the other UI.
+    """
+    store = load_customization(state_dir)
+    store[key] = customization
+    save_customization(state_dir, store)
+    return store
+
+
+def rename_account(state_dir: Path, slug: str, label: str) -> None:
+    """Rename operates on the stable identity slug, never on row
+    position or accounts.json's "name" field -- see the Accounts
+    manager's Rename flow, which must not confuse a live pane's index
+    with a manager row's index."""
+    store = load_customization(state_dir)
+    current = store.get(slug, Customization())
+    save_customization_entry(state_dir, slug, replace(current, label=label))
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:

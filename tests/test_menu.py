@@ -104,3 +104,30 @@ def test_randomize_and_surprise_present_with_seams():
     assert items["Surprise me"].checkbox() is True
     items["Surprise me"].action()
     assert calls["tsurp"] == 1
+
+
+def test_accounts_item_omitted_when_callback_not_given():
+    kwargs, _, _ = _kwargs()
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert "Accounts…" not in labels
+
+
+def test_accounts_item_present_when_callback_given():
+    kwargs, calls, _ = _kwargs(
+        on_open_accounts=lambda: calls.__setitem__("accounts", calls.get("accounts", 0) + 1),
+    )
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert labels.count("Accounts…") == 1
+    items = {i.label: i for i in build_menu(**kwargs) if not i.separator}
+    items["Accounts…"].action()
+    assert calls["accounts"] == 1
+
+
+def test_accounts_item_positioned_after_rename_before_refresh_separator():
+    kwargs, _, _ = _kwargs(on_open_accounts=lambda: None)
+    items = build_menu(**kwargs)
+    labels = [None if i.separator else i.label for i in items]
+    idx = labels.index("Accounts…")
+    assert labels[idx - 1] == "Rename…"
+    assert labels[idx + 1] is None  # separator preceding "Refresh now"
+    assert labels[idx + 2] == "Refresh now"

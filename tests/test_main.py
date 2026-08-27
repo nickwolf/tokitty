@@ -1,6 +1,10 @@
 import random
+import threading
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from tokitty.__main__ import (
     _display_state_for,
@@ -236,33 +240,34 @@ def test_initial_customization_no_account_no_stored_rolls_random():
     assert result.colorway in COLORWAYS and result.pattern in PATTERNS
 
 
-def test_initial_label_single_mode_defaults_empty():
+def test_initial_label_defaults_empty():
     account = Account(name="Work", config_dir="/x")
     custom = Customization()
-    assert initial_label(account, custom, dual=False) == ""
+    assert initial_label(account, custom) == ""
 
 
-def test_initial_label_dual_mode_defaults_to_account_name():
-    account = Account(name="Work", config_dir="/x")
+def test_initial_label_never_falls_back_to_account_name():
+    # Since the identity slug scheme, account.name is an opaque
+    # SHA-256-derived string and must never be shown to the user.
+    account = Account(name="acct-v1-deadbeef", config_dir="/x")
     custom = Customization()
-    assert initial_label(account, custom, dual=True) == "Work"
+    assert initial_label(account, custom) == ""
 
 
-def test_initial_label_explicit_stored_label_wins_single():
+def test_initial_label_explicit_stored_label_wins():
     account = Account(name="Work", config_dir="/x")
     custom = Customization(label="Fluffy")
-    assert initial_label(account, custom, dual=False) == "Fluffy"
+    assert initial_label(account, custom) == "Fluffy"
 
 
-def test_initial_label_explicit_stored_label_wins_dual():
-    account = Account(name="Work", config_dir="/x")
+def test_initial_label_explicit_stored_label_wins_no_account():
     custom = Customization(label="Fluffy")
-    assert initial_label(account, custom, dual=True) == "Fluffy"
+    assert initial_label(None, custom) == "Fluffy"
 
 
-def test_initial_label_dual_mode_no_account_defaults_empty():
+def test_initial_label_no_account_defaults_empty():
     custom = Customization()
-    assert initial_label(None, custom, dual=True) == ""
+    assert initial_label(None, custom) == ""
 
 
 def test_label_field_roundtrips_through_dataclasses_replace():
@@ -280,12 +285,11 @@ def test_label_field_can_be_cleared_back_to_empty():
     custom = Customization(label="Whiskers")
     cleared = replace(custom, label="")
     assert cleared.label == ""
-    # Clearing the stored label falls back to the dual-mode account-name
-    # default (or blank in single mode) via initial_label -- "" stored
-    # means "use default", consistent with its existing tested semantics.
+    # Clearing the stored label returns to blank -- initial_label never
+    # falls back to account.name, regardless of account.
     account = Account(name="Work", config_dir="/x")
-    assert initial_label(account, cleared, dual=True) == "Work"
-    assert initial_label(None, cleared, dual=False) == ""
+    assert initial_label(account, cleared) == ""
+    assert initial_label(None, cleared) == ""
 
 
 def test_build_fetch_fn_reports_keychain_denied(monkeypatch):
@@ -371,6 +375,28 @@ def test_keychain_denied_falls_back_to_cached_countdown(monkeypatch):
     assert display["dimmed"] is True
 
 
+def test_ambiguous_credentials_hint_without_cache_points_at_accounts_not_env_var():
+    # Cold start (no previous successful poll) reads the local `hints` dict
+    # inside _display_state_for.
+    display = _display_state_for(_error("ambiguous_credentials"), previous=None, now=NOW)
+    assert "TOKITTY_CREDENTIALS" not in display["hint_text"]
+    assert "Accounts" in display["hint_text"]
+
+
+def test_ambiguous_credentials_hint_overdue_cache_points_at_accounts_not_env_var():
+    # A cached countdown that's gone overdue reads _STALE_HINTS instead --
+    # same status, different dict, so both need repointing away from the
+    # now-removed env var advice.
+    capped_limit = _limit(kind="session", resets_at=NOW + timedelta(minutes=5))
+    previous = _ok(_snapshot(session_pct=100.0, limits=[capped_limit]))
+
+    later = NOW + timedelta(minutes=20)  # well past the cached reset time
+    display = _display_state_for(_error("ambiguous_credentials"), previous=previous, now=later)
+
+    assert "TOKITTY_CREDENTIALS" not in display["hint_text"]
+    assert "Accounts" in display["hint_text"]
+
+
 def _usage(offset_seconds=0, session_pct=10.0, weekly_pct=5.0):
     return UsageSnapshot(
         session_pct=session_pct,
@@ -414,3 +440,474 @@ def test_projection_text_for_is_none_during_warm_up():
 def test_projection_text_for_tolerates_a_display_without_a_dimmed_key():
     text = _projection_text_for(_burning_tracker(), {}, NOW + timedelta(seconds=600))
     assert text is not None
+
+
+def _capture_spawned_threads(monkeypatch):
+    """Subclass threading.Thread for the duration of the test so every
+    background thread run_gui spawns (discovery, pollers, watchers) is
+    recorded without changing its real behavior -- same technique as
+    test_accounts_ui.py's _run_and_wait_for_mutation.
+
+    Identifies each thread by its target's __name__, captured at
+    construction time rather than read back afterward: CPython's
+    Thread.run() does `del self._target, self._args, self._kwargs` in a
+    finally clause once the target returns, so a completed thread's
+    _target is already gone by the time a test gets around to inspecting
+    it -- capturing the name up front avoids that race entirely."""
+    real_thread_cls = threading.Thread
+    spawned = []
+
+    class _RecordingThread(real_thread_cls):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            target = k.get("target") if "target" in k else (a[0] if a else None)
+            self.recorded_target_name = getattr(target, "__name__", None)
+            spawned.append(self)
+
+    monkeypatch.setattr(threading, "Thread", _RecordingThread)
+    return spawned
+
+
+@pytest.mark.gui
+def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
+    """Controller ruling on Task 15's brief: retry_pending_hook_op
+    (hooks_install.py, Task 8/12) was never wired into run_gui through
+    Task 14 -- confirmed by grep. It must fire once from the startup
+    sequence, off the Tk thread alongside WSL discovery (run_discovery)."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+
+    calls = []
+    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    result = main_module.run_gui()
+    assert result == 0
+
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
+    assert len(discovery_threads) == 1, "expected exactly one discovery thread"
+    discovery_threads[0].join(timeout=5.0)
+    assert not discovery_threads[0].is_alive(), "discovery thread did not finish in time"
+
+    assert calls == [tmp_path]
+
+
+@pytest.mark.gui
+def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeypatch):
+    """TOKITTY_DEBUG_ACCOUNTS bypasses should_auto_open and discovery
+    entirely (acceptance criteria); the retry call rides along with that
+    same bypass since debug mode already skips normal account
+    resolution -- verified here rather than assumed."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setenv("TOKITTY_DEBUG_ACCOUNTS", "2")
+
+    calls = []
+    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    result = main_module.run_gui()
+    assert result == 0
+
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
+    assert discovery_threads == [], "debug-accounts mode must not launch the discovery thread"
+    assert calls == [], "debug-accounts mode must not retry the pending hook op"
+
+
+@pytest.mark.gui
+def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(tmp_path, monkeypatch):
+    """Reviewer-confirmed Finding 1 (CRITICAL): the original implementation
+    called root.after(0, maybe_auto_open) from run_discovery's background
+    thread. root.after() called from a non-Tk thread before root.mainloop()
+    has actually started raises "main thread is not in main loop" --
+    reproduced directly -- and the scheduled callback is silently DROPPED
+    FOREVER, not merely delayed, even once mainloop() eventually starts.
+    Since run_discovery starts (well) before the synchronous unit-building
+    loop even begins, it is entirely plausible for discovery to finish
+    before mainloop() is reached on a real launch.
+
+    The fix: run_discovery only ever writes discovery_result under a lock;
+    maybe_auto_open is invoked exclusively from tick(), which polls that
+    flag on the Tk thread via its own self-rescheduling
+    root.after(UI_REFRESH_MS, tick) -- the same mechanism this file
+    already uses for Poller/ActivityWatcher results.
+
+    This test proves the fix holds under the *exact* adversarial ordering
+    Finding 1 describes, deterministically rather than hoping a race lands
+    right: threading.Thread is patched so specifically run_discovery's
+    thread executes synchronously, in-place, the instant .start() is
+    called -- i.e. discovery_result["done"] becomes True before run_gui()
+    even reaches the unit-building loop, let alone root.mainloop(). Every
+    other thread run_gui spawns (Poller, ActivityWatcher) still runs as a
+    real background thread -- only run_discovery's target is forced
+    synchronous, identified by name at Thread construction time, same
+    technique as _capture_spawned_threads. should_auto_open is forced to
+    return True (bypassing the real accounts.json/WSL-count precedence
+    logic covered separately by test_startup.py) and AccountsManager.open
+    is replaced with a spy, so this test only has to prove the wiring --
+    discovery-finishes-first still reaches AccountsManager.open() -- once
+    mainloop() actually starts pumping real Tcl events."""
+    tk = pytest.importorskip("tkinter")
+
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager, "open",
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+        ),
+    )
+
+    # threading.Thread is deliberately left real (not patched to run
+    # synchronously): the bug this test guards against is specifically a
+    # *cross-thread* Tk call, so run_discovery has to actually run on a
+    # genuinely different OS thread than the one that will call
+    # mainloop() for this test to mean anything. It gets there first on
+    # its own in practice -- its real work here (a mocked retry, no win32
+    # branch on this platform) is a handful of dict/lock operations,
+    # while the main thread still has substantial synchronous setup left
+    # (load_customization, migrate_default_customization, building one
+    # Poller/ActivityWatcher/CredentialLoader per account, save_settings,
+    # TrayManager) before it ever reaches root.mainloop() below.
+
+    def _pumping_mainloop(self):
+        # A real (bounded) event pump, not a no-op: tick()'s first
+        # self-scheduled root.after(UI_REFRESH_MS, tick) has to actually
+        # fire for this test to mean anything.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], "maybe_auto_open must still fire via tick() once mainloop starts pumping"
+
+
+def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
+    """Shared setup for the two exception-containment tests below: forces
+    should_auto_open to True and spies on AccountsManager.open, so
+    "discovery_result['done'] got set and tick() consumed it" can be
+    observed indirectly (there's no other seam into run_gui's locals).
+    Returns the `opened` list -- non-empty means maybe_auto_open fired."""
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager, "open",
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+        ),
+    )
+
+    def _pumping_mainloop(self):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+    return main_module, opened
+
+
+@pytest.mark.gui
+def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypatch):
+    """Finding 2 (important, entangled with Finding 1): retry_pending_hook_op
+    can raise raw OSError/PermissionError from the underlying hook
+    install/uninstall functions (documented in the design spec's Write
+    ordering and crash consistency section -- they don't convert
+    filesystem exceptions to a result object). Uncaught, this would abort
+    run_discovery's thread before discovery_result["done"] is ever set --
+    worse than the original bug, since then auto-open would silently
+    never fire for the whole launch, not just misfire once. Confirms the
+    thread survives and discovery_result["done"] still gets set (proven
+    indirectly: maybe_auto_open still fires via tick())."""
+    tk = pytest.importorskip("tkinter")
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op",
+        lambda state_dir: (_ for _ in ()).throw(OSError("disk on fire")),
+    )
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], (
+        "discovery_result['done'] must still get set despite retry_pending_hook_op raising OSError"
+    )
+
+
+@pytest.mark.gui
+def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, monkeypatch):
+    """Finding 2: find_all_wsl_credentials can raise CredentialsError (a
+    real, common case: wsl.exe missing from PATH entirely, i.e. a
+    native-Windows Claude Code install with no WSL at all). Uncaught, this
+    would abort run_discovery's thread before discovery_result["done"] is
+    ever set, mirroring the exact "resolution failure means run without
+    it, never a crash" philosophy resolve_activity_sessions already
+    applies to this same exception (__main__.py's existing
+    `except CredentialsError: return None, None`).
+
+    sys.platform is forced globally to "win32" here (there's no narrower
+    seam -- every win32 branch in this codebase reads the real sys module
+    directly), which also flips SingleInstanceLock.acquire()/release()
+    onto their msvcrt path; msvcrt doesn't exist on this non-Windows test
+    runner, so the lock is stubbed out here too. Every other sys.platform
+    check reachable from run_gui on this path (resolve_activity_sessions's
+    own WSL branch, ui.py's DPI-awareness call, TrayManager._probe) is
+    already independently guarded against exactly this (verified by
+    reading each) -- only the lock is not, since acquire()'s ImportError
+    isn't a subclass of the OSError it already catches."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty.lock import SingleInstanceLock
+
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials",
+        lambda: (_ for _ in ()).throw(CredentialsError("wsl.exe not found on PATH")),
+    )
+
+    result = main_module.run_gui()
+    assert result == 0
+    assert opened == [tmp_path], (
+        "discovery_result['done'] must still get set despite the WSL scan raising CredentialsError"
+    )
+
+
+@pytest.mark.gui
+def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import accounts_ui as accounts_ui_module
+    from tokitty import startup as startup_module
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    monkeypatch.setattr(
+        main_module.Path, "home", classmethod(lambda cls: tmp_path / "home")
+    )
+    matches = [
+        ("Ubuntu", "/home/a/.claude/.credentials.json"),
+        ("Debian", "/home/b/.claude-work/.credentials.json"),
+    ]
+    monkeypatch.setattr("tokitty.wsl_probe.find_all_wsl_credentials", lambda: matches)
+
+    opened = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager,
+        "open",
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None:
+                opened.append((state_dir, list(discovered_matches or [])))
+        ),
+    )
+
+    def _pumping_mainloop(self):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not opened:
+            self.update()
+            time.sleep(0.01)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
+
+    assert main_module.run_gui() == 0
+    assert opened == [(tmp_path, matches)]
+
+
+@pytest.mark.gui
+def test_run_discovery_skips_wsl_scan_when_accounts_file_is_present(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.accounts import Account, save_accounts
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    save_accounts(tmp_path, [Account(name="acct-v1-a", config_dir=str(tmp_path / "claude"))])
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    scans = []
+    retries = []
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials", lambda: scans.append(1) or []
+    )
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op", lambda state_dir: retries.append(state_dir)
+    )
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    assert main_module.run_gui() == 0
+    discovery_threads = [t for t in spawned if t.recorded_target_name == "run_discovery"]
+    assert len(discovery_threads) == 1
+    discovery_threads[0].join(timeout=5.0)
+
+    assert scans == []
+    assert retries == [tmp_path]
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("credential_source", ["env_override", "home_relative"])
+def test_run_discovery_skips_wsl_scan_when_native_credentials_exist(
+    tmp_path, monkeypatch, credential_source
+):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    credentials_path = tmp_path / "home" / ".claude" / ".credentials.json"
+    credentials_path.parent.mkdir(parents=True)
+    credentials_path.write_text('{"claudeAiOauth": {}}', encoding="utf-8")
+
+    if credential_source == "env_override":
+        monkeypatch.setenv("TOKITTY_CREDENTIALS", str(credentials_path))
+    else:
+        monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+        monkeypatch.setattr(
+            main_module.Path,
+            "home",
+            classmethod(lambda cls: tmp_path / "home"),
+        )
+
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    scans = []
+    retries = []
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials",
+        lambda: scans.append(1) or [],
+    )
+    monkeypatch.setattr(
+        main_module,
+        "retry_pending_hook_op",
+        lambda state_dir: retries.append(state_dir),
+    )
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    assert main_module.run_gui() == 0
+    discovery_threads = [
+        thread
+        for thread in spawned
+        if thread.recorded_target_name == "run_discovery"
+    ]
+    assert len(discovery_threads) == 1
+    discovery_threads[0].join(timeout=5.0)
+    assert not discovery_threads[0].is_alive()
+
+    assert scans == []
+    assert retries == [tmp_path]
+
+
+@pytest.mark.gui
+def test_run_gui_persists_migration_before_marking_it_complete(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import migration
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+    events = []
+    real_save = main_module.save_customization
+    real_mark = migration.mark_customization_migration_complete
+
+    def recording_save(state_dir, store):
+        events.append("save")
+        return real_save(state_dir, store)
+
+    def recording_mark(state_dir, key):
+        events.append(f"mark:{key}")
+        return real_mark(state_dir, key)
+
+    monkeypatch.setattr(main_module, "save_customization", recording_save)
+    monkeypatch.setattr(migration, "mark_customization_migration_complete", recording_mark)
+
+    assert main_module.run_gui() == 0
+    assert events[:3] == [
+        "save",
+        f"mark:{migration.CUSTOMIZATION_MIGRATION_KEY}",
+        f"mark:{migration.LEGACY_ACCOUNT_LABELS_MIGRATION_KEY}",
+    ]
+
+
+@pytest.mark.gui
+def test_live_customization_change_preserves_manager_added_key(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.customize import Customization, load_customization, save_customization
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        latest = load_customization(tmp_path)
+        latest["default"] = replace(latest["default"], label="Renamed in manager")
+        latest["acct-v1-added"] = Customization(
+            colorway="gray", pattern="solid", label="Added in manager"
+        )
+        save_customization(tmp_path, latest)
+        holder["window"].on_customization_changed(0, "randomize", None)
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+
+    assert main_module.run_gui() == 0
+    stored = load_customization(tmp_path)
+    assert stored["default"].label == "Renamed in manager"
+    assert stored["acct-v1-added"].label == "Added in manager"

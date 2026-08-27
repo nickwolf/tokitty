@@ -5,7 +5,9 @@ from tokitty.customize import (
     Customization,
     effective_palette,
     load_customization,
+    rename_account,
     save_customization,
+    save_customization_entry,
 )
 
 
@@ -30,6 +32,22 @@ def test_roundtrip_save_and_load(tmp_path):
     save_customization(tmp_path, data)
     loaded = load_customization(tmp_path)
     assert loaded == data
+
+
+def test_save_customization_entry_merges_into_latest_on_disk_store(tmp_path):
+    save_customization(tmp_path, {
+        "acct-b": Customization(colorway="gray", pattern="solid", label="Bee")
+    })
+
+    save_customization_entry(
+        tmp_path,
+        "acct-a",
+        Customization(colorway="black", pattern="tuxedo", label="Ay"),
+    )
+
+    loaded = load_customization(tmp_path)
+    assert loaded["acct-a"].label == "Ay"
+    assert loaded["acct-b"].label == "Bee"
 
 
 def test_unknown_coat_falls_back_to_orange_tabby(tmp_path):
@@ -121,3 +139,18 @@ def test_effective_palette_uses_colorway_pattern(tmp_path):
     from tokitty.sprites import resolve_palette
     custom = Customization(colorway="gray", pattern="tabby")
     assert effective_palette(custom)["s"] == resolve_palette("gray", "tabby")["s"]
+
+
+def test_rename_account_sets_label_only(tmp_path):
+    save_customization(tmp_path, {"acct-v1-abc": Customization(colorway="black", pattern="tuxedo")})
+    rename_account(tmp_path, "acct-v1-abc", "Personal")
+    result = load_customization(tmp_path)
+    assert result["acct-v1-abc"].label == "Personal"
+    assert result["acct-v1-abc"].colorway == "black"
+
+
+def test_rename_account_creates_entry_when_slug_absent(tmp_path):
+    rename_account(tmp_path, "acct-v1-new", "Work")
+    result = load_customization(tmp_path)
+    assert result["acct-v1-new"].label == "Work"
+    assert result["acct-v1-new"].colorway == "orange"

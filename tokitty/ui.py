@@ -5,11 +5,12 @@ only module in this package that imports tkinter.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.geometry import clamp_position
@@ -36,15 +37,30 @@ POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
 
 
-def card_height(pane_count: int) -> int:
-    return PANE_HEIGHT * pane_count
+def grid_size(pane_count: int) -> Tuple[int, int, int]:
+    """(width, height, cols) for pane_count panes filled row-major,
+    capped at 4 rows: cols = ceil(N/4), rows = ceil(N/cols). Height
+    never exceeds 512px (4 * PANE_HEIGHT); width grows instead."""
+    cols = math.ceil(pane_count / 4)
+    rows = math.ceil(pane_count / cols)
+    return CARD_WIDTH * cols, PANE_HEIGHT * rows, cols
 
 
-def pane_index_at(y: int, pane_count: int) -> int:
-    """Map a y coordinate (relative to the window's top edge) to a pane
-    index, clamped to the valid range [0, pane_count - 1]."""
-    y = max(y, 0)
-    return min(y // PANE_HEIGHT, pane_count - 1)
+def pane_index_at(x: int, y: int, pane_count: int, cols: int) -> Optional[int]:
+    """Map root-relative (x, y) to a pane index in row-major grid order,
+    or None for a blank cell in a ragged final row (e.g. N=5, cols=2:
+    index 4 exists but index 5 does not -- that cell shows only global
+    menu actions, never falls back to the nearest real pane)."""
+    if x < 0 or y < 0:
+        return None
+    col = x // CARD_WIDTH
+    row = y // PANE_HEIGHT
+    if col >= cols:
+        return None
+    index = row * cols + col
+    if index >= pane_count:
+        return None
+    return index
 
 
 def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
@@ -253,12 +269,15 @@ class Pane:
             )
 
 
+_PANE_SPECIFIC_LABELS = frozenset({"Colorway", "Pattern", "Randomize", "Customize…", "Rename…"})
+
+
 class TokittyWindow:
     def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1):
         self.root = root
         self.state_dir = state_dir
         self._pane_count = pane_count
-        self._height = card_height(pane_count)
+        self._width, self._height, self._cols = grid_size(pane_count)
         self._position_path = state_dir / POSITION_FILENAME
         self._drag_offset = (0, 0)
         self._always_on_top_bool = True
@@ -268,6 +287,7 @@ class TokittyWindow:
         self.on_randomize: Optional[Callable[[int], None]] = None
         self.surprise_me: Optional[Callable[[], bool]] = None
         self.on_toggle_surprise: Optional[Callable[[], None]] = None
+        self.on_open_accounts: Optional[Callable[[], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # (pane_index, field, value) -- set externally by __main__.py. field
@@ -276,13 +296,14 @@ class TokittyWindow:
         # "reset"). For "label", an empty string clears the stored name
         # back to its default.
         self.on_customization_changed: Optional[Callable[[int, str, Optional[str]], None]] = None
-        self._menu_pane_index = 0
+        self._menu_pane_index: Optional[int] = 0
 
         self._configure_window()
         self.panes = []
         for i in range(pane_count):
+            row, col = divmod(i, self._cols)
             frame = tk.Frame(root, width=CARD_WIDTH, height=PANE_HEIGHT, bg=BG_COLOR)
-            frame.place(x=0, y=i * PANE_HEIGHT)
+            frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
             self.panes.append(Pane(frame))
         self._restore_position()
         self._bind_drag()
@@ -293,7 +314,7 @@ class TokittyWindow:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.configure(bg=BG_COLOR)
-        self.root.geometry(f"{CARD_WIDTH}x{self._height}")
+        self.root.geometry(f"{self._width}x{self._height}")
 
         if sys.platform == "win32":
             try:
@@ -352,6 +373,7 @@ class TokittyWindow:
             on_randomize=((lambda i=pane_index: self.on_randomize(i)) if self.on_randomize is not None else None),
             surprise_me=self.surprise_me,
             on_toggle_surprise=self.on_toggle_surprise,
+            on_open_accounts=self.on_open_accounts,
         )
 
     def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:
@@ -383,11 +405,16 @@ class TokittyWindow:
             self.menu.destroy()
         self._menu_vars = []
         self.menu = tk.Menu(self.root, tearoff=0)
-        self._render_tk_menu(self.menu, self.build_menu_model(self._menu_pane_index))
+        if self._menu_pane_index is None:
+            model = [item for item in self.build_menu_model(0) if item.label not in _PANE_SPECIFIC_LABELS]
+        else:
+            model = self.build_menu_model(self._menu_pane_index)
+        self._render_tk_menu(self.menu, model)
 
     def _show_context_menu(self, event: tk.Event) -> None:
+        x_relative = event.x_root - self.root.winfo_rootx()
         y_relative = event.y_root - self.root.winfo_rooty()
-        self._menu_pane_index = pane_index_at(y_relative, len(self.panes))
+        self._menu_pane_index = pane_index_at(x_relative, y_relative, len(self.panes), self._cols)
         self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
 
@@ -461,16 +488,16 @@ class TokittyWindow:
     def _restore_position(self) -> None:
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        x, y = screen_w - CARD_WIDTH - 24, screen_h - self._height - 24
+        x, y = screen_w - self._width - 24, screen_h - self._height - 24
 
         if self._position_path.is_file():
             try:
                 saved = json.loads(self._position_path.read_text(encoding="utf-8"))
-                x, y = clamp_position(int(saved["x"]), int(saved["y"]), CARD_WIDTH, self._height, screen_w, screen_h)
+                x, y = clamp_position(int(saved["x"]), int(saved["y"]), self._width, self._height, screen_w, screen_h)
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 pass
 
-        self.root.geometry(f"{CARD_WIDTH}x{self._height}+{x}+{y}")
+        self.root.geometry(f"{self._width}x{self._height}+{x}+{y}")
 
     def _save_position(self) -> None:
         try:

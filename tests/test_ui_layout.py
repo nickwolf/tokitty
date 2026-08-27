@@ -13,10 +13,34 @@ def test_pane_height_and_card_width_constants():
     assert ui.CARD_WIDTH == 300
 
 
-def test_window_height_scales_with_pane_count():
-    from tokitty import ui
-    assert ui.card_height(1) == 128
-    assert ui.card_height(2) == 256
+def test_grid_size_n1():
+    from tokitty.ui import grid_size
+    assert grid_size(1) == (300, 128, 1)
+
+
+def test_grid_size_n4():
+    from tokitty.ui import grid_size
+    assert grid_size(4) == (300, 512, 1)
+
+
+def test_grid_size_n5():
+    from tokitty.ui import grid_size
+    assert grid_size(5) == (600, 384, 2)
+
+
+def test_grid_size_n8():
+    from tokitty.ui import grid_size
+    assert grid_size(8) == (600, 512, 2)
+
+
+def test_grid_size_n9():
+    from tokitty.ui import grid_size
+    assert grid_size(9) == (900, 384, 3)
+
+
+def test_grid_size_n12():
+    from tokitty.ui import grid_size
+    assert grid_size(12) == (900, 512, 3)
 
 
 def test_pane_init_signature_has_appearance_kwargs_with_none_defaults():
@@ -54,25 +78,52 @@ def test_resolve_bar_fill_falls_back_to_bar_color_when_no_override():
 
 def test_pane_index_at_first_pane():
     from tokitty import ui
-    assert ui.pane_index_at(0, 3) == 0
-    assert ui.pane_index_at(127, 3) == 0
+    assert ui.pane_index_at(0, 0, 3, 1) == 0
+    assert ui.pane_index_at(0, 127, 3, 1) == 0
 
 
 def test_pane_index_at_second_pane():
     from tokitty import ui
-    assert ui.pane_index_at(128, 3) == 1
-    assert ui.pane_index_at(255, 3) == 1
+    assert ui.pane_index_at(0, 128, 3, 1) == 1
+    assert ui.pane_index_at(0, 255, 3, 1) == 1
 
 
-def test_pane_index_at_clamps_beyond_bottom():
+def test_pane_index_at_beyond_pane_count_returns_none():
+    # Single column (cols=1): rows 3+ don't exist for pane_count=3, so
+    # there is no clamping to the last real pane anymore -- out-of-range
+    # rows are blank grid cells, not the bottom pane.
     from tokitty import ui
-    assert ui.pane_index_at(10000, 3) == 2
-    assert ui.pane_index_at(384, 3) == 2
+    assert ui.pane_index_at(0, 10000, 3, 1) is None
+    assert ui.pane_index_at(0, 384, 3, 1) is None
 
 
-def test_pane_index_at_clamps_negative_y():
+def test_pane_index_at_negative_coordinates_return_none_not_clamped():
     from tokitty import ui
-    assert ui.pane_index_at(-50, 3) == 0
+    assert ui.pane_index_at(0, -50, 3, 1) is None
+    assert ui.pane_index_at(-50, 0, 3, 1) is None
+
+
+def test_pane_index_at_n5_x350_y50_selects_pane_1_not_0():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(350, 50, pane_count=5, cols=2) == 1
+
+
+def test_pane_index_at_n5_x50_y50_selects_pane_0():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(50, 50, pane_count=5, cols=2) == 0
+
+
+def test_pane_index_at_n5_ragged_last_row_blank_cell_is_none():
+    # N=5, cols=2 -> 3 rows, row 2 has only column 0 filled (index 4);
+    # row 2 column 1 would be index 5, which does not exist.
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(350, 300, pane_count=5, cols=2) is None
+
+
+def test_pane_index_at_negative_coordinates_return_none():
+    from tokitty.ui import pane_index_at
+    assert pane_index_at(-1, 50, pane_count=5, cols=2) is None
+    assert pane_index_at(50, -1, pane_count=5, cols=2) is None
 
 
 def test_on_customization_changed_default_none_in_init_source():
@@ -161,6 +212,45 @@ def test_randomize_and_surprise_seams_add_items():
             window.on_toggle_surprise = lambda: None
             labels = [i.label for i in window.build_menu_model(0) if not i.separator]
             assert "Randomize" in labels and "Surprise me" in labels
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_none_pane_index_rebuilds_menu_with_only_global_items():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow, _PANE_SPECIFIC_LABELS
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=5)
+            # Wire every optional seam so all five global items are present.
+            window.on_randomize = lambda i: None
+            window.surprise_me = lambda: True
+            window.on_toggle_surprise = lambda: None
+            window.tray_enabled = lambda: True
+            window.on_toggle_tray = lambda: None
+
+            window._menu_pane_index = None
+            window._rebuild_context_menu()
+
+            end = window.menu.index("end")
+            labels = []
+            for i in range(end + 1):
+                try:
+                    labels.append(window.menu.entrycget(i, "label"))
+                except tk.TclError:
+                    pass  # separator: no label to read
+            label_set = set(labels)
+
+            # Pane-specific items must be fully omitted, not just disabled.
+            assert label_set.isdisjoint(_PANE_SPECIFIC_LABELS)
+            # Global items must all be present.
+            assert {"Refresh now", "Always in front", "Show tray icon",
+                    "Surprise me", "Exit"} <= label_set
     finally:
         root.destroy()
 

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
-from tokitty.accounts import Account
+from tokitty.accounts import Account, load_accounts_result
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.api import ApiError, fetch_usage, parse_usage_response
@@ -23,8 +24,17 @@ from tokitty.credentials import (
     load_credentials,
     resolve_credentials_source,
 )
-from tokitty.customize import Customization, SINGLE_KEY, effective_palette, load_customization, save_customization
+from tokitty.customize import (
+    Customization,
+    SINGLE_KEY,
+    effective_palette,
+    load_customization,
+    save_customization,
+    save_customization_entry,
+)
 from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
+from tokitty.distro_probe import RunningDistroProbe
+from tokitty.hooks_install import retry_pending_hook_op
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
@@ -177,7 +187,7 @@ def debug_print() -> int:
 _STALE_HINTS = {
     "stale_token": "token expired, reopen Claude Code",
     "credentials_unreachable": "can't confirm, credentials unreachable",
-    "ambiguous_credentials": "can't confirm, set TOKITTY_CREDENTIALS",
+    "ambiguous_credentials": "can't confirm, use Accounts…",
     "api_error": "can't confirm, API hiccup",
     "keychain_denied": "can't confirm, Keychain denied",
 }
@@ -286,7 +296,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
     hints = {
         "stale_token": "token stale, open Claude Code",
         "credentials_unreachable": "can't find credentials",
-        "ambiguous_credentials": "multiple installs, set TOKITTY_CREDENTIALS",
+        "ambiguous_credentials": "multiple installs, use Accounts…",
         "api_error": "API hiccup, retrying",
         "keychain_denied": _KEYCHAIN_DENIED_HINT,
     }
@@ -349,14 +359,12 @@ def initial_customization(account: Optional[Account], stored: Optional[Customiza
     return Customization(colorway=colorway, pattern=pattern)
 
 
-def initial_label(account: Optional[Account], custom: Customization, dual: bool) -> str:
-    """Default label: an explicit stored label always wins; otherwise dual
-    mode defaults to the account name (single mode stays blank)."""
-    if custom.label:
-        return custom.label
-    if dual and account is not None:
-        return account.name
-    return ""
+def initial_label(account: Optional[Account], custom: Customization) -> str:
+    """Default label: an explicit stored label always wins; otherwise
+    blank. Never falls back to account.name -- since the identity slug
+    scheme, account.name is an opaque SHA-256-derived string and must
+    never be shown to the user."""
+    return custom.label
 
 
 def run_gui() -> int:
@@ -386,6 +394,110 @@ def run_gui() -> int:
     window = TokittyWindow(root, state_dir, pane_count=pane_count)
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
+
+    # First-run auto-open + the pending-hook-op retry both belong here, not in
+    # TokittyWindow.__init__: they must run only after tk.Tk() has succeeded
+    # (a headless launch should fail for lack of a display before ever
+    # probing WSL), and the gui-marked tests that construct TokittyWindow
+    # directly (never through run_gui) must keep seeing zero WSL calls.
+    from tokitty.startup import should_auto_open
+
+    # Written by run_discovery() on a background thread, read by tick() on
+    # the Tk thread -- discovery_lock guards every access from either side.
+    # maybe_auto_open() itself must only ever be called from the Tk thread
+    # (it can construct a Toplevel via AccountsManager.open()), which is why
+    # it is invoked from inside tick() rather than from run_discovery
+    # directly: calling anything Tk-related (root.after included) from a
+    # background thread before root.mainloop() has actually started raises
+    # "main thread is not in main loop" *and the call is silently dropped
+    # forever*, not merely delayed -- confirmed by direct reproduction.
+    # run_discovery starts (just below) before the synchronous unit-building
+    # loop below even begins, so it can easily finish before mainloop() is
+    # reached. tick()'s existing root.after(UI_REFRESH_MS, tick) polling
+    # loop is the Tk-thread-owned mechanism this file already uses for
+    # exactly this producer/consumer shape (Poller/ActivityWatcher results),
+    # so first-run auto-open reuses it instead of introducing a new one.
+    discovery_lock = threading.Lock()
+    discovery_result = {"wsl_matches": [], "done": False, "consumed": False}
+    discovery_accounts_state = load_accounts_result(state_dir).state
+    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
+    home_relative_exists = (
+        Path.home() / ".claude" / ".credentials.json"
+    ).is_file()
+
+    def maybe_auto_open() -> None:
+        accounts_result = load_accounts_result(state_dir)
+        keychain_available = False
+        if sys.platform == "darwin":
+            from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
+
+            keychain_available = keychain_item_exists(KEYCHAIN_SERVICE)
+        with discovery_lock:
+            wsl_matches = list(discovery_result["wsl_matches"])
+            wsl_match_count = len(wsl_matches)
+        if should_auto_open(
+            accounts_state=accounts_result.state,
+            env_override_set=env_override_set,
+            home_relative_exists=home_relative_exists,
+            keychain_available=keychain_available,
+            platform=sys.platform,
+            wsl_match_count=wsl_match_count,
+        ):
+            from tokitty.accounts_ui import AccountsManager
+
+            AccountsManager.open(root, state_dir, discovered_matches=wsl_matches)
+
+    def run_discovery() -> None:
+        # Best-effort, silent unless it matters (see hooks_install.py's
+        # pending-op journal): retries a hook install/uninstall left
+        # incomplete by a prior crash. Runs here, off the Tk thread,
+        # alongside WSL discovery -- not in the TOKITTY_DEBUG_ACCOUNTS
+        # branch, which bypasses normal account resolution entirely.
+        #
+        # Every step below is wrapped so a failure here can never crash
+        # this thread silently before "done" is set: an OSError/
+        # PermissionError from retry_pending_hook_op (the underlying hook
+        # install/uninstall functions don't convert filesystem exceptions
+        # to a result object -- see the design spec's Write ordering and
+        # crash consistency section) and a CredentialsError from the WSL
+        # scan (e.g. wsl.exe missing from PATH entirely) both mean "nothing
+        # to report here", mirroring resolve_activity_sessions's existing
+        # philosophy of "resolution failure means run without it, never a
+        # crash" -- never "auto-open silently never evaluates again."
+        try:
+            try:
+                retry_pending_hook_op(state_dir)
+            except (OSError, PermissionError):
+                pass
+
+            wsl_matches = []
+            if (
+                sys.platform == "win32"
+                and discovery_accounts_state == "absent"
+                and not env_override_set
+                and not home_relative_exists
+            ):
+                from tokitty.wsl_probe import find_all_wsl_credentials
+
+                try:
+                    wsl_matches = find_all_wsl_credentials()
+                except CredentialsError:
+                    wsl_matches = []
+
+            with discovery_lock:
+                discovery_result["wsl_matches"] = wsl_matches
+        finally:
+            # Unconditional: tick() below is waiting on this flag to decide
+            # when to call maybe_auto_open(), exactly once. If an
+            # unanticipated exception ever slipped past the narrower
+            # excepts above, leaving this unset would silently drop
+            # auto-open for the whole launch -- worse than never trying.
+            with discovery_lock:
+                discovery_result["done"] = True
+
+    if not (debug_state or debug_accounts == "2"):
+        threading.Thread(target=run_discovery, daemon=True).start()
+
     if debug_state or debug_accounts == "2":
         fake = dict(
             state=debug_state or "content", session_pct=37.0, weekly_pct=62.0,
@@ -401,10 +513,26 @@ def run_gui() -> int:
         return 0
 
     customization_store = load_customization(state_dir)
-    dual = bool(accounts) and len(accounts) > 1
+
+    from tokitty.migration import (
+        CUSTOMIZATION_MIGRATION_KEY,
+        LEGACY_ACCOUNT_LABELS_MIGRATION_KEY,
+        mark_customization_migration_complete,
+        migrate_default_customization,
+        migrate_legacy_account_labels,
+    )
+
+    customization_store = migrate_default_customization(state_dir, accounts, customization_store)
+    customization_store = migrate_legacy_account_labels(state_dir, accounts, customization_store)
+    # The transformed data must be durable before either migration marker.
+    # If the process stops after this save but before a marker, both
+    # transforms are safe to retry on the next launch.
+    save_customization(state_dir, customization_store)
+    mark_customization_migration_complete(state_dir, CUSTOMIZATION_MIGRATION_KEY)
+    mark_customization_migration_complete(state_dir, LEGACY_ACCOUNT_LABELS_MIGRATION_KEY)
 
     def customization_key(account: Optional[Account]) -> str:
-        return account.name if (dual and account is not None) else SINGLE_KEY
+        return account.name if account is not None else SINGLE_KEY
 
     def apply_customization(pane, custom: Customization) -> None:
         pane.set_appearance(
@@ -414,18 +542,23 @@ def run_gui() -> int:
             colorway=custom.colorway, pattern=custom.pattern,
         )
 
+    distro_probe = RunningDistroProbe()
+
     units = []
     for index, account in enumerate(accounts or [None]):
         config_dir = account.config_dir if account else None
         cred_loader = CredentialLoader()
         poller = Poller(fetch_fn=build_fetch_fn(config_dir, loader=cred_loader))
         sessions_dir, distro_name = resolve_activity_sessions(config_dir)
-        watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
+        watcher = ActivityWatcher(
+            sessions_dir, ActivityTracker(), distro_name=distro_name,
+            list_running_distros_fn=distro_probe.get_running,
+        )
 
         key = customization_key(account)
         custom = initial_customization(account, customization_store.get(key))
         customization_store[key] = custom
-        label = initial_label(account, custom, dual)
+        label = initial_label(account, custom)
         pane = window.panes[index]
         apply_customization(pane, custom)
         pane.set_appearance(label=label)
@@ -453,7 +586,10 @@ def run_gui() -> int:
     def handle_customization_changed(pane_index: int, field: str, value: Optional[str]) -> None:
         unit = units[pane_index]
         key = unit["key"]
-        custom = customization_store[key]
+        # Start from this identity's latest persisted value, not the
+        # process-lifetime startup snapshot.  Accounts... may have changed
+        # its label (or added other identities) since run_gui initialized.
+        custom = load_customization(state_dir).get(key, customization_store[key])
 
         if field == "colorway":
             if value in sprites.COLORWAYS:
@@ -478,10 +614,10 @@ def run_gui() -> int:
             return
 
         customization_store[key] = custom
-        save_customization(state_dir, customization_store)
+        save_customization_entry(state_dir, key, custom)
         apply_customization(unit["pane"], custom)
         if field == "label":
-            label = initial_label(unit["account"], custom, dual)
+            label = initial_label(unit["account"], custom)
             unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
@@ -510,6 +646,15 @@ def run_gui() -> int:
 
     window.on_toggle_surprise = toggle_surprise
 
+    from tokitty.accounts_ui import AccountsManager
+
+    def open_accounts() -> None:
+        with discovery_lock:
+            matches = list(discovery_result["wsl_matches"])
+        AccountsManager.open(root, state_dir, discovered_matches=matches)
+
+    window.on_open_accounts = open_accounts
+
     if settings.surprise_me:
         for index in range(len(units)):
             handle_customization_changed(index, "randomize", None)
@@ -534,6 +679,16 @@ def run_gui() -> int:
                                credits_text=None, hint_text=warning, dimmed=True)
 
     def tick():
+        # Consume run_discovery's result here, on the Tk thread, exactly
+        # once -- see the discovery_lock comment above for why this can't
+        # be done from run_discovery itself via root.after().
+        with discovery_lock:
+            ready = discovery_result["done"] and not discovery_result["consumed"]
+            if ready:
+                discovery_result["consumed"] = True
+        if ready:
+            maybe_auto_open()
+
         for unit in units:
             latest = unit["poller"].get_latest()
             if latest is None:
