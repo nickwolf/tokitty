@@ -11,6 +11,8 @@ import sys
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional
 
+from tokitty.paths import get_state_dir
+
 LAUNCHER_FILENAME = "autostart_launcher.pyw"
 
 
@@ -338,3 +340,51 @@ def get_backend(platform: Optional[str] = None):
     if platform.startswith("linux"):
         return LinuxDesktopEntryBackend()
     return None
+
+
+def write_launcher_and_register(state_dir: Path, backend) -> None:
+    """Write the launcher file, then register the resolved command with
+    the backend. This is the one place that does both steps, shared by
+    install_autostart below and the menu toggle in __main__.py's
+    run_gui, so turning autostart on from the CLI and from the tray/menu
+    checkbox can never drift apart into two implementations of the same
+    thing."""
+    write_launcher_file(state_dir)
+    backend.register(resolve_launch_command(state_dir))
+
+
+def install_autostart() -> int:
+    """Headless-scripting counterpart to the menu checkbox: --install-
+    autostart. Does the same work as toggling the checkbox on, via
+    write_launcher_and_register, and reports the outcome as an exit code
+    instead of updating a tray menu."""
+    state_dir = get_state_dir()
+    backend = get_backend()
+    if backend is None:
+        print(f"autostart is not supported on this platform ({sys.platform})", file=sys.stderr)
+        return 1
+    try:
+        write_launcher_and_register(state_dir, backend)
+    except OSError as exc:
+        print(f"could not install autostart: {exc}", file=sys.stderr)
+        return 1
+    print("autostart installed: tokitty will launch at login")
+    return 0
+
+
+def uninstall_autostart() -> int:
+    """Headless-scripting counterpart to the menu checkbox: --uninstall-
+    autostart. Mirrors install_autostart for the deregister side. No
+    state_dir here: deregistering only touches the OS registration, not
+    the launcher file, so there is nothing for it to do."""
+    backend = get_backend()
+    if backend is None:
+        print(f"autostart is not supported on this platform ({sys.platform})", file=sys.stderr)
+        return 1
+    try:
+        backend.deregister()
+    except OSError as exc:
+        print(f"could not remove autostart: {exc}", file=sys.stderr)
+        return 1
+    print("autostart removed")
+    return 0

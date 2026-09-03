@@ -1081,3 +1081,65 @@ def test_run_gui_calls_ensure_current_at_startup(tmp_path, monkeypatch):
 
     assert main_module.run_gui() == 0
     assert calls == [(tmp_path, fake_backend)]
+
+
+def test_main_dispatches_install_autostart(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.autostart.install_autostart", lambda: calls.append("install") or 0)
+
+    assert main_module.main(["--install-autostart"]) == 0
+    assert calls == ["install"]
+
+
+def test_main_dispatches_uninstall_autostart(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.autostart.uninstall_autostart", lambda: calls.append("uninstall") or 0)
+
+    assert main_module.main(["--uninstall-autostart"]) == 0
+    assert calls == ["uninstall"]
+
+
+@pytest.mark.gui
+def test_run_gui_toggle_autostart_registers_via_shared_path(tmp_path, monkeypatch):
+    """Companion to test_run_gui_wires_autostart_seam_and_toggle, which
+    only exercises the deregister branch. This covers the other half:
+    turning the checkbox on goes through write_launcher_and_register,
+    the same shared helper install_autostart uses, so the menu and the
+    CLI can never register autostart two different ways."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.autostart import LAUNCHER_FILENAME, resolve_launch_command
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+
+    fake_backend = _FakeToggleBackend(registered=False)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: fake_backend)
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        window = holder["window"]
+        assert window.autostart_enabled() is False
+        window.on_toggle_autostart()
+        assert fake_backend.registered is True
+        assert fake_backend.last_registered_command == resolve_launch_command(tmp_path)
+        assert (tmp_path / LAUNCHER_FILENAME).is_file()
+        assert window.autostart_enabled() is True
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0

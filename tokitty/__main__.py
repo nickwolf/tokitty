@@ -674,7 +674,7 @@ def run_gui() -> int:
 
         window.on_toggle_tray = toggle_tray
 
-    from tokitty.autostart import ensure_current, get_backend, resolve_launch_command, write_launcher_file
+    from tokitty.autostart import ensure_current, get_backend, write_launcher_and_register
 
     autostart_backend = get_backend()
     if autostart_backend is not None:
@@ -702,8 +702,7 @@ def run_gui() -> int:
                 if autostart_state["enabled"]:
                     autostart_backend.deregister()
                 else:
-                    write_launcher_file(state_dir)
-                    autostart_backend.register(resolve_launch_command(state_dir))
+                    write_launcher_and_register(state_dir, autostart_backend)
                 autostart_state["enabled"] = autostart_backend.is_registered()
 
             window.on_toggle_autostart = toggle_autostart
@@ -773,6 +772,14 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.hooks_install import uninstall_hooks
 
         return uninstall_hooks()
+    if "--install-autostart" in argv:
+        from tokitty.autostart import install_autostart
+
+        return install_autostart()
+    if "--uninstall-autostart" in argv:
+        from tokitty.autostart import uninstall_autostart
+
+        return uninstall_autostart()
     return run_gui()
 
 

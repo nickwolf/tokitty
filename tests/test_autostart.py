@@ -481,3 +481,121 @@ def test_ensure_current_swallows_oserror_and_returns_false(tmp_path):
         tmp_path, backend, repo_root=tmp_path / "repo", executable="/usr/bin/python3.12", platform="linux",
     )
     assert changed is False
+
+
+def test_write_launcher_and_register_writes_launcher_then_registers(tmp_path):
+    """The shared helper behind both install_autostart and the menu
+    toggle: write_launcher_file, then backend.register with the resolved
+    command, in that order and nothing else."""
+    from tokitty.autostart import write_launcher_and_register
+
+    backend = _RecordingBackend(registered=False)
+    write_launcher_and_register(tmp_path, backend)
+    assert (tmp_path / LAUNCHER_FILENAME).is_file()
+    assert backend.registered_calls == [resolve_launch_command(tmp_path)]
+
+
+def test_install_autostart_registers_via_backend(tmp_path, monkeypatch):
+    from tokitty import autostart
+
+    fake_backend = _FakeToggleBackendForCli()
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: fake_backend)
+
+    assert autostart.install_autostart() == 0
+    assert fake_backend.registered is True
+    assert (tmp_path / autostart.LAUNCHER_FILENAME).is_file()
+
+
+def test_uninstall_autostart_deregisters_via_backend(tmp_path, monkeypatch):
+    from tokitty import autostart
+
+    fake_backend = _FakeToggleBackendForCli(registered=True)
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: fake_backend)
+
+    assert autostart.uninstall_autostart() == 0
+    assert fake_backend.registered is False
+
+
+def test_install_autostart_unsupported_platform_returns_1(tmp_path, monkeypatch, capsys):
+    from tokitty import autostart
+
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: None)
+
+    assert autostart.install_autostart() == 1
+    assert "not supported" in capsys.readouterr().err
+
+
+def test_uninstall_autostart_unsupported_platform_returns_1(tmp_path, monkeypatch, capsys):
+    from tokitty import autostart
+
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: None)
+
+    assert autostart.uninstall_autostart() == 1
+    assert "not supported" in capsys.readouterr().err
+
+
+def test_install_autostart_oserror_returns_1(tmp_path, monkeypatch, capsys):
+    from tokitty import autostart
+
+    class _RaisingBackend:
+        def is_registered(self):
+            return False
+
+        def register(self, command):
+            raise OSError("permission denied")
+
+        def deregister(self):
+            pass
+
+        def is_current(self, command):
+            return False
+
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: _RaisingBackend())
+
+    assert autostart.install_autostart() == 1
+    assert "permission denied" in capsys.readouterr().err
+
+
+def test_uninstall_autostart_oserror_returns_1(tmp_path, monkeypatch, capsys):
+    from tokitty import autostart
+
+    class _RaisingBackend:
+        def is_registered(self):
+            return True
+
+        def register(self, command):
+            pass
+
+        def deregister(self):
+            raise OSError("permission denied")
+
+        def is_current(self, command):
+            return False
+
+    monkeypatch.setattr(autostart, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "get_backend", lambda: _RaisingBackend())
+
+    assert autostart.uninstall_autostart() == 1
+    assert "permission denied" in capsys.readouterr().err
+
+
+class _FakeToggleBackendForCli:
+    def __init__(self, registered=False):
+        self.registered = registered
+
+    def is_registered(self):
+        return self.registered
+
+    def is_current(self, command):
+        return False
+
+    def register(self, command):
+        self.registered = True
+
+    def deregister(self):
+        self.registered = False
