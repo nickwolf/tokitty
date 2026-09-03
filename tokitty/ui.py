@@ -292,6 +292,9 @@ class TokittyWindow:
         self.on_toggle_autostart: Optional[Callable[[], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
+        # Fired after any right-click menu action, so __main__.py can
+        # re-sync the tray menu, which pystray does not rebuild itself.
+        self.on_menu_action_done: Optional[Callable[[], None]] = None
         # (pane_index, field, value) -- set externally by __main__.py. field
         # is one of "colorway", "pattern", "coat_base", "coat_shade",
         # "card_bg", "bar_fill", "label", or "reset" (value ignored for
@@ -380,6 +383,27 @@ class TokittyWindow:
             on_toggle_autostart=self.on_toggle_autostart,
         )
 
+    def _after_menu_action(self, action):
+        """Run a right-click menu action, then let the caller re-sync any
+        other view of the same state.
+
+        This menu is rebuilt from the live getters on every right-click,
+        so it is always current on its own. The tray menu is not: pystray
+        builds it once, so a toggle made here leaves the tray showing the
+        value it read at startup until something calls update_menu. Wiring
+        that through on_menu_action_done keeps the two menus from
+        disagreeing.
+        """
+        if action is None:
+            return None
+
+        def run() -> None:
+            action()
+            if self.on_menu_action_done is not None:
+                self.on_menu_action_done()
+
+        return run
+
     def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:
         radio_var: Optional[tk.StringVar] = None
         for item in items:
@@ -396,13 +420,14 @@ class TokittyWindow:
                 if item.radio_selected():
                     radio_var.set(item.label)
                 menu.add_radiobutton(label=item.label, value=item.label,
-                                     variable=radio_var, command=item.action)
+                                     variable=radio_var, command=self._after_menu_action(item.action))
             elif item.checkbox is not None:
                 var = tk.BooleanVar(value=item.checkbox())
                 self._menu_vars.append(var)
-                menu.add_checkbutton(label=item.label, variable=var, command=item.action)
+                menu.add_checkbutton(label=item.label, variable=var,
+                                     command=self._after_menu_action(item.action))
             else:
-                menu.add_command(label=item.label, command=item.action)
+                menu.add_command(label=item.label, command=self._after_menu_action(item.action))
 
     def _rebuild_context_menu(self) -> None:
         if getattr(self, "menu", None) is not None:

@@ -664,6 +664,10 @@ def run_gui() -> int:
                        colorway=pane0._colorway, pattern=pane0._pattern)
 
     window.on_quit = lambda: (tray.stop(), root.destroy())
+    # The right-click menu rebuilds itself on every open, but pystray
+    # builds its menu once, so any toggle made from the right-click menu
+    # has to nudge the tray or the two disagree until restart.
+    window.on_menu_action_done = tray.refresh
     if tray.available:
         tray_state = {"enabled": settings.tray_enabled}
         window.tray_enabled = lambda: tray_state["enabled"]

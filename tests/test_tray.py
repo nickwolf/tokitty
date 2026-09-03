@@ -128,3 +128,35 @@ def test_darwin_beats_tray_enabled_setting(tmp_path, monkeypatch):
     assert mgr.available is False
     assert mgr._icon is None
     assert icons == []
+
+
+def test_refresh_calls_update_menu_on_the_live_icon():
+    """pystray builds its menu once and the win32 backend caches the
+    native HMENU, so a toggle made from the Tk right-click menu is
+    invisible in the tray until update_menu is called."""
+    calls = []
+
+    class _Icon:
+        def update_menu(self):
+            calls.append("update")
+
+    manager = TrayManager.__new__(TrayManager)
+    manager._icon = _Icon()
+    manager.refresh()
+    assert calls == ["update"]
+
+
+def test_refresh_is_a_noop_without_an_icon():
+    manager = TrayManager.__new__(TrayManager)
+    manager._icon = None
+    manager.refresh()
+
+
+def test_refresh_swallows_a_failing_update_menu():
+    class _Icon:
+        def update_menu(self):
+            raise RuntimeError("backend went away")
+
+    manager = TrayManager.__new__(TrayManager)
+    manager._icon = _Icon()
+    manager.refresh()
