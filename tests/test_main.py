@@ -3,6 +3,7 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -75,6 +76,71 @@ def test_non_ok_with_no_good_snapshot_shows_blocking_fallback():
     assert display["session_reset_text"] == "—"
     assert display["dimmed"] is True
     assert display["hint_text"]
+
+
+def test_no_good_snapshot_credentials_unreachable_matches_generic_fallback():
+    """Boot-race requirement: a failed FIRST poll (no previous ok result
+    yet -- e.g. WSL not answering yet at login) must render through the
+    exact same generic non-ok/no-cache path as any other transient
+    failure. No special-cased "still booting" state that could get
+    stuck exists anywhere in _display_state_for."""
+    display = _display_state_for(_error("credentials_unreachable"), previous=None, now=NOW)
+    assert display["state"] == "confused"
+    assert display["dimmed"] is True
+    assert display["hint_text"] == "can't find credentials"
+
+
+def test_boot_race_recovers_without_manual_refresh(monkeypatch):
+    """End-to-end: resolve_credentials_source fails on the first two
+    calls (the same CredentialsError build_fetch_fn already maps to
+    credentials_unreachable) and succeeds on the third. A real Poller,
+    with its real backoff loop, must reach "ok" on its own -- the whole
+    point of autostart making a first-poll failure routine instead of
+    rare -- with request_refresh() never called."""
+    from tokitty.credentials import CredentialsError, LocalCredentialsSource
+    from tokitty.poller import Poller
+
+    attempts = {"n": 0}
+
+    def flaky_resolve(config_dir=None):
+        attempts["n"] += 1
+        if attempts["n"] <= 2:
+            raise CredentialsError("WSL not answering yet")
+        return LocalCredentialsSource(path=Path("/does/not/matter"))
+
+    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", flaky_resolve)
+    monkeypatch.setattr(
+        "tokitty.__main__.load_credentials", lambda src: {"expiresAt": 4102444800000, "accessToken": "tok"}
+    )
+    monkeypatch.setattr("tokitty.__main__.fetch_usage", lambda token: {"raw": "doesn't matter, parse is stubbed"})
+    monkeypatch.setattr("tokitty.__main__.parse_usage_response", lambda raw: _snapshot())
+
+    fetch_fn = build_fetch_fn()
+    done = threading.Event()
+    # sleep_fn never actually blocks (see tests/test_poller.py for the same
+    # pattern), so once flaky_resolve starts succeeding the background
+    # thread keeps looping past recovery. Reading attempts["n"] after
+    # poller.stop() would race against those extra iterations, so capture
+    # the count at the moment recovery happens instead -- done.wait()
+    # returning True guarantees this write already happened, since it runs
+    # before done.set() on the same (background) thread.
+    recovered_at = {}
+
+    def wrapped_fetch():
+        result = fetch_fn()
+        if result.status == "ok" and "n" not in recovered_at:
+            recovered_at["n"] = attempts["n"]
+            done.set()
+        return result
+
+    poller = Poller(fetch_fn=wrapped_fetch, poll_interval=60, sleep_fn=lambda seconds: True)
+    poller.start()
+    try:
+        assert done.wait(timeout=3), "poller never reached ok on its own"
+        assert poller.get_latest().status == "ok"
+    finally:
+        poller.stop()
+    assert recovered_at["n"] == 3  # 2 simulated failures + the recovering success
 
 
 def test_non_ok_with_cached_uncapped_snapshot_shows_resting_look():
