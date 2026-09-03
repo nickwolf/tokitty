@@ -4,6 +4,7 @@ elevation, stdlib only. See docs/superpowers/specs/
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional
@@ -70,3 +71,36 @@ def _windows_pythonw_path(python_executable: str) -> str:
     if path.name.lower() == "python.exe":
         return str(path.with_name("pythonw.exe"))
     return python_executable
+
+
+def launcher_content(repo_root) -> str:
+    """Source of the generated launcher: pins repo_root onto sys.path and
+    imports tokitty.__main__.main directly, rather than running
+    tokitty/__main__.py as a script -- running the file directly would
+    put <repo>/tokitty on sys.path instead of <repo>, so "import tokitty"
+    would still fail. repr() (not manual string-building) embeds
+    repo_root safely: it produces a valid, correctly escaped Python
+    string literal for any path on any OS, including one with backslashes
+    or spaces, without ever needing a backslash inside an f-string
+    expression -- a SyntaxError before Python 3.12, and this repo's
+    floor is 3.10."""
+    repo_root_literal = repr(str(repo_root))
+    return (
+        "import sys\n"
+        f"sys.path.insert(0, {repo_root_literal})\n"
+        "from tokitty.__main__ import main\n"
+        "main()\n"
+    )
+
+
+def write_launcher_file(state_dir: Path, repo_root: Optional[Path] = None) -> Path:
+    """Write autostart_launcher.pyw into state_dir atomically (tmp
+    sibling + os.replace, matching settings.py/hooks_install.py) and
+    return its path. repo_root defaults to the real repo root, mirroring
+    resolve_launch_command's default."""
+    repo_root = _default_repo_root() if repo_root is None else repo_root
+    path = Path(state_dir) / LAUNCHER_FILENAME
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(launcher_content(repo_root), encoding="utf-8")
+    os.replace(tmp_path, path)
+    return path
