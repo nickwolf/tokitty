@@ -16,6 +16,10 @@ from tokitty.display import bar_color, resolve_status_text
 from tokitty.geometry import clamp_position
 from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
+from tokitty.transparency import (
+    KEY_COLOR, LEVELS, alpha_for, avoid_key, clamp_level, effective_level,
+    root_hwnd, set_content_owner, uses_color_key,
+)
 
 CARD_WIDTH = 300
 PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
@@ -32,6 +36,12 @@ BAR_BG = "#333340"
 # BG_COLOR the moment the activity state clears.
 ACCENT_BG = "#3a1620"
 ACCENT_FG = "#ffb4a8"
+
+# _tool_label passes unknown tool names through verbatim, so an MCP or
+# custom tool can supply an arbitrarily long one. On the keyed surface the
+# label sits on an opaque chip, and an unbounded chip is a slab across the
+# cat.
+TOOL_LABEL_MAX = 18
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
@@ -73,8 +83,15 @@ class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent, palette=None, card_bg=None, bar_fill=None, label="", colorway=None, pattern=None):
+    def __init__(self, parent, content_parent=None, palette=None, card_bg=None, bar_fill=None, label="", colorway=None, pattern=None):
         self.parent = parent
+        # Same widget on the single-window platforms, a frame on the keyed
+        # content window on Windows. Everything hard-edged (the cat, the two
+        # bars) lives here; every antialiased label stays on `parent`,
+        # because text keyed against a colour that is then punched out keeps
+        # a fringe of a background that is no longer there.
+        self.content_parent = content_parent if content_parent is not None else parent
+        self._keyed = self.content_parent is not parent
         self._current_state = "sleeping"
         self._frame_index = 0
         self._driving_tag = ""
@@ -86,7 +103,20 @@ class Pane:
         self._label = label
         self._colorway = colorway if colorway is not None else "orange"
         self._pattern = pattern if pattern is not None else "tabby"
+        # Set by TokittyWindow so window alpha can be recomputed once per
+        # event loop pass, after every pane has rendered.
+        self.on_accent_changed = None
         self._build_widgets()
+
+    def _canvas_bg(self, bg: str) -> str:
+        """The cat canvas background must stay exactly the key colour on the
+        content window. Painting it with the card or accent colour, which is
+        what every other surface here does, would put an opaque card back
+        behind the cat."""
+        return KEY_COLOR if self._keyed else bg
+
+    def _paint(self, color: str) -> str:
+        return avoid_key(color) if self._keyed else color
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, colorway=None, pattern=None) -> None:
         """Live re-style without rebuilding widgets. Each parameter left as
@@ -108,7 +138,7 @@ class Pane:
 
         bg = ACCENT_BG if self._accent else self._card_bg
         self.parent.configure(bg=bg)
-        self.canvas.configure(bg=bg)
+        self.canvas.configure(bg=self._canvas_bg(bg))
         for widget in (
             self.session_label,
             self.session_reset_label,
@@ -121,12 +151,14 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(self._last_session_pct, self._bar_fill),
+            0, 0, self._last_session_pct_px, 8,
+            fill=self._paint(resolve_bar_fill(self._last_session_pct, self._bar_fill)),
             width=0, tags="fill",
         )
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(self._last_weekly_pct, self._bar_fill),
+            0, 0, self._last_weekly_pct_px, 8,
+            fill=self._paint(resolve_bar_fill(self._last_weekly_pct, self._bar_fill)),
             width=0, tags="fill",
         )
 
@@ -142,20 +174,21 @@ class Pane:
         self._last_weekly_pct_px = 0
 
         self.canvas = tk.Canvas(
-            self.parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE, bg=self._card_bg, highlightthickness=0
+            self.content_parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE,
+            bg=self._canvas_bg(self._card_bg), highlightthickness=0
         )
         self.canvas.place(x=8, y=8)
 
         self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.session_label.place(x=STATS_X, y=12)
-        self.session_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.session_bar_bg = tk.Canvas(self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.session_bar_bg.place(x=STATS_X, y=30)
         self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.session_reset_label.place(x=STATS_X, y=42)
 
         self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
         self.weekly_label.place(x=STATS_X, y=60)
-        self.weekly_bar_bg = tk.Canvas(self.parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
+        self.weekly_bar_bg = tk.Canvas(self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
         self.weekly_bar_bg.place(x=STATS_X, y=78)
         self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
         self.weekly_reset_label.place(x=STATS_X, y=90)
@@ -206,7 +239,7 @@ class Pane:
 
         bg = ACCENT_BG if accent else self._card_bg
         self.parent.configure(bg=bg)
-        self.canvas.configure(bg=bg)
+        self.canvas.configure(bg=self._canvas_bg(bg))
         for label in (
             self.session_label,
             self.session_reset_label,
@@ -223,17 +256,22 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, self._last_session_pct_px, 8, fill=resolve_bar_fill(session_pct, self._bar_fill), width=0, tags="fill"
+            0, 0, self._last_session_pct_px, 8,
+            fill=self._paint(resolve_bar_fill(session_pct, self._bar_fill)), width=0, tags="fill"
         )
         self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
 
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, self._last_weekly_pct_px, 8, fill=resolve_bar_fill(weekly_pct, self._bar_fill), width=0, tags="fill"
+            0, 0, self._last_weekly_pct_px, 8,
+            fill=self._paint(resolve_bar_fill(weekly_pct, self._bar_fill)), width=0, tags="fill"
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
         self.status_label.configure(text=resolve_status_text(hint_text, credits_text, projection_text))
+
+        if self.on_accent_changed is not None:
+            self.on_accent_changed()
 
     def draw_next_frame(self) -> None:
         frames = get_frames(self._current_state)
@@ -252,28 +290,43 @@ class Pane:
                 color = self._palette.get(ch, "")
                 if not color:
                     continue
+                color = self._paint(color)
                 x0 = x_off + col_index * SCALE
                 y0 = y_off + row_index * SCALE
                 self.canvas.create_rectangle(x0, y0, x0 + SCALE, y0 + SCALE, fill=color, width=0, tags="cat")
 
         if self._driving_tag:
-            self.canvas.create_text(
-                6, CAT_CANVAS_SIZE - 6, text=self._driving_tag, anchor="sw",
-                fill=DIM_COLOR, font=("Segoe UI", 8), tags="cat",
-            )
+            self._draw_tag(6, CAT_CANVAS_SIZE - 6, self._driving_tag, "sw", DIM_COLOR)
 
         if self._tool_label:
-            self.canvas.create_text(
-                6, 6, text=self._tool_label, anchor="nw",
-                fill=FG_COLOR, font=("Segoe UI", 8), tags="cat",
-            )
+            self._draw_tag(6, 6, self._tool_label[:TOOL_LABEL_MAX], "nw", FG_COLOR)
+
+    def _draw_tag(self, x: int, y: int, text: str, anchor: str, fill: str) -> None:
+        """One overlay tag, on an opaque chip when the canvas is keyed.
+
+        Antialiasing is computed against the widget background, so text drawn
+        straight onto the key colour keeps a fringe of it once those pixels
+        are punched out. At 8pt in DIM_COLOR that fringe made the tag
+        illegible. The chip gives the glyph edges a background that is still
+        there after the key is applied.
+        """
+        item = self.canvas.create_text(
+            x, y, text=text, anchor=anchor, fill=fill, font=("Segoe UI", 8), tags="cat"
+        )
+        if not self._keyed:
+            return
+        x0, y0, x1, y1 = self.canvas.bbox(item)
+        self.canvas.create_rectangle(
+            x0 - 3, y0 - 1, x1 + 3, y1 + 1, fill=BG_COLOR, width=0, tags="cat"
+        )
+        self.canvas.tag_raise(item)
 
 
 _PANE_SPECIFIC_LABELS = frozenset({"Colorway", "Pattern", "Randomize", "Customize…", "Rename…"})
 
 
 class TokittyWindow:
-    def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1):
+    def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1, opacity: int = 100):
         self.root = root
         self.state_dir = state_dir
         self._pane_count = pane_count
@@ -281,6 +334,8 @@ class TokittyWindow:
         self._position_path = state_dir / POSITION_FILENAME
         self._drag_offset = (0, 0)
         self._always_on_top_bool = True
+        self._opacity = clamp_level(opacity)
+        self._opacity_pending = False
         self.on_quit: Callable[[], None] = self.root.destroy
         self.on_toggle_tray: Optional[Callable[[], None]] = None
         self.tray_enabled: Optional[Callable[[], bool]] = None
@@ -290,6 +345,8 @@ class TokittyWindow:
         self.on_open_accounts: Optional[Callable[[], None]] = None
         self.autostart_enabled: Optional[Callable[[], bool]] = None
         self.on_toggle_autostart: Optional[Callable[[], None]] = None
+        # Set externally by __main__.py to persist the chosen level.
+        self.on_opacity_changed: Optional[Callable[[int], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # Fired after any right-click menu action, so __main__.py can
@@ -304,15 +361,24 @@ class TokittyWindow:
         self._menu_pane_index: Optional[int] = 0
 
         self._configure_window()
+        self.content = self._make_content_window()
         self.panes = []
         for i in range(pane_count):
             row, col = divmod(i, self._cols)
             frame = tk.Frame(root, width=CARD_WIDTH, height=PANE_HEIGHT, bg=BG_COLOR)
             frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
-            self.panes.append(Pane(frame))
+            content_frame = frame
+            if self.content is not self.root:
+                content_frame = tk.Frame(self.content, width=CARD_WIDTH, height=PANE_HEIGHT, bg=KEY_COLOR)
+                content_frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
+            pane = Pane(frame, content_frame)
+            pane.on_accent_changed = self._schedule_opacity
+            self.panes.append(pane)
         self._restore_position()
         self._bind_drag()
         self._build_context_menu()
+        self._own_content_window()
+        self._apply_opacity()
         self._animate()
 
     def _configure_window(self) -> None:
@@ -329,22 +395,115 @@ class TokittyWindow:
             except Exception:
                 pass
 
+    def _make_content_window(self) -> tk.Misc:
+        """The keyed sibling window, on Windows only.
+
+        Everywhere else this returns the root window itself, so `Pane` gets
+        the same widget for both parents and the whole split collapses to the
+        single-window layout the app has always had.
+        """
+        if not uses_color_key():
+            return self.root
+        content = tk.Toplevel(self.root)
+        content.overrideredirect(True)
+        content.attributes("-topmost", self._always_on_top_bool)
+        content.geometry(f"{self._width}x{self._height}")
+        content.configure(bg=KEY_COLOR)
+        content.update_idletasks()
+        try:
+            content.attributes("-transparentcolor", KEY_COLOR)
+        except tk.TclError:
+            # Documented Windows-only, but a Tk build without it should fall
+            # back to one opaque window rather than leave a black slab on
+            # screen.
+            content.destroy()
+            return self.root
+        return content
+
+    def _own_content_window(self) -> None:
+        """Make the content window a native owned window of the card.
+
+        Without this a single click on the card background activates the
+        card, Windows raises it inside the topmost band, and the cat is
+        hidden behind it permanently. Measured at 3600 visible cat pixels
+        before that click and 0 after.
+        """
+        if self.content is self.root:
+            return
+        self.root.update_idletasks()
+        self.content.update_idletasks()
+        try:
+            set_content_owner(root_hwnd(self.content), root_hwnd(self.root))
+        except Exception:
+            # A failed ownership call costs the z-order guarantee, not the
+            # feature. _on_drag_start re-lifts as a second line of defence.
+            pass
+
+    def _select_opacity(self, level: int) -> None:
+        self.set_opacity(level)
+        if self.on_opacity_changed is not None:
+            self.on_opacity_changed(self._opacity)
+
+    def set_opacity(self, level: int) -> None:
+        self._opacity = clamp_level(level)
+        self._apply_opacity()
+
+    def opacity(self) -> int:
+        return self._opacity
+
+    def _schedule_opacity(self) -> None:
+        """Coalesce to one alpha write per event loop pass.
+
+        Panes render one after another, so applying alpha from inside
+        `Pane.render` would let the last pane win: an accented pane would set
+        1.0 and the next ordinary pane would immediately undo it.
+        """
+        if self._opacity_pending:
+            return
+        self._opacity_pending = True
+        self.root.after_idle(self._flush_opacity)
+
+    def _flush_opacity(self) -> None:
+        self._opacity_pending = False
+        self._apply_opacity()
+
+    def _apply_opacity(self) -> None:
+        level = effective_level(self._opacity, any(pane._accent for pane in self.panes))
+        try:
+            self.root.attributes("-alpha", alpha_for(level))
+        except tk.TclError:
+            pass
+
     def _bind_drag(self) -> None:
         # Bound on root only: every pane Frame and its child widgets carry
         # the toplevel (root) in their default bindtags, so a Button-1
         # press anywhere in the window -- including inside a pane -- already
         # reaches these handlers without per-widget binding.
-        self.root.bind("<Button-1>", self._on_drag_start)
-        self.root.bind("<B1-Motion>", self._on_drag_move)
-        self.root.bind("<ButtonRelease-1>", self._on_drag_end)
+        # The context menu stays on bind_all, which is interpreter-wide and
+        # already sees both toplevels. Drag is per-window, so with a separate
+        # content window it has to be bound on each.
+        for window in self._windows():
+            window.bind("<Button-1>", self._on_drag_start)
+            window.bind("<B1-Motion>", self._on_drag_move)
+            window.bind("<ButtonRelease-1>", self._on_drag_end)
+
+    def _windows(self) -> List[tk.Misc]:
+        return [self.root] if self.content is self.root else [self.root, self.content]
+
+    def _move_to(self, x: int, y: int) -> None:
+        for window in self._windows():
+            window.geometry(f"+{x}+{y}")
 
     def _on_drag_start(self, event: tk.Event) -> None:
-        self._drag_offset = (event.x, event.y)
+        # Screen coordinates, not widget-relative ones: the press can land on
+        # any descendant of either window, and event.x is relative to whatever
+        # widget received it.
+        self._drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
+        if self.content is not self.root:
+            self.content.lift()
 
     def _on_drag_move(self, event: tk.Event) -> None:
-        x = self.root.winfo_x() + event.x - self._drag_offset[0]
-        y = self.root.winfo_y() + event.y - self._drag_offset[1]
-        self.root.geometry(f"+{x}+{y}")
+        self._move_to(event.x_root - self._drag_offset[0], event.y_root - self._drag_offset[1])
 
     def _on_drag_end(self, _event: tk.Event) -> None:
         self._save_position()
@@ -381,6 +540,9 @@ class TokittyWindow:
             on_open_accounts=self.on_open_accounts,
             autostart_enabled=self.autostart_enabled,
             on_toggle_autostart=self.on_toggle_autostart,
+            opacity_levels=list(LEVELS),
+            current_opacity=self.opacity,
+            on_opacity=self._select_opacity,
         )
 
     def _after_menu_action(self, action):
@@ -512,7 +674,8 @@ class TokittyWindow:
 
     def _toggle_always_on_top(self) -> None:
         self._always_on_top_bool = not self._always_on_top_bool
-        self.root.attributes("-topmost", self._always_on_top_bool)
+        for window in self._windows():
+            window.attributes("-topmost", self._always_on_top_bool)
 
     def _restore_position(self) -> None:
         screen_w = self.root.winfo_screenwidth()
@@ -526,7 +689,8 @@ class TokittyWindow:
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 pass
 
-        self.root.geometry(f"{self._width}x{self._height}+{x}+{y}")
+        for window in self._windows():
+            window.geometry(f"{self._width}x{self._height}+{x}+{y}")
 
     def _save_position(self) -> None:
         try:

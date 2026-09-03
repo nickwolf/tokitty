@@ -11,6 +11,8 @@ import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from tokitty.transparency import DEFAULT_LEVEL, LEVELS
+
 SETTINGS_FILENAME = "settings.json"
 
 
@@ -18,6 +20,7 @@ SETTINGS_FILENAME = "settings.json"
 class Settings:
     tray_enabled: bool = True
     surprise_me: bool = False
+    opacity: int = DEFAULT_LEVEL
 
 
 def load_settings(state_dir) -> Settings:
@@ -36,7 +39,10 @@ def load_settings(state_dir) -> Settings:
     surprise_me = data.get("surprise_me", False)
     if not isinstance(surprise_me, bool):
         surprise_me = False
-    return Settings(tray_enabled=tray_enabled, surprise_me=surprise_me)
+    opacity = data.get("opacity", DEFAULT_LEVEL)
+    if isinstance(opacity, bool) or opacity not in LEVELS:
+        opacity = DEFAULT_LEVEL
+    return Settings(tray_enabled=tray_enabled, surprise_me=surprise_me, opacity=opacity)
 
 
 def save_settings(state_dir, settings: Settings) -> None:
