@@ -43,6 +43,8 @@ def build_menu(
     surprise_me: Optional[Callable[[], bool]] = None,
     on_toggle_surprise: Optional[Callable[[], None]] = None,
     on_open_accounts: Optional[Callable[[], None]] = None,
+    autostart_enabled: Optional[Callable[[], bool]] = None,
+    on_toggle_autostart: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
     colorway_items = [
         MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
@@ -73,6 +75,8 @@ def build_menu(
     ]
     if on_toggle_tray is not None and tray_enabled is not None:
         items.append(MenuItem(label="Show tray icon", action=on_toggle_tray, checkbox=tray_enabled))
+    if on_toggle_autostart is not None and autostart_enabled is not None:
+        items.append(MenuItem(label="Start at login", action=on_toggle_autostart, checkbox=autostart_enabled))
     if on_toggle_surprise is not None and surprise_me is not None:
         items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
     items.append(MenuItem(separator=True))

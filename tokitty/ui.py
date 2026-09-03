@@ -288,6 +288,8 @@ class TokittyWindow:
         self.surprise_me: Optional[Callable[[], bool]] = None
         self.on_toggle_surprise: Optional[Callable[[], None]] = None
         self.on_open_accounts: Optional[Callable[[], None]] = None
+        self.autostart_enabled: Optional[Callable[[], bool]] = None
+        self.on_toggle_autostart: Optional[Callable[[], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # (pane_index, field, value) -- set externally by __main__.py. field
@@ -374,6 +376,8 @@ class TokittyWindow:
             surprise_me=self.surprise_me,
             on_toggle_surprise=self.on_toggle_surprise,
             on_open_accounts=self.on_open_accounts,
+            autostart_enabled=self.autostart_enabled,
+            on_toggle_autostart=self.on_toggle_autostart,
         )
 
     def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:

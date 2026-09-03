@@ -131,3 +131,34 @@ def test_accounts_item_positioned_after_rename_before_refresh_separator():
     assert labels[idx - 1] == "Rename…"
     assert labels[idx + 1] is None  # separator preceding "Refresh now"
     assert labels[idx + 2] == "Refresh now"
+
+
+def test_autostart_item_absent_without_seam():
+    kwargs, _, _ = _kwargs()
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert "Start at login" not in labels
+
+
+def test_autostart_item_present_with_seam():
+    kwargs, calls, state = _kwargs(
+        autostart_enabled=lambda: state.get("autostart", True),
+        on_toggle_autostart=lambda: calls.__setitem__("toggle_autostart", calls.get("toggle_autostart", 0) + 1),
+    )
+    items = {i.label: i for i in build_menu(**kwargs) if not i.separator}
+    assert "Start at login" in items
+    assert items["Start at login"].checkbox() is True
+    items["Start at login"].action()
+    assert calls["toggle_autostart"] == 1
+
+
+def test_autostart_item_positioned_between_tray_and_surprise():
+    kwargs, _, state = _kwargs(
+        tray_enabled=lambda: state["tray"],
+        on_toggle_tray=lambda: None,
+        autostart_enabled=lambda: True,
+        on_toggle_autostart=lambda: None,
+        surprise_me=lambda: True,
+        on_toggle_surprise=lambda: None,
+    )
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert labels.index("Show tray icon") < labels.index("Start at login") < labels.index("Surprise me")

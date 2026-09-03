@@ -133,6 +133,15 @@ def test_on_customization_changed_default_none_in_init_source():
     assert lines and lines[0].endswith("= None")
 
 
+def test_autostart_seam_defaults_none_in_init_source():
+    from tokitty import ui
+
+    src = inspect.getsource(ui.TokittyWindow.__init__)
+    for attr in ("self.autostart_enabled", "self.on_toggle_autostart"):
+        lines = [line.strip() for line in src.splitlines() if attr in line]
+        assert lines and lines[0].endswith("= None")
+
+
 @pytest.mark.gui
 def test_build_menu_model_reads_shadow_state():
     tk = pytest.importorskip("tkinter")
@@ -212,6 +221,25 @@ def test_randomize_and_surprise_seams_add_items():
             window.on_toggle_surprise = lambda: None
             labels = [i.label for i in window.build_menu_model(0) if not i.separator]
             assert "Randomize" in labels and "Surprise me" in labels
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_autostart_seam_adds_start_at_login_item():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            window.autostart_enabled = lambda: True
+            window.on_toggle_autostart = lambda: None
+            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
+            assert "Start at login" in labels
     finally:
         root.destroy()
 

@@ -37,6 +37,16 @@ and the cat starts reacting to what a running Claude Code session is doing: a th
 
 On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in the Windows-native `~/.claude`. `--install-hooks` (and `--uninstall-hooks`) detect this automatically — same WSL-credentials probe the live-activity watcher uses — and target the `\\wsl.localhost\<distro>\home\<user>\.claude` dir instead, falling back to the Windows-local `~/.claude` only if WSL resolution fails (no WSL installed, no Claude Code credentials found, etc). Running `python3 -m tokitty --install-hooks` from inside WSL itself installs to the same dir and is equivalent — pick whichever shell is convenient.
 
+## Autostart
+
+Optional, off by default. Right-click any pane (or the tray icon) and check **Start at login** to have tokitty launch itself automatically the next time you log in: no installer, no admin rights, nothing outside your own user account. Unchecking it removes the same registration.
+
+The mechanism is native to each OS and needs no third-party dependency: the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value on Windows, a `LaunchAgent` plist at `~/Library/LaunchAgents/com.nickwolf.tokitty.plist` on macOS, and a `.desktop` file at `~/.config/autostart/tokitty.desktop` on Linux. The checkbox reflects the real OS registration, read when tokitty starts and again after you toggle it. Nothing is cached on disk, so removing the entry by hand is picked up the next time tokitty starts. It is not picked up mid-session: remove the entry externally while tokitty is running and the checkbox keeps showing the state it read at startup until you restart. On macOS, checking the box writes the plist but doesn't load it into the running session, so the change takes effect at your next login, not immediately.
+
+`python -m tokitty --install-autostart` and `python -m tokitty --uninstall-autostart` do the same thing from the command line, for headless setup or scripting.
+
+If tokitty's repo clone is moved, or the Python interpreter it was registered against changes, the registration can go stale and silently fail to launch at the next login with nothing on screen to explain it. tokitty checks for this itself at every startup and rewrites the registration if it's drifted, so as long as tokitty gets launched by hand at least once from wherever it now lives, the next automatic login launch self-heals. The one thing this can't fix: deleting the whole clone with no replacement leaves a permanently broken entry, since nothing is ever running to repair it. Uncheck **Start at login** (or run `--uninstall-autostart`) before deleting a clone that has autostart enabled.
+
 ## Accounts
 
 Tokitty can track any number of Claude Code accounts side by side in one window: a pane per account instead of one, laid out in a grid once you're past four, sharing a single always-on-top card. This is opt-in and off by default. With no accounts configured, tokitty behaves exactly like v1, single account, single pane.
@@ -77,7 +87,7 @@ With no `accounts.json` and no `customization.json`, tokitty runs as a single pa
 
 ## Security & privacy
 
-Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, and two app-wide toggles (`position.json`, `customization.json`, and `settings.json` — the latter holding "show tray icon" and "surprise me") are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu.
+Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, and two app-wide toggles (`position.json`, `customization.json`, and `settings.json` — the latter holding "show tray icon" and "surprise me") are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu. Autostart's on/off state is not among them: it lives entirely in the OS's own registration (a registry value, a LaunchAgent plist, or a desktop entry, depending on platform) and never in `settings.json`, so there is no stored copy to fall out of step with what the OS will actually do at your next login.
 
 The live-activity feature above is opt-in and changes this picture only if you turn it on:
 
@@ -171,7 +181,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) — phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, autostart, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
+See [docs/ROADMAP.md](docs/ROADMAP.md) — phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
 
 ## License
 
