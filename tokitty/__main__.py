@@ -626,7 +626,7 @@ def run_gui() -> int:
 
     settings = load_settings(state_dir)
 
-    from tokitty.settings import Settings, save_settings
+    from tokitty.settings import update_settings
 
     surprise_state = {"on": settings.surprise_me}
     window.surprise_me = lambda: surprise_state["on"]
@@ -638,8 +638,7 @@ def run_gui() -> int:
 
     def toggle_surprise() -> None:
         surprise_state["on"] = not surprise_state["on"]
-        save_settings(state_dir, Settings(tray_enabled=settings.tray_enabled,
-                                          surprise_me=surprise_state["on"]))
+        update_settings(state_dir, surprise_me=surprise_state["on"])
         if surprise_state["on"]:
             for i in range(len(units)):
                 handle_customization_changed(i, "randomize", None)
