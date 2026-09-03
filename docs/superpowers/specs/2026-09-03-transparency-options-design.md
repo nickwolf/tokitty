@@ -2,7 +2,7 @@
 
 Issue: [#37](https://github.com/nickwolf/tokitty/issues/37) ("Let's add a transparency slider for the background behind the cat and play with different UI options for various levels of opacity").
 
-Status: option C chosen by the owner on 2026-09-03, along with the four sub-decisions recorded at the end. Ready to plan into tasks.
+Status: option C chosen by the owner on 2026-09-03, along with the four sub-decisions recorded below. An adversarial review the same day found a blocker that the original spikes could not see, plus nine supporting defects. The blocker now has a verified fix. See the review section at the end before planning.
 
 Related: [#28](https://github.com/nickwolf/tokitty/issues/28) ("PySide6 transparent-cat rewrite"). This design says explicitly which parts of #37 need that rewrite and which do not.
 
@@ -166,7 +166,7 @@ Baseline to preserve, confirmed before this document was written: 584 headless, 
 
 Leaving them keyed is the worst case measured anywhere in this spike, not the mildest. Canvas text keys exactly as badly as `tk.Label` text does: rendered at Segoe UI 8 against a `#010203` key over a card at alpha 0.5, `tool_label` in `FG_COLOR` stays legible but fringed, and `driving_tag` in `DIM_COLOR` is illegible. The dim 8pt case is precisely the combination that suffers most.
 
-Moving them to the card window puts them behind the cat instead of on top of it, because the content window is above the card window. That is a real regression, not a theoretical one: the sprite grid is 28x26 at `SCALE` 4, so it spans the full 112px canvas width and y 4 to 108, and both tag positions fall inside its footprint. Counting opaque cells under the tag regions across all four states and both frames, the top-left region (`tool_label`) has 4 to 7 opaque cells of 33 sampled, and the bottom-left region (`driving_tag`) has 14 to 26 of 44. The cat would eat a third to half of the tag.
+Moving them to the card window puts them behind the cat instead of on top of it, because the content window is above the card window. That is a real regression, not a theoretical one: the sprite grid is 28x26 at `SCALE` 4, so it spans the full 112px canvas width and y 4 to 108, and both tag positions fall inside its footprint. Counting opaque cells under the tag regions, the top-left region (`tool_label`) has 4 to 7 opaque cells of 33 sampled, and the bottom-left region (`driving_tag`) has 14 to 26 of 44. That sample covered 4 states and 2 frames each. `sprites.ALL_STATES` actually holds 14 states, and `flopped` has 4 frames rather than 2, so the real worst case is unmeasured and can only be larger. The cat would eat a third to half of the tag.
 
 The fix is to give each tag an opaque backing rectangle on the keyed canvas: create the text, take its `bbox`, draw a filled rectangle in `BG_COLOR` `#1c1c22` padded 3px horizontally and 1px vertically, then `tag_raise` the text above it. Text antialiased against a colour that is actually still there renders correctly, and the chip is opaque so it survives the key.
 
@@ -182,6 +182,73 @@ So "the accent ignores the opacity setting" has to mean the card window goes to 
 
 That is the right trade, since the alternative is an accent that is quieter than the state it exists to announce, but it is a behaviour to name in the plan rather than discover.
 
+It is also not brief. `GONE_S` in `activity.py:16` is 1800.0, so an abandoned permission flag persists for 30 minutes by design. One stale pane can hold every pane opaque for that long.
+
+## Adversarial review, 2026-09-03
+
+Reviewed cold by `gpt-5.6-sol` at high effort, read-only, briefed with all seven measurements and the exact probe methods. Verdict was request-changes, and it was right. Every code-level claim below was checked against the repo before being recorded here, and the blocker was reproduced and then fixed empirically.
+
+### The blocker: a single real click inverts the two windows and the cat disappears
+
+`WindowFromPoint` reports the pre-click hit target. It says nothing about what happens after the click lands. A real click on an inactive top-level sends `WM_MOUSEACTIVATE`, and default handling activates that window and raises it within its topmost band. So clicking the card raises the card above the content window, and the content window is exactly where the cat lives.
+
+Reproduced with real mouse input via `SetCursorPos` plus `mouse_event`, counting visible cat pixels in a screenshot after each click:
+
+```
+before any click          fg=content  content_above_card=True   cat_px_visible=3600
+after click on card       fg=card     content_above_card=False  cat_px_visible=0
+after click on cat        fg=card     content_above_card=False  cat_px_visible=0
+after click on card again fg=card     content_above_card=False  cat_px_visible=0
+```
+
+The cat goes from 3600 visible pixels to 0 and never comes back, because it is now behind an opaque region of the card. One drag of the widget, which is the most ordinary interaction it has, destroys the feature. None of the earlier spikes could see this: they inspected hit testing and z-order without ever sending a click.
+
+The earlier stacking check was also weaker than it read. Walking `GW_HWNDNEXT` down from the content window until it reaches the card proves the card is somewhere below, not that it is directly below. Another topmost window between them would expose and receive input through the keyed holes.
+
+### The fix: make the content window owned by the card window
+
+Three mitigations were tested against the same click sequence plus a simulated drag.
+
+| Mitigation | Result |
+|---|---|
+| `SetWindowLongPtr(content, GWLP_HWNDPARENT, card)` | Works. `content_above_card=True` and `cat_px=3600` through every click and the drag. |
+| `WS_EX_NOACTIVATE` on the card | Fails. The card still took the foreground and still inverted, `cat_px=0`. |
+| Tk `<Button-1>` on the card calling `content.lift()` | Works in this test, but repairs after the fact rather than preventing, and only for events Tk sees. |
+
+An owned window is always above its owner and cannot be covered by it, which is enforced by Windows rather than re-asserted by us. That is the mechanism to build on. The Tk re-lift is worth keeping as a cheap secondary repair, not as the primary. `WS_EX_NOACTIVATE` is refuted and should not be retried.
+
+This is Windows-only ctypes, which costs nothing here because the whole two-window path is already Windows-only.
+
+### Supporting defects, all verified in the code
+
+1. **`Pane` destroys the colour-key invariant on every render.** `set_appearance` (`ui.py:91`) and `render` (`ui.py:183`) both set the cat canvas background to the pane's card or accent colour. Re-parenting the widgets does not fix that. The plan needs an explicit invariant: the content toplevel, its frames and the cat canvas empty pixels stay the key colour permanently, bar tracks stay deliberately opaque, and no per-pane render path may recolour a keyed surface. The hand-built spikes bypassed this code entirely.
+
+2. **Settings writes already lose fields, before opacity is added.** `TrayManager.set_enabled` (`tray.py:154`) writes `Settings(tray_enabled=enabled)` and drops `surprise_me` on the floor today. `toggle_surprise` (`__main__.py:640`) rebuilds from `settings.tray_enabled`, a startup snapshot, so it can resurrect a stale value. Adding a third field gives both writers a third thing to lose. This needs one merge-style update path, and it is a live bug independent of #37.
+
+3. **Settings load after the window is built.** `tk.Tk()` and `TokittyWindow` are constructed at `__main__.py:393-394`, and `load_settings` does not run until `__main__.py:627`. Cold start would flash fully opaque and then snap to the stored level. Load settings first and pass the initial opacity into construction.
+
+4. **Per-pane accent cannot drive window alpha from inside `Pane.render`.** Panes render sequentially at `__main__.py:744`, so the last pane wins: an accented pane sets 1.0 and an ordinary pane immediately restores 0.5. Accent has to be aggregated at `TokittyWindow` level once all pane states are known.
+
+5. **Drag needs `x_root`/`y_root`.** `_on_drag_start` and `_on_drag_move` (`ui.py:341-350`) use widget-relative `event.x`/`event.y`. With two toplevels and descendants on different surfaces, that is ambiguous. Use root coordinates plus the card's starting geometry. Two `geometry()` calls are also not atomic, so transient separation during a drag is possible and needs a synchronisation policy with reentrancy protection.
+
+6. **DPI awareness is already set too late.** `_configure_window` (`ui.py:318`) calls `SetProcessDpiAwareness(2)` from `TokittyWindow.__init__`, which runs after `tk.Tk()` at `__main__.py:393` has already created an HWND. Windows does not support changing process DPI awareness once a window exists, and the bare `except Exception: pass` hides the failure because the HRESULT is never inspected. Pre-existing, but it matters more with two HWNDs, which can process `WM_DPICHANGED` independently and diverge.
+
+7. **The chip needs bounds.** `_tool_label` (`activity.py:52`) returns unknown tool names verbatim, so an arbitrary MCP or custom tool name becomes an arbitrarily wide opaque slab across the cat. Specify a maximum width or truncation and the clipping behaviour, and give the chip rectangle the same `"cat"` delete tag as the text or `_draw_frame` will leak a rectangle per frame.
+
+8. **Key collision is exact, not near, and the wrong set was checked.** Collision is exact RGB equality, so "none is near `#010203`" is not the relevant test. Of the four user-settable overrides, `coat_base`, `coat_shade` and `bar_fill` live on the keyed surface and can collide; `card_bg` cannot, because it belongs to the card window. Compare normalised RGB rather than case-sensitive strings, and do not silently rewrite the colour the user picked in `customization.json`. Substitute at render time, or pick the key dynamically from a colour absent from the resolved keyed surface.
+
+9. **Do not double-bind the context menu.** `bind_all` is interpreter-wide and already sees events from every Tk toplevel, so binding `<Button-3>` on both windows risks duplicate or replacement behaviour. Drag bindings do need to cover both toplevels. Separately, the dialogs in `ui.py` and `accounts_ui.py` are `transient` to `root`, so the design has to say which window `root` is.
+
+10. **Readability at the floor is unmeasured.** The fringing comparison shows the mechanism cleanly but was run over one light backdrop at alpha 0.55. All six stat labels, including 8pt `DIM_COLOR`, fade to 50% over arbitrary wallpaper. Needs light, dark, high-frequency and similarly-coloured backdrops at each supported DPI scale before 50 is confirmed as the floor.
+
+### What the review did not change
+
+The capability probe, the controlled text-fringing comparison, the chip as a rendering remedy, app-wide rather than per-account persistence, and leaving `grid_size` and `pane_index_at` untouched all stand.
+
+The reviewer's position on #28 is worth recording accurately: it would not start the PySide6 rewrite for #37 alone, but it would defer #37 into #28 rather than ship option C if the project is unwilling to maintain an owned two-HWND unit and repeat a Windows interaction and DPI gate for future UI work. The evidence rules out options A and B as exact implementations of the issue. It does not rule out deferral.
+
 ## Open questions
 
-None remaining. The plan can proceed.
+1. Given that option C now requires an owned two-HWND unit maintained with ctypes, plus a manual Windows interaction and DPI gate that headless CI cannot cover, is that still the right trade against deferring #37 into #28. The blocker has a verified fix, so this is a maintenance-appetite question rather than a feasibility one.
+2. Whether the settings-writer bug (defect 2) is fixed as a prerequisite commit on its own, since it loses `surprise_me` today regardless of #37.
+3. Whether the DPI ordering fix (defect 6) belongs in this work or a separate issue. It is pre-existing and touches startup for every platform.
