@@ -303,3 +303,34 @@ def test_ui_uses_the_shared_status_priority_helper():
     from tokitty import ui
     source = inspect.getsource(ui.Pane.render)
     assert "resolve_status_text" in source
+
+
+def _bare_window():
+    """A TokittyWindow shell with only the attributes _after_menu_action
+    reads, so this stays a headless test with no real Tk root."""
+    from tokitty.ui import TokittyWindow
+
+    window = TokittyWindow.__new__(TokittyWindow)
+    window.on_menu_action_done = None
+    return window
+
+
+def test_after_menu_action_runs_the_action_then_the_done_hook():
+    order = []
+    window = _bare_window()
+    window.on_menu_action_done = lambda: order.append("done")
+    wrapped = window._after_menu_action(lambda: order.append("action"))
+    wrapped()
+    assert order == ["action", "done"]
+
+
+def test_after_menu_action_without_a_done_hook_still_runs_the_action():
+    ran = []
+    window = _bare_window()
+    wrapped = window._after_menu_action(lambda: ran.append("action"))
+    wrapped()
+    assert ran == ["action"]
+
+
+def test_after_menu_action_passes_none_through():
+    assert _bare_window()._after_menu_action(None) is None

@@ -122,6 +122,27 @@ class TrayManager:
             self.available = False
             self._icon = None
 
+    def refresh(self) -> None:
+        """Re-query the menu's dynamic checkbox and radio getters.
+
+        pystray builds its menu once and the win32 backend caches the
+        native HMENU, so a state change made anywhere other than the
+        tray's own menu (in practice, the Tk right-click menu) stays
+        invisible in the tray until update_menu is called. pystray's own
+        docs are explicit that this call is required in that case. Safe
+        to call when there is no icon, which is the common case on macOS
+        and whenever the tray is switched off.
+        """
+        icon = self._icon
+        if icon is None:
+            return
+        try:
+            icon.update_menu()
+        except Exception:
+            # Same posture as the rest of this class: a tray that fails
+            # to refresh must never take the app down with it.
+            pass
+
     def stop(self) -> None:
         if self._icon is not None:
             try:
