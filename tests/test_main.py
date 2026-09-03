@@ -911,3 +911,107 @@ def test_live_customization_change_preserves_manager_added_key(tmp_path, monkeyp
     stored = load_customization(tmp_path)
     assert stored["default"].label == "Renamed in manager"
     assert stored["acct-v1-added"].label == "Added in manager"
+
+
+class _FakeToggleBackend:
+    def __init__(self, registered=False):
+        self.registered = registered
+        self.last_registered_command = None
+
+    def is_registered(self):
+        return self.registered
+
+    def is_current(self, command):
+        return self.registered and self.last_registered_command == command
+
+    def register(self, command):
+        self.registered = True
+        self.last_registered_command = command
+
+    def deregister(self):
+        self.registered = False
+
+
+@pytest.mark.gui
+def test_run_gui_wires_autostart_seam_and_toggle(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+
+    fake_backend = _FakeToggleBackend(registered=True)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: fake_backend)
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        window = holder["window"]
+        assert window.autostart_enabled() is True
+        window.on_toggle_autostart()
+        assert fake_backend.registered is False
+        assert window.autostart_enabled() is False
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0
+
+
+@pytest.mark.gui
+def test_run_gui_leaves_autostart_seam_none_on_unsupported_platform(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: None)
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        window = holder["window"]
+        assert window.autostart_enabled is None
+        assert window.on_toggle_autostart is None
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0
+
+
+@pytest.mark.gui
+def test_run_gui_calls_ensure_current_at_startup(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
+
+    fake_backend = _FakeToggleBackend(registered=True)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: fake_backend)
+    calls = []
+    monkeypatch.setattr(
+        "tokitty.autostart.ensure_current", lambda state_dir, backend: calls.append((state_dir, backend))
+    )
+
+    assert main_module.run_gui() == 0
+    assert calls == [(tmp_path, fake_backend)]

@@ -673,6 +673,40 @@ def run_gui() -> int:
             tray.set_enabled(tray_state["enabled"])
 
         window.on_toggle_tray = toggle_tray
+
+    from tokitty.autostart import ensure_current, get_backend, resolve_launch_command, write_launcher_file
+
+    autostart_backend = get_backend()
+    if autostart_backend is not None:
+        try:
+            ensure_current(state_dir, autostart_backend)
+            autostart_registered = autostart_backend.is_registered()
+        except (OSError, ImportError):
+            # get_backend() decides purely from sys.platform, so a test (or
+            # a genuinely odd install) that reports "win32" without the
+            # winreg module actually being importable reaches here rather
+            # than at get_backend() itself -- see the sys.platform-spoofing
+            # tests in test_main.py (test_run_discovery_survives_wsl_scan_
+            # raising_credentials_error and neighbors) that force sys.
+            # platform to "win32" on non-Windows CI to exercise unrelated
+            # WSL logic. Degrade exactly like get_backend() returning None:
+            # leave the seam at its None default instead of crashing
+            # startup, mirroring ensure_current's own "never crash startup"
+            # OSError guard.
+            autostart_registered = None
+        if autostart_registered is not None:
+            autostart_state = {"enabled": autostart_registered}
+            window.autostart_enabled = lambda: autostart_state["enabled"]
+
+            def toggle_autostart() -> None:
+                if autostart_state["enabled"]:
+                    autostart_backend.deregister()
+                else:
+                    write_launcher_file(state_dir)
+                    autostart_backend.register(resolve_launch_command(state_dir))
+                autostart_state["enabled"] = autostart_backend.is_registered()
+
+            window.on_toggle_autostart = toggle_autostart
     if warning:
         window.panes[0].render(state="confused", session_pct=0.0, weekly_pct=0.0,
                                session_reset_text="—", weekly_reset_text="—", driving_tag="",
