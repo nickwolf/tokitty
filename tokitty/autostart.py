@@ -286,6 +286,46 @@ class LinuxDesktopEntryBackend:
         return any(line == target for line in path.read_text(encoding="utf-8").splitlines())
 
 
+def ensure_current(
+    state_dir: Path,
+    backend,
+    *,
+    repo_root: Optional[Path] = None,
+    executable: Optional[str] = None,
+    platform: Optional[str] = None,
+    frozen: Optional[bool] = None,
+) -> bool:
+    """Startup drift repair, never opt-in registration -- a no-op unless
+    autostart is already registered. The registered OS command never
+    encodes the repo root at all (only the launcher file's contents do),
+    so a moved repo produces a byte-identical registered command and a
+    comparison against it would never notice. That is why the launcher
+    file is rewritten unconditionally on every call, while the OS
+    registration itself is rewritten only when the freshly resolved
+    command actually differs from what is registered (e.g. an
+    interpreter that moved or was upgraded in place). See the design
+    doc's "Correction, 2026-09-01, found while planning" note."""
+    try:
+        if not backend.is_registered():
+            return False
+        resolved_repo_root = _default_repo_root() if repo_root is None else repo_root
+        write_launcher_file(state_dir, resolved_repo_root)
+        command = resolve_launch_command(
+            state_dir, repo_root=resolved_repo_root, executable=executable, platform=platform, frozen=frozen,
+        )
+        if backend.is_current(command):
+            return False
+        backend.register(command)
+        return True
+    except OSError:
+        # A permission hiccup or locked file here must never crash
+        # startup (mirrors run_discovery's retry_pending_hook_op guard
+        # in __main__.py). Worst case the entry stays stale for one more
+        # boot -- exactly the class of failure this function exists to
+        # eventually repair, not a new one.
+        return False
+
+
 def get_backend(platform: Optional[str] = None):
     """Pick the backend for the given (or current) platform. None for an
     unrecognized platform string -- callers (menu wiring, Task 5) treat

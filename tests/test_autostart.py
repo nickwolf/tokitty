@@ -10,6 +10,7 @@ from tokitty.autostart import (
     MacLaunchAgentBackend,
     WindowsRegistryBackend,
     _windows_pythonw_path,
+    ensure_current,
     get_backend,
     launcher_content,
     resolve_launch_command,
@@ -396,3 +397,87 @@ def test_get_backend_selects_linux():
 
 def test_get_backend_none_for_unknown_platform():
     assert get_backend(platform="freebsd13") is None
+
+
+class _RecordingBackend:
+    def __init__(self, registered=False, current_command=None, raise_on_register=False):
+        self._registered = registered
+        self._command = current_command
+        self._raise_on_register = raise_on_register
+        self.registered_calls = []
+
+    def is_registered(self):
+        return self._registered
+
+    def is_current(self, command):
+        return self._command == command
+
+    def register(self, command):
+        if self._raise_on_register:
+            raise OSError("permission denied")
+        self.registered_calls.append(command)
+        self._command = command
+        self._registered = True
+
+
+def test_ensure_current_noop_when_not_registered(tmp_path):
+    backend = _RecordingBackend(registered=False)
+    changed = ensure_current(tmp_path, backend, repo_root=tmp_path / "repo")
+    assert changed is False
+    assert backend.registered_calls == []
+
+
+def test_ensure_current_rewrites_registration_on_interpreter_drift(tmp_path):
+    stale = ["/usr/bin/python3.10", str(tmp_path / LAUNCHER_FILENAME)]
+    backend = _RecordingBackend(registered=True, current_command=stale)
+    changed = ensure_current(
+        tmp_path, backend, repo_root=tmp_path / "repo", executable="/usr/bin/python3.12", platform="linux",
+    )
+    assert changed is True
+    assert backend.registered_calls[-1][0] == "/usr/bin/python3.12"
+
+
+def test_ensure_current_noop_when_already_current(tmp_path):
+    fresh = resolve_launch_command(tmp_path, executable="/usr/bin/python3", platform="linux", repo_root=tmp_path / "repo")
+    backend = _RecordingBackend(registered=True, current_command=fresh)
+    changed = ensure_current(
+        tmp_path, backend, repo_root=tmp_path / "repo", executable="/usr/bin/python3", platform="linux",
+    )
+    assert changed is False
+    assert backend.registered_calls == []
+
+
+def test_ensure_current_always_rewrites_the_launcher_file(tmp_path):
+    """Repo-moved case: the registered command's argv never encodes the
+    repo path (only the launcher file's content does), so the only way
+    to repair a moved repo is to unconditionally regenerate the launcher
+    file -- covered even when the registered command doesn't change at
+    all. Both halves of the asymmetry are asserted here: the launcher
+    file now points at the new root, while the registered command (same
+    state_dir, same interpreter) is byte-identical and therefore never
+    rewritten."""
+    fresh = resolve_launch_command(
+        tmp_path, executable="/usr/bin/python3", platform="linux", repo_root=tmp_path / "old_repo"
+    )
+    backend = _RecordingBackend(registered=True, current_command=fresh)
+    ensure_current(tmp_path, backend, repo_root=tmp_path / "new_repo", executable="/usr/bin/python3", platform="linux")
+    content = (tmp_path / LAUNCHER_FILENAME).read_text(encoding="utf-8")
+    # repr(), not the raw path string: launcher_content() embeds repo_root
+    # via repr() (see its docstring), which doubles backslashes on a
+    # Windows-shaped path. A bare `str(path) in content` check is exactly
+    # the kind of assertion this repo's own accounts-setup-ui branch got
+    # burned by -- it passes on POSIX (no backslashes to escape) and fails
+    # on real Windows, confirmed by hand against
+    # C:\Users\nickw\AppData\Local\Programs\Python\Python313\python.exe.
+    assert repr(str(tmp_path / "old_repo")) not in content
+    assert repr(str(tmp_path / "new_repo")) in content
+    assert backend.registered_calls == []
+
+
+def test_ensure_current_swallows_oserror_and_returns_false(tmp_path):
+    stale = ["/usr/bin/python3.10", str(tmp_path / LAUNCHER_FILENAME)]
+    backend = _RecordingBackend(registered=True, current_command=stale, raise_on_register=True)
+    changed = ensure_current(
+        tmp_path, backend, repo_root=tmp_path / "repo", executable="/usr/bin/python3.12", platform="linux",
+    )
+    assert changed is False
