@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tokitty.settings import load_settings
+from tokitty.settings import Settings, load_settings, save_settings
 from tokitty.tray import TrayManager
 
 
@@ -85,6 +85,13 @@ def test_set_enabled_persists_and_toggles(tmp_path):
     mgr.set_enabled(True)
     assert load_settings(tmp_path).tray_enabled is True
     assert mgr._icon is not None  # re-enabling started a fresh icon
+
+
+def test_set_enabled_keeps_surprise_me(tmp_path):
+    save_settings(tmp_path, Settings(tray_enabled=True, surprise_me=True))
+    mgr, _, _ = _managers(tmp_path)
+    mgr.set_enabled(False)
+    assert load_settings(tmp_path).surprise_me is True
 
 
 def test_guard_image_factory_raises(tmp_path):

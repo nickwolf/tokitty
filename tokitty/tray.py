@@ -20,7 +20,7 @@ import sys
 import threading
 from typing import Callable, List, Optional
 
-from tokitty.settings import Settings, save_settings
+from tokitty.settings import update_settings
 
 TRAY_ICON_SCALE = 2  # 28x26 content sprite -> 56x52, padded to a 56x56 square
 
@@ -152,7 +152,7 @@ class TrayManager:
             self._icon = None
 
     def set_enabled(self, enabled: bool) -> None:
-        save_settings(self._state_dir, Settings(tray_enabled=enabled))
+        update_settings(self._state_dir, tray_enabled=enabled)
         if enabled:
             self.start()
         else:

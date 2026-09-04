@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 SETTINGS_FILENAME = "settings.json"
@@ -44,3 +44,10 @@ def save_settings(state_dir, settings: Settings) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(asdict(settings), indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def update_settings(state_dir, **changes) -> Settings:
+    """Change named fields and leave the rest at whatever is on disk."""
+    updated = replace(load_settings(state_dir), **changes)
+    save_settings(state_dir, updated)
+    return updated
