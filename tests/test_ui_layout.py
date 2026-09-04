@@ -157,7 +157,7 @@ def test_build_menu_model_reads_shadow_state():
             labels = [i.label for i in model if not i.separator]
             # No tray seam wired by default -> no "Show tray icon".
             assert labels == ["Colorway", "Pattern", "Customize…", "Rename…",
-                              "Refresh now", "Always in front", "Exit"]
+                              "Refresh now", "Always in front", "Transparency", "Exit"]
             # always_on_top getter reads the plain-Python shadow, not a tk Var.
             aot = {i.label: i for i in model if not i.separator}["Always in front"]
             assert aot.checkbox() == window._always_on_top_bool
@@ -334,3 +334,151 @@ def test_after_menu_action_without_a_done_hook_still_runs_the_action():
 
 def test_after_menu_action_passes_none_through():
     assert _bare_window()._after_menu_action(None) is None
+
+
+@pytest.mark.gui
+def test_transparency_submenu_tracks_the_window_level():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    from tokitty.transparency import LEVELS
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            saved = []
+            window.on_opacity_changed = saved.append
+
+            submenu = {i.label: i for i in window.build_menu_model(0)}["Transparency"].submenu
+            assert [i.label for i in submenu] == [f"{level}%" for level in LEVELS]
+            assert [i.label for i in submenu if i.radio_selected()] == ["100%"]
+
+            {i.label: i for i in submenu}["60%"].action()
+            assert window.opacity() == 60
+            assert saved == [60]
+            # The getters are plain-Python shadow reads, so pystray may call
+            # them off the main thread when it redraws the tray menu.
+            assert [i.label for i in submenu if i.radio_selected()] == ["60%"]
+    finally:
+        root.destroy()
+
+
+def _render_kwargs(**overrides):
+    kwargs = dict(state="working", session_pct=10.0, weekly_pct=20.0,
+                  session_reset_text="1h", weekly_reset_text="2d", driving_tag="",
+                  credits_text=None, hint_text=None, dimmed=False)
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.gui
+def test_keyed_canvas_keeps_the_key_colour_through_an_accent_render():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import ACCENT_BG, Pane
+    from tokitty.transparency import KEY_COLOR
+
+    root = tk.Tk()
+    try:
+        card = tk.Frame(root)
+        content = tk.Frame(root)
+        pane = Pane(card, content)
+        pane.render(**_render_kwargs(accent=True))
+        # The accent recolours the card surface and its labels, but the cat
+        # canvas is on the keyed window: painting it would put an opaque card
+        # back behind the cat.
+        assert str(pane.canvas.cget("bg")) == KEY_COLOR
+        assert str(pane.session_label.cget("bg")) == ACCENT_BG
+        pane.set_appearance(card_bg="#123456")
+        assert str(pane.canvas.cget("bg")) == KEY_COLOR
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_unkeyed_canvas_still_follows_the_card_colour():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import ACCENT_BG, Pane
+
+    root = tk.Tk()
+    try:
+        frame = tk.Frame(root)
+        pane = Pane(frame)
+        pane.render(**_render_kwargs(accent=True))
+        assert str(pane.canvas.cget("bg")) == ACCENT_BG
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_one_accented_pane_holds_the_window_opaque():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=2, opacity=50)
+            applied = []
+            window.root.attributes = lambda *args: applied.append(args)
+
+            # Panes render one after another. The accented pane renders first
+            # and the ordinary one second, which is exactly the order that
+            # would let the last pane win if alpha were applied per pane.
+            window.panes[0].render(**_render_kwargs(accent=True))
+            window.panes[1].render(**_render_kwargs(accent=False))
+            window._flush_opacity()
+            assert applied[-1] == ("-alpha", 1.0)
+
+            window.panes[0].render(**_render_kwargs(accent=False))
+            window._flush_opacity()
+            assert applied[-1] == ("-alpha", 0.5)
+    finally:
+        root.destroy()
+
+
+def test_known_tool_labels_are_never_truncated():
+    from tokitty.activity import _TOOL_LABELS
+    from tokitty.ui import fit_tag
+
+    for label in _TOOL_LABELS.values():
+        assert fit_tag(label) == label
+
+
+def test_an_unknown_tool_name_is_cut_to_fit_the_canvas():
+    from tokitty.ui import TOOL_LABEL_MAX, fit_tag
+
+    fitted = fit_tag("SomeVeryLongMcpToolName")
+    assert len(fitted) == TOOL_LABEL_MAX
+    assert fitted.endswith("…")
+
+
+@pytest.mark.gui
+def test_choosing_a_level_from_the_tk_menu_resyncs_the_tray():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1, opacity=100)
+            resyncs = []
+            window.on_menu_action_done = lambda: resyncs.append(window.opacity())
+
+            # pystray builds its menu once and the win32 backend caches the
+            # native HMENU, so anything changed from this menu is invisible in
+            # the tray until update_menu runs (PR #54).
+            window._rebuild_context_menu()
+            transparency = window.menu.entrycget(window.menu.index("Transparency"), "menu")
+            submenu = window.menu.nametowidget(transparency)
+            submenu.invoke(submenu.index("70%"))
+
+            assert window.opacity() == 70
+            assert resyncs == [70]
+    finally:
+        root.destroy()

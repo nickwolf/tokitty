@@ -390,8 +390,16 @@ def run_gui() -> int:
     debug_accounts = os.environ.get("TOKITTY_DEBUG_ACCOUNTS")
     pane_count = 2 if debug_accounts == "2" else (len(accounts) if accounts else 1)
 
+    # Settings are read before the window exists so the stored opacity is
+    # applied at construction. Loading them later made a cold start paint
+    # fully opaque and then snap to the saved level.
+    from tokitty.settings import load_settings, update_settings
+
+    settings = load_settings(state_dir)
+
     root = tk.Tk()
-    window = TokittyWindow(root, state_dir, pane_count=pane_count)
+    window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity)
+    window.on_opacity_changed = lambda level: update_settings(state_dir, opacity=level)
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
 
@@ -621,12 +629,7 @@ def run_gui() -> int:
             unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
-    from tokitty.settings import load_settings
     from tokitty.tray import TrayManager
-
-    settings = load_settings(state_dir)
-
-    from tokitty.settings import update_settings
 
     surprise_state = {"on": settings.surprise_me}
     window.surprise_me = lambda: surprise_state["on"]

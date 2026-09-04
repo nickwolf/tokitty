@@ -45,6 +45,9 @@ def build_menu(
     on_open_accounts: Optional[Callable[[], None]] = None,
     autostart_enabled: Optional[Callable[[], bool]] = None,
     on_toggle_autostart: Optional[Callable[[], None]] = None,
+    opacity_levels: Optional[List[int]] = None,
+    current_opacity: Optional[Callable[[], int]] = None,
+    on_opacity: Optional[Callable[[int], None]] = None,
 ) -> List[MenuItem]:
     colorway_items = [
         MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
@@ -77,6 +80,14 @@ def build_menu(
         items.append(MenuItem(label="Show tray icon", action=on_toggle_tray, checkbox=tray_enabled))
     if on_toggle_autostart is not None and autostart_enabled is not None:
         items.append(MenuItem(label="Start at login", action=on_toggle_autostart, checkbox=autostart_enabled))
+    if opacity_levels and current_opacity is not None and on_opacity is not None:
+        # Discrete levels rather than a slider: tk.Menu has no slider widget
+        # and pystray cannot render one at all, and this model feeds both.
+        items.append(MenuItem(label="Transparency", submenu=[
+            MenuItem(label=f"{level}%", action=(lambda level=level: on_opacity(level)),
+                     radio_selected=(lambda level=level: current_opacity() == level))
+            for level in opacity_levels
+        ]))
     if on_toggle_surprise is not None and surprise_me is not None:
         items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
     items.append(MenuItem(separator=True))
