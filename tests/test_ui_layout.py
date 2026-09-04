@@ -438,3 +438,47 @@ def test_one_accented_pane_holds_the_window_opaque():
             assert applied[-1] == ("-alpha", 0.5)
     finally:
         root.destroy()
+
+
+def test_known_tool_labels_are_never_truncated():
+    from tokitty.activity import _TOOL_LABELS
+    from tokitty.ui import fit_tag
+
+    for label in _TOOL_LABELS.values():
+        assert fit_tag(label) == label
+
+
+def test_an_unknown_tool_name_is_cut_to_fit_the_canvas():
+    from tokitty.ui import TOOL_LABEL_MAX, fit_tag
+
+    fitted = fit_tag("SomeVeryLongMcpToolName")
+    assert len(fitted) == TOOL_LABEL_MAX
+    assert fitted.endswith("…")
+
+
+@pytest.mark.gui
+def test_choosing_a_level_from_the_tk_menu_resyncs_the_tray():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1, opacity=100)
+            resyncs = []
+            window.on_menu_action_done = lambda: resyncs.append(window.opacity())
+
+            # pystray builds its menu once and the win32 backend caches the
+            # native HMENU, so anything changed from this menu is invisible in
+            # the tray until update_menu runs (PR #54).
+            window._rebuild_context_menu()
+            transparency = window.menu.entrycget(window.menu.index("Transparency"), "menu")
+            submenu = window.menu.nametowidget(transparency)
+            submenu.invoke(submenu.index("70%"))
+
+            assert window.opacity() == 70
+            assert resyncs == [70]
+    finally:
+        root.destroy()

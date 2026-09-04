@@ -37,11 +37,12 @@ BAR_BG = "#333340"
 ACCENT_BG = "#3a1620"
 ACCENT_FG = "#ffb4a8"
 
-# _tool_label passes unknown tool names through verbatim, so an MCP or
-# custom tool can supply an arbitrarily long one. On the keyed surface the
-# label sits on an opaque chip, and an unbounded chip is a slab across the
-# cat.
-TOOL_LABEL_MAX = 18
+# _tool_label passes unknown tool names through verbatim, so an MCP or custom
+# tool can supply an arbitrarily long one. On the keyed surface the label sits
+# on an opaque chip, and an unbounded chip runs the full width of the cat
+# canvas and gets clipped mid-word. 12 clears the longest label the table
+# produces ("Delegating", 10) with room to spare.
+TOOL_LABEL_MAX = 12
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
@@ -71,6 +72,13 @@ def pane_index_at(x: int, y: int, pane_count: int, cols: int) -> Optional[int]:
     if index >= pane_count:
         return None
     return index
+
+
+def fit_tag(text: str, limit: int = TOOL_LABEL_MAX) -> str:
+    """Keep an overlay tag inside the cat canvas, ellipsis included."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 def resolve_bar_fill(pct: float, override: Optional[str]) -> str:
@@ -299,7 +307,7 @@ class Pane:
             self._draw_tag(6, CAT_CANVAS_SIZE - 6, self._driving_tag, "sw", DIM_COLOR)
 
         if self._tool_label:
-            self._draw_tag(6, 6, self._tool_label[:TOOL_LABEL_MAX], "nw", FG_COLOR)
+            self._draw_tag(6, 6, fit_tag(self._tool_label), "nw", FG_COLOR)
 
     def _draw_tag(self, x: int, y: int, text: str, anchor: str, fill: str) -> None:
         """One overlay tag, on an opaque chip when the canvas is keyed.
@@ -434,6 +442,11 @@ class TokittyWindow:
         self.content.update_idletasks()
         try:
             set_content_owner(root_hwnd(self.content), root_hwnd(self.root))
+            # Ownership constrains later stacking operations, it does not
+            # perform one. Without this lift the content window stays wherever
+            # it was created, which left the cat invisible until the user's
+            # first click happened to reorder the pair.
+            self.content.lift()
         except Exception:
             # A failed ownership call costs the z-order guarantee, not the
             # feature. _on_drag_start re-lifts as a second line of defence.
