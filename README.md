@@ -21,7 +21,7 @@ A cat-themed desktop widget that shows your live Claude Code usage (session %, w
 
 Once Tokitty has a snapshot, it keeps counting down using its own clock, no live connection needed to know when a known reset time arrives. If a poll fails (for example, the OAuth access token going stale between Claude Code sessions), Tokitty keeps showing that same cached countdown rather than blanking out, and only surfaces a small warning once the countdown should already be done and it still can't confirm the reset actually happened.
 
-**Burn-rate projection.** When your current pace would hit a cap before the window resets, the status line says when: `session caps ~6:20 PM`. It tracks whichever limit lands first, and stays blank when you are coasting.
+There is a burn-rate projection too. When your current pace would hit a cap before the window resets, the status line says when: `session caps ~6:20 PM`. It tracks whichever limit lands first, and stays blank when you are coasting.
 
 **Not affiliated with Anthropic (but I am open to it, *wink wink*).** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility.
 
@@ -33,9 +33,9 @@ Optional, off by default. Run:
 python -m tokitty --install-hooks
 ```
 
-and the cat starts reacting to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt, and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files — delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall — hook edits aren't hot-reloaded.
+and the cat starts reacting to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt, and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
 
-On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in the Windows-native `~/.claude`. `--install-hooks` (and `--uninstall-hooks`) detect this automatically — same WSL-credentials probe the live-activity watcher uses — and target the `\\wsl.localhost\<distro>\home\<user>\.claude` dir instead, falling back to the Windows-local `~/.claude` only if WSL resolution fails (no WSL installed, no Claude Code credentials found, etc). Running `python3 -m tokitty --install-hooks` from inside WSL itself installs to the same dir and is equivalent — pick whichever shell is convenient.
+On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in the Windows-native `~/.claude`. `--install-hooks` (and `--uninstall-hooks`) detect this automatically, using the same WSL-credentials probe the live-activity watcher uses, and target the `\\wsl.localhost\<distro>\home\<user>\.claude` dir instead, falling back to the Windows-local `~/.claude` only if WSL resolution fails (no WSL installed, no Claude Code credentials found, etc). Running `python3 -m tokitty --install-hooks` from inside WSL itself installs to the same dir and is equivalent, so pick whichever shell is convenient.
 
 ## Autostart
 
@@ -57,23 +57,17 @@ After adding or removing an account, restart tokitty to see the new pane layout,
 
 Accounts still live in `accounts.json` in tokitty's per-user state directory (the same directory `position.json` already lives in, `%LOCALAPPDATA%\Tokitty\` on Windows, `~/Library/Application Support/Tokitty` on macOS, `$XDG_CONFIG_HOME/tokitty` or `~/.config/tokitty` on Linux), but the dialog is the supported way to manage it now. Each entry's `config_dir` points at that account's Claude Code config directory (a WSL UNC path, a native path, whatever `--install-hooks` would target for that account); `name` is an opaque identity slug the dialog assigns on add, not something meant to be typed by hand.
 
-`TOKITTY_CREDENTIALS` (see Configuration above) still works, but only when no accounts are configured. If both `TOKITTY_CREDENTIALS` and a valid `accounts.json` are present, `accounts.json` wins and the env var is ignored; tokitty prints a startup warning to stderr so the conflict doesn't pass silently.
+`TOKITTY_CREDENTIALS` (see [Configuration](#configuration) below) still works, but only when no accounts are configured. If both `TOKITTY_CREDENTIALS` and a valid `accounts.json` are present, `accounts.json` wins and the env var is ignored; tokitty prints a startup warning to stderr so the conflict doesn't pass silently.
 
-**The resting look is normal, not an error.** Work-account tokens typically expire around an hour after that account's Claude Code last ran. Outside work hours, an idle account's pane will show its last-good numbers dimmed, a sleeping cat, and a "last seen HH:MM" label. That's the expected steady state for an idle account, not a warning condition, and no error styling is applied.
+The resting look is normal, not an error. Work-account tokens typically expire around an hour after that account's Claude Code last ran. Outside work hours, an idle account's pane will show its last-good numbers dimmed, a sleeping cat, and a "last seen HH:MM" label. That's the expected steady state for an idle account, not a warning condition, and no error styling is applied.
 
-**Multi-account mode requires credential *files*.** Each `config_dir` entry is
-read as `<config_dir>/.credentials.json`, so on macOS, where Claude Code stores
-credentials in the login Keychain, tokitty can't discover or add a second
-Keychain-backed account yet. When there's no credentials file on disk, the
-Accounts dialog shows a read-only "Default macOS account (Keychain)" row in
-place of a normal account row, since the Keychain holds one item per macOS
-user with no per-account identity to key on.
+Multi-account mode requires credential *files*. Each `config_dir` entry is read as `<config_dir>/.credentials.json`, so on macOS, where Claude Code stores credentials in the login Keychain, tokitty can't discover or add a second Keychain-backed account yet. When there's no credentials file on disk, the Accounts dialog shows a read-only "Default macOS account (Keychain)" row in place of a normal account row, since the Keychain holds one item per macOS user with no per-account identity to key on.
 
 Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one in the resting look) without needing any real accounts configured, handy for checking layout changes.
 
 ## Customization
 
-A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane to change either. **Colorway ▸** is a radio submenu of six — `orange`, `gray`, `black`, `white`, `cream`, `brown` — and **Pattern ▸** is a radio submenu of nine — `solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`. Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
+A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane to change either. **Colorway ▸** is a radio submenu of six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern ▸** is a radio submenu of nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
 
 <p align="center">
   <img src="docs/media/looks-grid.png" alt="All six colorways down, all nine patterns across" width="760">
@@ -81,7 +75,7 @@ A cat's look is two independent axes: a **colorway** (its tone palette) times a 
 
 Colorways run top to bottom in menu order, patterns left to right.
 
-Two ways to let tokitty pick for you: **Randomize** rolls a fresh colorway + pattern for that pane and saves it, and **Surprise me** (a checkbox) re-rolls every pane to a new look on each launch — off by default, so your chosen look sticks. Both only ever roll from the built-in colorways and patterns, never free-form colors.
+Two ways to let tokitty pick for you: **Randomize** rolls a fresh colorway + pattern for that pane and saves it, and **Surprise me** (a checkbox) re-rolls every pane to a new look on each launch. Surprise me is off by default, so your chosen look sticks. Both only ever roll from the built-in colorways and patterns, never free-form colors.
 
 **Customize…** opens a small dialog with a color-chooser button per overridable piece (coat base, coat shading, card background, bar color); each pick live-previews on the pane right away, and **Reset to preset** clears all four overrides back to the current colorway + pattern's stock colors.
 
@@ -89,7 +83,7 @@ Every choice you make is saved to `customization.json`, in the same per-user sta
 
 Each pane also gets a label under the sprite. Right-click a pane and choose **Rename…** to set one; it's saved to `customization.json` and persists across restarts. A pane with no name set shows no label, matching how single-account mode has always worked. Clearing the name back to empty in the dialog reverts to no label. The Accounts dialog's own account list shows a generic placeholder ("Cat 1", "Cat 2", and so on) for any account that hasn't been renamed yet, just for that list; it doesn't change what's shown on the pane itself.
 
-With no `accounts.json` and no `customization.json`, tokitty runs as a single pane and, on first launch, rolls one random look and saves it — so a fresh install gets its own cat that then stays put across restarts, rather than always starting orange tabby.
+With no `accounts.json` and no `customization.json`, tokitty runs as a single pane and, on first launch, rolls one random look and saves it, so a fresh install gets its own cat that then stays put across restarts, rather than always starting orange tabby.
 
 ## Transparency
 
@@ -107,43 +101,28 @@ Tokitty only *reads* your local Claude Code OAuth credentials file: it never wri
 
 The live-activity feature above is opt-in and changes this picture only if you turn it on:
 
-- **Installer.** `--install-hooks` registers a small hook script in each configured Claude Code config dir's `settings.json` (merged additively into any existing hooks, with a timestamped backup of `settings.json` taken first) and copies the hook script itself to `<config-dir>/tokitty/hook_writer.py`. It's idempotent — re-running it skips events already installed — and every entry it adds is tagged so `--uninstall-hooks` can remove exactly tokitty's entries and nothing else.
-- **What the hook script sees.** Claude Code invokes it once per hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) with that event's full JSON payload on stdin, which for `PreToolUse` includes the tool's input arguments. The script only reads that payload to decide what to write — it doesn't read prompts, file contents, or transcripts from anywhere else.
-- **What it persists.** Per session, it writes one small JSON state file to `<config-dir>/tokitty/sessions/<session_id>.json` containing just the session id, the event name, a sequence number, a timestamp, and — for tool-call and agent events — the tool name and agent id. Prompt text, tool arguments/output, and file contents are never written to that file. On `SessionEnd` the file is deleted; tokitty's own watcher also deletes state files it judges stale (no update within its timeout window) so a crashed or killed session doesn't leave the cat stuck.
-- **Failure behavior.** The hook script never writes to stdout and never exits non-zero, under any input — Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing it does can ever interfere with your actual session. This is covered by tests, not just a claim.
-- **Nothing leaves your machine.** None of this activity data is transmitted anywhere; it's read locally by tokitty's own watcher to drive the sprite.
+- `--install-hooks` registers a small hook script in each configured Claude Code config dir's `settings.json` (merged additively into any existing hooks, with a timestamped backup of `settings.json` taken first) and copies the hook script itself to `<config-dir>/tokitty/hook_writer.py`. It's idempotent, so re-running it skips events already installed, and every entry it adds is tagged so `--uninstall-hooks` can remove exactly tokitty's entries and nothing else.
+- Claude Code invokes that script once per hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) with that event's full JSON payload on stdin, which for `PreToolUse` includes the tool's input arguments. The script only reads that payload to decide what to write. It doesn't read prompts, file contents, or transcripts from anywhere else.
+- Per session, it writes one small JSON state file to `<config-dir>/tokitty/sessions/<session_id>.json` containing just the session id, the event name, a sequence number, a timestamp, and, for tool-call and agent events, the tool name and agent id. Prompt text, tool arguments/output, and file contents are never written to that file. On `SessionEnd` the file is deleted; tokitty's own watcher also deletes state files it judges stale (no update within its timeout window) so a crashed or killed session doesn't leave the cat stuck.
+- The hook script never writes to stdout and never exits non-zero, under any input. Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing it does can ever interfere with your actual session. This is covered by tests, not just a claim.
+- None of this activity data is transmitted anywhere; it's read locally by tokitty's own watcher to drive the sprite.
 
-**macOS Keychain.** On macOS the credentials are read from the login Keychain
-instead of a file. Tokitty's access stays read-only — it never writes to the
-item and never touches the refresh token. One thing worth knowing before you
-click **Always Allow**: macOS Keychain ACLs are per-*binary*, and the binary
-being authorized is `/usr/bin/security`. So granting it persistent access means
-any process running as you can afterwards read that token by shelling out to
-`security`, without a prompt. That is a property of how Keychain authorization
-works, not something tokitty can tighten — a narrower grant would require
-tokitty to be a signed app bundle with a stable identity rather than a Python
-script. Choosing **Allow** instead of **Always Allow** grants a single read,
-and while the token stays valid tokitty's cache means that's roughly one
-prompt per token lifetime. But the cache is invalidated the moment the token
-expires — deliberately, since that's how tokitty notices Claude Code has
-refreshed it — so once nothing is refreshing the token (the idle-account
-resting look above, e.g. outside work hours), every retry on the 30s→600s
-backoff is a cache miss and re-prompts: on the order of fifty prompts
-overnight, not one. If you leave tokitty running unattended, use
-**Always Allow**.
+On macOS the credentials are read from the login Keychain instead of a file. Tokitty's access stays read-only there too: it never writes to the item and never touches the refresh token. One thing worth knowing before you click **Always Allow**: macOS Keychain ACLs are per-*binary*, and the binary being authorized is `/usr/bin/security`. So granting it persistent access means any process running as you can afterwards read that token by shelling out to `security`, without a prompt. That is a property of how Keychain authorization works, not something tokitty can tighten. A narrower grant would require tokitty to be a signed app bundle with a stable identity rather than a Python script.
+
+Choosing **Allow** instead of **Always Allow** grants a single read, and while the token stays valid tokitty's cache means that's roughly one prompt per token lifetime. But the cache is invalidated the moment the token expires, deliberately, since that's how tokitty notices Claude Code has refreshed it. So once nothing is refreshing the token (the idle-account resting look above, e.g. outside work hours), every retry on the 30s to 600s backoff is a cache miss and re-prompts: on the order of fifty prompts overnight, not one. If you leave tokitty running unattended, use **Always Allow**.
 
 Multi-account mode (above) extends this picture the same way single-account mode already worked, just once per configured account: tokitty reads OAuth credentials and (if hooks are installed) hook/session state from each account's Claude Code config dir. Nothing about what's read, persisted, or transmitted changes. It's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains an identity slug and a config-dir path per account, both assigned by the Accounts dialog, not typed in by hand.
 
 ## Platforms tested
 
-- **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself — drag, always-on-top, sizing, text legibility, animation — is visually confirmed on a real desktop.
-- **Linux, macOS, Windows — automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic — credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering — and, on Linux, GUI construction are covered wherever the badge is green.
-- **macOS 15 (Apple silicon, python.org Python 3.14 + Tk 9.0) — hands-on, with caveats:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) confirmed by hand on 2026-08-04. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. Two caveats, both tracked:
-  - **No tray icon on macOS.** The tray is disabled there automatically, whatever `tray_enabled` is set to, and the "Show tray icon" menu entry is hidden. pystray's darwin backend needs `NSApplication.run()` on the main thread, and Tk's `mainloop()` already owns it, so starting a tray aborts the process rather than failing gracefully ([#45](https://github.com/nickwolf/tokitty/issues/45)). Nothing is lost from the menu: every action, **Refresh now** included, is on the window's right-click menu. A native menu-bar item would be the real fix ([#44](https://github.com/nickwolf/tokitty/issues/44) touches the same main-thread question).
-  - **The system menu bar stays.** Removing it needs a real `.app` bundle with `LSUIElement=1`; no runtime call can do it, because Tk owns and rebuilds that menu ([#44](https://github.com/nickwolf/tokitty/issues/44)).
+- **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself (drag, always-on-top, sizing, text legibility, animation) is visually confirmed on a real desktop.
+- **Linux, macOS, Windows, automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic (credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering) and, on Linux, GUI construction are covered wherever the badge is green.
+- **macOS 15 (Apple silicon, python.org Python 3.14 + Tk 9.0), hands-on, with caveats:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) confirmed by hand on 2026-08-04. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. Two caveats, both tracked:
+  - There is no tray icon on macOS. The tray is disabled there automatically, whatever `tray_enabled` is set to, and the "Show tray icon" menu entry is hidden. pystray's darwin backend needs `NSApplication.run()` on the main thread, and Tk's `mainloop()` already owns it, so starting a tray aborts the process rather than failing gracefully ([#45](https://github.com/nickwolf/tokitty/issues/45)). Nothing is lost from the menu: every action, **Refresh now** included, is on the window's right-click menu. A native menu-bar item would be the real fix ([#44](https://github.com/nickwolf/tokitty/issues/44) touches the same main-thread question).
+  - The system menu bar stays. Removing it needs a real `.app` bundle with `LSUIElement=1`; no runtime call can do it, because Tk owns and rebuilds that menu ([#44](https://github.com/nickwolf/tokitty/issues/44)).
 
   One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live.
-- **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work — but nobody has run it there interactively yet.
+- **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work, but nobody has run it there interactively yet.
 
 ## Setup
 
@@ -163,17 +142,10 @@ Same as above: `resolve_credentials_source()` finds `~/.claude/.credentials.json
 
 ### macOS
 
-1. Install Python from [python.org](https://www.python.org/) (recommended over
-   Apple's system Python — which is 3.9 and below this project's 3.10 floor —
-   or some Homebrew builds, which can have flaky Tcl/Tk).
+1. Install Python from [python.org](https://www.python.org/), recommended over Apple's system Python (3.9, below this project's 3.10 floor) or some Homebrew builds, which can have flaky Tcl/Tk.
 2. `python3 -m tokitty`
 
-Claude Code on macOS keeps its OAuth credentials in your **login Keychain**, not
-in `~/.claude/.credentials.json`, so tokitty reads them from there. The first
-read raises a macOS authorization prompt; choose **Always Allow** unless you
-want to re-authorize roughly once an hour. If you deny it, the cat shows
-"Keychain denied, Refresh to retry" and stops asking — grant access, then
-right-click ▸ **Refresh now** to recover. No restart needed.
+Claude Code on macOS keeps its OAuth credentials in your **login Keychain**, not in `~/.claude/.credentials.json`, so tokitty reads them from there. The first read raises a macOS authorization prompt; choose **Always Allow** unless you want to re-authorize roughly once an hour. If you deny it, the cat shows "Keychain denied, Refresh to retry" and stops asking. Grant access, then right-click ▸ **Refresh now** to recover, no restart needed.
 
 ## Configuration
 
@@ -199,7 +171,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) — phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
 
 ## License
 
