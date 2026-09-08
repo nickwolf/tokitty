@@ -13,6 +13,7 @@ from tkinter import colorchooser, simpledialog
 from typing import Callable, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
+from tokitty.usage_display import ROW_SLOTS
 from tokitty.geometry import clamp_position
 from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
@@ -43,6 +44,21 @@ ACCENT_FG = "#ffb4a8"
 # canvas and gets clipped mid-word. 12 clears the longest label the table
 # produces ("Delegating", 10) with room to spare.
 TOOL_LABEL_MAX = 12
+
+# Per-model view geometry. Row 1 starts well below y=8 on purpose: the
+# account label is anchored top-right at y=4 and an 8pt label is ~13px
+# tall, so a right-aligned figure at y=8 would sit underneath it.
+MODEL_ROW_Y = (20, 48, 76)
+MODEL_BAR_OFFSET = 14
+
+# Share-of-total bars have no cap to be near, so the threshold ramp does
+# not apply to them. This is the neutral fill used instead.
+NEUTRAL_BAR = "#5a7fa8"
+
+# (stored value, menu label) for the three usage radio submenus.
+VIEW_MODE_ITEMS = [("limits", "Limits"), ("models", "Per-model")]
+USAGE_WINDOW_ITEMS = [("24h", "Last 24 hours"), ("7d", "Last 7 days"), ("month", "This month")]
+USAGE_READOUT_ITEMS = [("cost", "Cost"), ("tokens", "Tokens")]
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
@@ -111,6 +127,7 @@ class Pane:
         self._label = label
         self._colorway = colorway if colorway is not None else "orange"
         self._pattern = pattern if pattern is not None else "tabby"
+        self._view_mode = "limits"
         # Set by TokittyWindow so window alpha can be recomputed once per
         # event loop pass, after every pane has rendered.
         self.on_accent_changed = None
@@ -147,14 +164,7 @@ class Pane:
         bg = ACCENT_BG if self._accent else self._card_bg
         self.parent.configure(bg=bg)
         self.canvas.configure(bg=self._canvas_bg(bg))
-        for widget in (
-            self.session_label,
-            self.session_reset_label,
-            self.weekly_label,
-            self.weekly_reset_label,
-            self.status_label,
-            self.label_widget,
-        ):
+        for widget in self._all_text_widgets():
             widget.configure(bg=bg)
 
         self.session_bar_bg.delete("fill")
@@ -171,6 +181,22 @@ class Pane:
         )
 
         self._update_label()
+
+    def _all_text_widgets(self):
+        """Every antialiased label in the pane, both views. These stay on
+        `parent`, never the keyed content window: text keyed against a
+        colour that is then punched out keeps a fringe of a background
+        that is no longer there."""
+        return (
+            self.session_label,
+            self.session_reset_label,
+            self.weekly_label,
+            self.weekly_reset_label,
+            self.status_label,
+            self.label_widget,
+            *self.model_name_labels,
+            *self.model_value_labels,
+        )
 
     def _update_label(self) -> None:
         self.label_widget.configure(text=self._label, bg=self._card_bg if not self._accent else ACCENT_BG)
@@ -214,12 +240,140 @@ class Pane:
         )
         self.status_label.place(x=STATS_X, y=108)
 
+        # Per-model view. Built once and hidden, never rebuilt:
+        # set_appearance has to be able to restyle either view without
+        # knowing which one is currently up.
+        self.model_name_labels = []
+        self.model_value_labels = []
+        self.model_bars = []
+        for row_y in MODEL_ROW_Y:
+            name = tk.Label(
+                self.parent, text="", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 8, "bold")
+            )
+            value = tk.Label(
+                self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
+            )
+            bar = tk.Canvas(
+                self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0
+            )
+            self.model_name_labels.append(name)
+            self.model_value_labels.append(value)
+            self.model_bars.append(bar)
+
         # Small dim label at the pane's top-right (cat name / identifier).
         # Empty text renders as an empty Label -- takes no visible space.
         self.label_widget = tk.Label(
             self.parent, text=self._label, fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
         )
         self.label_widget.place(x=CARD_WIDTH - 6, y=4, anchor="ne")
+
+    def _limits_widgets(self):
+        return (
+            self.session_label,
+            self.session_bar_bg,
+            self.session_reset_label,
+            self.weekly_label,
+            self.weekly_bar_bg,
+            self.weekly_reset_label,
+        )
+
+    def _model_widgets(self):
+        return (*self.model_name_labels, *self.model_value_labels, *self.model_bars)
+
+    def _apply_view(self, view_mode: str) -> None:
+        """Show one view's widgets and hide the other's.
+
+        place/place_forget rather than rebuilding: both sets exist for the
+        pane's whole life, so a restyle never has to know which view is up,
+        and switching views costs no widget construction.
+        """
+        if view_mode == self._view_mode:
+            return
+        self._view_mode = view_mode
+
+        if view_mode == "models":
+            for widget in self._limits_widgets():
+                widget.place_forget()
+            for index, row_y in enumerate(MODEL_ROW_Y):
+                self.model_name_labels[index].place(x=STATS_X, y=row_y)
+                self.model_value_labels[index].place(x=CARD_WIDTH - 8, y=row_y, anchor="ne")
+                self.model_bars[index].place(x=STATS_X, y=row_y + MODEL_BAR_OFFSET)
+            return
+
+        for widget in self._model_widgets():
+            widget.place_forget()
+        self.session_label.place(x=STATS_X, y=12)
+        self.session_bar_bg.place(x=STATS_X, y=30)
+        self.session_reset_label.place(x=STATS_X, y=42)
+        self.weekly_label.place(x=STATS_X, y=60)
+        self.weekly_bar_bg.place(x=STATS_X, y=78)
+        self.weekly_reset_label.place(x=STATS_X, y=90)
+
+    def _draw_model_bar(self, index: int, pct: float, ramp_pct) -> None:
+        bar = self.model_bars[index]
+        bar.delete("fill")
+        if pct <= 0:
+            return
+        # An explicit bar_fill override always wins. Otherwise the ramp
+        # applies only when a budget gave it a real denominator; with
+        # share-of-total there is no cap to be near, and painting the top
+        # row red every week would train the user to ignore the colour.
+        if self._bar_fill:
+            fill = self._bar_fill
+        elif ramp_pct is not None:
+            fill = bar_color(ramp_pct)
+        else:
+            fill = NEUTRAL_BAR
+        bar.create_rectangle(
+            0, 0, BAR_WIDTH * min(pct, 100) / 100, 8, fill=self._paint(fill), width=0, tags="fill"
+        )
+
+    def render_usage(
+        self,
+        state: str,
+        usage_view,
+        driving_tag: str = "",
+        tool_label: str = "",
+        accent: bool = False,
+        dimmed: bool = False,
+    ) -> None:
+        """Draw the per-model view.
+
+        Takes no PollResult-derived arguments at all, which is the point:
+        this view has to be fully legible with no credentials, no network,
+        and no subscription.
+        """
+        self._current_state = state
+        self._driving_tag = driving_tag
+        self._tool_label = tool_label
+        self._accent = accent
+        self._apply_view("models")
+
+        bg = ACCENT_BG if accent else self._card_bg
+        self.parent.configure(bg=bg)
+        self.canvas.configure(bg=self._canvas_bg(bg))
+        for label in self._all_text_widgets():
+            label.configure(bg=bg)
+
+        fg = DIM_COLOR if dimmed else (ACCENT_FG if accent else FG_COLOR)
+        rows = usage_view.rows
+        for index in range(ROW_SLOTS):
+            row = rows[index] if index < len(rows) else None
+            name = self.model_name_labels[index]
+            value = self.model_value_labels[index]
+            if row is None:
+                name.configure(text="")
+                value.configure(text="")
+                self._draw_model_bar(index, 0.0, None)
+                continue
+            name.configure(text=fit_tag(row.label, 14), fg=fg)
+            value.configure(text=row.value_text)
+            self._draw_model_bar(index, row.bar_pct, usage_view.ramp_pct)
+
+        self.status_label.configure(text=usage_view.status_text)
+
+        if self.on_accent_changed is not None:
+            self.on_accent_changed()
 
     def render(
         self,
@@ -240,6 +394,7 @@ class Pane:
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
+        self._apply_view("limits")
         self._last_session_pct = session_pct
         self._last_weekly_pct = weekly_pct
         self._last_session_pct_px = BAR_WIDTH * min(session_pct, 100) / 100
@@ -248,14 +403,7 @@ class Pane:
         bg = ACCENT_BG if accent else self._card_bg
         self.parent.configure(bg=bg)
         self.canvas.configure(bg=self._canvas_bg(bg))
-        for label in (
-            self.session_label,
-            self.session_reset_label,
-            self.weekly_label,
-            self.weekly_reset_label,
-            self.status_label,
-            self.label_widget,
-        ):
+        for label in self._all_text_widgets():
             label.configure(bg=bg)
 
         fg = DIM_COLOR if dimmed else (ACCENT_FG if accent else FG_COLOR)
@@ -330,7 +478,9 @@ class Pane:
         self.canvas.tag_raise(item)
 
 
-_PANE_SPECIFIC_LABELS = frozenset({"Colorway", "Pattern", "Randomize", "Customize…", "Rename…"})
+_PANE_SPECIFIC_LABELS = frozenset(
+    {"Colorway", "Pattern", "Randomize", "Customize…", "Rename…", "Set budget…"}
+)
 
 
 class TokittyWindow:
@@ -355,6 +505,16 @@ class TokittyWindow:
         self.on_toggle_autostart: Optional[Callable[[], None]] = None
         # Set externally by __main__.py to persist the chosen level.
         self.on_opacity_changed: Optional[Callable[[int], None]] = None
+        # Per-model usage view. All getters read plain-Python shadow state
+        # in __main__.py, never a Tk var, because pystray evaluates them
+        # on its own thread when it draws the tray menu.
+        self.view_mode: Optional[Callable[[], str]] = None
+        self.on_view_mode: Optional[Callable[[str], None]] = None
+        self.usage_window: Optional[Callable[[], str]] = None
+        self.on_usage_window: Optional[Callable[[str], None]] = None
+        self.usage_readout: Optional[Callable[[], str]] = None
+        self.on_usage_readout: Optional[Callable[[str], None]] = None
+        self.on_set_budget: Optional[Callable[[int], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # Fired after any right-click menu action, so __main__.py can
@@ -556,6 +716,20 @@ class TokittyWindow:
             opacity_levels=list(LEVELS),
             current_opacity=self.opacity,
             on_opacity=self._select_opacity,
+            view_modes=VIEW_MODE_ITEMS,
+            current_view_mode=self.view_mode,
+            on_view_mode=self.on_view_mode,
+            usage_windows=USAGE_WINDOW_ITEMS,
+            current_usage_window=self.usage_window,
+            on_usage_window=self.on_usage_window,
+            usage_readouts=USAGE_READOUT_ITEMS,
+            current_usage_readout=self.usage_readout,
+            on_usage_readout=self.on_usage_readout,
+            on_set_budget=(
+                (lambda i=pane_index: self.on_set_budget(i))
+                if self.on_set_budget is not None
+                else None
+            ),
         )
 
     def _after_menu_action(self, action):

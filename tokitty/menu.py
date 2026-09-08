@@ -48,7 +48,27 @@ def build_menu(
     opacity_levels: Optional[List[int]] = None,
     current_opacity: Optional[Callable[[], int]] = None,
     on_opacity: Optional[Callable[[int], None]] = None,
+    view_modes: Optional[List[tuple]] = None,
+    current_view_mode: Optional[Callable[[], str]] = None,
+    on_view_mode: Optional[Callable[[str], None]] = None,
+    usage_windows: Optional[List[tuple]] = None,
+    current_usage_window: Optional[Callable[[], str]] = None,
+    on_usage_window: Optional[Callable[[str], None]] = None,
+    usage_readouts: Optional[List[tuple]] = None,
+    current_usage_readout: Optional[Callable[[], str]] = None,
+    on_usage_readout: Optional[Callable[[str], None]] = None,
+    on_set_budget: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
+    def radio_submenu(options, current, on_select) -> List[MenuItem]:
+        return [
+            MenuItem(
+                label=label,
+                action=(lambda value=value: on_select(value)),
+                radio_selected=(lambda value=value: current() == value),
+            )
+            for value, label in options
+        ]
+
     colorway_items = [
         MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
                  radio_selected=(lambda n=n: current_colorway() == n))
@@ -88,6 +108,28 @@ def build_menu(
                      radio_selected=(lambda level=level: current_opacity() == level))
             for level in opacity_levels
         ]))
+    # Each usage group appears only when both halves are supplied, the
+    # same way tray_enabled/on_toggle_tray already gate each other.
+    if view_modes and current_view_mode is not None and on_view_mode is not None:
+        items.append(
+            MenuItem(label="View", submenu=radio_submenu(view_modes, current_view_mode, on_view_mode))
+        )
+    if usage_windows and current_usage_window is not None and on_usage_window is not None:
+        items.append(
+            MenuItem(
+                label="Usage window",
+                submenu=radio_submenu(usage_windows, current_usage_window, on_usage_window),
+            )
+        )
+    if usage_readouts and current_usage_readout is not None and on_usage_readout is not None:
+        items.append(
+            MenuItem(
+                label="Usage readout",
+                submenu=radio_submenu(usage_readouts, current_usage_readout, on_usage_readout),
+            )
+        )
+    if on_set_budget is not None:
+        items.append(MenuItem(label="Set budget…", action=on_set_budget))
     if on_toggle_surprise is not None and surprise_me is not None:
         items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
     items.append(MenuItem(separator=True))

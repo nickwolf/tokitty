@@ -482,3 +482,126 @@ def test_choosing_a_level_from_the_tk_menu_resyncs_the_tray():
             assert resyncs == [70]
     finally:
         root.destroy()
+
+
+# --- per-model view ----------------------------------------------------
+
+
+def test_model_rows_clear_the_account_label_and_the_status_line():
+    """The account label is anchored top-right at y=4 and an 8pt label is
+    roughly 13px tall, so a right-aligned figure at y=8 would sit under
+    it. The bottom bar must also clear the status line at y=108."""
+    from tokitty.ui import MODEL_BAR_OFFSET, MODEL_ROW_Y
+
+    assert MODEL_ROW_Y[0] >= 18
+    assert MODEL_ROW_Y[-1] + MODEL_BAR_OFFSET + 8 <= 108
+
+
+def test_model_rows_do_not_overlap_each_other():
+    from tokitty.ui import MODEL_BAR_OFFSET, MODEL_ROW_Y
+
+    for upper, lower in zip(MODEL_ROW_Y, MODEL_ROW_Y[1:]):
+        assert upper + MODEL_BAR_OFFSET + 8 <= lower
+
+
+def test_row_slots_matches_the_number_of_laid_out_rows():
+    from tokitty.usage_display import ROW_SLOTS
+    from tokitty.ui import MODEL_ROW_Y
+
+    assert len(MODEL_ROW_Y) == ROW_SLOTS
+
+
+def test_render_usage_takes_no_poll_derived_arguments():
+    """The per-model view has to be fully legible with no credentials and
+    no subscription, so nothing PollResult-shaped may reach it."""
+    import inspect
+
+    from tokitty.ui import Pane
+
+    params = set(inspect.signature(Pane.render_usage).parameters)
+    assert not params & {
+        "session_pct",
+        "weekly_pct",
+        "session_reset_text",
+        "weekly_reset_text",
+        "credits_text",
+        "hint_text",
+        "projection_text",
+    }
+
+
+@pytest.mark.gui
+def test_switching_views_hides_the_other_views_widgets():
+    import tkinter as tk
+
+    from tokitty.ui import Pane
+    from tokitty.usage_display import build_view
+
+    root = tk.Tk()
+    try:
+        frame = tk.Frame(root)
+        frame.place(x=0, y=0)
+        pane = Pane(frame)
+
+        pane.render(
+            state="content", session_pct=10.0, weekly_pct=20.0,
+            session_reset_text="9pm", weekly_reset_text="Fri", driving_tag="",
+            credits_text=None, hint_text=None, dimmed=False,
+        )
+        assert pane.session_bar_bg.winfo_manager() == "place"
+        assert pane.model_bars[0].winfo_manager() == ""
+
+        pane.render_usage(state="content", usage_view=build_view(None))
+        assert pane.session_bar_bg.winfo_manager() == ""
+        assert pane.model_bars[0].winfo_manager() == "place"
+
+        pane.render(
+            state="content", session_pct=10.0, weekly_pct=20.0,
+            session_reset_text="9pm", weekly_reset_text="Fri", driving_tag="",
+            credits_text=None, hint_text=None, dimmed=False,
+        )
+        assert pane.session_bar_bg.winfo_manager() == "place"
+        assert pane.model_bars[0].winfo_manager() == ""
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_unused_model_rows_render_blank_rather_than_stale():
+    import tkinter as tk
+    from datetime import datetime, timezone
+
+    from tokitty.ui import Pane
+    from tokitty.usage_display import build_view
+    from tokitty.usage_scan import STATUS_OK, ModelUsage, UsageBreakdown
+
+    def usage(models):
+        return UsageBreakdown(
+            status=STATUS_OK,
+            window="7d",
+            window_start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            models=tuple(models),
+            total_cost_usd=sum(m.cost_usd or 0 for m in models),
+            total_tokens=sum(m.total_tokens for m in models),
+            scanned_at=datetime(2026, 9, 8, tzinfo=timezone.utc),
+        )
+
+    def model(name, cost):
+        return ModelUsage(name, 100, 0, 0, 0, 0, cost)
+
+    root = tk.Tk()
+    try:
+        frame = tk.Frame(root)
+        frame.place(x=0, y=0)
+        pane = Pane(frame)
+
+        pane.render_usage(
+            state="content",
+            usage_view=build_view(usage([model("claude-opus-5", 3.0), model("claude-sonnet-5", 1.0)])),
+        )
+        assert pane.model_name_labels[2].cget("text") == ""
+
+        pane.render_usage(state="content", usage_view=build_view(usage([model("claude-opus-5", 3.0)])))
+        assert pane.model_name_labels[1].cget("text") == ""
+    finally:
+        root.destroy()
