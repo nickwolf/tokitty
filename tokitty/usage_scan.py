@@ -151,18 +151,24 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     return parsed
 
 
-def window_start(window: str, now: datetime) -> datetime:
+def window_start(window: str, now: datetime, local_tz=None) -> datetime:
     """The inclusive lower bound of a display window.
 
     The month boundary is derived in LOCAL time, because that is how a
     calendar is read. Transcript timestamps are UTC; in UTC-6 a
     UTC-derived boundary would push the first six hours of every month
     into the previous one.
+
+    `local_tz` exists so that rule can be tested on every platform.
+    Passing None means the system's own zone, exactly as astimezone()
+    with no argument does, so production behavior is unchanged; the
+    alternative was setting TZ and calling time.tzset(), which does not
+    exist on Windows, tokitty's primary platform.
     """
     if window == "24h":
         return now - timedelta(hours=24)
     if window == "month":
-        local_now = now.astimezone()
+        local_now = now.astimezone(local_tz)
         first = local_now.replace(
             day=1, hour=0, minute=0, second=0, microsecond=0
         )
@@ -170,7 +176,7 @@ def window_start(window: str, now: datetime) -> datetime:
     return now - timedelta(days=7)
 
 
-def retention_start(now: datetime) -> datetime:
+def retention_start(now: datetime, local_tz=None) -> datetime:
     """How far back the scanner keeps records, across every window the
     user could switch to without a rescan.
 
@@ -179,7 +185,7 @@ def retention_start(now: datetime) -> datetime:
     the 1st does, so assuming the month is widest would prune records the
     7d view still needs and silently undercount it.
     """
-    return min(window_start(w, now) for w in WINDOWS) - RETENTION_MARGIN
+    return min(window_start(w, now, local_tz) for w in WINDOWS) - RETENTION_MARGIN
 
 
 def _cache_writes(usage: dict) -> Tuple[int, int]:
