@@ -40,6 +40,9 @@ from tokitty.mood import compute_capped_substate, compute_mood, detect_activate,
 from tokitty.paths import get_state_dir
 from tokitty.pose import resolve_pose
 from tokitty.poller import PollResult, Poller
+from tokitty.settings import Settings
+from tokitty.usage_display import build_view
+from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
 from tokitty import sprites
 
@@ -148,6 +151,86 @@ def resolve_activity_sessions(config_dir: Optional[str] = None) -> Tuple[Optiona
     return sessions_dir, distro
 
 
+def _config_root_from(config_dir: str):
+    """(root, distro_name) for an explicit config_dir, in the separator
+    style of whichever side will do the reading.
+
+    Shared by the sessions path and the projects path so the two can never
+    drift: a WSL UNC dir stays UNC on win32 (with the distro parsed out for
+    the running-distro check) and becomes its posix path on Linux.
+    """
+    from tokitty.accounts import parse_wsl_unc
+
+    unc = parse_wsl_unc(config_dir)
+    if sys.platform == "win32":
+        if unc is not None:
+            return config_dir.rstrip("\\/"), unc[0]
+        return str(Path(config_dir)), None
+    base = unc[1] if unc is not None else config_dir
+    return base.rstrip("/"), None
+
+
+def _join(root: str, *parts: str) -> str:
+    """Join in the separator style `root` is already written in.
+
+    pathlib would emit host-native separators, which turns a UNC root into
+    backslash-plus-forward-slash soup when tokitty runs on Linux against a
+    Windows-style path, and vice versa.
+    """
+    separator = "\\" if "\\" in root else "/"
+    return root + separator + separator.join(parts)
+
+
+def resolve_projects_dir(config_dir: Optional[str] = None):
+    """(projects_dir, distro_name) for the transcript scanner.
+
+    Unlike resolve_activity_sessions, the no-config_dir fallback here must
+    NOT be credential-gated. An API-key user has a full billing ledger on
+    disk and no OAuth credentials anywhere, so a credentials probe reports
+    that they have no Claude Code install at all -- which would make the
+    per-model view permanently empty for exactly the people it exists for.
+    Credentials are still tried first, so a subscriber's resolution is
+    unchanged; the transcript probe is a fallback, not a replacement.
+    """
+    if config_dir:
+        root, distro = _config_root_from(config_dir)
+        return _join(root, "projects"), distro
+
+    if sys.platform != "win32":
+        try:
+            from tokitty.hooks_install import get_config_dirs
+
+            resolved = get_config_dirs()[0]
+        except Exception:
+            resolved = str(Path.home() / ".claude")
+        return str(Path(resolved) / "projects"), None
+
+    from tokitty.wsl_probe import (
+        find_all_wsl_claude_dirs,
+        find_wsl_credentials,
+        wsl_config_dir_from_credentials,
+    )
+
+    try:
+        distro, wsl_credentials_path = find_wsl_credentials()
+    except CredentialsError:
+        try:
+            matches = find_all_wsl_claude_dirs()
+        except CredentialsError:
+            matches = []
+        if len(matches) != 1:
+            # Zero means nothing to read; more than one is the ambiguity
+            # the Accounts dialog exists to resolve, and guessing would
+            # silently cost the wrong account.
+            return None, None
+        distro, posix_dir = matches[0]
+        unc = "\\\\wsl.localhost\\" + distro + "\\" + posix_dir.lstrip("/").replace("/", "\\")
+        return unc + "\\projects", distro
+
+    config_root = wsl_config_dir_from_credentials(distro, wsl_credentials_path)
+    return config_root.rstrip("\\/") + "\\projects", distro
+
+
 def debug_print() -> int:
     from tokitty.accounts import load_accounts
 
@@ -169,6 +252,26 @@ def debug_print() -> int:
             print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
             if s.credits_used is not None and s.credits_limit is not None:
                 print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+
+        projects_dir, projects_distro = resolve_projects_dir(config_dir)
+        if projects_dir:
+            from tokitty.pricing import display_name
+            from tokitty.settings import load_settings
+            from tokitty.usage_display import format_money, format_tokens
+            from tokitty.usage_scan import TranscriptScanner
+
+            window = load_settings(get_state_dir()).usage_window
+            scanner = TranscriptScanner(projects_dir)
+            status, failed_files, failed_rows = scanner.scan()
+            usage = scanner.breakdown(window, status, failed_files, failed_rows)
+            print(f"usage ({usage.window}, scan {usage.status}): {projects_dir}")
+            for row in usage.models:
+                cost = "--" if row.cost_usd is None else format_money(row.cost_usd)
+                print(f"  {display_name(row.model):<22} {format_tokens(row.total_tokens):>8} {cost:>10}")
+            prefix = ">= " if usage.is_partial_cost else ""
+            print(f"  {'total':<22} {format_tokens(usage.total_tokens):>8} {prefix + format_money(usage.total_cost_usd):>10} at API rates")
+        else:
+            print("usage: no transcripts found")
 
         sessions_dir, distro_name = resolve_activity_sessions(config_dir)
         if sessions_dir is not None:
@@ -313,6 +416,40 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
     }
 
 
+def _usage_render_args(unit, latest, breakdown, activity, usage_state) -> dict:
+    """Arguments for Pane.render_usage.
+
+    Deliberately ignores every FAILED poll result: a non-subscriber must
+    never see "token expired" or a confused cat in the view built for
+    them. A CONFIRMED cap from a fresh successful poll is NOT suppressed,
+    though -- hiding it would show a cat happily working against a wall,
+    which is the exact confusion the capped/waking vocabulary exists to
+    prevent.
+    """
+    from tokitty.settings import budget_for
+
+    state = "content"
+    driving_tag = ""
+    if latest is not None and latest.status == "ok" and latest.snapshot is not None:
+        binding = select_binding_capped_limit(latest.snapshot.limits)
+        if binding is not None:
+            capped = compute_capped_substate(binding)
+            state = capped.substate
+            driving_tag = capped.driving_tag
+
+    pose = resolve_pose(state, activity)
+    budget = budget_for(
+        Settings(usage_budgets=usage_state["budgets"]), unit["key"], usage_state["window"]
+    )
+    return {
+        "state": pose["sprite_state"],
+        "usage_view": build_view(breakdown, usage_state["readout"], budget),
+        "driving_tag": driving_tag,
+        "tool_label": pose["tool_label"],
+        "accent": pose["accent"],
+    }
+
+
 def _next_last_good(latest: PollResult, last_good: Optional[PollResult]) -> Optional[PollResult]:
     """Track the most recent *successful* poll, independent of how many
     failed polls land in between -- so a stale token doesn't wipe out the
@@ -397,6 +534,18 @@ def run_gui() -> int:
 
     settings = load_settings(state_dir)
 
+    # Plain-Python shadow state: menu.py's contract is that every getter
+    # is read by pystray on its OWN thread, so none of these may ever
+    # become a Tk var. UsageWatcher reads usage_state["window"] from its
+    # worker thread for the same reason.
+    usage_state = {
+        "view": settings.view_mode,
+        "window": settings.usage_window,
+        "readout": settings.usage_readout,
+        "budgets": settings.usage_budgets,
+        "onboarding": settings.onboarding_version,
+    }
+
     root = tk.Tk()
     window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity)
     window.on_opacity_changed = lambda level: update_settings(state_dir, opacity=level)
@@ -408,7 +557,12 @@ def run_gui() -> int:
     # (a headless launch should fail for lack of a display before ever
     # probing WSL), and the gui-marked tests that construct TokittyWindow
     # directly (never through run_gui) must keep seeing zero WSL calls.
-    from tokitty.startup import should_auto_open
+    from tokitty.startup import (
+        ACTION_USAGE_SETUP,
+        ONBOARDING_MODELS_AUTOSELECT,
+        resolve_first_run_action,
+        should_auto_select_models,
+    )
 
     # Written by run_discovery() on a background thread, read by tick() on
     # the Tk thread -- discovery_lock guards every access from either side.
@@ -426,7 +580,12 @@ def run_gui() -> int:
     # exactly this producer/consumer shape (Poller/ActivityWatcher results),
     # so first-run auto-open reuses it instead of introducing a new one.
     discovery_lock = threading.Lock()
-    discovery_result = {"wsl_matches": [], "done": False, "consumed": False}
+    discovery_result = {
+        "wsl_matches": [],
+        "transcript_matches": [],
+        "done": False,
+        "consumed": False,
+    }
     discovery_accounts_state = load_accounts_result(state_dir).state
     env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
     home_relative_exists = (
@@ -443,17 +602,32 @@ def run_gui() -> int:
         with discovery_lock:
             wsl_matches = list(discovery_result["wsl_matches"])
             wsl_match_count = len(wsl_matches)
-        if should_auto_open(
+            transcripts_found = bool(discovery_result["transcript_matches"])
+        action = resolve_first_run_action(
             accounts_state=accounts_result.state,
             env_override_set=env_override_set,
             home_relative_exists=home_relative_exists,
             keychain_available=keychain_available,
             platform=sys.platform,
             wsl_match_count=wsl_match_count,
-        ):
-            from tokitty.accounts_ui import AccountsManager
+            transcripts_found=transcripts_found,
+        )
+        if action is None:
+            return
 
-            AccountsManager.open(root, state_dir, discovered_matches=wsl_matches)
+        from tokitty.accounts_ui import AccountsManager
+
+        # Both actions open the same dialog. A separate first-run wizard
+        # would cut against the way the rest of the app works: no
+        # installer, no admin rights, every feature opted into from a
+        # menu. ACTION_USAGE_SETUP just arrives with the usage section in
+        # focus, for the user who previously got only an error.
+        AccountsManager.open(
+            root,
+            state_dir,
+            discovered_matches=wsl_matches,
+            focus_usage=action == ACTION_USAGE_SETUP,
+        )
 
     def run_discovery() -> None:
         # Best-effort, silent unless it matters (see hooks_install.py's
@@ -492,8 +666,27 @@ def run_gui() -> int:
                 except CredentialsError:
                     wsl_matches = []
 
+            transcript_matches = []
+            if not wsl_matches and discovery_accounts_state == "absent" and not env_override_set:
+                # Credential-independent: an API-key user has a full
+                # billing ledger on disk and no OAuth credentials
+                # anywhere, so every credentials-keyed probe above reports
+                # that they have no Claude Code install at all.
+                if sys.platform == "win32":
+                    from tokitty.wsl_probe import find_all_wsl_claude_dirs
+
+                    try:
+                        transcript_matches = find_all_wsl_claude_dirs()
+                    except CredentialsError:
+                        transcript_matches = []
+                else:
+                    local_projects, _ = resolve_projects_dir()
+                    if local_projects and Path(local_projects).is_dir():
+                        transcript_matches = [local_projects]
+
             with discovery_lock:
                 discovery_result["wsl_matches"] = wsl_matches
+                discovery_result["transcript_matches"] = transcript_matches
         finally:
             # Unconditional: tick() below is waiting on this flag to decide
             # when to call maybe_auto_open(), exactly once. If an
@@ -562,6 +755,13 @@ def run_gui() -> int:
             sessions_dir, ActivityTracker(), distro_name=distro_name,
             list_running_distros_fn=distro_probe.get_running,
         )
+        projects_dir, projects_distro = resolve_projects_dir(config_dir)
+        usage_watcher = UsageWatcher(
+            projects_dir,
+            distro_name=projects_distro,
+            window=lambda: usage_state["window"],
+            list_running_distros_fn=distro_probe.get_running,
+        )
 
         key = customization_key(account)
         custom = initial_customization(account, customization_store.get(key))
@@ -573,7 +773,8 @@ def run_gui() -> int:
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
                       "last_good": None, "key": key, "account": account,
-                      "cred_loader": cred_loader, "burn": BurnTracker()})
+                      "cred_loader": cred_loader, "burn": BurnTracker(),
+                      "usage": usage_watcher})
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -588,6 +789,7 @@ def run_gui() -> int:
             # restart needed, which is what makes the sticky block safe.
             unit["cred_loader"].clear_block()
             unit["poller"].request_refresh()
+            unit["usage"].request_refresh()
 
     window.on_refresh_requested = refresh_all
 
@@ -657,6 +859,67 @@ def run_gui() -> int:
 
     window.on_open_accounts = open_accounts
 
+    def set_view_mode(value: str) -> None:
+        usage_state["view"] = value
+        update_settings(state_dir, view_mode=value)
+
+    def set_usage_window(value: str) -> None:
+        usage_state["window"] = value
+        update_settings(state_dir, usage_window=value)
+        # Re-aggregate the records already in memory rather than rescan:
+        # switching windows is arithmetic, so the panes update on the next
+        # tick with no I/O and no visible gap.
+        for unit in units:
+            unit["usage"].rebuild_for_window()
+
+    def set_usage_readout(value: str) -> None:
+        usage_state["readout"] = value
+        update_settings(state_dir, usage_readout=value)
+
+    def set_budget(pane_index: int) -> None:
+        # Imported here, not at module scope: --debug-print must keep
+        # working on a machine with no GUI toolkit installed.
+        from tkinter import messagebox, simpledialog
+
+        from tokitty.settings import budget_for, with_budget
+
+        unit = units[pane_index]
+        window_key = usage_state["window"]
+        current = budget_for(load_settings(state_dir), unit["key"], window_key)
+        label = {"24h": "24 hours", "7d": "7 days", "month": "this month"}[window_key]
+        # askstring, not askfloat: askfloat cannot tell a cancel from a
+        # submitted blank, and clearing a budget has to be expressible.
+        answer = simpledialog.askstring(
+            "Set budget",
+            f"Budget in dollars for {label}\n(leave blank to clear):",
+            initialvalue="" if current is None else f"{current:g}",
+            parent=root,
+        )
+        if answer is None:
+            return
+        answer = answer.strip()
+        amount = None
+        if answer:
+            try:
+                amount = float(answer.lstrip("$"))
+            except ValueError:
+                messagebox.showerror("Set budget", f"'{answer}' is not a number.", parent=root)
+                return
+            if amount <= 0:
+                messagebox.showerror("Set budget", "Enter an amount greater than zero.", parent=root)
+                return
+        budgets = with_budget(load_settings(state_dir), unit["key"], window_key, amount)
+        usage_state["budgets"] = budgets
+        update_settings(state_dir, usage_budgets=budgets)
+
+    window.view_mode = lambda: usage_state["view"]
+    window.on_view_mode = set_view_mode
+    window.usage_window = lambda: usage_state["window"]
+    window.on_usage_window = set_usage_window
+    window.usage_readout = lambda: usage_state["readout"]
+    window.on_usage_readout = set_usage_readout
+    window.on_set_budget = set_budget
+
     if settings.surprise_me:
         for index in range(len(units)):
             handle_customization_changed(index, "randomize", None)
@@ -717,6 +980,28 @@ def run_gui() -> int:
                                session_reset_text="—", weekly_reset_text="—", driving_tag="",
                                credits_text=None, hint_text=warning, dimmed=True)
 
+    def maybe_onboard(unit, latest, breakdown) -> None:
+        """One-shot: land an API-key user in the view that works for them.
+
+        Runs on the Tk thread from tick(), so the settings write and the
+        shadow-state update can never interleave with a menu action.
+        """
+        if usage_state["onboarding"] >= ONBOARDING_MODELS_AUTOSELECT:
+            return
+        if not should_auto_select_models(
+            poll_status=latest.status if latest is not None else None,
+            scan_status=breakdown.status if breakdown is not None else None,
+            has_records=bool(breakdown.models) if breakdown is not None else False,
+            onboarding_version=usage_state["onboarding"],
+        ):
+            return
+        usage_state["onboarding"] = ONBOARDING_MODELS_AUTOSELECT
+        usage_state["view"] = "models"
+        update_settings(
+            state_dir, view_mode="models", onboarding_version=ONBOARDING_MODELS_AUTOSELECT
+        )
+        tray.refresh()
+
     def tick():
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
@@ -730,6 +1015,9 @@ def run_gui() -> int:
 
         for unit in units:
             latest = unit["poller"].get_latest()
+            breakdown = unit["usage"].get_latest()
+            maybe_onboard(unit, latest, breakdown)
+
             if latest is None:
                 continue
             display = _display_state_for(latest, unit["last_good"])
@@ -739,17 +1027,24 @@ def run_gui() -> int:
                 unit["burn"], display, datetime.now(timezone.utc)
             )
             activity = unit["watcher"].get_latest()
-            pose = resolve_pose(display["state"], activity)
-            display["state"] = pose["sprite_state"]
-            display["tool_label"] = pose["tool_label"]
-            display["accent"] = pose["accent"]
-            unit["pane"].render(**display)
+
+            if usage_state["view"] == "models":
+                unit["pane"].render_usage(
+                    **_usage_render_args(unit, latest, breakdown, activity, usage_state)
+                )
+            else:
+                pose = resolve_pose(display["state"], activity)
+                display["state"] = pose["sprite_state"]
+                display["tool_label"] = pose["tool_label"]
+                display["accent"] = pose["accent"]
+                unit["pane"].render(**display)
             unit["last_good"] = _next_last_good(latest, unit["last_good"])
         root.after(UI_REFRESH_MS, tick)
 
     for unit in units:
         unit["poller"].start()
         unit["watcher"].start()
+        unit["usage"].start()
     if tray.available and settings.tray_enabled:
         tray.start()
     root.after(UI_REFRESH_MS, tick)
@@ -761,6 +1056,7 @@ def run_gui() -> int:
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()
+            unit["usage"].stop()
         lock.release()
 
     return 0

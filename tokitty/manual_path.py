@@ -15,11 +15,24 @@ from typing import Callable, List, Optional
 from tokitty.accounts import canonicalize_locator, parse_wsl_unc
 
 
+# What a config directory can actually drive. A directory with OAuth
+# credentials can answer the usage endpoint ("limits"); a directory with
+# transcripts can be costed per model ("models"). They are independent:
+# an API-key user has the second and not the first, which is exactly the
+# case this validator used to reject outright.
+CAP_LIMITS = "limits"
+CAP_MODELS = "models"
+
+
 @dataclass(frozen=True)
 class PathValidationResult:
     ok: bool
     config_dir: Optional[str] = None
     error: Optional[str] = None
+    capabilities: frozenset = frozenset()
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
 
 
 def _strip_credentials_filename(path: str) -> str:
@@ -43,18 +56,35 @@ def _parses_as_oauth(text: str) -> bool:
 
 
 def _check_wsl_credentials(distro: str, posix_dir: str, run: Callable) -> PathValidationResult:
-    from tokitty.wsl_probe import read_wsl_credentials
+    """Capabilities of a WSL-side config dir.
 
+    Only an empty capability set is a rejection. A directory with
+    transcripts and no credentials is a real account: it drives the
+    per-model view, which needs no OAuth at all.
+    """
+    from tokitty.wsl_probe import read_wsl_credentials, wsl_dir_exists
+
+    capabilities = set()
     creds_path = posix_dir.rstrip("/") + "/.credentials.json"
+    credentials_error = f"No .credentials.json found at {distro}:{posix_dir}."
     try:
         text = read_wsl_credentials(distro, creds_path, run=run)
     except Exception:
-        return PathValidationResult(ok=False, error=f"No .credentials.json found at {distro}:{posix_dir}.")
-    if not _parses_as_oauth(text):
-        return PathValidationResult(
-            ok=False, error=f"{distro}:{creds_path} is not a valid Claude Code credentials file."
-        )
-    return PathValidationResult(ok=True)
+        text = None
+    if text is not None:
+        if _parses_as_oauth(text):
+            capabilities.add(CAP_LIMITS)
+        else:
+            credentials_error = (
+                f"{distro}:{creds_path} is not a valid Claude Code credentials file."
+            )
+
+    if wsl_dir_exists(distro, posix_dir.rstrip("/") + "/projects", run=run):
+        capabilities.add(CAP_MODELS)
+
+    if not capabilities:
+        return PathValidationResult(ok=False, error=credentials_error)
+    return PathValidationResult(ok=True, capabilities=frozenset(capabilities))
 
 
 def validate_manual_path(
@@ -78,6 +108,7 @@ def validate_manual_path(
         wsl_result = _check_wsl_credentials(distro, posix_dir, run=run)
         if not wsl_result.ok:
             return wsl_result
+        capabilities = set(wsl_result.capabilities)
     else:
         path = Path(candidate)
         # On real Windows, `Path` is `WindowsPath`, and a leading-slash
@@ -92,13 +123,18 @@ def validate_manual_path(
                 ok=False,
                 error=f"'{raw}' is not an absolute path. Enter a full Claude config directory.",
             )
+        capabilities = set()
         creds = path / ".credentials.json"
-        if not creds.is_file():
-            return PathValidationResult(ok=False, error=f"No .credentials.json found in {candidate}.")
-        if not _parses_as_oauth(creds.read_text(encoding="utf-8")):
-            return PathValidationResult(
-                ok=False, error=f"{creds} is not a valid Claude Code credentials file."
-            )
+        credentials_error = f"No .credentials.json found in {candidate}."
+        if creds.is_file():
+            if _parses_as_oauth(creds.read_text(encoding="utf-8")):
+                capabilities.add(CAP_LIMITS)
+            else:
+                credentials_error = f"{creds} is not a valid Claude Code credentials file."
+        if (path / "projects").is_dir():
+            capabilities.add(CAP_MODELS)
+        if not capabilities:
+            return PathValidationResult(ok=False, error=credentials_error)
         # os.path.expanduser only substitutes the "~" segment; it leaves
         # whatever separator style followed it untouched, so "~/foo" on
         # Windows becomes a mixed "C:\Users\you/foo". Route the local
@@ -118,4 +154,6 @@ def validate_manual_path(
         except ValueError:
             continue
 
-    return PathValidationResult(ok=True, config_dir=candidate)
+    return PathValidationResult(
+        ok=True, config_dir=candidate, capabilities=frozenset(capabilities)
+    )

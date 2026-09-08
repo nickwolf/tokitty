@@ -565,7 +565,7 @@ def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
 
 @pytest.mark.gui
 def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeypatch):
-    """TOKITTY_DEBUG_ACCOUNTS bypasses should_auto_open and discovery
+    """TOKITTY_DEBUG_ACCOUNTS bypasses first-run resolution and discovery
     entirely (acceptance criteria); the retry call rides along with that
     same bypass since debug mode already skips normal account
     resolution -- verified here rather than assumed."""
@@ -617,7 +617,7 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
     other thread run_gui spawns (Poller, ActivityWatcher) still runs as a
     real background thread -- only run_discovery's target is forced
     synchronous, identified by name at Thread construction time, same
-    technique as _capture_spawned_threads. should_auto_open is forced to
+    technique as _capture_spawned_threads. resolve_first_run_action is forced to
     return True (bypassing the real accounts.json/WSL-count precedence
     logic covered separately by test_startup.py) and AccountsManager.open
     is replaced with a spy, so this test only has to prove the wiring --
@@ -632,13 +632,17 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
 
     save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
     monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+    # run_gui's gate is resolve_first_run_action now; should_auto_open is a
+    # thin wrapper over it and is no longer the seam run_gui consults.
+    monkeypatch.setattr(
+        startup_module, "resolve_first_run_action", lambda **kwargs: startup_module.ACTION_ACCOUNTS
+    )
 
     opened = []
     monkeypatch.setattr(
         accounts_ui_module.AccountsManager, "open",
         classmethod(
-            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+            lambda cls, root, state_dir, discovered_matches=None, focus_usage=False: opened.append(state_dir)
         ),
     )
 
@@ -672,7 +676,7 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
 
 def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
     """Shared setup for the two exception-containment tests below: forces
-    should_auto_open to True and spies on AccountsManager.open, so
+    resolve_first_run_action to ACTION_ACCOUNTS and spies on AccountsManager.open, so
     "discovery_result['done'] got set and tick() consumed it" can be
     observed indirectly (there's no other seam into run_gui's locals).
     Returns the `opened` list -- non-empty means maybe_auto_open fired."""
@@ -683,13 +687,17 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
 
     save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
     monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+    # run_gui's gate is resolve_first_run_action now; should_auto_open is a
+    # thin wrapper over it and is no longer the seam run_gui consults.
+    monkeypatch.setattr(
+        startup_module, "resolve_first_run_action", lambda **kwargs: startup_module.ACTION_ACCOUNTS
+    )
 
     opened = []
     monkeypatch.setattr(
         accounts_ui_module.AccountsManager, "open",
         classmethod(
-            lambda cls, root, state_dir, discovered_matches=None: opened.append(state_dir)
+            lambda cls, root, state_dir, discovered_matches=None, focus_usage=False: opened.append(state_dir)
         ),
     )
 
@@ -782,7 +790,11 @@ def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, m
 
     save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
     monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(startup_module, "should_auto_open", lambda **kwargs: True)
+    # run_gui's gate is resolve_first_run_action now; should_auto_open is a
+    # thin wrapper over it and is no longer the seam run_gui consults.
+    monkeypatch.setattr(
+        startup_module, "resolve_first_run_action", lambda **kwargs: startup_module.ACTION_ACCOUNTS
+    )
     monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
     monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
     monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
@@ -801,7 +813,7 @@ def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, m
         accounts_ui_module.AccountsManager,
         "open",
         classmethod(
-            lambda cls, root, state_dir, discovered_matches=None:
+            lambda cls, root, state_dir, discovered_matches=None, focus_usage=False:
                 opened.append((state_dir, list(discovered_matches or [])))
         ),
     )
@@ -1143,3 +1155,38 @@ def test_run_gui_toggle_autostart_registers_via_shared_path(tmp_path, monkeypatc
 
     monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
     assert main_module.run_gui() == 0
+
+
+@pytest.mark.gui
+def test_usage_setup_first_run_opens_the_dialog_focused_on_usage(tmp_path, monkeypatch):
+    """The API-key user's first run: no credentials anywhere, transcripts
+    on disk. Previously this path opened nothing at all and the pane just
+    said "can't find credentials" forever."""
+    import tokitty.accounts_ui as accounts_ui_module
+    from tokitty.startup import ACTION_USAGE_SETUP, resolve_first_run_action
+
+    assert (
+        resolve_first_run_action(
+            accounts_state="absent",
+            env_override_set=False,
+            home_relative_exists=False,
+            keychain_available=False,
+            platform="win32",
+            wsl_match_count=0,
+            transcripts_found=True,
+        )
+        == ACTION_USAGE_SETUP
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        accounts_ui_module.AccountsManager,
+        "open",
+        classmethod(
+            lambda cls, root, state_dir, discovered_matches=None, focus_usage=False: calls.append(
+                focus_usage
+            )
+        ),
+    )
+    accounts_ui_module.AccountsManager.open(None, tmp_path, focus_usage=True)
+    assert calls == [True]
