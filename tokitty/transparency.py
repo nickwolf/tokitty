@@ -134,3 +134,35 @@ def root_hwnd(widget) -> int:
     user32.GetAncestor.restype = wintypes.HWND
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     return user32.GetAncestor(wintypes.HWND(widget.winfo_id()), GA_ROOT)
+
+
+def hide_from_taskbar(hwnd: int) -> bool:
+    """Re-assert WS_EX_TOOLWINDOW on a window, and report whether it stuck.
+
+    Tk drops the style when it recreates a wrapper window, which the first
+    `-alpha` write on an overrideredirect toplevel does -- measured on Tk
+    8.6 as ex-style 0x88 before the write and 0x8 after, and it does not
+    come back when alpha returns to 1.0. WS_EX_TOOLWINDOW is what keeps the
+    card out of the taskbar, so without this the app grows a stray "tk"
+    button the moment opacity is applied, including at the default 100%.
+    """
+    if not uses_color_key():
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW = 0x00000080
+    # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+    SWP_FLAGS = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+
+    user32 = ctypes.windll.user32
+    window = wintypes.HWND(hwnd)
+    style = user32.GetWindowLongW(window, GWL_EXSTYLE) & 0xFFFFFFFF
+    user32.SetWindowLongW(window, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW)
+    # The style change is only read at the next frame calculation, so a
+    # window already on screen keeps its taskbar button until SetWindowPos
+    # forces one.
+    user32.SetWindowPos(window, None, 0, 0, 0, 0, SWP_FLAGS)
+    return bool(user32.GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)

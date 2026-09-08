@@ -19,7 +19,7 @@ from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
 from tokitty.transparency import (
     KEY_COLOR, LEVELS, alpha_for, avoid_key, clamp_level, effective_level,
-    root_hwnd, set_content_owner, uses_color_key,
+    hide_from_taskbar, root_hwnd, set_content_owner, uses_color_key,
 )
 
 CARD_WIDTH = 300
@@ -645,6 +645,23 @@ class TokittyWindow:
         try:
             self.root.attributes("-alpha", alpha_for(level))
         except tk.TclError:
+            pass
+        self._keep_off_taskbar()
+
+    def _keep_off_taskbar(self) -> None:
+        """Restore the style the alpha write above strips.
+
+        Every alpha write is followed by this, not just the first: Tk decides
+        for itself when to recreate the wrapper, and a redundant re-assert
+        costs two API calls while a missed one leaves a stray taskbar button
+        the user has to restart the app to clear.
+        """
+        if not uses_color_key():
+            return
+        try:
+            hide_from_taskbar(root_hwnd(self.root))
+        except Exception:
+            # Cosmetic. A failed style call must never take the window down.
             pass
 
     def _bind_drag(self) -> None:

@@ -2,7 +2,8 @@ import pytest
 
 from tokitty.transparency import (
     DEFAULT_LEVEL, KEY_COLOR, LEVELS, MIN_LEVEL, alpha_for, avoid_key,
-    clamp_level, collides_with_key, effective_level, uses_color_key,
+    clamp_level, collides_with_key, effective_level, hide_from_taskbar,
+    uses_color_key,
 )
 
 
@@ -63,3 +64,10 @@ def test_a_colliding_colour_is_nudged_off_the_key():
     nudged = avoid_key(KEY_COLOR)
     assert nudged != KEY_COLOR
     assert collides_with_key(nudged) is False
+
+
+@pytest.mark.skipif(uses_color_key(), reason="the win32 path needs a real window")
+def test_the_taskbar_style_is_a_no_op_off_windows():
+    # Called with a bogus handle on purpose: off Windows it must return
+    # before it looks at ctypes at all, so no handle can be dereferenced.
+    assert hide_from_taskbar(0) is False
