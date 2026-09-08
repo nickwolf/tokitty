@@ -65,6 +65,22 @@ Multi-account mode requires credential *files*. Each `config_dir` entry is read 
 
 Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one in the resting look) without needing any real accounts configured, handy for checking layout changes.
 
+## Per-model usage
+
+The bars described so far come from Claude Code's usage endpoint, which only answers for a subscription. If you pay per token with an API key, that endpoint has nothing to tell you, and tokitty used to sit on "can't find credentials" forever.
+
+There is a second view that reads Claude Code's own transcripts instead, under `<config-dir>/projects/`, and totals the tokens each model used. It needs no network, no credentials, and no subscription. Right-click a pane and pick **View ▸ Per-model** to switch, or **View ▸ Limits** to go back. If tokitty finds transcripts and no credentials at all, it selects the per-model view for you once on first run, and leaves it as an ordinary setting you can change afterwards.
+
+Each row is one model, with the tail folded into an `other (N)` row so what's on screen always adds up to the real total. **Usage window ▸** picks the last 24 hours, the last 7 days, or the current calendar month; switching between them is instant, because the scanner keeps a month of records in memory and re-totals them. **Usage readout ▸** switches the figures between dollars and token counts. On a subscription those dollars are what the same work would have cost at API rates rather than anything you are billed, which is why the line says so, and why the token readout is the more honest one to leave it on.
+
+Set a budget from **Set budget…** and the bars change meaning: instead of each model's share of the window, they become a share of the budget, and the usual green/amber/red comes back with something real to measure against. Budgets are per account and per window, so $40 for a month and $40 for a day are different settings, and a blank entry clears one.
+
+Two details worth knowing, because both make the totals differ from a naive reading of the same files. A turn that made several API calls records each one separately, and the top-level total for that turn leaves out advisor calls, so tokitty adds up the individual calls and bills advisor calls against the model that actually ran them. The same message also gets rewritten several times inside one transcript, 4,037 of 5,817 entries on the machine this was built on, so only the last copy of each is counted.
+
+Prices are a table baked into `tokitty/pricing.py`, current as of 2026-09-08. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete.
+
+`python -m tokitty --debug-print` prints the same breakdown per account as text, which is the first thing to look at if a number looks wrong.
+
 ## Customization
 
 A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane to change either. **Colorway ▸** is a radio submenu of six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern ▸** is a radio submenu of nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
@@ -110,6 +126,8 @@ The live-activity feature above is opt-in and changes this picture only if you t
 On macOS the credentials are read from the login Keychain instead of a file. Tokitty's access stays read-only there too: it never writes to the item and never touches the refresh token. One thing worth knowing before you click **Always Allow**: macOS Keychain ACLs are per-*binary*, and the binary being authorized is `/usr/bin/security`. So granting it persistent access means any process running as you can afterwards read that token by shelling out to `security`, without a prompt. That is a property of how Keychain authorization works, not something tokitty can tighten. A narrower grant would require tokitty to be a signed app bundle with a stable identity rather than a Python script.
 
 Choosing **Allow** instead of **Always Allow** grants a single read, and while the token stays valid tokitty's cache means that's roughly one prompt per token lifetime. But the cache is invalidated the moment the token expires, deliberately, since that's how tokitty notices Claude Code has refreshed it. So once nothing is refreshing the token (the idle-account resting look above, e.g. outside work hours), every retry on the 30s to 600s backoff is a cache miss and re-prompts: on the order of fifty prompts overnight, not one. If you leave tokitty running unattended, use **Always Allow**.
+
+The per-model view reads more than the credentials file: it opens the `.jsonl` transcripts under `<config-dir>/projects/` to count tokens. It reads only each entry's `usage` numbers, model id, and timestamp. Prompt text, tool arguments, tool output, and file contents are never read out of those files, never persisted, and never transmitted; the totals are computed in memory and drawn on the pane. Nothing about this view contacts the network at all, which is the point of it. Your budget figures live in `settings.json` alongside the other app-wide settings.
 
 Multi-account mode (above) extends this picture the same way single-account mode already worked, just once per configured account: tokitty reads OAuth credentials and (if hooks are installed) hook/session state from each account's Claude Code config dir. Nothing about what's read, persisted, or transmitted changes. It's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains an identity slug and a config-dir path per account, both assigned by the Accounts dialog, not typed in by hand.
 

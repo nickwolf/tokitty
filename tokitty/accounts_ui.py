@@ -82,6 +82,36 @@ def _fallback_label(index: int) -> str:
     return f"Cat {index + 1}"
 
 
+def _parses_as_oauth_file(path: Path) -> bool:
+    from tokitty.manual_path import _parses_as_oauth
+
+    try:
+        return _parses_as_oauth(path.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+
+
+def describe_capabilities(has_credentials: bool, has_transcripts: bool) -> Tuple[str, str]:
+    """The two fact lines shown under an account row.
+
+    Worded so the target user is not told they are broken: "not available
+    (no credentials found)" sitting next to a populated local-usage line
+    tells the whole story, where the old dialog just refused the directory
+    as "not a valid Claude Code credentials file" and turned them away.
+    """
+    subscription = (
+        "subscription usage: available"
+        if has_credentials
+        else "subscription usage: not available (no credentials found)"
+    )
+    local = (
+        "local usage: transcripts found"
+        if has_transcripts
+        else "local usage: no transcripts found"
+    )
+    return subscription, local
+
+
 def build_row_specs(accounts: List[Account], customization_store: Dict[str, Customization]) -> List[RowSpec]:
     """Pure, Tk-free: one display row per account. Never shows the raw
     slug as a fallback label -- it's an opaque SHA-256-derived string."""
@@ -302,6 +332,7 @@ class AccountsManager:
         root: tk.Tk,
         state_dir: Path,
         discovered_matches: Optional[Sequence[Tuple[str, str]]] = None,
+        focus_usage: bool = False,
     ) -> "AccountsManager":
         key = id(root)
         existing = _manager_instances.get(key)
@@ -309,12 +340,27 @@ class AccountsManager:
             if discovered_matches is not None:
                 existing._discovered_paths = build_discovered_path_specs(discovered_matches)
                 existing._refresh_rows()
+            if focus_usage:
+                existing.focus_usage_section()
             existing.toplevel.lift()
             existing.toplevel.focus_force()
             return existing
         manager = cls(root, state_dir, discovered_matches=discovered_matches)
+        if focus_usage:
+            manager.focus_usage_section()
         _manager_instances[key] = manager
         return manager
+
+    def focus_usage_section(self) -> None:
+        """Bring the usage controls into view.
+
+        Called on the ACTION_USAGE_SETUP first run: the user has
+        transcripts and no credentials, so the account rows are not the
+        part of this dialog they need.
+        """
+        section = getattr(self, "usage_section", None)
+        if section is not None and section.winfo_exists():
+            section.focus_set()
 
     def _on_close(self) -> None:
         self.toplevel.destroy()
@@ -340,6 +386,7 @@ class AccountsManager:
 
     def _build(self) -> None:
         self._refresh_rows()
+        self._build_usage_section()
         tk.Label(
             self.toplevel,
             text="Tokitty restart needed for new panes. Claude Code session restart needed for hooks.",
@@ -353,6 +400,99 @@ class AccountsManager:
             button._account_enabled = True
             button.pack(padx=8, pady=(0, 10))
         self._update_mutation_controls()
+
+    def _build_usage_section(self) -> None:
+        """The same three global controls the right-click menu carries,
+        plus a per-account budget, so a user who never opens a menu still
+        finds them.
+
+        Writes through the same Settings helpers the menu does: no second
+        code path and no second source of truth.
+        """
+        from tokitty.settings import (
+            READOUTS,
+            VIEW_MODES,
+            budget_for,
+            load_settings,
+            update_settings,
+            with_budget,
+        )
+        from tokitty.usage_scan import WINDOWS
+
+        section = tk.LabelFrame(self.toplevel, text="Usage")
+        self.usage_section = section
+        settings = load_settings(self.state_dir)
+
+        groups = (
+            ("Show", "view_mode", VIEW_MODES, ("Limits", "Per-model"), settings.view_mode),
+            ("Window", "usage_window", WINDOWS, ("24 hours", "7 days", "This month"), settings.usage_window),
+            ("Readout", "usage_readout", READOUTS, ("Cost", "Tokens"), settings.usage_readout),
+        )
+        for title, field, values, labels, current in groups:
+            row = tk.Frame(section)
+            tk.Label(row, text=f"{title}:", width=8, anchor="w").pack(side="left")
+            variable = tk.StringVar(value=current)
+            for value, label in zip(values, labels):
+                tk.Radiobutton(
+                    row,
+                    text=label,
+                    value=value,
+                    variable=variable,
+                    command=(
+                        lambda f=field, v=variable: update_settings(self.state_dir, **{f: v.get()})
+                    ),
+                ).pack(side="left")
+            row.pack(fill="x", padx=4, pady=1)
+            setattr(self, f"_{field}_var", variable)
+
+        budget_row = tk.Frame(section)
+        tk.Label(budget_row, text="Budget:", width=8, anchor="w").pack(side="left")
+        tk.Label(budget_row, text="$").pack(side="left")
+        self._budget_entry = tk.Entry(budget_row, width=10)
+        accounts = load_accounts_result(self.state_dir).accounts
+        self._budget_slug = accounts[0].name if accounts else SINGLE_KEY
+        existing = budget_for(settings, self._budget_slug, settings.usage_window)
+        if existing is not None:
+            self._budget_entry.insert(0, f"{existing:g}")
+        self._budget_entry.pack(side="left")
+
+        def apply_budget() -> None:
+            raw = self._budget_entry.get().strip().lstrip("$")
+            # Blank clears. That has to be expressible, which is why this
+            # is an Entry rather than a numeric prompt that cannot tell a
+            # cancel from a submitted blank.
+            amount = None
+            if raw:
+                try:
+                    amount = float(raw)
+                except ValueError:
+                    messagebox.showerror("Budget", f"'{raw}' is not a number.", parent=self.toplevel)
+                    return
+                if amount <= 0:
+                    messagebox.showerror(
+                        "Budget", "Enter an amount greater than zero.", parent=self.toplevel
+                    )
+                    return
+            current = load_settings(self.state_dir)
+            update_settings(
+                self.state_dir,
+                usage_budgets=with_budget(
+                    current, self._budget_slug, current.usage_window, amount
+                ),
+            )
+
+        tk.Button(budget_row, text="Set", command=apply_budget).pack(side="left", padx=4)
+        tk.Label(budget_row, text="(blank clears)", fg="#666666").pack(side="left")
+        budget_row.pack(fill="x", padx=4, pady=(1, 4))
+
+        tk.Label(
+            section,
+            text="Per-model usage is read from Claude Code's own transcripts, so it works without a subscription.",
+            wraplength=340,
+            justify="left",
+            fg="#666666",
+        ).pack(padx=4, pady=(0, 4))
+        section.pack(fill="x", padx=8, pady=(0, 8))
 
     def _showing_virtual_macos_row(self) -> bool:
         return (
@@ -382,6 +522,7 @@ class AccountsManager:
             frame = tk.Frame(self.toplevel)
             frame._accounts_row = True
             tk.Label(frame, text=row.display_label).pack(side="left", padx=4)
+            self._render_capability_facts(frame, row.config_dir)
             tk.Button(frame, text="Rename…", command=lambda s=row.slug: self._on_rename(s)).pack(side="left")
             remove_state = "normal" if row.remove_enabled else "disabled"
             remove = tk.Button(frame, text="Remove", state=remove_state,
@@ -412,6 +553,35 @@ class AccountsManager:
             button._account_enabled = True
             button.pack(side="left")
             frame.pack(fill="x", padx=8, pady=2)
+
+    def _local_capabilities(self, config_dir: str):
+        """(has_credentials, has_transcripts) for a config dir, or None
+        when answering would need a subprocess.
+
+        Deliberately cheap and local-only. A WSL UNC path would need
+        wsl.exe calls, and this runs on the Tk thread while the dialog is
+        being built -- the same freeze this file's own comments warn about
+        for the pending-hook retry. Unknown is rendered as nothing rather
+        than as a guess.
+        """
+        from tokitty.accounts import parse_wsl_unc
+
+        if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
+            return None
+        try:
+            path = Path(config_dir)
+            credentials = path / ".credentials.json"
+            has_credentials = credentials.is_file() and _parses_as_oauth_file(credentials)
+            return has_credentials, (path / "projects").is_dir()
+        except OSError:
+            return None
+
+    def _render_capability_facts(self, frame, config_dir: str) -> None:
+        capabilities = self._local_capabilities(config_dir)
+        if capabilities is None:
+            return
+        subscription, local = describe_capabilities(*capabilities)
+        tk.Label(frame, text=f"{subscription} · {local}", fg="#666666").pack(side="left", padx=4)
 
     def _render_malformed_row(self) -> None:
         frame = tk.Frame(self.toplevel)

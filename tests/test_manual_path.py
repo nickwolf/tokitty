@@ -137,3 +137,46 @@ def test_duplicate_of_active_account_rejected(tmp_path):
     result = validate_manual_path(str(config_dir), active_config_dirs=[str(config_dir)])
     assert not result.ok
     assert "already added" in result.error.lower()
+
+
+def test_transcripts_without_credentials_are_accepted(tmp_path):
+    """The case the old validator rejected outright, and the whole reason
+    an API-key user could not add their account by hand."""
+    (tmp_path / "projects").mkdir()
+    result = validate_manual_path(str(tmp_path), [])
+    assert result.ok
+    assert result.capabilities == frozenset({"models"})
+    assert not result.supports("limits")
+
+
+def test_credentials_and_transcripts_grant_both(tmp_path):
+    (tmp_path / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "t"}}), encoding="utf-8"
+    )
+    (tmp_path / "projects").mkdir()
+    result = validate_manual_path(str(tmp_path), [])
+    assert result.capabilities == frozenset({"limits", "models"})
+
+
+def test_credentials_without_transcripts_grant_limits_only(tmp_path):
+    (tmp_path / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "t"}}), encoding="utf-8"
+    )
+    result = validate_manual_path(str(tmp_path), [])
+    assert result.capabilities == frozenset({"limits"})
+
+
+def test_neither_is_still_rejected(tmp_path):
+    result = validate_manual_path(str(tmp_path), [])
+    assert result.ok is False
+    assert result.capabilities == frozenset()
+
+
+def test_invalid_credentials_still_accepted_when_transcripts_exist(tmp_path):
+    """A broken credentials file must not veto a directory that can still
+    drive the per-model view."""
+    (tmp_path / ".credentials.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "projects").mkdir()
+    result = validate_manual_path(str(tmp_path), [])
+    assert result.ok
+    assert result.capabilities == frozenset({"models"})

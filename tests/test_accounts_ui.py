@@ -785,3 +785,60 @@ def test_destroying_root_cancels_pending_manager_callbacks(tmp_path):
 
     pending_after = set(root.tk.splitlist(root.tk.call("after", "info")))
     assert pending_before.isdisjoint(pending_after)
+
+
+# --- usage facts and section -------------------------------------------
+
+
+def test_describe_capabilities_never_calls_a_transcripts_only_account_broken():
+    from tokitty.accounts_ui import describe_capabilities
+
+    subscription, local = describe_capabilities(has_credentials=False, has_transcripts=True)
+    assert "not available (no credentials found)" in subscription
+    assert "transcripts found" in local
+    assert "invalid" not in subscription.lower()
+    assert "error" not in subscription.lower()
+
+
+def test_describe_capabilities_reports_a_full_account():
+    from tokitty.accounts_ui import describe_capabilities
+
+    subscription, local = describe_capabilities(True, True)
+    assert subscription == "subscription usage: available"
+    assert local == "local usage: transcripts found"
+
+
+@pytest.mark.gui
+def test_usage_section_is_built_and_focusable(tmp_path):
+    import tkinter as tk
+
+    from tokitty.accounts_ui import AccountsManager
+
+    root = tk.Tk()
+    try:
+        manager = AccountsManager.open(root, tmp_path, focus_usage=True)
+        assert manager.usage_section.winfo_exists()
+        # focus_usage_section must actually have something to focus: it
+        # was a silent no-op while the section did not exist.
+        manager.focus_usage_section()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_usage_section_writes_through_the_same_settings_helpers(tmp_path):
+    import tkinter as tk
+
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.settings import load_settings
+
+    root = tk.Tk()
+    try:
+        manager = AccountsManager.open(root, tmp_path)
+        manager._view_mode_var.set("models")
+        manager.usage_section.nametowidget(
+            manager.usage_section.winfo_children()[0].winfo_children()[2]
+        ).invoke()
+        assert load_settings(tmp_path).view_mode == "models"
+    finally:
+        root.destroy()

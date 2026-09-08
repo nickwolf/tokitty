@@ -15,6 +15,15 @@ from tokitty.credentials import ENV_OVERRIDE, AmbiguousCredentialsError, Credent
 
 _CHECK_SCRIPT = 'for f in /home/*/.claude*/.credentials.json; do [ -f "$f" ] && echo "$f"; done'
 
+# Same shape as _CHECK_SCRIPT, but keyed on a transcripts directory rather
+# than on credentials. This is what makes the per-model view reachable for
+# an API-key user: they have a full billing ledger on disk and no OAuth
+# credentials file anywhere, so every credentials-keyed probe reports that
+# they do not have Claude Code installed at all.
+_PROJECTS_SCRIPT = (
+    'for d in /home/*/.claude*/projects; do [ -d "$d" ] && echo "${d%/projects}"; done'
+)
+
 # wsl.exe is a console app; spawning it from a GUI process (pythonw.exe has
 # no console of its own) without this flag flashes a visible terminal
 # window on every poll. getattr(...) keeps this a no-op on non-Windows,
@@ -113,6 +122,57 @@ def find_wsl_credentials(run: Callable = subprocess.run) -> Tuple[str, str]:
         "No Claude Code credentials found in any WSL distro. "
         f"Set {ENV_OVERRIDE} to the correct path."
     )
+
+
+def _claude_dirs_in_distro(distro: str, run: Callable = subprocess.run) -> List[str]:
+    """WSL-side Claude config dirs in one distro, found by their projects/
+    subdirectory. Mirrors _credentials_paths_in_distro, including its
+    --exec argv handling."""
+    try:
+        result = run(
+            ["wsl.exe", "-d", distro, "--exec", "sh", "-c", _PROJECTS_SCRIPT],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            creationflags=_NO_CONSOLE_FLAGS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+    raw = result.stdout
+    text = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def find_all_wsl_claude_dirs(run: Callable = subprocess.run) -> List[Tuple[str, str]]:
+    """Every (distro, wsl-side config dir) that has transcripts, whether or
+    not it has OAuth credentials.
+
+    find_all_wsl_credentials is deliberately left untouched: the limits
+    view keeps its exact current behavior, and this is an additional,
+    wider probe rather than a loosened one.
+    """
+    matches: List[Tuple[str, str]] = []
+    for distro in list_wsl_distros(run=run):
+        for config_dir in _claude_dirs_in_distro(distro, run=run):
+            matches.append((distro, config_dir))
+    return matches
+
+
+def wsl_dir_exists(distro: str, posix_path: str, run: Callable = subprocess.run) -> bool:
+    """Whether a directory exists inside a distro, without touching the
+    UNC path (which would boot a stopped distro)."""
+    try:
+        result = run(
+            ["wsl.exe", "-d", distro, "--exec", "sh", "-c", f'[ -d "{posix_path}" ]'],
+            capture_output=True,
+            timeout=10,
+            check=False,
+            creationflags=_NO_CONSOLE_FLAGS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def find_all_wsl_credentials(run: Callable = subprocess.run) -> List[Tuple[str, str]]:
