@@ -191,20 +191,23 @@ def test_window_boundaries():
     assert window_start("7d", NOW) == NOW - timedelta(days=7)
 
 
-def test_month_boundary_is_local_not_utc(monkeypatch):
+def test_month_boundary_is_local_not_utc():
     """In UTC-6, a UTC-derived boundary puts the first six hours of the
-    month in the previous one."""
-    monkeypatch.setenv("TZ", "America/Mexico_City")
-    import time
+    month in the previous one.
 
-    time.tzset()
-    try:
-        now = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
-        start = window_start("month", now)
-        assert start == datetime(2026, 9, 1, 6, 0, tzinfo=timezone.utc)
-    finally:
-        monkeypatch.delenv("TZ", raising=False)
-        time.tzset()
+    The zone is injected rather than set through TZ + time.tzset(), which
+    does not exist on Windows and took CI red there.
+    """
+    minus_six = timezone(timedelta(hours=-6))
+    now = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    assert window_start("month", now, minus_six) == datetime(2026, 9, 1, 6, 0, tzinfo=timezone.utc)
+
+
+def test_month_boundary_east_of_greenwich_lands_before_the_utc_first():
+    """The mirror case, so the test cannot pass by ignoring the zone."""
+    plus_two = timezone(timedelta(hours=2))
+    now = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    assert window_start("month", now, plus_two) == datetime(2026, 8, 31, 22, 0, tzinfo=timezone.utc)
 
 
 def test_retention_early_in_a_month_reaches_past_the_first():
