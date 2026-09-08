@@ -1,7 +1,7 @@
 # Tokitty
 
 <p align="center">
-  <img src="docs/media/dual-card.png" alt="Two cats: an orange tabby working on a laptop above a sleeping gray tabby" height="280">
+  <img src="docs/media/live-card.png" alt="The tokitty window: two cat panes, each with its session and weekly usage bars and reset times" height="254">
   <img src="docs/media/permission.gif" alt="The cat raising its permission flag" height="136">
 </p>
 
@@ -75,6 +75,12 @@ Setting `TOKITTY_DEBUG_ACCOUNTS=2` renders a fake two-pane card (one normal, one
 
 A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane to change either. **Colorway ▸** is a radio submenu of six — `orange`, `gray`, `black`, `white`, `cream`, `brown` — and **Pattern ▸** is a radio submenu of nine — `solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`. Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
 
+<p align="center">
+  <img src="docs/media/looks-grid.png" alt="All six colorways down, all nine patterns across" width="760">
+</p>
+
+Colorways run top to bottom in menu order, patterns left to right.
+
 Two ways to let tokitty pick for you: **Randomize** rolls a fresh colorway + pattern for that pane and saves it, and **Surprise me** (a checkbox) re-rolls every pane to a new look on each launch — off by default, so your chosen look sticks. Both only ever roll from the built-in colorways and patterns, never free-form colors.
 
 **Customize…** opens a small dialog with a color-chooser button per overridable piece (coat base, coat shading, card background, bar color); each pick live-previews on the pane right away, and **Reset to preset** clears all four overrides back to the current colorway + pattern's stock colors.
@@ -85,9 +91,19 @@ Each pane also gets a label under the sprite. Right-click a pane and choose **Re
 
 With no `accounts.json` and no `customization.json`, tokitty runs as a single pane and, on first launch, rolls one random look and saves it — so a fresh install gets its own cat that then stays put across restarts, rather than always starting orange tabby.
 
+## Transparency
+
+Right-click a pane and pick a level from **Transparency ▸** (100%, 90%, 80%, 70%, 60%, 50%). It applies immediately and is saved to `settings.json`, so it survives a restart. The setting is app-wide, not per pane.
+
+On Windows only the card background fades: the cat and the usage bars stay fully opaque at every level. That takes two stacked windows, one holding the faded background and one holding the sprites and bars with its background color keyed out, so anything you set the card to shows the desktop through it while the cat stays readable. Everywhere else it is a single window at that alpha, which fades the cat and the bars along with the background. On X11 with no compositor running, nothing happens at all and no error is raised.
+
+50% is the floor on purpose. Keyed-out pixels are click-through, so a card faded all the way out would be both invisible and unclickable, leaving the optional tray icon as the only way back.
+
+Two things override the level you picked. A pending permission prompt forces the window back to fully opaque until you answer it, since a dimmed "Claude is waiting on you" defeats the point; with several panes, one waiting pane makes all of them opaque. And in **Customize…**, picking exactly `#010203` for a color gets one unit of blue added when that color is painted, because that is the pixel value Windows punches out. Your saved color is left as you chose it, only the painted pixel differs.
+
 ## Security & privacy
 
-Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, and two app-wide toggles (`position.json`, `customization.json`, and `settings.json` — the latter holding "show tray icon" and "surprise me") are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu. Autostart's on/off state is not among them: it lives entirely in the OS's own registration (a registry value, a LaunchAgent plist, or a desktop entry, depending on platform) and never in `settings.json`, so there is no stored copy to fall out of step with what the OS will actually do at your next login.
+Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, and three app-wide settings (`position.json`, `customization.json`, and `settings.json`, the latter holding "show tray icon", "surprise me" and the transparency level) are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu. Autostart's on/off state is not among them: it lives entirely in the OS's own registration (a registry value, a LaunchAgent plist, or a desktop entry, depending on platform) and never in `settings.json`, so there is no stored copy to fall out of step with what the OS will actually do at your next login.
 
 The live-activity feature above is opt-in and changes this picture only if you turn it on:
 
@@ -166,6 +182,8 @@ If Tokitty can't find your Claude Code credentials automatically (e.g. more than
 ```bash
 export TOKITTY_CREDENTIALS=/path/to/.claude/.credentials.json
 ```
+
+For a visual check without waiting for a state to happen for real, `TOKITTY_DEBUG_STATE=<state>` (`permission`, `flopped`, `done_hop`, any state name) pins the card to that sprite with placeholder numbers and skips polling.
 
 ## How this was built
 
