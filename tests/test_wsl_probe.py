@@ -230,3 +230,99 @@ def test_find_all_wsl_credentials_returns_every_match_across_distros():
 
 def test_check_script_globs_dot_claude_star():
     assert "/home/*/.claude*/.credentials.json" in _CHECK_SCRIPT
+
+
+def test_credentials_cache_sweeps_once_across_repeated_calls():
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_scan():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude/.credentials.json")]
+
+    cache = WslCredentialsCache(scan=fake_scan)
+    cache.all_matches()
+    cache.single()
+    cache.all_matches()
+    assert sweeps["n"] == 1
+
+
+def test_credentials_cache_shares_one_sweep_between_threads():
+    # The Tk thread and the Accounts discovery thread race for this in
+    # practice; the lock is held across the sweep so the loser waits on the
+    # winner's result instead of starting a second one (issue #52).
+    import threading
+
+    sweeps = {"n": 0}
+    release = threading.Event()
+
+    def fake_scan():
+        sweeps["n"] += 1
+        release.wait(timeout=5)
+        return [("Ubuntu", "/home/n/.claude/.credentials.json")]
+
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    cache = WslCredentialsCache(scan=fake_scan)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(cache.all_matches())) for _ in range(4)]
+    for t in threads:
+        t.start()
+    release.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert sweeps["n"] == 1
+    assert results == [[("Ubuntu", "/home/n/.claude/.credentials.json")]] * 4
+
+
+def test_credentials_cache_single_matches_find_wsl_credentials_contract():
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    one = WslCredentialsCache(scan=lambda: [("Ubuntu", "/home/n/.claude/.credentials.json")])
+    assert one.single() == ("Ubuntu", "/home/n/.claude/.credentials.json")
+
+    many = WslCredentialsCache(scan=lambda: [("Ubuntu", "/a"), ("Debian", "/b")])
+    with pytest.raises(AmbiguousCredentialsError):
+        many.single()
+
+    none = WslCredentialsCache(scan=lambda: [])
+    with pytest.raises(CredentialsError):
+        none.single()
+
+
+def test_credentials_cache_swallows_a_failed_sweep_and_does_not_retry():
+    # "wsl.exe missing from PATH" and "no credentials anywhere" are the same
+    # answer to the discovery thread, and a failed sweep must not leave the
+    # cache open to sweeping again on the next caller.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_scan():
+        sweeps["n"] += 1
+        raise CredentialsError("wsl.exe not found")
+
+    cache = WslCredentialsCache(scan=fake_scan)
+    assert cache.all_matches() == []
+    assert cache.all_matches() == []
+    assert sweeps["n"] == 1
+
+
+def test_credentials_cache_disabled_never_sweeps():
+    # run_gui disables the cache when credentials were already found
+    # natively. Sweeping then would wake every installed distro to answer a
+    # question that is already answered.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_scan():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude/.credentials.json")]
+
+    cache = WslCredentialsCache(scan=fake_scan, enabled=False)
+    assert cache.all_matches() == []
+    with pytest.raises(CredentialsError):
+        cache.single()
+    assert sweeps["n"] == 0

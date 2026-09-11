@@ -241,3 +241,69 @@ def read_wsl_credentials(distro: str, wsl_path: str, run: Callable = subprocess.
 
     raw = result.stdout
     return raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
+
+
+class WslCredentialsCache:
+    """One credential sweep per process, shared by every caller that needs
+    one (issue #52).
+
+    Before this existed, a launch with no accounts.json ran the sweep three
+    times over: once in resolve_activity_sessions, once in
+    resolve_projects_dir, and once more on the Accounts discovery thread.
+    The sweep is not cheap and it is not passive -- _credentials_paths_in_
+    distro shells into each distro with `wsl.exe -d <name> --exec`, which
+    starts a stopped distro. Running it three times per launch meant waking
+    every installed distro three times, and once autostart (#20) shipped,
+    on every login.
+
+    The result is cached for the life of the process rather than on a TTL:
+    every caller resolves once at startup, so a credentials file that
+    appears mid-session was never picked up anyway. The lock is held across
+    the sweep itself, which is what makes concurrent callers -- the Tk
+    thread and the discovery thread race in practice -- share one sweep
+    instead of each running their own.
+    """
+
+    def __init__(self, scan: Callable[[], List[Tuple[str, str]]] = None, enabled: bool = True):
+        import threading
+
+        self._scan = scan or find_all_wsl_credentials
+        self._lock = threading.Lock()
+        # enabled=False means there is nothing to sweep for: credentials
+        # were already found natively, so a sweep would wake every distro to
+        # answer a question that is already answered. run_discovery has
+        # always put that guard on its own sweep. The resolvers went around
+        # it and swept anyway, which is only visible now that both read the
+        # same cache.
+        self._done = not enabled
+        self._matches: List[Tuple[str, str]] = []
+
+    def all_matches(self) -> List[Tuple[str, str]]:
+        """Every (distro, path) match, [] on any probe failure. Never raises:
+        the discovery thread treats "no credentials anywhere" and "wsl.exe is
+        missing from PATH" identically."""
+        with self._lock:
+            if not self._done:
+                try:
+                    self._matches = list(self._scan())
+                except CredentialsError:
+                    self._matches = []
+                self._done = True
+            return list(self._matches)
+
+    def single(self) -> Tuple[str, str]:
+        """find_wsl_credentials's contract, served from the cache: the one
+        match, or AmbiguousCredentialsError / CredentialsError."""
+        matches = self.all_matches()
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            joined = ", ".join(f"{d}:{p}" for d, p in matches)
+            raise AmbiguousCredentialsError(
+                f"Multiple Claude Code installs found across WSL distros: {joined}. "
+                f"Set {ENV_OVERRIDE} to the correct path."
+            )
+        raise CredentialsError(
+            "No Claude Code credentials found in any WSL distro. "
+            f"Set {ENV_OVERRIDE} to the correct path."
+        )
