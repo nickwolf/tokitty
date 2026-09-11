@@ -100,7 +100,7 @@ def build_fetch_fn(config_dir: Optional[str] = None, loader: Optional[Credential
     return fetch
 
 
-def resolve_activity_sessions(config_dir: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def resolve_activity_sessions(config_dir: Optional[str] = None, credentials=None) -> Tuple[Optional[str], Optional[str]]:
     """Return (sessions_dir, distro_name) for the ActivityWatcher.
 
     distro_name is None on Linux/macOS (no WSL check needed) and on any
@@ -142,8 +142,14 @@ def resolve_activity_sessions(config_dir: Optional[str] = None) -> Tuple[Optiona
 
     from tokitty.wsl_probe import find_wsl_credentials, wsl_sessions_dir_from_credentials
 
+    # `credentials` is the process-wide WslCredentialsCache when run_gui
+    # wired one up (issue #52). Falling back to the bare function keeps the
+    # tests that call this resolver directly working unchanged.
     try:
-        distro, wsl_credentials_path = find_wsl_credentials()
+        if credentials is not None:
+            distro, wsl_credentials_path = credentials.single()
+        else:
+            distro, wsl_credentials_path = find_wsl_credentials()
     except CredentialsError:
         return None, None
 
@@ -181,7 +187,7 @@ def _join(root: str, *parts: str) -> str:
     return root + separator + separator.join(parts)
 
 
-def resolve_projects_dir(config_dir: Optional[str] = None):
+def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
     """(projects_dir, distro_name) for the transcript scanner.
 
     Unlike resolve_activity_sessions, the no-config_dir fallback here must
@@ -212,7 +218,10 @@ def resolve_projects_dir(config_dir: Optional[str] = None):
     )
 
     try:
-        distro, wsl_credentials_path = find_wsl_credentials()
+        if credentials is not None:
+            distro, wsl_credentials_path = credentials.single()
+        else:
+            distro, wsl_credentials_path = find_wsl_credentials()
     except CredentialsError:
         try:
             matches = find_all_wsl_claude_dirs()
@@ -579,6 +588,15 @@ def run_gui() -> int:
     # loop is the Tk-thread-owned mechanism this file already uses for
     # exactly this producer/consumer shape (Poller/ActivityWatcher results),
     # so first-run auto-open reuses it instead of introducing a new one.
+    # One wsl.exe credential sweep for the whole launch, shared by
+    # run_discovery below and by both per-account resolvers in the unit
+    # loop. The sweep shells into every installed distro, which starts a
+    # stopped one, so running it once per caller meant waking every distro
+    # three times per launch -- and, since autostart (#20), on every login.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    wsl_credentials = WslCredentialsCache()
+
     discovery_lock = threading.Lock()
     discovery_result = {
         "wsl_matches": [],
@@ -659,12 +677,11 @@ def run_gui() -> int:
                 and not env_override_set
                 and not home_relative_exists
             ):
-                from tokitty.wsl_probe import find_all_wsl_credentials
-
-                try:
-                    wsl_matches = find_all_wsl_credentials()
-                except CredentialsError:
-                    wsl_matches = []
+                # Served from the shared cache, so this is the same sweep
+                # the unit loop below resolves from rather than a second
+                # one -- whichever thread gets here first pays for it once
+                # (issue #52).
+                wsl_matches = wsl_credentials.all_matches()
 
             transcript_matches = []
             if not wsl_matches and discovery_accounts_state == "absent" and not env_override_set:
@@ -750,12 +767,12 @@ def run_gui() -> int:
         config_dir = account.config_dir if account else None
         cred_loader = CredentialLoader()
         poller = Poller(fetch_fn=build_fetch_fn(config_dir, loader=cred_loader))
-        sessions_dir, distro_name = resolve_activity_sessions(config_dir)
+        sessions_dir, distro_name = resolve_activity_sessions(config_dir, credentials=wsl_credentials)
         watcher = ActivityWatcher(
             sessions_dir, ActivityTracker(), distro_name=distro_name,
             list_running_distros_fn=distro_probe.get_running,
         )
-        projects_dir, projects_distro = resolve_projects_dir(config_dir)
+        projects_dir, projects_distro = resolve_projects_dir(config_dir, credentials=wsl_credentials)
         usage_watcher = UsageWatcher(
             projects_dir,
             distro_name=projects_distro,

@@ -15,6 +15,7 @@ from tokitty.__main__ import (
     initial_customization,
     initial_label,
     resolve_activity_sessions,
+    resolve_projects_dir,
 )
 from tokitty.accounts import Account
 from tokitty.api import LimitInfo, UsageSnapshot
@@ -1190,3 +1191,41 @@ def test_usage_setup_first_run_opens_the_dialog_focused_on_usage(tmp_path, monke
     )
     accounts_ui_module.AccountsManager.open(None, tmp_path, focus_usage=True)
     assert calls == [True]
+
+
+def test_both_resolvers_share_one_credential_sweep(monkeypatch):
+    # Issue #52: a launch with no accounts.json used to sweep every WSL
+    # distro once per caller. Both resolvers now read the same cache, so
+    # whichever runs first pays for the only sweep there is.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    sweeps = {"n": 0}
+
+    def fake_scan():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude/.credentials.json")]
+
+    cache = WslCredentialsCache(scan=fake_scan)
+
+    sessions_dir, sessions_distro = resolve_activity_sessions(None, credentials=cache)
+    projects_dir, projects_distro = resolve_projects_dir(None, credentials=cache)
+
+    assert sweeps["n"] == 1
+    assert sessions_distro == "Ubuntu"
+    assert projects_distro == "Ubuntu"
+    assert sessions_dir.endswith("\\tokitty\\sessions")
+    assert projects_dir.endswith("\\projects")
+
+
+def test_resolvers_still_work_without_a_cache(monkeypatch):
+    # debug_print and the existing direct-call tests pass no cache; the
+    # bare-function path has to stay intact.
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_wsl_credentials",
+        lambda *a, **k: ("Ubuntu", "/home/n/.claude/.credentials.json"),
+    )
+    sessions_dir, distro = resolve_activity_sessions(None)
+    assert distro == "Ubuntu"
+    assert sessions_dir.endswith("\\tokitty\\sessions")
