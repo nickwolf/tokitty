@@ -546,8 +546,15 @@ def run_gui() -> int:
         "onboarding": settings.onboarding_version,
     }
 
+    # Before tk.Tk(), and it has to stay before it: Windows refuses to
+    # change a process's DPI awareness once the process owns a window, and
+    # reports the refusal in the return value rather than by raising.
+    from tokitty import dpi
+
+    scale = dpi.init()
+
     root = tk.Tk()
-    window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity)
+    window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity, scale=scale)
     window.on_opacity_changed = lambda level: update_settings(state_dir, opacity=level)
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
@@ -22,11 +21,19 @@ from tokitty.transparency import (
     hide_from_taskbar, root_hwnd, set_content_owner, uses_color_key,
 )
 
+# Every pixel constant and literal in this module is in LOGICAL pixels, at
+# the 96-dpi baseline. Device pixels come from multiplying by the scale
+# factor tokitty.dpi resolves at startup: Pane._px for everything inside a
+# pane, and the card_w/pane_h pair TokittyWindow computes once for the grid
+# itself. Nothing multiplies a product (s(col * CARD_WIDTH)) -- always a
+# product of a scaled unit (col * card_w), so placement and hit-testing can
+# never round to different grids.
 CARD_WIDTH = 300
 PANE_HEIGHT = 128  # was CARD_HEIGHT; one cat+bars unit
 CAT_CANVAS_SIZE = 112
 STATS_X = 132
 BAR_WIDTH = 158
+BAR_HEIGHT = 8
 BG_COLOR = "#1c1c22"
 FG_COLOR = "#f0f0f0"
 DIM_COLOR = "#8a8a92"
@@ -64,30 +71,63 @@ POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
 
 
-def grid_size(pane_count: int) -> Tuple[int, int, int]:
+def cell_size(scale: float = 1.0) -> Tuple[int, int]:
+    """(card_w, pane_h) in device pixels. One rounding, reused by the window
+    geometry, the pane frames and the hit test, so all three agree."""
+    return round(CARD_WIDTH * scale), round(PANE_HEIGHT * scale)
+
+
+def grid_size(pane_count: int, scale: float = 1.0) -> Tuple[int, int, int]:
     """(width, height, cols) for pane_count panes filled row-major,
     capped at 4 rows: cols = ceil(N/4), rows = ceil(N/cols). Height
-    never exceeds 512px (4 * PANE_HEIGHT); width grows instead."""
+    never exceeds 512 logical px (4 * PANE_HEIGHT); width grows instead."""
     cols = math.ceil(pane_count / 4)
     rows = math.ceil(pane_count / cols)
-    return CARD_WIDTH * cols, PANE_HEIGHT * rows, cols
+    card_w, pane_h = cell_size(scale)
+    return card_w * cols, pane_h * rows, cols
 
 
-def pane_index_at(x: int, y: int, pane_count: int, cols: int) -> Optional[int]:
+def pane_index_at(x: int, y: int, pane_count: int, cols: int,
+                  card_w: int = CARD_WIDTH, pane_h: int = PANE_HEIGHT) -> Optional[int]:
     """Map root-relative (x, y) to a pane index in row-major grid order,
     or None for a blank cell in a ragged final row (e.g. N=5, cols=2:
     index 4 exists but index 5 does not -- that cell shows only global
-    menu actions, never falls back to the nearest real pane)."""
+    menu actions, never falls back to the nearest real pane).
+
+    card_w/pane_h are device pixels and must be the same pair the frames
+    were placed with; the event coordinates this divides are device pixels
+    too, so defaulting them to the logical constants is only right at
+    scale 1.0."""
     if x < 0 or y < 0:
         return None
-    col = x // CARD_WIDTH
-    row = y // PANE_HEIGHT
+    col = x // card_w
+    row = y // pane_h
     if col >= cols:
         return None
     index = row * cols + col
     if index >= pane_count:
         return None
     return index
+
+
+def sprite_bounds(cols: int, rows: int, scale: float = 1.0) -> Tuple[List[int], List[int]]:
+    """Device-pixel cell boundaries for a cols x rows sprite, centred in the
+    cat canvas.
+
+    Boundaries rather than a rounded cell size. round(SCALE * scale) only
+    tracks the scale factor where the product lands on an integer: true at
+    125% and 150%, false at a custom 110%, where the canvas grows about 10%
+    and a rounded cell size does not grow at all. Returning cols + 1 and
+    rows + 1 boundaries puts the last one at exactly
+    round(cols * SCALE * scale), so the sprite is the right size and still
+    cannot overflow the canvas.
+    """
+    canvas_size = round(CAT_CANVAS_SIZE * scale)
+    x_off = max((canvas_size - round(cols * SCALE * scale)) // 2, 0)
+    y_off = max((canvas_size - round(rows * SCALE * scale)) // 2, 0)
+    xs = [x_off + round(i * SCALE * scale) for i in range(cols + 1)]
+    ys = [y_off + round(i * SCALE * scale) for i in range(rows + 1)]
+    return xs, ys
 
 
 def fit_tag(text: str, limit: int = TOOL_LABEL_MAX) -> str:
@@ -107,8 +147,9 @@ class Pane:
     """One cat + bars unit. Owns its widgets inside a parent Frame; knows
     nothing about window chrome, drag, or position."""
 
-    def __init__(self, parent, content_parent=None, palette=None, card_bg=None, bar_fill=None, label="", colorway=None, pattern=None):
+    def __init__(self, parent, content_parent=None, palette=None, card_bg=None, bar_fill=None, label="", colorway=None, pattern=None, scale: float = 1.0):
         self.parent = parent
+        self._scale = scale
         # Same widget on the single-window platforms, a frame on the keyed
         # content window on Windows. Everything hard-edged (the cat, the two
         # bars) lives here; every antialiased label stays on `parent`,
@@ -132,6 +173,11 @@ class Pane:
         # event loop pass, after every pane has rendered.
         self.on_accent_changed = None
         self._build_widgets()
+
+    def _px(self, n: float) -> int:
+        """Logical pixels to device pixels. Every geometry number in this
+        class goes through here."""
+        return round(n * self._scale)
 
     def _canvas_bg(self, bg: str) -> str:
         """The cat canvas background must stay exactly the key colour on the
@@ -169,13 +215,13 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, self._last_session_pct_px, 8,
+            0, 0, self._last_session_pct_px, self._px(BAR_HEIGHT),
             fill=self._paint(resolve_bar_fill(self._last_session_pct, self._bar_fill)),
             width=0, tags="fill",
         )
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, self._last_weekly_pct_px, 8,
+            0, 0, self._last_weekly_pct_px, self._px(BAR_HEIGHT),
             fill=self._paint(resolve_bar_fill(self._last_weekly_pct, self._bar_fill)),
             width=0, tags="fill",
         )
@@ -208,24 +254,24 @@ class Pane:
         self._last_weekly_pct_px = 0
 
         self.canvas = tk.Canvas(
-            self.content_parent, width=CAT_CANVAS_SIZE, height=CAT_CANVAS_SIZE,
+            self.content_parent, width=self._px(CAT_CANVAS_SIZE), height=self._px(CAT_CANVAS_SIZE),
             bg=self._canvas_bg(self._card_bg), highlightthickness=0
         )
-        self.canvas.place(x=8, y=8)
+        self.canvas.place(x=self._px(8), y=self._px(8))
 
         self.session_label = tk.Label(self.parent, text="SESSION", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
-        self.session_label.place(x=STATS_X, y=12)
-        self.session_bar_bg = tk.Canvas(self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
-        self.session_bar_bg.place(x=STATS_X, y=30)
+        self.session_label.place(x=self._px(STATS_X), y=self._px(12))
+        self.session_bar_bg = tk.Canvas(self.content_parent, width=self._px(BAR_WIDTH), height=self._px(BAR_HEIGHT), bg=BAR_BG, highlightthickness=0)
+        self.session_bar_bg.place(x=self._px(STATS_X), y=self._px(30))
         self.session_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
-        self.session_reset_label.place(x=STATS_X, y=42)
+        self.session_reset_label.place(x=self._px(STATS_X), y=self._px(42))
 
         self.weekly_label = tk.Label(self.parent, text="WEEK", fg=FG_COLOR, bg=self._card_bg, font=("Segoe UI", 9, "bold"))
-        self.weekly_label.place(x=STATS_X, y=60)
-        self.weekly_bar_bg = tk.Canvas(self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0)
-        self.weekly_bar_bg.place(x=STATS_X, y=78)
+        self.weekly_label.place(x=self._px(STATS_X), y=self._px(60))
+        self.weekly_bar_bg = tk.Canvas(self.content_parent, width=self._px(BAR_WIDTH), height=self._px(BAR_HEIGHT), bg=BAR_BG, highlightthickness=0)
+        self.weekly_bar_bg.place(x=self._px(STATS_X), y=self._px(78))
         self.weekly_reset_label = tk.Label(self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8))
-        self.weekly_reset_label.place(x=STATS_X, y=90)
+        self.weekly_reset_label.place(x=self._px(STATS_X), y=self._px(90))
 
         # One widget for both credits and the error hint -- _display_state_for
         # only ever populates one at a time (credits on ok status, hint on
@@ -236,9 +282,10 @@ class Pane:
         # first character (the "$" in the credits line) -- found via a real
         # screenshot, not guessed.
         self.status_label = tk.Label(
-            self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8), wraplength=CARD_WIDTH - STATS_X - 8
+            self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8),
+            wraplength=self._px(CARD_WIDTH - STATS_X - 8)
         )
-        self.status_label.place(x=STATS_X, y=108)
+        self.status_label.place(x=self._px(STATS_X), y=self._px(108))
 
         # Per-model view. Built once and hidden, never rebuilt:
         # set_appearance has to be able to restyle either view without
@@ -254,7 +301,7 @@ class Pane:
                 self.parent, text="", fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
             )
             bar = tk.Canvas(
-                self.content_parent, width=BAR_WIDTH, height=8, bg=BAR_BG, highlightthickness=0
+                self.content_parent, width=self._px(BAR_WIDTH), height=self._px(BAR_HEIGHT), bg=BAR_BG, highlightthickness=0
             )
             self.model_name_labels.append(name)
             self.model_value_labels.append(value)
@@ -265,7 +312,7 @@ class Pane:
         self.label_widget = tk.Label(
             self.parent, text=self._label, fg=DIM_COLOR, bg=self._card_bg, font=("Segoe UI", 8)
         )
-        self.label_widget.place(x=CARD_WIDTH - 6, y=4, anchor="ne")
+        self.label_widget.place(x=self._px(CARD_WIDTH - 6), y=self._px(4), anchor="ne")
 
     def _limits_widgets(self):
         return (
@@ -295,19 +342,19 @@ class Pane:
             for widget in self._limits_widgets():
                 widget.place_forget()
             for index, row_y in enumerate(MODEL_ROW_Y):
-                self.model_name_labels[index].place(x=STATS_X, y=row_y)
-                self.model_value_labels[index].place(x=CARD_WIDTH - 8, y=row_y, anchor="ne")
-                self.model_bars[index].place(x=STATS_X, y=row_y + MODEL_BAR_OFFSET)
+                self.model_name_labels[index].place(x=self._px(STATS_X), y=self._px(row_y))
+                self.model_value_labels[index].place(x=self._px(CARD_WIDTH - 8), y=self._px(row_y), anchor="ne")
+                self.model_bars[index].place(x=self._px(STATS_X), y=self._px(row_y + MODEL_BAR_OFFSET))
             return
 
         for widget in self._model_widgets():
             widget.place_forget()
-        self.session_label.place(x=STATS_X, y=12)
-        self.session_bar_bg.place(x=STATS_X, y=30)
-        self.session_reset_label.place(x=STATS_X, y=42)
-        self.weekly_label.place(x=STATS_X, y=60)
-        self.weekly_bar_bg.place(x=STATS_X, y=78)
-        self.weekly_reset_label.place(x=STATS_X, y=90)
+        self.session_label.place(x=self._px(STATS_X), y=self._px(12))
+        self.session_bar_bg.place(x=self._px(STATS_X), y=self._px(30))
+        self.session_reset_label.place(x=self._px(STATS_X), y=self._px(42))
+        self.weekly_label.place(x=self._px(STATS_X), y=self._px(60))
+        self.weekly_bar_bg.place(x=self._px(STATS_X), y=self._px(78))
+        self.weekly_reset_label.place(x=self._px(STATS_X), y=self._px(90))
 
     def _draw_model_bar(self, index: int, pct: float, ramp_pct) -> None:
         bar = self.model_bars[index]
@@ -325,7 +372,8 @@ class Pane:
         else:
             fill = NEUTRAL_BAR
         bar.create_rectangle(
-            0, 0, BAR_WIDTH * min(pct, 100) / 100, 8, fill=self._paint(fill), width=0, tags="fill"
+            0, 0, self._px(BAR_WIDTH) * min(pct, 100) / 100, self._px(BAR_HEIGHT),
+            fill=self._paint(fill), width=0, tags="fill",
         )
 
     def render_usage(
@@ -397,8 +445,8 @@ class Pane:
         self._apply_view("limits")
         self._last_session_pct = session_pct
         self._last_weekly_pct = weekly_pct
-        self._last_session_pct_px = BAR_WIDTH * min(session_pct, 100) / 100
-        self._last_weekly_pct_px = BAR_WIDTH * min(weekly_pct, 100) / 100
+        self._last_session_pct_px = self._px(BAR_WIDTH) * min(session_pct, 100) / 100
+        self._last_weekly_pct_px = self._px(BAR_WIDTH) * min(weekly_pct, 100) / 100
 
         bg = ACCENT_BG if accent else self._card_bg
         self.parent.configure(bg=bg)
@@ -412,14 +460,14 @@ class Pane:
 
         self.session_bar_bg.delete("fill")
         self.session_bar_bg.create_rectangle(
-            0, 0, self._last_session_pct_px, 8,
+            0, 0, self._last_session_pct_px, self._px(BAR_HEIGHT),
             fill=self._paint(resolve_bar_fill(session_pct, self._bar_fill)), width=0, tags="fill"
         )
         self.session_reset_label.configure(text=f"{session_pct:.0f}% · {session_reset_text}")
 
         self.weekly_bar_bg.delete("fill")
         self.weekly_bar_bg.create_rectangle(
-            0, 0, self._last_weekly_pct_px, 8,
+            0, 0, self._last_weekly_pct_px, self._px(BAR_HEIGHT),
             fill=self._paint(resolve_bar_fill(weekly_pct, self._bar_fill)), width=0, tags="fill"
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
@@ -437,25 +485,23 @@ class Pane:
 
     def _draw_frame(self, frame) -> None:
         self.canvas.delete("cat")
-        frame_w = len(frame[0]) * SCALE
-        frame_h = len(frame) * SCALE
-        x_off = max((CAT_CANVAS_SIZE - frame_w) // 2, 0)
-        y_off = max((CAT_CANVAS_SIZE - frame_h) // 2, 0)
+        canvas_size = self._px(CAT_CANVAS_SIZE)
+        xs, ys = sprite_bounds(len(frame[0]), len(frame), self._scale)
         for row_index, row in enumerate(frame):
             for col_index, ch in enumerate(row):
                 color = self._palette.get(ch, "")
                 if not color:
                     continue
-                color = self._paint(color)
-                x0 = x_off + col_index * SCALE
-                y0 = y_off + row_index * SCALE
-                self.canvas.create_rectangle(x0, y0, x0 + SCALE, y0 + SCALE, fill=color, width=0, tags="cat")
+                self.canvas.create_rectangle(
+                    xs[col_index], ys[row_index], xs[col_index + 1], ys[row_index + 1],
+                    fill=self._paint(color), width=0, tags="cat",
+                )
 
         if self._driving_tag:
-            self._draw_tag(6, CAT_CANVAS_SIZE - 6, self._driving_tag, "sw", DIM_COLOR)
+            self._draw_tag(self._px(6), canvas_size - self._px(6), self._driving_tag, "sw", DIM_COLOR)
 
         if self._tool_label:
-            self._draw_tag(6, 6, fit_tag(self._tool_label), "nw", FG_COLOR)
+            self._draw_tag(self._px(6), self._px(6), fit_tag(self._tool_label), "nw", FG_COLOR)
 
     def _draw_tag(self, x: int, y: int, text: str, anchor: str, fill: str) -> None:
         """One overlay tag, on an opaque chip when the canvas is keyed.
@@ -472,8 +518,9 @@ class Pane:
         if not self._keyed:
             return
         x0, y0, x1, y1 = self.canvas.bbox(item)
+        pad_x, pad_y = self._px(3), self._px(1)
         self.canvas.create_rectangle(
-            x0 - 3, y0 - 1, x1 + 3, y1 + 1, fill=BG_COLOR, width=0, tags="cat"
+            x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y, fill=BG_COLOR, width=0, tags="cat"
         )
         self.canvas.tag_raise(item)
 
@@ -484,11 +531,17 @@ _PANE_SPECIFIC_LABELS = frozenset(
 
 
 class TokittyWindow:
-    def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1, opacity: int = 100):
+    def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1, opacity: int = 100,
+                 scale: float = 1.0):
         self.root = root
         self.state_dir = state_dir
         self._pane_count = pane_count
-        self._width, self._height, self._cols = grid_size(pane_count)
+        # Resolved by tokitty.dpi before tk.Tk() and passed in, never read
+        # here: a Tk root has to exist before this runs, and by then the
+        # process awareness that decides the factor is already fixed.
+        self._scale = scale
+        self._card_w, self._pane_h = cell_size(scale)
+        self._width, self._height, self._cols = grid_size(pane_count, scale)
         self._position_path = state_dir / POSITION_FILENAME
         self._drag_offset = (0, 0)
         self._always_on_top_bool = True
@@ -533,13 +586,13 @@ class TokittyWindow:
         self.panes = []
         for i in range(pane_count):
             row, col = divmod(i, self._cols)
-            frame = tk.Frame(root, width=CARD_WIDTH, height=PANE_HEIGHT, bg=BG_COLOR)
-            frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
+            frame = tk.Frame(root, width=self._card_w, height=self._pane_h, bg=BG_COLOR)
+            frame.place(x=col * self._card_w, y=row * self._pane_h)
             content_frame = frame
             if self.content is not self.root:
-                content_frame = tk.Frame(self.content, width=CARD_WIDTH, height=PANE_HEIGHT, bg=KEY_COLOR)
-                content_frame.place(x=col * CARD_WIDTH, y=row * PANE_HEIGHT)
-            pane = Pane(frame, content_frame)
+                content_frame = tk.Frame(self.content, width=self._card_w, height=self._pane_h, bg=KEY_COLOR)
+                content_frame.place(x=col * self._card_w, y=row * self._pane_h)
+            pane = Pane(frame, content_frame, scale=scale)
             pane.on_accent_changed = self._schedule_opacity
             self.panes.append(pane)
         self._restore_position()
@@ -554,14 +607,6 @@ class TokittyWindow:
         self.root.attributes("-topmost", True)
         self.root.configure(bg=BG_COLOR)
         self.root.geometry(f"{self._width}x{self._height}")
-
-        if sys.platform == "win32":
-            try:
-                import ctypes
-
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                pass
 
     def _make_content_window(self) -> tk.Misc:
         """The keyed sibling window, on Windows only.
@@ -809,7 +854,9 @@ class TokittyWindow:
     def _show_context_menu(self, event: tk.Event) -> None:
         x_relative = event.x_root - self.root.winfo_rootx()
         y_relative = event.y_root - self.root.winfo_rooty()
-        self._menu_pane_index = pane_index_at(x_relative, y_relative, len(self.panes), self._cols)
+        self._menu_pane_index = pane_index_at(
+            x_relative, y_relative, len(self.panes), self._cols, self._card_w, self._pane_h
+        )
         self._rebuild_context_menu()
         self.menu.tk_popup(event.x_root, event.y_root)
 

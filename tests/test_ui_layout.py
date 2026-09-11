@@ -605,3 +605,87 @@ def test_unused_model_rows_render_blank_rather_than_stale():
         assert pane.model_name_labels[1].cget("text") == ""
     finally:
         root.destroy()
+
+
+def test_cell_size_scales_both_dimensions():
+    from tokitty.ui import cell_size
+    assert cell_size(1.0) == (300, 128)
+    assert cell_size(1.5) == (450, 192)
+    assert cell_size(1.25) == (375, 160)
+
+
+def test_grid_size_uses_one_rounded_cell_for_every_column():
+    # The grid must be an exact multiple of the cell the frames are placed
+    # with. Rounding CARD_WIDTH * cols separately from CARD_WIDTH would let
+    # the window be a pixel wider or narrower than its own panes at a
+    # custom scale.
+    from tokitty.ui import cell_size, grid_size
+    scale = 106 / 96.0
+    card_w, pane_h = cell_size(scale)
+    width, height, cols = grid_size(5, scale)
+    assert cols == 2
+    assert width == card_w * 2
+    assert height == pane_h * 3
+
+
+def test_pane_index_at_uses_the_scaled_cell():
+    from tokitty.ui import cell_size, pane_index_at
+    card_w, pane_h = cell_size(1.5)
+    assert card_w == 450 and pane_h == 192
+    # A point that is pane 0 at 100% is still pane 0 at 150% only if the
+    # hit test is told the scaled cell; with the logical constants it would
+    # land in pane 1.
+    assert pane_index_at(0, 150, 3, 1, card_w, pane_h) == 0
+    assert pane_index_at(0, 192, 3, 1, card_w, pane_h) == 1
+    assert pane_index_at(0, 150, 3, 1) == 1
+
+
+def test_sprite_bounds_fill_the_canvas_at_every_scale():
+    # The rounded-cell-size approach this replaced froze the sprite at 112px
+    # for a 123px canvas at 110%, because round(4 * 1.104) is 4. Flooring
+    # had the same defect. Boundary mapping tracks the canvas exactly.
+    from tokitty.ui import CAT_CANVAS_SIZE, sprite_bounds
+    for scale in (1.0, 1.1, 106 / 96.0, 1.25, 1.5, 1.75, 2.0, 2.4):
+        xs, ys = sprite_bounds(28, 28, scale)
+        canvas = round(CAT_CANVAS_SIZE * scale)
+        assert xs[-1] - xs[0] == canvas, scale
+        assert xs[-1] <= canvas, scale
+        assert ys[-1] <= canvas, scale
+
+
+def test_sprite_bounds_leave_no_gaps_between_cells():
+    from tokitty.ui import sprite_bounds
+    xs, ys = sprite_bounds(28, 26, 106 / 96.0)
+    assert all(b >= a for a, b in zip(xs, xs[1:]))
+    assert len(xs) == 29 and len(ys) == 27
+    # Every cell boundary is the next cell's start, so no row of background
+    # shows through between two filled pixels.
+    assert xs == sorted(xs)
+
+
+def test_a_shorter_sprite_stays_centred_vertically():
+    from tokitty.ui import CAT_CANVAS_SIZE, sprite_bounds
+    scale = 1.5
+    xs, ys = sprite_bounds(28, 26, scale)
+    canvas = round(CAT_CANVAS_SIZE * scale)
+    assert ys[0] == (canvas - (ys[-1] - ys[0])) // 2
+
+
+def test_sprite_bounds_are_pixel_identical_to_the_unscaled_arithmetic():
+    # At 100% the new boundary mapping has to reproduce the old
+    # x_off + i * SCALE exactly, so a machine at 96 dpi sees no change at
+    # all from the scaling pass.
+    from tokitty.ui import CAT_CANVAS_SIZE, SCALE, sprite_bounds
+    cols, rows = 28, 26
+    xs, ys = sprite_bounds(cols, rows, 1.0)
+    x_off = max((CAT_CANVAS_SIZE - cols * SCALE) // 2, 0)
+    y_off = max((CAT_CANVAS_SIZE - rows * SCALE) // 2, 0)
+    assert xs == [x_off + i * SCALE for i in range(cols + 1)]
+    assert ys == [y_off + i * SCALE for i in range(rows + 1)]
+
+
+def test_unscaled_grid_and_hit_test_are_unchanged():
+    from tokitty.ui import CARD_WIDTH, PANE_HEIGHT, cell_size, grid_size, pane_index_at
+    assert cell_size(1.0) == (CARD_WIDTH, PANE_HEIGHT)
+    assert grid_size(5) == grid_size(5, 1.0) == (600, 384, 2)
+    assert pane_index_at(350, 50, 5, 2) == pane_index_at(350, 50, 5, 2, 300, 128) == 1
