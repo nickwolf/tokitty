@@ -307,3 +307,22 @@ def test_credentials_cache_swallows_a_failed_sweep_and_does_not_retry():
     assert cache.all_matches() == []
     assert cache.all_matches() == []
     assert sweeps["n"] == 1
+
+
+def test_credentials_cache_disabled_never_sweeps():
+    # run_gui disables the cache when credentials were already found
+    # natively. Sweeping then would wake every installed distro to answer a
+    # question that is already answered.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_scan():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude/.credentials.json")]
+
+    cache = WslCredentialsCache(scan=fake_scan, enabled=False)
+    assert cache.all_matches() == []
+    with pytest.raises(CredentialsError):
+        cache.single()
+    assert sweeps["n"] == 0

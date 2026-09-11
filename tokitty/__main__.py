@@ -588,15 +588,6 @@ def run_gui() -> int:
     # loop is the Tk-thread-owned mechanism this file already uses for
     # exactly this producer/consumer shape (Poller/ActivityWatcher results),
     # so first-run auto-open reuses it instead of introducing a new one.
-    # One wsl.exe credential sweep for the whole launch, shared by
-    # run_discovery below and by both per-account resolvers in the unit
-    # loop. The sweep shells into every installed distro, which starts a
-    # stopped one, so running it once per caller meant waking every distro
-    # three times per launch -- and, since autostart (#20), on every login.
-    from tokitty.wsl_probe import WslCredentialsCache
-
-    wsl_credentials = WslCredentialsCache()
-
     discovery_lock = threading.Lock()
     discovery_result = {
         "wsl_matches": [],
@@ -609,6 +600,22 @@ def run_gui() -> int:
     home_relative_exists = (
         Path.home() / ".claude" / ".credentials.json"
     ).is_file()
+
+    # One wsl.exe credential sweep for the whole launch, shared by
+    # run_discovery below and by both per-account resolvers in the unit
+    # loop. The sweep shells into every installed distro, which starts a
+    # stopped one, so running it once per caller meant waking every distro
+    # three times per launch, and since autostart (#20) on every login.
+    #
+    # Disabled outright when credentials were already found natively, which
+    # is the guard run_discovery has always had on its own sweep. The
+    # resolvers never had it, so a launch with TOKITTY_CREDENTIALS set woke
+    # every distro looking for something it had already been handed.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    wsl_credentials = WslCredentialsCache(
+        enabled=not (env_override_set or home_relative_exists)
+    )
 
     def maybe_auto_open() -> None:
         accounts_result = load_accounts_result(state_dir)

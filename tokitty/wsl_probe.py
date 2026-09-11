@@ -264,12 +264,18 @@ class WslCredentialsCache:
     instead of each running their own.
     """
 
-    def __init__(self, scan: Callable[[], List[Tuple[str, str]]] = None):
+    def __init__(self, scan: Callable[[], List[Tuple[str, str]]] = None, enabled: bool = True):
         import threading
 
         self._scan = scan or find_all_wsl_credentials
         self._lock = threading.Lock()
-        self._done = False
+        # enabled=False means there is nothing to sweep for: credentials
+        # were already found natively, so a sweep would wake every distro to
+        # answer a question that is already answered. run_discovery has
+        # always put that guard on its own sweep. The resolvers went around
+        # it and swept anyway, which is only visible now that both read the
+        # same cache.
+        self._done = not enabled
         self._matches: List[Tuple[str, str]] = []
 
     def all_matches(self) -> List[Tuple[str, str]]:
