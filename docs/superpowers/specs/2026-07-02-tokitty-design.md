@@ -185,7 +185,7 @@ All states keep showing last-good data. **Refined after a real usage gap (2026-0
 Stack-ranked for future Sonnet/Opus sessions; each gets its own plan doc in `tokitty/docs/superpowers/plans/` when picked up:
 
 1. **CI matrix (GitHub Actions, ubuntu/macos/windows)** — import the package and run the non-GUI unit tests (`credentials.py` resolution logic, `api.py` parsing, `lock.py`) on all three; a headless Tk smoke test via `xvfb` on Linux. Cheap, and it's the credibility backbone of the cross-platform claim — sequence early, right after the POC ships.
-2. **ntfy threshold notifications** — owner runs ntfy already. Edge-triggered with hysteresis: fire once on crossing a threshold upward, re-arm only after dropping below or after `resets_at`. Session and weekly independently. Native path only (see tray icon note).
+2. **ntfy threshold notifications** — needs an ntfy server to post to, so check one exists before picking this up. Edge-triggered with hysteresis: fire once on crossing a threshold upward, re-arm only after dropping below or after `resets_at`. Session and weekly independently. Native path only (see tray icon note).
 3. **Autostart** — `shell:startup` shortcut (Windows) / login item (macOS) / autostart desktop entry (Linux) + boot-race tolerance (backoff + Confused cat, never a crash).
 4. **Tray icon** — needs `pystray` (first pip dependency); runs its own event loop in a second thread alongside tkinter's. **Native path only — not reachable from a WSLg-hosted process.**
 5. **Per-model weekly bars** — data already in `limits[]` `weekly_scoped` entries; main constraint is card space.
