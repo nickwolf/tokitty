@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tokitty.__main__ import _display_state_for, initial_label, provider_tag_kind
 from tokitty.accounts import Account, DEFAULT_PROVIDER, load_accounts_result, save_accounts
+from tokitty.customize import Customization
+from tokitty.display import format_observed_at, format_pane_label, resolve_status_text
+from tokitty.poller import PollResult
 from tokitty.providers import (
     DEFAULT_KIND,
     NULL_PROVIDER,
@@ -189,7 +193,8 @@ def test_freshest_event_wins_across_files_not_the_newest_filename(tmp_path):
 
 def test_the_last_token_count_in_a_file_wins():
     """Rollouts append, so an early event in the same file is superseded."""
-    import tempfile, pathlib
+    import pathlib
+    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         day = pathlib.Path(tmp) / "sessions" / "2026" / "09" / "22"
         _write_rollout(day, "rollout-a.jsonl", [
@@ -236,10 +241,6 @@ def test_the_fetch_fn_reports_a_readable_failure_rather_than_raising(tmp_path):
 
 # --- display: provider tag and staleness ----------------------------------
 
-from tokitty.__main__ import _display_state_for, initial_label, provider_tag_kind
-from tokitty.customize import Customization
-from tokitty.display import format_observed_at, format_pane_label, resolve_status_text
-from tokitty.poller import PollResult
 
 
 class _FakeProvider:

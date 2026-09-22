@@ -47,7 +47,7 @@ from tokitty.providers import (
 # Re-exported, not just imported: these were __main__ functions before
 # the provider seam and are still imported from here by the tests and
 # by --debug-print below.
-from tokitty.providers.claude import (
+from tokitty.providers.claude import (  # noqa: F401
     build_fetch_fn,
     resolve_activity_sessions,
     resolve_projects_dir,
