@@ -232,3 +232,83 @@ def test_the_fetch_fn_reports_a_readable_failure_rather_than_raising(tmp_path):
     assert result.status == "source_unreachable"
     assert result.snapshot is None
     assert result.message
+
+
+# --- display: provider tag and staleness ----------------------------------
+
+from tokitty.__main__ import _display_state_for, initial_label, provider_tag_kind
+from tokitty.customize import Customization
+from tokitty.display import format_observed_at, format_pane_label, resolve_status_text
+from tokitty.poller import PollResult
+
+
+class _FakeProvider:
+    def __init__(self, kind):
+        self.kind = kind
+
+
+def test_no_tag_when_every_pane_is_the_same_harness():
+    """Naming the same harness on every pane is noise, and the label is
+    often blank, so the tag has to earn its pixels."""
+    claude = [_FakeProvider("claude"), _FakeProvider("claude")]
+    assert provider_tag_kind(claude[0], claude) is None
+
+
+def test_tag_appears_as_soon_as_two_harnesses_share_a_window():
+    mixed = [_FakeProvider("claude"), _FakeProvider("codex")]
+    assert provider_tag_kind(mixed[0], mixed) == "claude"
+    assert provider_tag_kind(mixed[1], mixed) == "codex"
+
+
+def test_label_joins_the_tag_and_survives_a_blank_name():
+    assert format_pane_label("nibbles", "codex") == "codex·nibbles"
+    assert format_pane_label("", "codex") == "codex"
+    assert format_pane_label("mittens", None) == "mittens"
+
+
+def test_initial_label_threads_the_tag_through():
+    custom = Customization(colorway="ash", pattern=None, label="nibbles")
+    assert initial_label(None, custom, "codex") == "codex·nibbles"
+    assert initial_label(None, custom, None) == "nibbles"
+
+
+def test_a_fresh_snapshot_says_nothing_about_its_age():
+    now = datetime(2026, 9, 22, 16, 30, tzinfo=timezone.utc)
+    assert format_observed_at(now - timedelta(minutes=2), now) is None
+
+
+def test_an_old_snapshot_reports_when_it_was_taken():
+    now = datetime(2026, 9, 22, 16, 30, tzinfo=timezone.utc)
+    assert format_observed_at(now - timedelta(hours=2), now).startswith("as of ")
+
+
+def test_a_snapshot_from_another_day_carries_its_weekday():
+    now = datetime(2026, 9, 22, 16, 30, tzinfo=timezone.utc)
+    text = format_observed_at(now - timedelta(days=2), now)
+    # "as of Sun 10:30 AM" -- the weekday is what separates it from a
+    # time earlier today, which reads identically without one.
+    assert text.startswith("as of Sun ")
+
+
+def test_a_future_timestamp_is_a_clock_disagreement_not_an_age():
+    now = datetime(2026, 9, 22, 16, 30, tzinfo=timezone.utc)
+    assert format_observed_at(now + timedelta(minutes=30), now) is None
+
+
+def test_age_outranks_the_projection_it_would_otherwise_qualify():
+    """A cap projection computed from a snapshot hours old is the most
+    confidently wrong thing the pane can say."""
+    assert resolve_status_text(None, "$1 / $2", "session caps ~6:20 PM", "as of 4:12 PM") == "as of 4:12 PM"
+    assert resolve_status_text("hint", None, None, "as of 4:12 PM") == "hint"
+    assert resolve_status_text(None, "$1 / $2", "proj", None) == "$1 / $2"
+
+
+def test_a_stale_codex_snapshot_reaches_the_pane_with_its_age():
+    now = datetime(2026, 9, 22, 16, 30, tzinfo=timezone.utc)
+    snapshot = parse_token_count_event(_event("2026-09-22T12:00:00.000Z", 27.0, 83.0))
+    result = PollResult(status="ok", snapshot=snapshot, message=None, fetched_at=now)
+    display = _display_state_for(result, None, now=now)
+    assert display["stale_text"].startswith("as of ")
+    # The numbers themselves are still shown: they are the real ones, just
+    # old, and blanking them would lose the only data Codex publishes.
+    assert display["session_pct"] == 27.0

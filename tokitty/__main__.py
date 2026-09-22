@@ -22,7 +22,14 @@ from tokitty.customize import (
     save_customization,
     save_customization_entry,
 )
-from tokitty.display import format_countdown, format_projection, format_reset_day, format_reset_time
+from tokitty.display import (
+    format_countdown,
+    format_observed_at,
+    format_pane_label,
+    format_projection,
+    format_reset_day,
+    format_reset_time,
+)
 from tokitty.distro_probe import RunningDistroProbe
 from tokitty.hooks_install import retry_pending_hook_op
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock
@@ -178,6 +185,10 @@ def _display_from_snapshot(snapshot, now: datetime) -> dict:
         "weekly_reset_text": weekly_text,
         "driving_tag": driving_tag,
         "credits_text": credits_text,
+        # Derived from the snapshot rather than the poll, so it reports
+        # the age of the numbers on screen whether they came from this
+        # poll, a cached one, or a transcript written hours ago.
+        "stale_text": format_observed_at(snapshot.fetched_at, now),
     }
 
 
@@ -253,6 +264,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         "credits_text": None,
         "hint_text": hints.get(result.status, "unknown error"),
         "dimmed": True,
+        "stale_text": None,
     }
 
 
@@ -336,12 +348,26 @@ def initial_customization(account: Optional[Account], stored: Optional[Customiza
     return Customization(colorway=colorway, pattern=pattern)
 
 
-def initial_label(account: Optional[Account], custom: Customization) -> str:
+def initial_label(account: Optional[Account], custom: Customization,
+                  provider_kind: Optional[str] = None) -> str:
     """Default label: an explicit stored label always wins; otherwise
     blank. Never falls back to account.name -- since the identity slug
     scheme, account.name is an opaque SHA-256-derived string and must
-    never be shown to the user."""
-    return custom.label
+    never be shown to the user.
+
+    `provider_kind` prefixes the harness when the window holds more than
+    one of them (see provider_tag_kind). A window of Claude accounts is
+    unchanged: naming the same harness on every pane is noise, and the
+    tag has to earn its pixels on a label that is often blank."""
+    return format_pane_label(custom.label, provider_kind)
+
+
+def provider_tag_kind(provider, providers) -> Optional[str]:
+    """The kind to show on one pane, or None when every pane in the window
+    is the same harness and there is nothing to tell apart."""
+    if len({each.kind for each in providers}) < 2:
+        return None
+    return provider.kind
 
 
 def run_gui() -> int:
@@ -607,17 +633,25 @@ def run_gui() -> int:
 
     distro_probe = RunningDistroProbe()
 
-    units = []
-    for index, account in enumerate(accounts or [None]):
-        config_dir = account.config_dir if account else None
+    # Providers are resolved in their own pass because the label rule needs
+    # to know every harness in the window before the first pane is built.
+    resolved_accounts = list(accounts or [None])
+    providers = []
+    for account in resolved_accounts:
         try:
-            provider = get_provider(account.provider if account else None)
+            providers.append(get_provider(account.provider if account else None))
         except UnknownProviderError as exc:
             # A pane that polls the wrong harness is worse than a pane that
             # says it can't: name the problem on stderr and give this one a
             # provider that reports nothing.
             print(f"tokitty: {exc}", file=sys.stderr)
-            provider = NULL_PROVIDER
+            providers.append(NULL_PROVIDER)
+
+    units = []
+    for index, account in enumerate(resolved_accounts):
+        config_dir = account.config_dir if account else None
+        provider = providers[index]
+        tag_kind = provider_tag_kind(provider, providers)
         cred_loader = CredentialLoader()
         poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader))
         sessions_dir, distro_name = provider.resolve_activity_sessions(
@@ -640,13 +674,13 @@ def run_gui() -> int:
         key = customization_key(account)
         custom = initial_customization(account, customization_store.get(key))
         customization_store[key] = custom
-        label = initial_label(account, custom)
+        label = initial_label(account, custom, tag_kind)
         pane = window.panes[index]
         apply_customization(pane, custom)
         pane.set_appearance(label=label)
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
-                      "provider": provider,
+                      "provider": provider, "tag_kind": tag_kind,
                       "last_good": None, "key": key, "account": account,
                       "cred_loader": cred_loader, "burn": BurnTracker(),
                       "usage": usage_watcher})
@@ -702,7 +736,7 @@ def run_gui() -> int:
         save_customization_entry(state_dir, key, custom)
         apply_customization(unit["pane"], custom)
         if field == "label":
-            label = initial_label(unit["account"], custom)
+            label = initial_label(unit["account"], custom, unit["tag_kind"])
             unit["pane"].set_appearance(label=label)
 
     window.on_customization_changed = handle_customization_changed
