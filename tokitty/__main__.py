@@ -70,7 +70,11 @@ UI_REFRESH_MS = 500
 def debug_print() -> int:
     from tokitty.accounts import load_accounts
 
+    from tokitty import pricing
+
     accounts = load_accounts(get_state_dir())
+    # table() prints any override warning to stderr on first load.
+    print("prices: " + "; ".join(pricing.table().sources))
     for account in accounts or [None]:
         if account is not None:
             print(f"— {account.name} ({account.config_dir})")

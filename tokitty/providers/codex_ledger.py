@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
-from tokitty.pricing import CONTEXT_TIERED_MODELS, LONG_CONTEXT_SUFFIX, LONG_CONTEXT_THRESHOLD
+from tokitty.pricing import LONG_CONTEXT_SUFFIX, long_context_threshold
 from tokitty.usage_scan import (
     UNATTRIBUTED,
     BillingRecord,
@@ -78,7 +78,8 @@ def billing_model(model: str, input_tokens: int) -> str:
     """The id a request is priced under. A context-tiered model over the
     threshold gets its own id, so it lands on the long-context row where
     one is published and stays unpriced where one is not."""
-    if model in CONTEXT_TIERED_MODELS and input_tokens > LONG_CONTEXT_THRESHOLD:
+    threshold = long_context_threshold(model)
+    if threshold is not None and input_tokens > threshold:
         return model + LONG_CONTEXT_SUFFIX
     return model
 

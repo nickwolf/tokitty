@@ -77,7 +77,17 @@ Set a budget from **Set budget…** and the bars change meaning: instead of each
 
 Two details worth knowing, because both make the totals differ from a naive reading of the same files. A turn that made several API calls records each one separately, and the top-level total for that turn leaves out advisor calls, so tokitty adds up the individual calls and bills advisor calls against the model that actually ran them. The same message also gets rewritten several times inside one transcript, 4,037 of 5,817 entries on the machine this was built on, so only the last copy of each is counted.
 
-Prices are a table baked into `tokitty/pricing.py`, current as of 2026-09-08. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete.
+Prices live in `tokitty/prices.json`, one section per provider, each stamped with the pricing page it came from and the date it was read. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete. Once any rate on screen is more than 60 days old, the status line says "at old API rates" instead of "at API rates".
+
+To price a model before the next release, put a `prices.json` of the same shape in Tokitty's state directory (`%LOCALAPPDATA%\Tokitty`, `~/Library/Application Support/Tokitty`, or `~/.config/tokitty`). Its models replace the packaged ones entry by entry. A malformed override is ignored with a warning on stderr and in `--debug-print`, and the packaged prices stay in effect.
+
+```json
+{"schema": 1, "providers": {"mine": {"as_of": "2026-09-23", "models": {
+  "gpt-7": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": null}
+}}}}
+```
+
+`python3 scripts/refresh_prices.py` rewrites the packaged file from the live Anthropic and OpenAI pricing pages and prints what was added, changed, and kept; `--check` only reports. It refuses to write if a page's columns no longer line up with its rates.
 
 `python -m tokitty --debug-print` prints the same breakdown per account as text, which is the first thing to look at if a number looks wrong.
 

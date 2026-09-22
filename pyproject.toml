@@ -20,6 +20,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["tokitty*"]
 
+[tool.setuptools.package-data]
+tokitty = ["prices.json"]
+
 [tool.pytest.ini_options]
 # The `gui` marker guards tests that need a real Tk display (run under xvfb in
 # CI). Deselected by default so `pytest` stays headless-green everywhere.

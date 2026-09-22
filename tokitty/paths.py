@@ -12,6 +12,14 @@ def get_state_dir() -> Path:
     repo/install directory -- see the design spec's State/config location
     section for why.
     """
+    state_dir = state_dir_path()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir
+
+
+def state_dir_path() -> Path:
+    """Where get_state_dir() points, without creating it. For readers of
+    optional files, which should not leave an empty directory behind."""
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA")
         if not base:
@@ -24,6 +32,4 @@ def get_state_dir() -> Path:
         if not base:
             base = str(Path.home() / ".config")
         state_dir = Path(base) / "tokitty"
-
-    state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir

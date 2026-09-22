@@ -5,6 +5,22 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _packaged_prices_only(monkeypatch, tmp_path_factory):
+    """Keep a developer's own prices.json override out of every test.
+
+    Tests pin costs to the packaged table; an override in the real state
+    directory would change them depending on whose machine ran the suite.
+    """
+    from tokitty import pricing
+
+    missing = tmp_path_factory.mktemp("no-price-override") / "prices.json"
+    monkeypatch.setattr(pricing, "override_path", lambda: missing)
+    pricing.reload()
+    yield
+    pricing.reload()
+
+
+@pytest.fixture(autouse=True)
 def _clean_up_gui_root(request, monkeypatch):
     """Keep one GUI test's Tcl event queue out of the next GUI test.
 
