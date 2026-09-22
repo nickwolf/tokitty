@@ -109,12 +109,12 @@ def test_boot_race_recovers_without_manual_refresh(monkeypatch):
             raise CredentialsError("WSL not answering yet")
         return LocalCredentialsSource(path=Path("/does/not/matter"))
 
-    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", flaky_resolve)
+    monkeypatch.setattr("tokitty.providers.claude.resolve_credentials_source", flaky_resolve)
     monkeypatch.setattr(
-        "tokitty.__main__.load_credentials", lambda src: {"expiresAt": 4102444800000, "accessToken": "tok"}
+        "tokitty.providers.claude.load_credentials", lambda src: {"expiresAt": 4102444800000, "accessToken": "tok"}
     )
-    monkeypatch.setattr("tokitty.__main__.fetch_usage", lambda token: {"raw": "doesn't matter, parse is stubbed"})
-    monkeypatch.setattr("tokitty.__main__.parse_usage_response", lambda raw: _snapshot())
+    monkeypatch.setattr("tokitty.providers.claude.fetch_usage", lambda token: {"raw": "doesn't matter, parse is stubbed"})
+    monkeypatch.setattr("tokitty.providers.claude.parse_usage_response", lambda raw: _snapshot())
 
     fetch_fn = build_fetch_fn()
     done = threading.Event()
@@ -272,7 +272,7 @@ def test_build_fetch_fn_passes_config_dir(monkeypatch, tmp_path):
         seen["config_dir"] = config_dir
         raise CredentialsError("stop here")
 
-    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", fake_resolve)
+    monkeypatch.setattr("tokitty.providers.claude.resolve_credentials_source", fake_resolve)
     result = build_fetch_fn(config_dir="/home/u/.claude-work")()
     assert seen["config_dir"] == "/home/u/.claude-work"
     assert result.status == "credentials_unreachable"
@@ -363,9 +363,9 @@ def test_build_fetch_fn_reports_keychain_denied(monkeypatch):
     from tokitty.credentials import KeychainAccessError, KeychainCredentialsSource
 
     source = KeychainCredentialsSource(service="Claude Code-credentials")
-    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+    monkeypatch.setattr("tokitty.providers.claude.resolve_credentials_source", lambda config_dir=None: source)
     monkeypatch.setattr(
-        "tokitty.__main__.load_credentials",
+        "tokitty.providers.claude.load_credentials",
         lambda src: (_ for _ in ()).throw(KeychainAccessError("denied")),
     )
 
@@ -381,7 +381,7 @@ def test_build_fetch_fn_uses_the_injected_loader_and_caches_across_calls(monkeyp
     from tokitty.credentials import CredentialLoader, KeychainCredentialsSource
 
     source = KeychainCredentialsSource(service="Claude Code-credentials")
-    monkeypatch.setattr("tokitty.__main__.resolve_credentials_source", lambda config_dir=None: source)
+    monkeypatch.setattr("tokitty.providers.claude.resolve_credentials_source", lambda config_dir=None: source)
 
     load_calls = []
 
@@ -391,11 +391,11 @@ def test_build_fetch_fn_uses_the_injected_loader_and_caches_across_calls(monkeyp
         # a cache hit rather than a fresh Keychain read.
         return {"expiresAt": 4102444800000, "accessToken": "tok"}
 
-    monkeypatch.setattr("tokitty.__main__.load_credentials", counting_load)
+    monkeypatch.setattr("tokitty.providers.claude.load_credentials", counting_load)
     # Stops the poll right after the token check, so no real network call is
     # made -- getting past that check is all this test needs from fetch_usage.
     monkeypatch.setattr(
-        "tokitty.__main__.fetch_usage",
+        "tokitty.providers.claude.fetch_usage",
         lambda token: (_ for _ in ()).throw(ApiError("boom", status_code=500)),
     )
 

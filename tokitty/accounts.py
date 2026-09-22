@@ -18,12 +18,24 @@ from typing import List, Optional, Tuple
 
 ACCOUNTS_FILENAME = "accounts.json"
 
+# Duplicated from tokitty.providers.DEFAULT_KIND rather than imported: the
+# registry imports the providers, which import the poller and the API
+# client, and none of that belongs in the dependency graph of a file
+# parser. The registry's own default is asserted equal to this in tests.
+DEFAULT_PROVIDER = "claude"
+
 
 @dataclass(frozen=True)
 class Account:
     name: str
     config_dir: str
     coat: Optional[str] = None  # parsed now, rendered in Phase 4
+    # Which harness this account belongs to. Absent in every file written
+    # before the provider seam existed, and those files all describe Claude
+    # Code, so the default is the migration. Stored as the raw string rather
+    # than validated here: the registry owns which kinds exist, and a file
+    # from a newer build should survive a round trip through an older one.
+    provider: str = DEFAULT_PROVIDER
 
 
 @dataclass(frozen=True)
@@ -53,6 +65,7 @@ def load_accounts_result(state_dir: Path) -> AccountsLoadResult:
                 name=str(entry.get("name") or f"account {index}"),
                 config_dir=str(entry["config_dir"]),
                 coat=entry.get("coat"),
+                provider=str(entry.get("provider") or DEFAULT_PROVIDER),
             )
         )
     if not accounts:
@@ -88,7 +101,11 @@ def save_accounts(state_dir: Path, accounts: List[Account]) -> None:
     path = Path(state_dir) / ACCOUNTS_FILENAME
     payload = {
         "accounts": [
-            {"name": account.name, "config_dir": account.config_dir}
+            {
+                "name": account.name,
+                "config_dir": account.config_dir,
+                "provider": account.provider,
+            }
             for account in accounts
         ]
     }

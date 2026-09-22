@@ -12,18 +12,8 @@ from typing import Optional, Tuple
 from tokitty.accounts import Account, load_accounts_result
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
-from tokitty.api import ApiError, fetch_usage, parse_usage_response
 from tokitty.burn import BurnTracker
-from tokitty.credentials import (
-    AmbiguousCredentialsError,
-    CredentialLoader,
-    CredentialsError,
-    KeychainAccessError,
-    describe_source,
-    is_token_expired,
-    load_credentials,
-    resolve_credentials_source,
-)
+from tokitty.credentials import CredentialLoader, CredentialsError
 from tokitty.customize import (
     Customization,
     SINGLE_KEY,
@@ -40,6 +30,21 @@ from tokitty.mood import compute_capped_substate, compute_mood, detect_activate,
 from tokitty.paths import get_state_dir
 from tokitty.pose import resolve_pose
 from tokitty.poller import PollResult, Poller
+from tokitty.providers import (
+    DEFAULT_KIND,
+    NULL_PROVIDER,
+    STATUS_UNSUPPORTED,
+    UnknownProviderError,
+    get_provider,
+)
+# Re-exported, not just imported: these were __main__ functions before
+# the provider seam and are still imported from here by the tests and
+# by --debug-print below.
+from tokitty.providers.claude import (
+    build_fetch_fn,
+    resolve_activity_sessions,
+    resolve_projects_dir,
+)
 from tokitty.settings import Settings
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
@@ -55,191 +60,6 @@ DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 UI_REFRESH_MS = 500
 
 
-def build_fetch_fn(config_dir: Optional[str] = None, loader: Optional[CredentialLoader] = None):
-    # One loader per closure, i.e. per account: it caches that account's
-    # Keychain reads and holds its sticky-denial state.
-    loader = loader if loader is not None else CredentialLoader()
-
-    def fetch() -> PollResult:
-        now = datetime.now(timezone.utc)
-        try:
-            source = resolve_credentials_source(config_dir=config_dir)
-        except AmbiguousCredentialsError as exc:
-            return PollResult(status="ambiguous_credentials", snapshot=None, message=str(exc), fetched_at=now)
-        except CredentialsError as exc:
-            return PollResult(status="credentials_unreachable", snapshot=None, message=str(exc), fetched_at=now)
-
-        try:
-            creds = loader.load(source, load_fn=load_credentials)
-        except KeychainAccessError as exc:
-            # Must precede the CredentialsError branch -- it is a subclass.
-            return PollResult(status="keychain_denied", snapshot=None, message=str(exc), fetched_at=now)
-        except CredentialsError as exc:
-            return PollResult(status="credentials_unreachable", snapshot=None, message=str(exc), fetched_at=now)
-
-        if is_token_expired(creds):
-            return PollResult(
-                status="stale_token",
-                snapshot=None,
-                message="access token expired",
-                fetched_at=now,
-                source_description=describe_source(source),
-            )
-
-        try:
-            raw = fetch_usage(creds["accessToken"])
-        except ApiError as exc:
-            status = "stale_token" if exc.status_code == 401 else "api_error"
-            return PollResult(status=status, snapshot=None, message=str(exc), fetched_at=now)
-
-        snapshot = parse_usage_response(raw)
-        return PollResult(
-            status="ok", snapshot=snapshot, message=None, fetched_at=now, source_description=describe_source(source)
-        )
-
-    return fetch
-
-
-def resolve_activity_sessions(config_dir: Optional[str] = None, credentials=None) -> Tuple[Optional[str], Optional[str]]:
-    """Return (sessions_dir, distro_name) for the ActivityWatcher.
-
-    distro_name is None on Linux/macOS (no WSL check needed) and on any
-    resolution failure -- resolution failure always means "run without
-    activity" (sessions_dir=None too), never a crash. Single default
-    account for now (issue #7's scope); a future multi-account watcher
-    would resolve one of these per account.
-
-    With an explicit config_dir (from accounts.json): a WSL UNC dir stays
-    UNC on win32 (with the distro name parsed out for the running-distro
-    check) and is translated to its posix path on Linux; a plain dir is
-    used as-is on either platform. Without one: v1 behavior below.
-    """
-    if config_dir:
-        from tokitty.accounts import parse_wsl_unc
-
-        unc = parse_wsl_unc(config_dir)
-        if sys.platform == "win32":
-            if unc is not None:
-                distro = unc[0]
-                sessions = config_dir.rstrip("\\/") + "\\tokitty\\sessions"
-                return sessions, distro
-            return str(Path(config_dir) / "tokitty" / "sessions"), None
-        base = unc[1] if unc is not None else config_dir
-        # This branch's result is always a Linux/WSL sessions path. Build it with
-        # explicit "/" rather than pathlib, which emits host-native separators
-        # (backslashes when Tokitty itself runs on Windows) -- mirroring the
-        # win32 branch above, which likewise concatenates its separators.
-        return base.rstrip("/") + "/tokitty/sessions", None
-
-    if sys.platform != "win32":
-        try:
-            from tokitty.hooks_install import get_config_dirs
-
-            config_dir = get_config_dirs()[0]
-        except Exception:
-            config_dir = str(Path.home() / ".claude")
-        return str(Path(config_dir) / "tokitty" / "sessions"), None
-
-    from tokitty.wsl_probe import find_wsl_credentials, wsl_sessions_dir_from_credentials
-
-    # `credentials` is the process-wide WslCredentialsCache when run_gui
-    # wired one up (issue #52). Falling back to the bare function keeps the
-    # tests that call this resolver directly working unchanged.
-    try:
-        if credentials is not None:
-            distro, wsl_credentials_path = credentials.single()
-        else:
-            distro, wsl_credentials_path = find_wsl_credentials()
-    except CredentialsError:
-        return None, None
-
-    sessions_dir = wsl_sessions_dir_from_credentials(distro, wsl_credentials_path)
-    return sessions_dir, distro
-
-
-def _config_root_from(config_dir: str):
-    """(root, distro_name) for an explicit config_dir, in the separator
-    style of whichever side will do the reading.
-
-    Shared by the sessions path and the projects path so the two can never
-    drift: a WSL UNC dir stays UNC on win32 (with the distro parsed out for
-    the running-distro check) and becomes its posix path on Linux.
-    """
-    from tokitty.accounts import parse_wsl_unc
-
-    unc = parse_wsl_unc(config_dir)
-    if sys.platform == "win32":
-        if unc is not None:
-            return config_dir.rstrip("\\/"), unc[0]
-        return str(Path(config_dir)), None
-    base = unc[1] if unc is not None else config_dir
-    return base.rstrip("/"), None
-
-
-def _join(root: str, *parts: str) -> str:
-    """Join in the separator style `root` is already written in.
-
-    pathlib would emit host-native separators, which turns a UNC root into
-    backslash-plus-forward-slash soup when tokitty runs on Linux against a
-    Windows-style path, and vice versa.
-    """
-    separator = "\\" if "\\" in root else "/"
-    return root + separator + separator.join(parts)
-
-
-def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
-    """(projects_dir, distro_name) for the transcript scanner.
-
-    Unlike resolve_activity_sessions, the no-config_dir fallback here must
-    NOT be credential-gated. An API-key user has a full billing ledger on
-    disk and no OAuth credentials anywhere, so a credentials probe reports
-    that they have no Claude Code install at all -- which would make the
-    per-model view permanently empty for exactly the people it exists for.
-    Credentials are still tried first, so a subscriber's resolution is
-    unchanged; the transcript probe is a fallback, not a replacement.
-    """
-    if config_dir:
-        root, distro = _config_root_from(config_dir)
-        return _join(root, "projects"), distro
-
-    if sys.platform != "win32":
-        try:
-            from tokitty.hooks_install import get_config_dirs
-
-            resolved = get_config_dirs()[0]
-        except Exception:
-            resolved = str(Path.home() / ".claude")
-        return str(Path(resolved) / "projects"), None
-
-    from tokitty.wsl_probe import (
-        find_all_wsl_claude_dirs,
-        find_wsl_credentials,
-        wsl_config_dir_from_credentials,
-    )
-
-    try:
-        if credentials is not None:
-            distro, wsl_credentials_path = credentials.single()
-        else:
-            distro, wsl_credentials_path = find_wsl_credentials()
-    except CredentialsError:
-        try:
-            matches = find_all_wsl_claude_dirs()
-        except CredentialsError:
-            matches = []
-        if len(matches) != 1:
-            # Zero means nothing to read; more than one is the ambiguity
-            # the Accounts dialog exists to resolve, and guessing would
-            # silently cost the wrong account.
-            return None, None
-        distro, posix_dir = matches[0]
-        unc = "\\\\wsl.localhost\\" + distro + "\\" + posix_dir.lstrip("/").replace("/", "\\")
-        return unc + "\\projects", distro
-
-    config_root = wsl_config_dir_from_credentials(distro, wsl_credentials_path)
-    return config_root.rstrip("\\/") + "\\projects", distro
-
-
 def debug_print() -> int:
     from tokitty.accounts import load_accounts
 
@@ -248,8 +68,15 @@ def debug_print() -> int:
         if account is not None:
             print(f"— {account.name} ({account.config_dir})")
         config_dir = account.config_dir if account else None
+        try:
+            provider = get_provider(account.provider if account else None)
+        except UnknownProviderError as exc:
+            print(f"provider: {exc}")
+            continue
+        if provider.kind != DEFAULT_KIND:
+            print(f"provider: {provider.display_name}")
 
-        result = build_fetch_fn(config_dir)()
+        result = provider.build_fetch_fn(config_dir)()
         print(f"status: {result.status}")
         if result.message:
             print(f"message: {result.message}")
@@ -262,7 +89,7 @@ def debug_print() -> int:
             if s.credits_used is not None and s.credits_limit is not None:
                 print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
 
-        projects_dir, projects_distro = resolve_projects_dir(config_dir)
+        projects_dir, projects_distro = provider.resolve_projects_dir(config_dir)
         if projects_dir:
             from tokitty.pricing import display_name
             from tokitty.settings import load_settings
@@ -282,7 +109,7 @@ def debug_print() -> int:
         else:
             print("usage: no transcripts found")
 
-        sessions_dir, distro_name = resolve_activity_sessions(config_dir)
+        sessions_dir, distro_name = provider.resolve_activity_sessions(config_dir)
         if sessions_dir is not None:
             watcher = ActivityWatcher(sessions_dir, ActivityTracker(), distro_name=distro_name)
             watcher._tick_once()  # one-shot snapshot; no background thread for a single debug print
@@ -302,6 +129,8 @@ _STALE_HINTS = {
     "ambiguous_credentials": "can't confirm, use Accounts…",
     "api_error": "can't confirm, API hiccup",
     "keychain_denied": "can't confirm, Keychain denied",
+    "source_unreachable": "can't confirm, no recent sessions",
+    STATUS_UNSUPPORTED: "no limits published",
 }
 
 # Unlike every other status, a Keychain denial cannot self-heal: once
@@ -411,6 +240,8 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
         "ambiguous_credentials": "multiple installs, use Accounts…",
         "api_error": "API hiccup, retrying",
         "keychain_denied": _KEYCHAIN_DENIED_HINT,
+        "source_unreachable": "no recent sessions found",
+        STATUS_UNSUPPORTED: "no limits published",
     }
     return {
         "state": "confused",
@@ -779,14 +610,26 @@ def run_gui() -> int:
     units = []
     for index, account in enumerate(accounts or [None]):
         config_dir = account.config_dir if account else None
+        try:
+            provider = get_provider(account.provider if account else None)
+        except UnknownProviderError as exc:
+            # A pane that polls the wrong harness is worse than a pane that
+            # says it can't: name the problem on stderr and give this one a
+            # provider that reports nothing.
+            print(f"tokitty: {exc}", file=sys.stderr)
+            provider = NULL_PROVIDER
         cred_loader = CredentialLoader()
-        poller = Poller(fetch_fn=build_fetch_fn(config_dir, loader=cred_loader))
-        sessions_dir, distro_name = resolve_activity_sessions(config_dir, credentials=wsl_credentials)
+        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader))
+        sessions_dir, distro_name = provider.resolve_activity_sessions(
+            config_dir, credentials=wsl_credentials
+        )
         watcher = ActivityWatcher(
             sessions_dir, ActivityTracker(), distro_name=distro_name,
             list_running_distros_fn=distro_probe.get_running,
         )
-        projects_dir, projects_distro = resolve_projects_dir(config_dir, credentials=wsl_credentials)
+        projects_dir, projects_distro = provider.resolve_projects_dir(
+            config_dir, credentials=wsl_credentials
+        )
         usage_watcher = UsageWatcher(
             projects_dir,
             distro_name=projects_distro,
@@ -803,6 +646,7 @@ def run_gui() -> int:
         pane.set_appearance(label=label)
 
         units.append({"pane": pane, "poller": poller, "watcher": watcher,
+                      "provider": provider,
                       "last_good": None, "key": key, "account": account,
                       "cred_loader": cred_loader, "burn": BurnTracker(),
                       "usage": usage_watcher})
