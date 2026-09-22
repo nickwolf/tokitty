@@ -34,6 +34,22 @@ STATUS_UNSUPPORTED = "rate_limits_unsupported"
 
 
 @dataclass(frozen=True)
+class LedgerSource:
+    """Where one account's token ledger is read from, and how.
+
+    The scanner is built by the provider rather than by the caller because
+    only the provider knows which reader fits. Claude Code keeps its ledger
+    in a projects tree of its own; Codex keeps it inside the rollouts that
+    also carry its rate limits. `root` is what gets shown to a person; `distro_name` gates the
+    scan on a running WSL distro exactly as the activity watcher's does.
+    """
+
+    root: str
+    distro_name: Optional[str]
+    make_scanner: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class ProviderCapabilities:
     rate_limits: bool = False
     token_ledger: bool = False
@@ -62,11 +78,11 @@ class Provider(Protocol):
         """(sessions_dir, distro_name) for the ActivityWatcher. (None, None)
         means run without activity; it is never an error."""
 
-    def resolve_projects_dir(
+    def resolve_ledger(
         self, config_dir: Optional[str] = None, credentials=None
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """(projects_dir, distro_name) for the transcript scanner. (None,
-        None) means run without a cost readout."""
+    ) -> Optional[LedgerSource]:
+        """The token ledger for the UsageWatcher. None means run without a
+        cost readout; it is never an error."""
 
 
 def unsupported_fetch_fn(display_name: str) -> Callable[[], PollResult]:
@@ -148,5 +164,5 @@ class NullProvider:
     def resolve_activity_sessions(self, config_dir: Optional[str] = None, credentials=None):
         return no_directory(config_dir, credentials)
 
-    def resolve_projects_dir(self, config_dir: Optional[str] = None, credentials=None):
-        return no_directory(config_dir, credentials)
+    def resolve_ledger(self, config_dir: Optional[str] = None, credentials=None):
+        return None

@@ -42,6 +42,7 @@ class UsageWatcher:
         list_running_distros_fn: Optional[Callable[[], list]] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
         sleep_fn: Optional[Callable[[float], bool]] = None,
+        scanner_factory: Optional[Callable[..., TranscriptScanner]] = None,
     ):
         self._projects_dir = projects_dir
         self._distro_name = distro_name
@@ -49,7 +50,11 @@ class UsageWatcher:
         self._interval = interval
         self._list_running_distros_fn = list_running_distros_fn or (lambda: [])
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        self._scanner = TranscriptScanner(projects_dir, now_fn=self._now_fn)
+        # A provider hands in its own reader (LedgerSource.make_scanner);
+        # the default is the Claude Code one, which every caller used
+        # before a second harness existed.
+        factory = scanner_factory or (lambda now_fn: TranscriptScanner(projects_dir, now_fn=now_fn))
+        self._scanner = factory(now_fn=self._now_fn)
         self._lock = threading.Lock()
         self._latest: Optional[UsageBreakdown] = None
         self._wake = threading.Event()

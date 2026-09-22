@@ -96,18 +96,17 @@ def debug_print() -> int:
             if s.credits_used is not None and s.credits_limit is not None:
                 print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
 
-        projects_dir, projects_distro = provider.resolve_projects_dir(config_dir)
-        if projects_dir:
+        ledger = provider.resolve_ledger(config_dir)
+        if ledger is not None:
             from tokitty.pricing import display_name
             from tokitty.settings import load_settings
             from tokitty.usage_display import format_money, format_tokens
-            from tokitty.usage_scan import TranscriptScanner
 
             window = load_settings(get_state_dir()).usage_window
-            scanner = TranscriptScanner(projects_dir)
+            scanner = ledger.make_scanner()
             status, failed_files, failed_rows = scanner.scan()
             usage = scanner.breakdown(window, status, failed_files, failed_rows)
-            print(f"usage ({usage.window}, scan {usage.status}): {projects_dir}")
+            print(f"usage ({usage.window}, scan {usage.status}): {ledger.root}")
             for row in usage.models:
                 cost = "--" if row.cost_usd is None else format_money(row.cost_usd)
                 print(f"  {display_name(row.model):<22} {format_tokens(row.total_tokens):>8} {cost:>10}")
@@ -661,14 +660,13 @@ def run_gui() -> int:
             sessions_dir, ActivityTracker(), distro_name=distro_name,
             list_running_distros_fn=distro_probe.get_running,
         )
-        projects_dir, projects_distro = provider.resolve_projects_dir(
-            config_dir, credentials=wsl_credentials
-        )
+        ledger = provider.resolve_ledger(config_dir, credentials=wsl_credentials)
         usage_watcher = UsageWatcher(
-            projects_dir,
-            distro_name=projects_distro,
+            ledger.root if ledger else None,
+            distro_name=ledger.distro_name if ledger else None,
             window=lambda: usage_state["window"],
             list_running_distros_fn=distro_probe.get_running,
+            scanner_factory=ledger.make_scanner if ledger else None,
         )
 
         key = customization_key(account)

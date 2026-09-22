@@ -88,7 +88,7 @@ def test_every_registered_provider_satisfies_the_protocol():
         provider = get_provider(kind)
         assert callable(provider.build_fetch_fn(None))
         assert provider.resolve_activity_sessions(None) is not None
-        assert provider.resolve_projects_dir(None) is not None
+        assert provider.resolve_ledger(None) is not None
         assert provider.display_name
 
 
@@ -96,7 +96,7 @@ def test_null_provider_reports_unsupported_without_raising():
     result = NULL_PROVIDER.build_fetch_fn("/anywhere")()
     assert result.status == STATUS_UNSUPPORTED
     assert result.snapshot is None
-    assert NULL_PROVIDER.resolve_projects_dir("/anywhere") == (None, None)
+    assert NULL_PROVIDER.resolve_ledger("/anywhere") is None
 
 
 def test_capabilities_declare_what_each_harness_can_do():

@@ -24,7 +24,7 @@ from tokitty.credentials import (
     resolve_credentials_source,
 )
 from tokitty.poller import PollResult
-from tokitty.providers.base import ProviderCapabilities, _config_root_from, _join
+from tokitty.providers.base import LedgerSource, ProviderCapabilities, _config_root_from, _join
 
 
 def build_fetch_fn(config_dir: Optional[str] = None, loader: Optional[CredentialLoader] = None):
@@ -197,5 +197,14 @@ class ClaudeProvider:
     def resolve_activity_sessions(self, config_dir: Optional[str] = None, credentials=None):
         return resolve_activity_sessions(config_dir, credentials=credentials)
 
-    def resolve_projects_dir(self, config_dir: Optional[str] = None, credentials=None):
-        return resolve_projects_dir(config_dir, credentials=credentials)
+    def resolve_ledger(self, config_dir: Optional[str] = None, credentials=None):
+        projects_dir, distro = resolve_projects_dir(config_dir, credentials=credentials)
+        if not projects_dir:
+            return None
+        from tokitty.usage_scan import TranscriptScanner
+
+        return LedgerSource(
+            root=projects_dir,
+            distro_name=distro,
+            make_scanner=lambda now_fn=None: TranscriptScanner(projects_dir, now_fn=now_fn),
+        )

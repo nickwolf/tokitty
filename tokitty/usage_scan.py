@@ -498,6 +498,12 @@ class TranscriptScanner:
         self._cursors: Dict[Path, _Cursor] = {}
         self._store: Dict[Path, Dict[str, Occurrence]] = {}
 
+    def _list_paths(self) -> List[Path]:
+        """Every transcript this scanner reads. Raises OSError when the
+        tree cannot be listed; returns [] only for a tree that is there
+        and empty."""
+        return sorted(self._projects_dir.glob("*/*.jsonl"))
+
     def scan(self) -> Tuple[str, int, int]:
         """One pass. Returns (status, failed_files, failed_rows)."""
         if self._projects_dir is None:
@@ -505,7 +511,7 @@ class TranscriptScanner:
         try:
             if not self._projects_dir.is_dir():
                 return STATUS_UNAVAILABLE, 0, 0
-            paths = sorted(self._projects_dir.glob("*/*.jsonl"))
+            paths = self._list_paths()
         except OSError:
             return STATUS_UNAVAILABLE, 0, 0
 
@@ -525,7 +531,7 @@ class TranscriptScanner:
             failed_rows += rows
 
         for gone in set(self._store) - seen:
-            self._store.pop(gone, None)
+            self._forget(gone)
             self._cursors.pop(gone, None)
 
         self._prune(keep_after)
@@ -549,7 +555,7 @@ class TranscriptScanner:
 
         resume = self._can_resume(path, cursor, stat_result)
         if not resume:
-            self._store.pop(path, None)
+            self._forget(path)
             cursor = _Cursor(
                 file_id=_file_id(stat_result),
                 size=0,
@@ -560,7 +566,6 @@ class TranscriptScanner:
             self._cursors[path] = cursor
 
         failed_rows = 0
-        bucket = self._store.setdefault(path, {})
         with open(path, "rb") as handle:
             handle.seek(cursor.offset)
             chunk = handle.read()
@@ -572,15 +577,8 @@ class TranscriptScanner:
         for raw in complete.split(b"\n"):
             if not raw.strip():
                 continue
-            occurrence, failed = classify_line(raw.decode("utf-8", errors="replace"))
-            if failed:
+            if self._ingest(path, raw.decode("utf-8", errors="replace")):
                 failed_rows += 1
-            if occurrence is None:
-                continue
-            # Last occurrence of a key wins, whole. Replacing the entry
-            # rather than merging is what drops iterations a correction
-            # removed.
-            bucket[occurrence.key] = occurrence
 
         # If the file moved under us mid-read, throw the cursor away rather
         # than trust a torn read; the next pass re-reads from zero.
@@ -598,6 +596,22 @@ class TranscriptScanner:
             tail_digest=self._tail_digest(path, new_offset),
         )
         return failed_rows
+
+    def _forget(self, path: Path) -> None:
+        """Drop everything held for one file, ahead of a full re-read or
+        because the file is gone."""
+        self._store.pop(path, None)
+
+    def _ingest(self, path: Path, line: str) -> bool:
+        """Take in one complete line. Returns True when the line looked
+        like a billing entry and could not be used."""
+        occurrence, failed = classify_line(line)
+        if occurrence is not None:
+            # Last occurrence of a key wins, whole. Replacing the entry
+            # rather than merging is what drops iterations a correction
+            # removed.
+            self._store.setdefault(path, {})[occurrence.key] = occurrence
+        return failed
 
     def _can_resume(self, path: Path, cursor: Optional[_Cursor], stat_result) -> bool:
         if cursor is None:

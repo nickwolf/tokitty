@@ -79,9 +79,40 @@ def test_display_name_passes_synthetic_ids_through():
     assert display_name("<advisor-unknown>") == "<advisor-unknown>"
 
 
-def test_every_known_id_is_a_claude_model():
+def test_every_known_id_is_a_claude_or_openai_model():
     """Guards against a typo'd key silently becoming an unreachable row."""
-    assert all(model.startswith("claude-") for model in PRICES)
+    assert all(model.startswith(("claude-", "gpt-")) for model in PRICES)
+
+
+def test_codex_internal_models_are_never_priced():
+    """Neither is on OpenAI's pricing page. codex-auto-review is half of
+    all measured Codex tokens, so a guessed rate there would be most of
+    the readout."""
+    assert price_for("codex-auto-review") is None
+    assert price_for("gpt-5.3-codex-spark") is None
+
+
+def test_openai_rows_are_dated():
+    from tokitty.pricing import OPENAI_PRICES_AS_OF
+
+    assert OPENAI_PRICES_AS_OF == "2026-09-22"
+
+
+def test_long_context_row_exists_only_where_published():
+    from tokitty.pricing import LONG_CONTEXT_SUFFIX
+
+    assert price_for("gpt-5.6-sol" + LONG_CONTEXT_SUFFIX) is not None
+    # gpt-5.5 and gpt-5.4 are published for short context only.
+    assert price_for("gpt-5.5" + LONG_CONTEXT_SUFFIX) is None
+    assert price_for("gpt-5.4" + LONG_CONTEXT_SUFFIX) is None
+
+
+def test_tokens_in_a_class_with_no_published_rate_make_the_cost_unknown():
+    """gpt-5.5 publishes no cache-write rate. Pricing the other classes
+    and dropping the writes would look complete and not be."""
+    gpt55 = PRICES["gpt-5.5"]
+    assert cost_usd(gpt55, 1_000_000, 0, 0, 0, 0) == pytest.approx(5.0)
+    assert cost_usd(gpt55, 1_000_000, 0, 0, 1, 0) is None
 
 
 def test_display_name_drops_a_dated_snapshot_suffix():

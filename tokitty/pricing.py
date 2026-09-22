@@ -7,8 +7,8 @@ cache write 2x) do not hold universally -- Claude Fable 5.1 reads cache at
 a flat $0.25/MTok against $10 input, which is 0.025x, not 0.1x -- so a
 table of multipliers would silently misprice it while looking correct.
 
-These are Anthropic first-party API rates as published on 2026-09-08.
-They will go stale. The test suite deliberately does NOT assert that any
+The Claude rows are Anthropic first-party API rates as published on
+2026-09-08; the OpenAI rows are dated separately below. Both will go stale. The test suite deliberately does NOT assert that any
 price is current, because no offline test can know that; it asserts the
 lookup rules and the set of ids the app knows about.
 """
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, FrozenSet, Optional
 
 MTOK = 1_000_000
 
@@ -28,13 +28,18 @@ _SNAPSHOT_SUFFIX = re.compile(r"-\d{8}$")
 
 @dataclass(frozen=True)
 class ModelPrice:
-    """US dollars per million tokens, per token class."""
+    """US dollars per million tokens, per token class.
+
+    A None rate means the source publishes no price for that class. The
+    row still prices every other class; see cost_usd for what happens when
+    tokens actually land in the unpublished one.
+    """
 
     input_per_mtok: float
     output_per_mtok: float
     cache_read_per_mtok: float
-    cache_write_5m_per_mtok: float
-    cache_write_1h_per_mtok: float
+    cache_write_5m_per_mtok: Optional[float]
+    cache_write_1h_per_mtok: Optional[float]
 
 
 def _standard(input_per_mtok: float, output_per_mtok: float) -> ModelPrice:
@@ -64,6 +69,49 @@ PRICES: Dict[str, ModelPrice] = {
     "claude-sonnet-4-6": _standard(3.0, 15.0),
     "claude-haiku-4-5": _standard(1.0, 5.0),
 }
+
+# OpenAI standard-tier rates, read off the pricing tables at
+# https://developers.openai.com/api/docs/pricing on this date. Rows are
+# ModelPrice(input, output, cached input, cache write, None): OpenAI has one
+# cache-write rate, which the Codex ledger carries in the 5m slot, and no
+# 1h tier at all. A "-" on the page is None here, never a derived number.
+#
+# Only models seen in real Codex rollouts are listed. Deliberately absent:
+# codex-auto-review (the automatic review pass, not on the page) and
+# gpt-5.3-codex-spark (not on the page either). Both keep their tokens and
+# show "--" for cost.
+#
+# Not modelled: Fast mode (formerly Priority) bills 2x, Batch and Flex 0.5x,
+# and nothing in a rollout says which tier a turn ran on, so standard is
+# the only rate that can be applied without guessing. The page also notes
+# gpt-5.6-sol and gpt-6-astra are on promotional pricing "at least through
+# November 21, 2026".
+OPENAI_PRICES_AS_OF = "2026-09-22"
+
+# Requests above this many input tokens are billed at a separate long-
+# context rate by the models in CONTEXT_TIERED_MODELS.
+LONG_CONTEXT_THRESHOLD = 272_000
+
+# Suffix the Codex ledger appends to a context-tiered model's id for a
+# request over the threshold, so it lands on its own price row. A model
+# with no long-context row published stays unpriced over the threshold
+# rather than being charged the short-context rate.
+LONG_CONTEXT_SUFFIX = " >272K"
+
+CONTEXT_TIERED_MODELS: FrozenSet[str] = frozenset({"gpt-5.6-sol", "gpt-5.5", "gpt-5.4"})
+
+PRICES.update(
+    {
+        "gpt-6-astra": ModelPrice(10.0, 50.0, 1.0, 12.5, None),
+        "gpt-5.6-sol": ModelPrice(4.0, 20.0, 0.4, 5.0, None),
+        "gpt-5.6-sol" + LONG_CONTEXT_SUFFIX: ModelPrice(8.0, 30.0, 0.8, 10.0, None),
+        "gpt-5.6-terra": ModelPrice(2.0, 12.0, 0.2, 2.5, None),
+        "gpt-5.6-luna": ModelPrice(0.2, 1.2, 0.02, 0.25, None),
+        # Published for short context only, with no cache-write rate.
+        "gpt-5.5": ModelPrice(5.0, 30.0, 0.5, None, None),
+        "gpt-5.4": ModelPrice(2.5, 15.0, 0.25, None, None),
+    }
+)
 
 # Models the scanner synthesizes rather than reads from the wire. They are
 # never billed and must never reach the pricing table or the display.
@@ -106,16 +154,28 @@ def cost_usd(
     cache_write_5m_tokens: int,
     cache_write_1h_tokens: int,
 ) -> Optional[float]:
-    """Dollar cost for one model's token counts, or None when unpriced."""
+    """Dollar cost for one model's token counts, or None when unpriced.
+
+    Also None when tokens landed in a class the row has no rate for:
+    pricing the rest and silently dropping those would print a complete-
+    looking number with a hole in it.
+    """
     if price is None:
         return None
-    return (
-        input_tokens * price.input_per_mtok
-        + output_tokens * price.output_per_mtok
-        + cache_read_tokens * price.cache_read_per_mtok
-        + cache_write_5m_tokens * price.cache_write_5m_per_mtok
-        + cache_write_1h_tokens * price.cache_write_1h_per_mtok
-    ) / MTOK
+    total = 0.0
+    for tokens, rate in (
+        (input_tokens, price.input_per_mtok),
+        (output_tokens, price.output_per_mtok),
+        (cache_read_tokens, price.cache_read_per_mtok),
+        (cache_write_5m_tokens, price.cache_write_5m_per_mtok),
+        (cache_write_1h_tokens, price.cache_write_1h_per_mtok),
+    ):
+        if not tokens:
+            continue
+        if rate is None:
+            return None
+        total += tokens * rate
+    return total / MTOK
 
 
 def display_name(model_id: str) -> str:

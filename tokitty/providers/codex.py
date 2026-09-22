@@ -38,7 +38,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.poller import PollResult
-from tokitty.providers.base import ProviderCapabilities, _config_root_from, _join, no_directory
+from tokitty.providers.base import LedgerSource, ProviderCapabilities, _config_root_from, _join, no_directory
 
 CODEX_DIRNAME = ".codex"
 SESSIONS_SUBDIR = "sessions"
@@ -76,6 +76,14 @@ def sessions_dir_for(config_dir: Optional[str]) -> Tuple[Optional[str], Optional
         return str(Path(default_codex_home()) / SESSIONS_SUBDIR), None
     root, distro = _config_root_from(config_dir)
     return _join(root, SESSIONS_SUBDIR), distro
+
+
+def codex_home_for(config_dir: Optional[str]) -> Tuple[str, Optional[str]]:
+    """(codex_home, distro_name), in the separator style the dir is
+    already written in."""
+    if not config_dir:
+        return default_codex_home(), None
+    return _config_root_from(config_dir)
 
 
 def kind_for_window(window_minutes: Optional[int], fallback: str) -> str:
@@ -306,9 +314,15 @@ class CodexProvider:
     def resolve_activity_sessions(self, config_dir: Optional[str] = None, credentials=None):
         return no_directory(config_dir, credentials)
 
-    def resolve_projects_dir(self, config_dir: Optional[str] = None, credentials=None):
-        # Codex's token ledger lives in the same rollouts as its rate
-        # limits, not in a separate projects tree. Wiring that into a
-        # scanner is its own change; until then the pane shows bars
-        # without a cost readout rather than a wrong one.
-        return no_directory(config_dir, credentials)
+    def resolve_ledger(self, config_dir: Optional[str] = None, credentials=None):
+        # The ledger is the same rollouts the rate limits come from, read
+        # whole rather than tailed, plus archived_sessions/. codex_ledger
+        # says why both trees.
+        from tokitty.providers.codex_ledger import CodexLedgerScanner
+
+        home, distro = codex_home_for(config_dir)
+        return LedgerSource(
+            root=home,
+            distro_name=distro,
+            make_scanner=lambda now_fn=None: CodexLedgerScanner(home, now_fn=now_fn),
+        )

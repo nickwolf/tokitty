@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
-from tokitty.providers.base import NullProvider, Provider, ProviderCapabilities, STATUS_UNSUPPORTED
+from tokitty.providers.base import LedgerSource, NullProvider, Provider, ProviderCapabilities, STATUS_UNSUPPORTED
 from tokitty.providers.claude import ClaudeProvider
 from tokitty.providers.codex import CodexProvider
 
@@ -46,6 +46,7 @@ def get_provider(kind: str = DEFAULT_KIND) -> Provider:
 
 __all__ = [
     "DEFAULT_KIND",
+    "LedgerSource",
     "NULL_PROVIDER",
     "NullProvider",
     "STATUS_UNSUPPORTED",

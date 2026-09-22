@@ -1,6 +1,6 @@
 # Codex per-model token ledger
 
-Status: measured, not built, 2026-09-22. The provider seam (`eb0d16f`) and the pane display rules (`a7c3cde`) are in on `provider-seam`; `CodexProvider.resolve_projects_dir` currently returns `(None, None)` so the Per-model view is empty for a Codex pane. This document is the measurement that should precede writing the scanner.
+Status: built 2026-09-22 in `tokitty/providers/codex_ledger.py`. `CodexProvider.resolve_ledger` hands the UsageWatcher a `CodexLedgerScanner`, a subclass of the Claude `TranscriptScanner` that reuses its byte offsets and tail digests. The measurement below came first; the section after it records what building against the real files turned up that the measurement missed.
 
 ## Why the Claude scanner cannot be pointed at it
 
@@ -66,9 +66,23 @@ Two consequences. `codex-auto-review` is an internal name for the automatic revi
 
 Neither is a substitute for summing `usage`: both are cumulative, and summing a cumulative field over records squares the bill.
 
+## What building it found
+
+Three more properties, all checked against the same install on 2026-09-22, now across 329 rollout files in `sessions/` plus 164 in `archived_sessions/`.
+
+**Archived rollouts are real spend.** Archiving a thread moves its file to `archived_sessions/` (flat, no date folders). That directory held 2,538 `token_usage_record` events, the newest file modified on 2026-09-21, so a scanner reading only `sessions/` would drop recent spend the moment a thread is archived. No filename and no `response_id` appeared in both directories. The scanner reads both, and dedupes on `response_id` across files anyway, because a scan that lands mid-move would otherwise see one file under two paths.
+
+**The 3 unattributed records were not unattributed.** Each one's `turn_context` is in the same file, written after it. They are compaction records: the `compacted` record is emitted before the `turn_context` of the turn it opens (in one case 44 seconds after `task_started` and 0.07 seconds before the `turn_context`). An in-order join misses them. The scanner stores records with their `turn_id` and resolves the model when the breakdown is built, which also covers a `turn_context` that only arrives in a later incremental read. With that, every record in the current data joins.
+
+**`thread_token_usage` does not always start at zero.** The cross-check from finding 5 holds on 115 of 117 files with records. The two that fail are guardian sub-agent threads (`source.subagent.other == "guardian"`) forked from a parent, whose first `thread_token_usage` is the parent's running total plus the first call. Their `response_id`s are unique, so summing `usage` is still right; the cross-check just cannot be used on forked threads.
+
+**Pricing, as fetched.** Standard-tier rates from https://developers.openai.com/api/docs/pricing on 2026-09-22, stamped as `OPENAI_PRICES_AS_OF` in `pricing.py`, per million tokens (input / cached input / cache write / output): `gpt-6-astra` 10 / 1 / 12.5 / 50, `gpt-5.6-sol` 4 / 0.4 / 5 / 20, `gpt-5.6-terra` 2 / 0.2 / 2.5 / 12, `gpt-5.6-luna` 0.2 / 0.02 / 0.25 / 1.2, `gpt-5.5` 5 / 0.5 / none / 30, `gpt-5.4` 2.5 / 0.25 / none / 15. The page adds three things the table has to respect. `gpt-5.6-sol` has a separate long-context row for requests over 272K input tokens (8 / 0.8 / 10 / 30), and `gpt-5.5` and `gpt-5.4` are priced for under 272K only, so a request over the threshold is priced on the long row for Sol and left unpriced for the other two; no record in the current data crosses it. The cache-write column's tooltip says "Input tokens are either Input, Cached Input, or Cache Write", so uncached input is `input_tokens - cached_input_tokens - cache_write_input_tokens`. And Fast mode (renamed from Priority on 2026-07-30) bills at 2x, Batch and Flex at 0.5x, while no field in `turn_context` names the service tier, so standard is applied to everything. Sol and Astra are on promotional pricing "at least through November 21, 2026". `codex-auto-review` and `gpt-5.3-codex-spark` are not on the page and have no price.
+
+Read end to end with `--debug-print` over the 7d window: 603.2M tokens, of which `codex-auto-review` is 144.3M and unpriced, and `>= $253.72` at API rates for the rest. An independent script summing `token_usage_record.usage.total_tokens` by `response_id` over the same window came to 603.3M, with the per-model split matching to 0.1M.
+
 ## Open decisions
 
-**Prices are not in this document on purpose.** `gpt-5.6-sol`, `gpt-5.6-luna`, and `gpt-6-astra` postdate this session's model knowledge, and `pricing.py` already carries a dated table that goes stale silently; adding a second table sourced from memory would make a wrong number look measured. Fetch the rates from the live pricing page when the scanner is written, stamp them with the date, and leave any model whose rate cannot be sourced without a price. A row with real tokens and `--` for cost is correct; an invented rate is not.
+**Resolved 2026-09-22, see Pricing above.** The original note, kept for why the table is dated: **prices were not in this document on purpose.** `gpt-5.6-sol`, `gpt-5.6-luna`, and `gpt-6-astra` postdate this session's model knowledge, and `pricing.py` already carries a dated table that goes stale silently; adding a second table sourced from memory would make a wrong number look measured. Fetch the rates from the live pricing page when the scanner is written, stamp them with the date, and leave any model whose rate cannot be sourced without a price. A row with real tokens and `--` for cost is correct; an invented rate is not.
 
 **Whether `codex-auto-review` is billed to the user at all** is unknown. It runs automatically and is 49% of tokens, so if it is not separately billed the honest readout may be to show it with no price rather than to price it as a model.
 
