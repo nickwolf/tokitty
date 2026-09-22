@@ -13,6 +13,7 @@ from tokitty.display import format_observed_at, format_pane_label, resolve_statu
 from tokitty.poller import PollResult
 from tokitty.providers import (
     DEFAULT_KIND,
+    LedgerSource,
     NULL_PROVIDER,
     STATUS_UNSUPPORTED,
     UnknownProviderError,
@@ -92,7 +93,10 @@ def test_every_registered_provider_satisfies_the_protocol():
         provider = get_provider(kind)
         assert callable(provider.build_fetch_fn(None))
         assert provider.resolve_activity_sessions(None) is not None
-        assert provider.resolve_ledger(None) is not None
+        # None is a valid answer ("no ledger here"), e.g. Claude on a
+        # Windows machine with no WSL install; it just must not raise.
+        ledger = provider.resolve_ledger(None)
+        assert ledger is None or isinstance(ledger, LedgerSource)
         assert provider.display_name
 
 
