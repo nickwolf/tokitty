@@ -23,7 +23,7 @@ Once Tokitty has a snapshot, it keeps counting down using its own clock, no live
 
 There is a burn-rate projection too. When your current pace would hit a cap before the window resets, the status line says when: `session caps ~6:20 PM`. It tracks whichever limit lands first, and stays blank when you are coasting.
 
-**Not affiliated with Anthropic (but I am open to it, *wink wink*) or with OpenAI.** "Claude" and "Claude Code" are Anthropic's marks, and "Codex" and "OpenAI" are OpenAI's, used here only to describe compatibility.
+**Not affiliated with Anthropic or OpenAI (but I am open to it with either, *wink wink*).** "Claude" and "Claude Code" are Anthropic's marks, and "Codex" and "OpenAI" are OpenAI's, used here only to describe compatibility.
 
 ## Live activity (thinking / working / permission / done)
 
