@@ -434,6 +434,7 @@ class Pane:
         credits_text: Optional[str],
         hint_text: Optional[str],
         dimmed: bool,
+        stale_text: Optional[str] = None,
         tool_label: str = "",
         accent: bool = False,
         projection_text: Optional[str] = None,
@@ -472,7 +473,9 @@ class Pane:
         )
         self.weekly_reset_label.configure(text=f"{weekly_pct:.0f}% · {weekly_reset_text}")
 
-        self.status_label.configure(text=resolve_status_text(hint_text, credits_text, projection_text))
+        self.status_label.configure(
+            text=resolve_status_text(hint_text, credits_text, projection_text, stale_text)
+        )
 
         if self.on_accent_changed is not None:
             self.on_accent_changed()

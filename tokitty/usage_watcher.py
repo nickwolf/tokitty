@@ -42,6 +42,7 @@ class UsageWatcher:
         list_running_distros_fn: Optional[Callable[[], list]] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
         sleep_fn: Optional[Callable[[float], bool]] = None,
+        scanner_factory: Optional[Callable[..., TranscriptScanner]] = None,
     ):
         self._projects_dir = projects_dir
         self._distro_name = distro_name
@@ -49,7 +50,11 @@ class UsageWatcher:
         self._interval = interval
         self._list_running_distros_fn = list_running_distros_fn or (lambda: [])
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        self._scanner = TranscriptScanner(projects_dir, now_fn=self._now_fn)
+        # A provider hands in its own reader (LedgerSource.make_scanner);
+        # the default is the Claude Code one, which every caller used
+        # before a second harness existed.
+        factory = scanner_factory or (lambda now_fn: TranscriptScanner(projects_dir, now_fn=now_fn))
+        self._scanner = factory(now_fn=self._now_fn)
         self._lock = threading.Lock()
         self._latest: Optional[UsageBreakdown] = None
         self._wake = threading.Event()
@@ -81,9 +86,14 @@ class UsageWatcher:
             previous = self._latest
         if previous is None:
             return None
-        snapshot = self._scanner.breakdown(
-            self._window(), previous.status, previous.failed_files, previous.failed_rows
-        )
+        try:
+            snapshot = self._scanner.breakdown(
+                self._window(), previous.status, previous.failed_files, previous.failed_rows
+            )
+        except Exception:
+            # Runs on the Tk thread; pricing can raise here as well as in
+            # the scan, and a window switch must not take the UI down.
+            snapshot = self._unavailable()
         self._publish(snapshot)
         return snapshot
 
@@ -126,12 +136,14 @@ class UsageWatcher:
 
         try:
             status, failed_files, failed_rows = self._scanner.scan()
+            # Inside the guard too: building the breakdown prices every
+            # row, and a price table that fails to load must cost the
+            # pane its readout, not its worker thread.
+            snapshot = self._scanner.breakdown(self._window(), status, failed_files, failed_rows)
         except Exception:
             # A scan must never take the thread down: a dead worker means a
             # pane frozen on a stale snapshot with nothing to explain it.
             self._publish(self._unavailable())
             return
 
-        self._publish(
-            self._scanner.breakdown(self._window(), status, failed_files, failed_rows)
-        )
+        self._publish(snapshot)

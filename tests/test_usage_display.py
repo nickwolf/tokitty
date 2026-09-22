@@ -163,3 +163,25 @@ def test_format_tokens():
     assert format_tokens(12_400_000) == "12.4M"
     assert format_tokens(3_100) == "3.1K"
     assert format_tokens(42) == "42"
+
+
+def test_status_line_says_when_the_rates_behind_it_are_old():
+    from datetime import timedelta
+
+    from tokitty.pricing import price_as_of
+
+    as_of = price_as_of("claude-opus-5")
+    row = ModelUsage("claude-opus-5", 1_000_000, 0, 0, 0, 0, 5.0)
+    fresh = UsageBreakdown(STATUS_OK, "7d", NOW, models=(row,), total_cost_usd=5.0, total_tokens=1_000_000,
+                           scanned_at=datetime.combine(as_of, datetime.min.time(), timezone.utc) + timedelta(days=30))
+    stale = UsageBreakdown(STATUS_OK, "7d", NOW, models=(row,), total_cost_usd=5.0, total_tokens=1_000_000,
+                           scanned_at=datetime.combine(as_of, datetime.min.time(), timezone.utc) + timedelta(days=61))
+    assert build_view(fresh).status_text.endswith(" at API rates")
+    assert build_view(stale).status_text.endswith(" at old API rates")
+
+
+def test_an_unpriced_row_never_makes_the_rates_look_old():
+    row = ModelUsage("codex-auto-review", 1_000, 0, 0, 0, 0, None)
+    breakdown = UsageBreakdown(STATUS_OK, "7d", NOW, models=(row,), total_tokens=1_000,
+                               unpriced_models=("codex-auto-review",), scanned_at=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    assert "old" not in build_view(breakdown).status_text

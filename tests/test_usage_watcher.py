@@ -129,3 +129,16 @@ def test_snapshot_held_across_a_rescan_is_not_mutated(tmp_path):
 
     assert held.total_tokens == 30
     assert watcher.get_latest().total_tokens == 1009
+
+
+def test_a_pricing_failure_costs_the_readout_not_the_worker(tmp_path, monkeypatch):
+    from tokitty import pricing
+
+    def broken():
+        raise pricing.PriceFileError("packaged prices.json: bad")
+
+    monkeypatch.setattr(pricing, "table", broken)
+    watcher = make(transcript(tmp_path))
+    watcher._tick_once()
+    assert watcher.get_latest().status == STATUS_UNAVAILABLE
+    assert watcher.rebuild_for_window().status == STATUS_UNAVAILABLE

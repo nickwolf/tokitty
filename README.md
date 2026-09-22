@@ -17,13 +17,13 @@
   <a href="https://github.com/nickwolf/tokitty/actions/workflows/ci.yml"><img src="https://github.com/nickwolf/tokitty/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-A cat-themed desktop widget that shows your live Claude Code usage (session %, weekly %, reset countdowns, and extra-usage credits) with a pixel cat whose mood reflects how close you are to the limit. When a limit is capped, the cat rests, then stirs, then wakes up as the reset approaches, then hops back to sleep once usage clears. Does not assist with boredom and existential dread upon hitting weekly limit.
+A cat-themed desktop widget that shows your live Claude Code and Codex usage (session %, weekly %, reset countdowns, and extra-usage credits) with a pixel cat whose mood reflects how close you are to the limit. When a limit is capped, the cat rests, then stirs, then wakes up as the reset approaches, then hops back to sleep once usage clears. Does not assist with boredom and existential dread upon hitting weekly limit.
 
 Once Tokitty has a snapshot, it keeps counting down using its own clock, no live connection needed to know when a known reset time arrives. If a poll fails (for example, the OAuth access token going stale between Claude Code sessions), Tokitty keeps showing that same cached countdown rather than blanking out, and only surfaces a small warning once the countdown should already be done and it still can't confirm the reset actually happened.
 
 There is a burn-rate projection too. When your current pace would hit a cap before the window resets, the status line says when: `session caps ~6:20 PM`. It tracks whichever limit lands first, and stays blank when you are coasting.
 
-**Not affiliated with Anthropic (but I am open to it, *wink wink*).** "Claude" and "Claude Code" are Anthropic's marks, used here only to describe compatibility.
+**Not affiliated with Anthropic or OpenAI (but I am open to it with either, *wink wink*).** "Claude" and "Claude Code" are Anthropic's marks, and "Codex" and "OpenAI" are OpenAI's, used here only to describe compatibility.
 
 ## Live activity (thinking / working / permission / done)
 
@@ -77,9 +77,39 @@ Set a budget from **Set budget…** and the bars change meaning: instead of each
 
 Two details worth knowing, because both make the totals differ from a naive reading of the same files. A turn that made several API calls records each one separately, and the top-level total for that turn leaves out advisor calls, so tokitty adds up the individual calls and bills advisor calls against the model that actually ran them. The same message also gets rewritten several times inside one transcript, 4,037 of 5,817 entries on the machine this was built on, so only the last copy of each is counted.
 
-Prices are a table baked into `tokitty/pricing.py`, current as of 2026-09-08. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete.
+Prices live in `tokitty/prices.json`, one section per provider, each stamped with the pricing page it came from and the date it was read. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete. Once any rate on screen is more than 60 days old, the status line says "at old API rates" instead of "at API rates".
+
+To price a model before the next release, put a `prices.json` of the same shape in Tokitty's state directory (`%LOCALAPPDATA%\Tokitty`, `~/Library/Application Support/Tokitty`, or `~/.config/tokitty`). Its models replace the packaged ones entry by entry. An entry that only gives rates keeps the packaged long-context pricing for that model; set `"short_context_only": false` to make a model flat on purpose. A malformed override is ignored with a warning on stderr and in `--debug-print`, and the packaged prices stay in effect.
+
+```json
+{"schema": 1, "providers": {"mine": {"as_of": "2026-09-23", "models": {
+  "gpt-7": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write_5m": 2.5, "cache_write_1h": null}
+}}}}
+```
+
+`python3 scripts/refresh_prices.py` rewrites the packaged file from the live Anthropic and OpenAI pricing pages and prints what was added, changed, and kept; `--check` only reports. It refuses to write if a page's columns no longer line up with its rates.
 
 `python -m tokitty --debug-print` prints the same breakdown per account as text, which is the first thing to look at if a number looks wrong.
+
+## Codex
+
+A pane can track an OpenAI Codex account instead of a Claude Code one. It gets the same limit bars (whichever windows your plan has) and the same Per-model view, both read from the rollout files Codex writes under `<codex-home>/sessions/` and `archived_sessions/`. Nothing is fetched and no credentials are read, so a Codex pane works offline.
+
+For now a Codex account is added by editing `accounts.json` by hand; the Accounts dialog only adds Claude Code accounts so far. Add an entry with `"provider": "codex"` and `config_dir` pointing at the Codex home (`C:\Users\<you>\.codex` on Windows, `~/.codex` elsewhere):
+
+```json
+{"name": "codex", "config_dir": "C:\\Users\\you\\.codex", "provider": "codex"}
+```
+
+Entries without a `provider` key are Claude Code accounts, so existing files keep working unchanged. An entry naming a provider this build doesn't know gets a pane that says so instead of numbers. When a window holds more than one harness, each pane's label gets a tag like `codex·nibbles` so you can tell them apart.
+
+A few things behave differently from a Claude Code pane:
+
+- Codex only records its rate limits when it takes a turn, so between sessions the bars are a snapshot. Past 10 minutes old, the status line says when it was taken ("as of 4:12 PM"), and the countdowns keep running on tokitty's own clock as usual.
+- There are no thinking or working poses, because Codex has no hook for tokitty to listen to.
+- Costs use OpenAI's standard-tier API rates. Fast mode bills double and Batch and Flex half, but the rollouts don't say which tier a turn ran on.
+- `codex-auto-review`, the automatic review pass, isn't on OpenAI's pricing page. Its tokens are counted and shown, but its cost reads `--` and the total is marked `>=`.
+- Requests to models that OpenAI prices by context length (currently `gpt-5.6-sol`, `gpt-5.5`, and `gpt-5.4` over 272K input tokens) are costed separately, and show up as a `long` row where a long-context rate is published.
 
 ## Customization
 
@@ -128,6 +158,8 @@ On macOS the credentials are read from the login Keychain instead of a file. Tok
 Choosing **Allow** instead of **Always Allow** grants a single read, and while the token stays valid tokitty's cache means that's roughly one prompt per token lifetime. But the cache is invalidated the moment the token expires, deliberately, since that's how tokitty notices Claude Code has refreshed it. So once nothing is refreshing the token (the idle-account resting look above, e.g. outside work hours), every retry on the 30s to 600s backoff is a cache miss and re-prompts: on the order of fifty prompts overnight, not one. If you leave tokitty running unattended, use **Always Allow**.
 
 The per-model view reads more than the credentials file: it opens the `.jsonl` transcripts under `<config-dir>/projects/` to count tokens. It reads only each entry's `usage` numbers, model id, and timestamp. Prompt text, tool arguments, tool output, and file contents are never read out of those files, never persisted, and never transmitted; the totals are computed in memory and drawn on the pane. Nothing about this view contacts the network at all, which is the point of it. Your budget figures live in `settings.json` alongside the other app-wide settings.
+
+A Codex account (see [Codex](#codex)) is read-only in the same way and narrower: tokitty reads the rollout files under that Codex home's `sessions/` and `archived_sessions/`, never its `auth.json` or any other credentials, writes nothing there, and makes no network request for it.
 
 Multi-account mode (above) extends this picture the same way single-account mode already worked, just once per configured account: tokitty reads OAuth credentials and (if hooks are installed) hook/session state from each account's Claude Code config dir. Nothing about what's read, persisted, or transmitted changes. It's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains an identity slug and a config-dir path per account, both assigned by the Accounts dialog, not typed in by hand.
 
@@ -184,6 +216,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 ## Known limitations (POC)
 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
+- Codex support reads Codex's rollout files, an internal format with no compatibility promise. The rules it relies on were measured against Codex CLI 0.147.0 and 0.155.0-alpha.9, and are written up in `docs/superpowers/specs/2026-09-22-codex-token-ledger-design.md`.
 - Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run: `python3-tk` isn't installed in the reference dev environment.
 - Sprite art is composed from three reusable 28x26 pose templates (sitting calm, sitting alert, lying down) with per-state substitutions, not a fully independent illustration per state.
 

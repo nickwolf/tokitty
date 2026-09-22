@@ -1,7 +1,7 @@
 [project]
 name = "tokitty"
 version = "0.1.0"
-description = "A cat-themed desktop widget for tracking Claude Code usage limits"
+description = "A cat-themed desktop widget for tracking Claude Code and Codex usage limits"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -19,6 +19,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["tokitty*"]
+
+[tool.setuptools.package-data]
+tokitty = ["prices.json"]
 
 [tool.pytest.ini_options]
 # The `gui` marker guards tests that need a real Tk display (run under xvfb in

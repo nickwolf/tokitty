@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
-from tokitty.pricing import display_name
+from tokitty.pricing import STALE_AFTER_DAYS, display_name, price_as_of
 from tokitty.usage_scan import (
     STATUS_OK,
     STATUS_PARTIAL,
@@ -105,6 +105,20 @@ def fold(models: Sequence[ModelUsage], readout: str) -> List[Tuple[str, float, s
     return rows
 
 
+def prices_are_stale(breakdown: UsageBreakdown) -> bool:
+    """Whether any priced row on screen rests on a rate read more than
+    STALE_AFTER_DAYS before the scan. Judged per model, since the two
+    providers' sections are refreshed independently."""
+    today = breakdown.scanned_at.date()
+    for model in breakdown.models:
+        if model.cost_usd is None:
+            continue
+        as_of = price_as_of(model.model)
+        if as_of is not None and (today - as_of).days > STALE_AFTER_DAYS:
+            return True
+    return False
+
+
 def _status_text(
     breakdown: UsageBreakdown, readout: str, budget: Optional[float], total_pct: Optional[float]
 ) -> str:
@@ -128,7 +142,8 @@ def _status_text(
         # "at API rates" is dropped first when the line has to shrink: a
         # subscriber's tokens do not cost them this, but the figure itself
         # is never the part that gets cut.
-        body = f"{label} · {prefix}{format_money(breakdown.total_cost_usd)} at API rates"
+        rates = "at old API rates" if prices_are_stale(breakdown) else "at API rates"
+        body = f"{label} · {prefix}{format_money(breakdown.total_cost_usd)} {rates}"
 
     if breakdown.status == STATUS_PARTIAL:
         return f"{body} · partial"
