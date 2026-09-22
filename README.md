@@ -79,7 +79,7 @@ Two details worth knowing, because both make the totals differ from a naive read
 
 Prices live in `tokitty/prices.json`, one section per provider, each stamped with the pricing page it came from and the date it was read. A model that isn't in it still has its tokens counted and shown, but its cost reads `--` and the total is marked `>=` rather than quietly pretending to be complete. Once any rate on screen is more than 60 days old, the status line says "at old API rates" instead of "at API rates".
 
-To price a model before the next release, put a `prices.json` of the same shape in Tokitty's state directory (`%LOCALAPPDATA%\Tokitty`, `~/Library/Application Support/Tokitty`, or `~/.config/tokitty`). Its models replace the packaged ones entry by entry. A malformed override is ignored with a warning on stderr and in `--debug-print`, and the packaged prices stay in effect.
+To price a model before the next release, put a `prices.json` of the same shape in Tokitty's state directory (`%LOCALAPPDATA%\Tokitty`, `~/Library/Application Support/Tokitty`, or `~/.config/tokitty`). Its models replace the packaged ones entry by entry. An entry that only gives rates keeps the packaged long-context pricing for that model; set `"short_context_only": false` to make a model flat on purpose. A malformed override is ignored with a warning on stderr and in `--debug-print`, and the packaged prices stay in effect.
 
 ```json
 {"schema": 1, "providers": {"mine": {"as_of": "2026-09-23", "models": {

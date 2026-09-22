@@ -217,3 +217,39 @@ def test_unparseable_override_json_falls_back_to_packaged(tmp_path, monkeypatch,
     pricing.reload()
     assert price_for("claude-opus-5") is not None
     assert "ignored" in capsys.readouterr().err
+
+
+def test_an_override_of_rates_alone_keeps_the_long_context_row():
+    """A user bumping one rate must not quietly bill every long request at
+    the short rate by wiping the packaged tiering."""
+    table = build_table(packaged(), price_file({"gpt-5.6-sol": {**ROW, "input": 4.5}}))
+    assert table.prices["gpt-5.6-sol"].input_per_mtok == 4.5
+    assert table.prices["gpt-5.6-sol" + LONG_CONTEXT_SUFFIX].input_per_mtok == 8.0
+    assert table.long_context_thresholds["gpt-5.6-sol"] == 272_000
+
+    short_only = build_table(packaged(), price_file({"gpt-5.5": ROW}))
+    assert short_only.long_context_thresholds["gpt-5.5"] == 272_000
+    assert "gpt-5.5" + LONG_CONTEXT_SUFFIX not in short_only.prices
+
+
+def test_an_override_can_make_a_model_flat_on_purpose():
+    table = build_table(packaged(), price_file({"gpt-5.5": {**ROW, "short_context_only": False}}))
+    assert "gpt-5.5" not in table.long_context_thresholds
+
+
+def test_short_context_only_must_be_a_real_boolean():
+    with pytest.raises(PriceFileError, match="true or false"):
+        build_table(price_file({"x": {**ROW, "short_context_only": "false"}}, long_context_threshold=1000))
+
+
+def test_a_model_can_carry_its_own_date():
+    table = build_table(price_file({"x": {**ROW, "as_of": "2026-01-01"}, "y": ROW}, as_of="2026-09-22"))
+    assert table.as_of["x"] == date(2026, 1, 1)
+    assert table.as_of["y"] == date(2026, 9, 22)
+
+
+def test_dated_snapshots_resolve_under_the_long_context_suffix():
+    assert long_context_threshold("gpt-5.6-sol-20260901") == 272_000
+    assert price_for("gpt-5.6-sol-20260901" + LONG_CONTEXT_SUFFIX) is price_for("gpt-5.6-sol" + LONG_CONTEXT_SUFFIX)
+    assert price_for("gpt-5.5-20260901" + LONG_CONTEXT_SUFFIX) is None
+    assert display_name("gpt-5.6-sol-20260901" + LONG_CONTEXT_SUFFIX) == "gpt-5.6-sol" + LONG_CONTEXT_SUFFIX

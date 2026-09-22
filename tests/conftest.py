@@ -15,9 +15,10 @@ def _packaged_prices_only(monkeypatch, tmp_path_factory):
 
     missing = tmp_path_factory.mktemp("no-price-override") / "prices.json"
     monkeypatch.setattr(pricing, "override_path", lambda: missing)
-    pricing.reload()
+    pricing._TABLE = None
     yield
-    pricing.reload()
+    # Cleared, not reloaded: a test may still have table() patched here.
+    pricing._TABLE = None
 
 
 @pytest.fixture(autouse=True)

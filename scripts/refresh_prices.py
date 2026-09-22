@@ -26,6 +26,10 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from tokitty.pricing import PriceFileError, build_table  # noqa: E402
+
 PRICES_FILE = Path(__file__).resolve().parent.parent / "tokitty" / "prices.json"
 
 ANTHROPIC_URL = "https://platform.claude.com/docs/en/about-claude/pricing"
@@ -96,6 +100,8 @@ def parse_anthropic(page: str) -> Tuple[Dict[str, dict], List[str]]:
     skipped: List[str] = []
     for row in target[1:]:
         cells = _cells(row)
+        if len(cells) != len(ANTHROPIC_HEADER):
+            raise LayoutError(f"Anthropic: row {cells!r} has {len(cells)} cells, expected {len(ANTHROPIC_HEADER)}")
         model_id = anthropic_model_id(cells[0])
         if model_id is None:
             skipped.append(f"{cells[0]}: API id not derivable from the display name")
@@ -208,6 +214,10 @@ def parse_openai(page: str) -> Tuple[Dict[str, dict], Optional[int], List[str]]:
             "Short context input", "Short context cached input", "Short context cache writes", "Short context output",
             "Long context input", "Long context cached input", "Long context cache writes", "Long context output",
         ]:
+            if any("long context" in str(h).lower() for h in headings):
+                # Skipping this quietly would drop every long-context row
+                # and bill long requests at the short rate.
+                raise LayoutError(f"OpenAI: long-context table with unexpected headings {headings}")
             continue
         match = _LONG_TOOLTIP.search(json.dumps(grouped.get("headingGroups")))
         if not match:
@@ -224,6 +234,8 @@ def parse_openai(page: str) -> Tuple[Dict[str, dict], Optional[int], List[str]]:
                 raise LayoutError(f"OpenAI: {model_id}: short-context rates disagree between tables")
             if any(c in (None, "-") for c in rows[0][4:]):
                 models[model_id]["short_context_only"] = True
+            elif models[model_id].get("short_context_only"):
+                raise LayoutError(f"OpenAI: {model_id} is labelled short-context only but has long-context rates")
             else:
                 models[model_id]["long_context"] = _openai_rates(model_id + " long", rows[0][4:])
 
@@ -242,7 +254,13 @@ def merge(existing: dict, fresh: Dict[str, dict], source: str, as_of: str, notes
     added = sorted(set(fresh) - set(old_models))
     changed = sorted(m for m in set(fresh) & set(old_models) if fresh[m] != old_models[m])
     kept = sorted(set(old_models) - set(fresh))
-    models = {**old_models, **fresh}
+    models = dict(fresh)
+    for model_id in kept:
+        # Stamped with the date it was last actually read, so a delisted
+        # model's price ages into "at old API rates" instead of being
+        # refreshed forever by a page it is no longer on.
+        models[model_id] = {**old_models[model_id]}
+        models[model_id].setdefault("as_of", existing.get("as_of"))
     section = {"source": source, "as_of": as_of, "notes": notes}
     if threshold is not None or any("long_context" in m or "short_context_only" in m for m in models.values()):
         section["long_context_threshold"] = threshold if threshold is not None else existing.get("long_context_threshold")
@@ -284,6 +302,10 @@ def refresh(existing: dict, anthropic_page: str, openai_page: str, today: str):
         old_models = old.get(provider, {}).get("models", {})
         new_models = data["providers"][provider]["models"]
         report.append(f"{provider}: {len(added)} added, {len(changed)} changed, {len(kept)} not on page (kept)")
+        for m in changed:
+            for key in ("long_context", "short_context_only"):
+                if key in old_models[m] and key not in new_models[m]:
+                    report.append(f"  ! {m} lost {key}; check the page before committing")
         report.extend(f"  + {m} {json.dumps(new_models[m])}" for m in added)
         for m in changed:
             report.append(f"  ~ {m} {json.dumps(old_models[m])}")
@@ -313,7 +335,15 @@ def main(argv=None) -> int:
     changed = rates(data) != rates(existing)
     if args.check:
         return 1 if changed else 0
-    PRICES_FILE.write_text(dumps(data), encoding="utf-8")
+    text = dumps(data)
+    try:
+        # Never ship a file the app would refuse: a packaged file that
+        # fails to load takes every pane's cost readout down with it.
+        build_table(json.loads(text))
+    except PriceFileError as exc:
+        print(f"refusing to write: generated file does not load: {exc}", file=sys.stderr)
+        return 2
+    PRICES_FILE.write_text(text, encoding="utf-8")
     print(f"wrote {PRICES_FILE}")
     return 0
 

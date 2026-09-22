@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
+import refresh_prices  # noqa: E402
 from refresh_prices import (  # noqa: E402
     LayoutError,
     anthropic_model_id,
@@ -164,3 +165,53 @@ def test_refresh_keeps_models_that_left_the_page_and_reports_changes():
     table = build_table(json.loads(dumps(data)))
     assert table.prices["gpt-5.6-sol" + LONG_CONTEXT_SUFFIX].input_per_mtok == 8.0
     assert table.long_context_thresholds["gpt-5.6-sol"] == 272_000
+
+
+def test_openai_refuses_a_short_only_label_with_long_context_rates():
+    page = openai_page([["gpt-5.6-sol (<272K context length)", 4, 0.4, 5, 20]], grouped=SOL_LONG)
+    with pytest.raises(LayoutError, match="short-context only"):
+        parse_openai(page)
+
+
+def test_openai_refuses_a_renamed_long_context_table():
+    page = openai_page([SOL]) + island("GroupedPricingTable", {"headings": ["Model", "Long context input (new)"], "groups": []})
+    with pytest.raises(LayoutError, match="unexpected headings"):
+        parse_openai(page)
+
+
+def test_anthropic_refuses_a_short_row():
+    with pytest.raises(LayoutError, match="cells"):
+        parse_anthropic(anthropic_page([OPUS[:4]]))
+
+
+def test_a_model_that_left_the_page_keeps_its_old_date():
+    existing = {"schema": 1, "providers": {"anthropic": {"as_of": "2026-09-08", "models": {
+        "claude-old-4": {"input": 1.0, "output": 2.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0},
+    }}}}
+    data, _ = refresh(existing, anthropic_page([OPUS]), openai_page([SOL], grouped=SOL_LONG), "2026-09-22")
+    assert data["providers"]["anthropic"]["models"]["claude-old-4"]["as_of"] == "2026-09-08"
+    assert "as_of" not in data["providers"]["anthropic"]["models"]["claude-opus-5"]
+    table = build_table(json.loads(dumps(data)))
+    assert str(table.as_of["claude-old-4"]) == "2026-09-08"
+
+
+def test_losing_a_long_context_row_is_called_out():
+    existing = {"schema": 1, "providers": {"openai": {"as_of": "2026-09-08", "long_context_threshold": 272000, "models": {
+        "gpt-5.6-sol": {"input": 4.0, "output": 20.0, "cache_read": 0.4, "cache_write_5m": 5.0, "cache_write_1h": None,
+                        "long_context": {"input": 8.0, "output": 30.0, "cache_read": 0.8, "cache_write_5m": 10.0, "cache_write_1h": None}},
+    }}}}
+    _, report = refresh(existing, anthropic_page([OPUS]), openai_page([SOL]), "2026-09-22")
+    assert any("! gpt-5.6-sol lost long_context" in line for line in report)
+
+
+def test_main_refuses_to_write_a_file_the_app_would_not_load(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "prices.json"
+    target.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(refresh_prices, "PRICES_FILE", target)
+    broken = {"schema": 1, "providers": {"openai": {"as_of": "2026-09-22", "models": {
+        "x": {"input": 1.0, "output": 2.0, "short_context_only": True}}}}}
+    monkeypatch.setattr(refresh_prices, "refresh", lambda *a: (broken, []))
+    monkeypatch.setattr(refresh_prices, "fetch", lambda url: "")
+    assert refresh_prices.main([]) == 2
+    assert target.read_text(encoding="utf-8") == "{}"
+    assert "does not load" in capsys.readouterr().err

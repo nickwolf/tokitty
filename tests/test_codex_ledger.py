@@ -51,17 +51,31 @@ def usage_record(response_id, turn_id, input_tokens=1000, cached=0, output=100, 
     )
 
 
-def token_count(input_tokens=1000, output=100, minutes_ago=5):
-    """The duplicate stream. Byte-identical usage to the record it mirrors."""
+def token_count(input_tokens=1000, output=100, minutes_ago=5, running=None, cached=0):
+    """The duplicate stream where records exist, and the only ledger in a
+    file from a CLI that writes none. `running` is the thread's cumulative
+    total_tokens, which a duplicate event repeats unchanged."""
+    last = {
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached,
+        "cache_write_input_tokens": 0,
+        "output_tokens": output,
+        "reasoning_output_tokens": 0,
+        "total_tokens": input_tokens + output,
+    }
+    total = {**last, "total_tokens": running if running is not None else input_tokens + output}
     return json.dumps(
         {
             "timestamp": _ts(minutes_ago),
             "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {"last_token_usage": {"input_tokens": input_tokens, "output_tokens": output}},
-            },
+            "payload": {"type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}},
         }
+    )
+
+
+def rate_limits_only(minutes_ago=5):
+    return json.dumps(
+        {"timestamp": _ts(minutes_ago), "type": "event_msg", "payload": {"type": "token_count", "info": None, "rate_limits": {}}}
     )
 
 
@@ -271,3 +285,64 @@ def test_codex_provider_resolves_a_ledger_on_the_codex_home(tmp_path):
     latest = watcher.get_latest()
     assert latest.status == STATUS_OK
     assert by_model(latest)["gpt-5.6-sol"].total_tokens == 1100
+
+
+def test_a_file_with_no_records_is_billed_from_token_count(tmp_path):
+    """Codex CLI 0.147.0 writes no token_usage_record at all. Reading only
+    records dropped 33.3M tokens across 6 recent files, reported as ok."""
+    rollout(
+        tmp_path,
+        "rollout-old.jsonl",
+        [
+            rate_limits_only(),
+            turn_context("t1", "gpt-5.6-sol"),
+            token_count(input_tokens=1000, output=100, running=1100),
+            # A duplicate event repeats the running total unchanged.
+            token_count(input_tokens=1000, output=100, running=1100),
+            turn_context("t2", "gpt-5.6-luna"),
+            token_count(input_tokens=2000, output=200, running=3300),
+        ],
+    )
+    _, breakdown = scan(tmp_path)
+    assert breakdown.status == STATUS_OK
+    rows = by_model(breakdown)
+    assert rows["gpt-5.6-sol"].total_tokens == 1100
+    assert rows["gpt-5.6-luna"].total_tokens == 2200
+    assert breakdown.total_tokens == 3300
+
+
+def test_token_count_before_any_turn_context_takes_the_first_one(tmp_path):
+    rollout(tmp_path, "rollout-old.jsonl", [token_count(running=1100), turn_context("t1", "gpt-5.6-sol")])
+    _, breakdown = scan(tmp_path)
+    assert set(by_model(breakdown)) == {"gpt-5.6-sol"}
+
+
+def test_token_count_fallback_survives_an_archive_move(tmp_path):
+    lines = [turn_context("t1", "gpt-5.6-sol"), token_count(running=1100)]
+    rollout(tmp_path, "rollout-old.jsonl", lines)
+    rollout(tmp_path, "rollout-old.jsonl", lines, archived=True)
+    _, breakdown = scan(tmp_path)
+    assert breakdown.total_tokens == 1100
+
+
+def test_token_count_fallback_reads_incrementally(tmp_path):
+    path = rollout(tmp_path, "rollout-old.jsonl", [turn_context("t1", "gpt-5.6-sol"), token_count(running=1100)])
+    scanner, _ = scan(tmp_path)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(turn_context("t2", "gpt-5.6-luna") + "\n")
+        handle.write(token_count(input_tokens=2000, output=200, running=3300) + "\n")
+    status, failed_files, failed_rows = scanner.scan()
+    rows = by_model(scanner.breakdown("7d", status, failed_files, failed_rows))
+    assert rows["gpt-5.6-sol"].total_tokens == 1100
+    assert rows["gpt-5.6-luna"].total_tokens == 2200
+
+
+def test_a_dated_model_id_still_gets_the_long_context_row(tmp_path):
+    rollout(
+        tmp_path,
+        "rollout-a.jsonl",
+        [turn_context("t1", "gpt-5.6-sol-20260901"), usage_record("resp_1", "t1", input_tokens=300_000, output=0)],
+    )
+    _, breakdown = scan(tmp_path)
+    row = by_model(breakdown)["gpt-5.6-sol-20260901" + LONG_CONTEXT_SUFFIX]
+    assert row.cost_usd == pytest.approx(300_000 * 8.0 / 1_000_000)

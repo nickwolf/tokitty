@@ -109,10 +109,13 @@ def _rate(entry: dict, key: str, where: str) -> Optional[float]:
     return float(value)
 
 
-def _model_price(entry: dict, where: str) -> ModelPrice:
+_ENTRY_KEYS = set(RATE_KEYS) | {"long_context", "short_context_only", "as_of"}
+
+
+def _model_price(entry: dict, where: str, allowed=frozenset(RATE_KEYS)) -> ModelPrice:
     if not isinstance(entry, dict):
         raise PriceFileError(f"{where}: expected an object")
-    unknown = set(entry) - set(RATE_KEYS) - {"long_context", "short_context_only"}
+    unknown = set(entry) - set(allowed)
     if unknown:
         # A typo'd key would otherwise read as "no published rate" and
         # quietly unprice a whole token class.
@@ -127,51 +130,79 @@ def _as_of(value, where: str) -> date:
         raise PriceFileError(f"{where}: as_of must be YYYY-MM-DD, got {value!r}") from None
 
 
+@dataclass
+class _Entry:
+    """One model as a price file describes it, before merging.
+
+    `tiering_set` records whether the entry said anything about context
+    length. An override that only restates a model's rates must not wipe
+    the packaged long-context row: that would quietly bill every long
+    request at the short rate.
+    """
+
+    price: ModelPrice
+    as_of: date
+    long_price: Optional[ModelPrice] = None
+    short_only: bool = False
+    threshold: Optional[int] = None
+    tiering_set: bool = False
+
+
 def _parse_provider(name: str, section, origin: str):
-    """Yield (model_id, rows) for one provider section, where rows is a
-    list of (id, ModelPrice, as_of, threshold-or-None). Raises
+    """Yield (model_id, _Entry) for one provider section. Raises
     PriceFileError on anything malformed."""
     where = f"{origin}: providers.{name}"
     if not isinstance(section, dict):
         raise PriceFileError(f"{where}: expected an object")
-    as_of = _as_of(section.get("as_of"), where)
+    section_as_of = _as_of(section.get("as_of"), where)
     threshold = section.get("long_context_threshold")
+    if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0):
+        raise PriceFileError(f"{where}: long_context_threshold must be a positive integer")
     models = section.get("models")
     if not isinstance(models, dict):
         raise PriceFileError(f"{where}: models must be an object")
 
     for model_id, entry in models.items():
         entry_where = f"{where}.models.{model_id}"
-        price = _model_price(entry, entry_where)
+        price = _model_price(entry, entry_where, _ENTRY_KEYS)
+        # A model kept after leaving its pricing page carries the date it
+        # was last actually read, not the date of the section around it.
+        as_of = _as_of(entry["as_of"], entry_where) if "as_of" in entry else section_as_of
         long_entry = entry.get("long_context")
-        short_only = bool(entry.get("short_context_only"))
-        if (long_entry is not None or short_only) and not isinstance(threshold, int):
+        short_only = entry.get("short_context_only", False)
+        if not isinstance(short_only, bool):
+            raise PriceFileError(f"{entry_where}: short_context_only must be true or false")
+        tiered = long_entry is not None or short_only
+        if tiered and threshold is None:
             raise PriceFileError(f"{where}: a context-tiered model needs long_context_threshold")
         if long_entry is not None and short_only:
             raise PriceFileError(f"{entry_where}: long_context and short_context_only conflict")
-
-        rows = [(model_id, price, as_of, threshold if (long_entry is not None or short_only) else None)]
-        if long_entry is not None:
-            rows.append((model_id + LONG_CONTEXT_SUFFIX, _model_price(long_entry, entry_where + ".long_context"), as_of, None))
-        yield model_id, rows
+        yield model_id, _Entry(
+            price=price,
+            as_of=as_of,
+            long_price=_model_price(long_entry, entry_where + ".long_context") if long_entry is not None else None,
+            short_only=short_only,
+            threshold=threshold if tiered else None,
+            tiering_set="long_context" in entry or "short_context_only" in entry,
+        )
 
 
 def _sources(data, origin: str) -> Tuple[str, ...]:
     return tuple(f"{name} {section.get('as_of')} ({origin})" for name, section in data["providers"].items())
 
 
-def _parse_file(data, origin: str) -> Dict[str, list]:
+def _parse_file(data, origin: str) -> Dict[str, _Entry]:
     if not isinstance(data, dict) or data.get("schema") != SCHEMA_VERSION:
         raise PriceFileError(f"{origin}: expected schema {SCHEMA_VERSION}")
     providers = data.get("providers")
     if not isinstance(providers, dict):
         raise PriceFileError(f"{origin}: providers must be an object")
-    parsed: Dict[str, list] = {}
+    parsed: Dict[str, _Entry] = {}
     for name, section in providers.items():
-        for model_id, rows in _parse_provider(name, section, origin):
+        for model_id, entry in _parse_provider(name, section, origin):
             if model_id in parsed:
                 raise PriceFileError(f"{origin}: {model_id} is listed twice")
-            parsed[model_id] = rows
+            parsed[model_id] = entry
     return parsed
 
 
@@ -182,24 +213,39 @@ def build_table(packaged: dict, override: Optional[dict] = None, override_origin
     the user's own file, so a fault there is reported in `warnings` and
     the packaged prices are used unchanged: a typo in a hand-edited file
     should cost the user their override, not the whole cost readout.
+
+    An override entry replaces the packaged one's rates. It inherits the
+    packaged context tiering (long-context row, short-only flag,
+    threshold) unless it sets long_context or short_context_only itself;
+    "short_context_only": false with no long_context makes a model flat.
     """
     entries = _parse_file(packaged, "packaged prices.json")
     sources = _sources(packaged, "packaged")
     warnings = []
     if override is not None:
         try:
-            entries.update(_parse_file(override, override_origin))
-            sources += _sources(override, override_origin)
+            overrides = _parse_file(override, override_origin)
         except PriceFileError as exc:
             warnings.append(f"ignored {exc}")
+        else:
+            sources += _sources(override, override_origin)
+            for model_id, entry in overrides.items():
+                base = entries.get(model_id)
+                if base is not None and not entry.tiering_set:
+                    entry.long_price = base.long_price
+                    entry.short_only = base.short_only
+                    entry.threshold = base.threshold
+                entries[model_id] = entry
 
     table = PriceTable(warnings=tuple(warnings), sources=sources)
-    for rows in entries.values():
-        for model_id, price, as_of, threshold in rows:
-            table.prices[model_id] = price
-            table.as_of[model_id] = as_of
-            if threshold is not None:
-                table.long_context_thresholds[model_id] = threshold
+    for model_id, entry in entries.items():
+        table.prices[model_id] = entry.price
+        table.as_of[model_id] = entry.as_of
+        if entry.threshold is not None:
+            table.long_context_thresholds[model_id] = entry.threshold
+        if entry.long_price is not None:
+            table.prices[model_id + LONG_CONTEXT_SUFFIX] = entry.long_price
+            table.as_of[model_id + LONG_CONTEXT_SUFFIX] = entry.as_of
     return table
 
 
@@ -248,17 +294,20 @@ def reload() -> PriceTable:
     return table()
 
 
-def _resolve(model_id: Optional[str]) -> Optional[str]:
-    """The id in the table a model id prices as, or None."""
+def _resolve(model_id: Optional[str], keys=None) -> Optional[str]:
+    """The id in the table a model id prices as, or None. A dated snapshot
+    resolves to its base, including under the long-context suffix."""
     if not isinstance(model_id, str) or not model_id:
         return None
     if model_id in SYNTHETIC_MODELS:
         return None
-    prices = table().prices
-    if model_id in prices:
+    keys = table().prices if keys is None else keys
+    if model_id in keys:
         return model_id
-    base = _SNAPSHOT_SUFFIX.sub("", model_id)
-    if base != model_id and base in prices:
+    suffix = LONG_CONTEXT_SUFFIX if model_id.endswith(LONG_CONTEXT_SUFFIX) else ""
+    stem = model_id[: -len(suffix)] if suffix else model_id
+    base = _SNAPSHOT_SUFFIX.sub("", stem) + suffix
+    if base != model_id and base in keys:
         return base
     return None
 
@@ -289,7 +338,8 @@ def price_as_of(model_id: Optional[str]) -> Optional[date]:
 def long_context_threshold(model_id: str) -> Optional[int]:
     """Input tokens above which a request is billed at a different rate,
     or None for a model whose price does not depend on context length."""
-    return table().long_context_thresholds.get(model_id)
+    resolved = _resolve(model_id, table().long_context_thresholds)
+    return table().long_context_thresholds[resolved] if resolved else None
 
 
 def cost_usd(
@@ -335,7 +385,8 @@ def display_name(model_id: str) -> str:
     """
     if model_id in SYNTHETIC_MODELS:
         return model_id
-    name = _SNAPSHOT_SUFFIX.sub("", model_id)
+    suffix = LONG_CONTEXT_SUFFIX if model_id.endswith(LONG_CONTEXT_SUFFIX) else ""
+    name = _SNAPSHOT_SUFFIX.sub("", model_id[: len(model_id) - len(suffix)]) + suffix
     if name.startswith("claude-"):
         return name[len("claude-") :]
     return name

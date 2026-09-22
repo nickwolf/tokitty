@@ -530,7 +530,9 @@ class TranscriptScanner:
                 continue
             failed_rows += rows
 
-        for gone in set(self._store) - seen:
+        # Cursors too: a file that never yielded a record still holds one,
+        # and subclasses keep per-file state beside it.
+        for gone in (set(self._store) | set(self._cursors)) - seen:
             self._forget(gone)
             self._cursors.pop(gone, None)
 
