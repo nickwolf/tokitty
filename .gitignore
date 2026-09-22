@@ -7,3 +7,6 @@ dist/
 .venv/
 venv/
 .env
+
+# Private session handoff, project-root-anchored. Never tracked.
+/.handoff/
