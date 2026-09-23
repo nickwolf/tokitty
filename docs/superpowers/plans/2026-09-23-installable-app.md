@@ -298,7 +298,9 @@ git commit -m "Add a PyInstaller spec that builds the app and a hook runner"
 - [ ] Frozen, same-OS home: `{"type": "command", "command": <runner>, "args": ["--sessions-dir", "<native>/tokitty/sessions"]}`, where `<runner>` defaults to `stable_runner_path(state_dir_path(), platform)` = `<state dir>/current/tokitty-hook[.exe]` (spec Q2a). Task 3 makes that link exist and passes its own result in as `runner`.
 - [ ] `hook_runner_path(executable, platform)` returns the bundled runner beside a frozen executable (`tokitty-hook.exe` on win32, `tokitty-hook` elsewhere); Task 3 and `--self-check` use it.
 - [ ] `frozen`, `platform`, `runner` are keyword overrides defaulting to `sys.frozen`, `sys.platform`, and the stable path, like `autostart.resolve_launch_command`, so every row is testable on every CI OS.
+- [ ] Trailing separators on the home are stripped before joining (`/home/n/.claude/` gives `/home/n/.claude/tokitty/sessions`, not `//tokitty`), tested for a POSIX and a `C:\` home. A home without a trailing separator produces exactly today's string.
 - [ ] The installed entry is `{"matcher": m, "hooks": [<the dict>]}`.
+- [ ] The existing test at `tests/test_hooks_install.py:190-208` that calls `_is_tokitty_entry` is left for Task 4, which changes that signature and updates the call.
 
 **Verify:** `python3 -m pytest -q tests/test_hooks_install.py` → pass.
 
@@ -311,7 +313,7 @@ WIN_RUNNER = r"C:\Users\nick\AppData\Local\Tokitty\current\tokitty-hook.exe"
 
 
 def test_build_command_source_posix_unchanged():
-    hook = hi._build_command("/home/nick/.claude", frozen=False, executable="/usr/bin/python3", platform="linux")
+    hook = hi._build_command("/home/nick/.claude", frozen=False, platform="linux")
     assert hook == {
         "type": "command",
         "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" --sessions-dir "/home/nick/.claude/tokitty/sessions"',
@@ -319,7 +321,7 @@ def test_build_command_source_posix_unchanged():
 
 
 def test_build_command_source_windows_local_uses_python():
-    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=False, executable=r"C:\Py\python.exe", platform="win32")
+    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=False, platform="win32")
     assert hook["command"].startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
     assert "args" not in hook
 
@@ -424,7 +426,7 @@ def _build_command(config_dir: str, *, frozen=None, platform=None, runner=None) 
     """
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     platform = sys.platform if platform is None else platform
-    native = _wsl_native_path(config_dir)
+    native = _wsl_native_path(config_dir).rstrip("/\\") or _wsl_native_path(config_dir)
     sessions_dir = f"{native}/tokitty/sessions"
     if frozen and not (platform == "win32" and _is_wsl_unc(config_dir)):
         return {
@@ -464,12 +466,14 @@ Import `state_dir_path` from `tokitty.paths` at module level (tests patch `hi.st
   - raises `FileNotFoundError` if `bundled` is not a file, touching nothing (a link is never made to a folder without the runner);
   - if `<state dir>/current` exists and is not a link (symlink, or on Windows a junction): leaves it alone and returns `LinkOutcome(bundled, "<state dir>/current is not a link Tokitty made, so hooks use this release's own path")`;
   - if it is a link that already resolves to `release`: returns `LinkOutcome(stable_runner_path(state_dir, platform), None)` without writing;
-  - otherwise repoints it and returns the stable path. POSIX: `os.symlink(release, tmp, target_is_directory=True)` to a sibling temp name, then `os.replace(tmp, link)`. Windows: `os.rmdir(link)` if present, then `_winapi.CreateJunction(release, link)`.
+  - otherwise repoints it and returns the stable path. POSIX: `os.symlink(release, tmp, target_is_directory=True)` to a sibling temp name, then `os.replace(tmp, link)`. Windows: remember the old target (`os.readlink` or `realpath`), `os.rmdir(link)` if present, then `_winapi.CreateJunction(release, link)`; if that raises, recreate the junction to the old target before re-raising, so a failed repoint never leaves registered hooks pointing nowhere.
+  - the whole check-and-repoint runs under a cross-process lock, `lock.SingleInstanceLock(state_dir, name="current.lock")`, retried every 50 ms for up to 5 s, so a GUI launch and a CLI `--install-hooks` cannot race (the GUI's own single-instance lock does not cover the CLI path, `__main__.py:976-996`). The link-or-real-directory check is redone after the lock is taken, immediately before any removal. Lock timeout raises `OSError`.
   - never calls `shutil.rmtree`, and never points the link at itself or inside itself (guard: refuse if `release` equals or sits under the unresolved link path).
-- [ ] `_is_link(path)` is true for a symlink, or on Windows for a directory junction (`os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT`), and works on Python 3.10.
-- [ ] In `hooks_install`, when the desired hook is exec form (frozen, not the WSL row), `install_hooks_for_dir` calls `ensure_runner_link(state_dir_path())` first and passes `outcome.runner` to `_build_command`. `AppTranslocatedError` becomes `ConfigDirResult(config_dir, False, MOVE_TO_APPLICATIONS)` with nothing written. Any other `OSError` falls back to the bundled absolute path, with the reason appended to the result message. `outcome.note` is appended to the message too.
-- [ ] `run_discovery` calls `runner_link.ensure_runner_link(state_dir)` when `sys.frozen`, before `retry_pending_hook_op`, inside the existing guard (catching `OSError`, which covers `AppTranslocatedError`).
-- [ ] Task 2's `test_install_writes_exec_form_entry_when_frozen` is changed to build a fake release in `tmp_path` (a `tokitty` file and a `tokitty-hook` file) and patch `sys.executable` to it, so no test ever links to a real directory.
+- [ ] `_is_link(path)` is true for a symlink, or on Windows for a directory junction specifically (`os.lstat(path).st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT`), not any reparse point, and works on Python 3.10.
+- [ ] In `hooks_install`, when the desired hook is exec form (frozen, not the WSL row), `install_hooks_for_dir` calls `ensure_runner_link(state_dir_path())` first and passes `outcome.runner` to `_build_command`. `AppTranslocatedError` becomes `ConfigDirResult(config_dir, False, MOVE_TO_APPLICATIONS)` with nothing written. Any other `OSError` (lock timeout, failed repoint) becomes `ok=False` with the reason and nothing written: a transient failure must never rewrite a stable registration to a release-specific path, which would change the string Codex hashes. Only the real-directory case falls back to the bundled absolute path, and its `outcome.note` is appended to the message.
+- [ ] `run_discovery` calls `runner_link.ensure_runner_link(state_dir)` when `sys.frozen`, before `retry_pending_hook_op`, in its own `try/except OSError` (which covers `AppTranslocatedError`) so a link failure does not skip the retry. Task 4 Step 6 shows the combined block. A `tests/test_main.py` test drives `run_discovery` with `sys.frozen` patched and a fake release, and asserts the link is repointed with no `--install-hooks` involved.
+- [ ] Task 2's `test_install_writes_exec_form_entry_when_frozen` is changed to build a fake release in `tmp_path` with host-native names (`tokitty.exe`/`tokitty-hook.exe` on Windows) and patch `sys.executable` to it, so no test ever links to a real directory. Tests that create links never patch `sys.platform`; platform overrides stay in the pure command-builder tests.
+- [ ] Tests also cover: a repoint whose `CreateJunction`/`symlink` is monkeypatched to raise leaves the old link target in place; the lock is held during repoint (a second caller with the lock already taken times out with `OSError`, use a short timeout override).
 - [ ] Tests (`tests/test_runner_link.py`, using real links for the host OS, `platform=sys.platform`):
   - first launch creates the link to release A and returns the stable path;
   - **two simulated releases**: the runner path returned for A and for B is identical, the link ends at B, and a recursive listing (names and sizes) of both release folders is unchanged;
@@ -624,6 +628,8 @@ Then `tokitty/runner_link.py` per the criteria. Keep it stdlib; import `_winapi`
 - [ ] `get_config_dirs` takes an optional `state_dir` (default `get_state_dir()`).
 - [ ] Uninstall removes only owned hooks, dropping an entry only if it ends up with no hooks, and an event only if it ends up with no entries.
 - [ ] `run_discovery` calls `hooks_install.ensure_current(state_dir)` right after `retry_pending_hook_op`, inside the same OSError guard, off the Tk thread.
+- [ ] Equivalent spellings: a hook written for `C:\Users\Nick\.claude` is owned and left byte-identical when the account says `c:\users\nick\.claude`; a hook written with a doubled slash (`/home/n/.claude//tokitty/sessions`, from a trailing-slash home) is owned and left as written. Tests for both.
+- [ ] Update the existing call at `tests/test_hooks_install.py:190-208` to the two-argument `_is_tokitty_entry(entry, config_dir)`.
 - [ ] The two existing fixtures that use `python3 x/tokitty/hook_writer.py` with no `--sessions-dir` (`test_install_skips_event_already_marked_in_settings_local`, `test_uninstall_leaves_settings_local_alone_but_reports`) switch to a command Tokitty really wrote for that home; a separate test proves the partial lookalike is not owned.
 - [ ] Tests from spec Task 4 all present: python to exe; an old absolute-path exec hook to the stable path; identical is a no-op (file mtime and content unchanged, no backup file created); user hook containing "tokitty" left alone; mixed entry keeps the user hook; `--uninstall-hooks` then `ensure_current` stays uninstalled; stale owned entry in `settings.local.json` reported and not duplicated. Plus: unquoted legacy form is owned and gets rewritten; duplicate owned hooks collapse to one; `timeout` key preserved on rewrite; uninstall of a mixed entry keeps the user hook.
 
@@ -656,16 +662,17 @@ def _read(path):
 
 
 def _frozen(monkeypatch, tmp_path):
-    """A frozen linux build whose release folder and state dir live in tmp_path.
-    Links are only ever created inside tmp_path, pointing at a fake release."""
+    """A frozen build for the host OS whose release folder and state dir live
+    in tmp_path. Links are only ever created inside tmp_path, pointing at a
+    fake release. sys.platform is never patched here: link creation is real."""
+    win = sys.platform == "win32"
     release = tmp_path / "release"
     release.mkdir(exist_ok=True)
-    (release / "tokitty-hook").write_text("", encoding="utf-8")
+    (release / ("tokitty-hook.exe" if win else "tokitty-hook")).write_text("", encoding="utf-8")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(hi.sys, "executable", str(release / "tokitty"))
-    monkeypatch.setattr(hi.sys, "platform", "linux")
+    monkeypatch.setattr(hi.sys, "executable", str(release / ("tokitty.exe" if win else "tokitty")))
     monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path / "state")
-    return hi.stable_runner_path(tmp_path / "state", "linux")
+    return hi.stable_runner_path(tmp_path / "state", sys.platform)
 
 
 def _full_settings(hook):
@@ -776,7 +783,7 @@ _RUNNER_NAMES = (HOOK_RUNNER_NAME, HOOK_RUNNER_NAME + ".exe")
 
 
 def _norm_dir(path: str) -> str:
-    path = path.replace("\\", "/").rstrip("/")
+    path = re.sub(r"/{2,}", "/", path.replace("\\", "/")).rstrip("/")
     return path.lower() if _is_windows_local_path(path) else path
 
 
@@ -813,7 +820,17 @@ def _is_tokitty_entry(entry, config_dir: str) -> bool:
 
 ```python
 def _same_hook(hook: dict, desired: dict) -> bool:
-    return hook.get("command") == desired["command"] and hook.get("args") == desired.get("args")
+    """Equal, or equal up to how the home is spelled (case of a drive-letter
+    path, doubled or trailing separators). An equivalent spelling is kept as
+    written: rewriting it would change the command string Codex hashes."""
+    if hook.get("command") != desired["command"]:
+        return False
+    args, want = hook.get("args"), desired.get("args")
+    if args is None or want is None:
+        return args == want
+    return len(args) == len(want) and all(
+        a == w or (isinstance(a, str) and _norm_dir(a) == _norm_dir(w)) for a, w in zip(args, want)
+    )
 
 
 def _rewritten(hook: dict, desired: dict) -> dict:
@@ -886,6 +903,11 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
 - [ ] **Step 6: startup wiring.** In `__main__.run_discovery`:
 
 ```python
+            if getattr(sys, "frozen", False):
+                try:
+                    runner_link.ensure_runner_link(state_dir)
+                except OSError:
+                    pass
             try:
                 retry_pending_hook_op(state_dir)
                 hooks_install.ensure_current(state_dir)
@@ -893,7 +915,7 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
                 pass
 ```
 
-with `from tokitty import hooks_install` at the top (keep the existing `retry_pending_hook_op` import). If the retry raises, the refresh is skipped for this launch; that is fine.
+with `from tokitty import hooks_install, runner_link` at the top (the `runner_link` block is Task 3's; keep it) (keep the existing `retry_pending_hook_op` import). If the retry raises, the refresh is skipped for this launch; that is fine.
 
 - [ ] **Step 7:** `install_hooks()` CLI prints `refreshed hooks for ...` when `result.refreshed_events` is non-empty. Run the full suite. Commit: `git commit -m "Rewrite out-of-date tokitty hooks in place and refresh them at startup"`.
 
@@ -1256,11 +1278,11 @@ sys.exit(_run())
 
 ### Task 10: Manual gate on Windows (Nick)
 
-Not a subagent task. After the dry run is green, the controller hands Nick exact steps: download the Windows dry-run artifact, extract to a new folder, launch `Tokitty.exe`, add an account in the dialog, confirm the WSL home still gets the `python3` hook (`settings.json` under `\\wsl.localhost\...`), confirm the cat reacts in a restarted Claude Code session, toggle Start at login, reboot, confirm it launches from the new folder. Then the stable-path check: extract the same artifact to a second new folder, launch that copy once, and confirm that `%LOCALAPPDATA%\Tokitty\current` now points there, that `settings.json` of a native-Windows Claude home (if Nick has one; otherwise a scratch home) did not change, and that the cat still reacts in a Claude Code session that stayed open throughout.
+Not a subagent task. After the dry run is green, the controller hands Nick exact steps: download the Windows dry-run artifact, extract to a new folder, launch `Tokitty.exe`, add an account in the dialog, confirm the WSL home still gets the `python3` hook (`settings.json` under `\\wsl.localhost\...`), confirm the cat reacts in a restarted Claude Code session, toggle Start at login, reboot, confirm it launches from the new folder. Then the stable-path check: extract the same artifact to a second new folder, launch that copy once, and confirm that `%LOCALAPPDATA%\Tokitty\current` now points there, that `settings.json` of a native-Windows Claude home (if Nick has one; otherwise a scratch home) did not change, and that a hook keeps working across the switch. With a native-Windows Claude home, that means the cat still reacts in a Claude Code session left open throughout. Without one, the controller supplies a scratch-home check instead: run the scratch home's registered command (`current\tokitty-hook.exe --sessions-dir ...` with a sample payload, via `python.exe` and an argv list) before and after the switch, and confirm its session file updates both times. The WSL home proves nothing here because it uses `python3`.
 
 ### Task 11: Manual gate on a real Mac (deferred, before publishing a release)
 
-Not a subagent task, and nobody has a Mac today. Spec Q6 keeps the real-keychain recipe as the release gate for the Keychain question, because Task 8 only covers a synthetic keychain. The controller records it as an open item: before the draft release is published, someone with a Mac runs the recipe in spec Q6 (release N with Always Allow, replace with N+1 in the same Applications path, no dialog, `security dump-keychain -a` lists `/usr/bin/security` and not Tokitty) and the App Translocation check (spec Q4 and Q2a: from `~/Downloads`, both autostart and hook install refuse, and `current` is not created. After moving the app to Applications, both register and `current` points into `/Applications/Tokitty.app/Contents/MacOS`).
+Not a subagent task, and nobody has a Mac today. Spec Q6 keeps the real-keychain recipe as the release gate for the Keychain question, because Task 8 only covers a synthetic keychain. The controller records it as an open item: before the draft release is published, someone with a Mac runs the recipe in spec Q6 (release N with Always Allow, replace with N+1 in the same Applications path, no dialog, `security dump-keychain -a` lists `/usr/bin/security` and not Tokitty) and the App Translocation check (spec Q4 and Q2a: from `~/Downloads`, both autostart and hook install refuse, and `current` is either absent (fresh state dir) or still points at its previous target. After moving the app to Applications, both register and `current` points into `/Applications/Tokitty.app/Contents/MacOS`).
 
 ---
 
