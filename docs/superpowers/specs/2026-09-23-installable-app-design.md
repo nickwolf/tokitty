@@ -1,6 +1,6 @@
 # Installable app (#48)
 
-Status: design only, 2026-09-23. Nothing here is built. The numbers come from a throwaway Windows spike (PyInstaller 6.22.3 with pyinstaller-hooks-contrib 2026.7, Nuitka 4.2.2 with its auto-downloaded zig 0.16.0 backend, Briefcase 0.4.5, pystray 0.19.5, Pillow 12.3.0, Windows Python 3.13.2 with Tk 8.6.15, WSL Ubuntu Python 3.12.3) run on Cucumber with Defender real-time protection on. Claude Code facts come from the 2.1.280 binary and its public CHANGELOG, Codex facts from codex-cli 0.156.1.
+Status: design only, 2026-09-23. Nothing here is built. Decided with Nick the same day: PyInstaller, a minimum Claude Code of 2.1.139 stated in the README, and the macOS 15 first-launch wording. The numbers come from a throwaway Windows spike (PyInstaller 6.22.3 with pyinstaller-hooks-contrib 2026.7, Nuitka 4.2.2 with its auto-downloaded zig 0.16.0 backend, Briefcase 0.4.5, pystray 0.19.5, Pillow 12.3.0, Windows Python 3.13.2 with Tk 8.6.15, WSL Ubuntu Python 3.12.3) run on Cucumber with Defender real-time protection on. Claude Code facts come from the 2.1.280 binary and its public CHANGELOG, Codex facts from codex-cli 0.156.1.
 
 Settled before this spec and not reopened here: ship unsigned, and build the artifacts on the existing three-OS CI matrix, published to GitHub Releases on a tag.
 
@@ -205,4 +205,4 @@ Sized for one subagent each, in order. Tasks 2 to 5 have no packaging dependency
 8. **README.** Install from Releases. First-launch notes per OS with the current macOS 15 flow. "Hooks from the downloaded app need Claude Code 2.1.139 or newer", "restart open Claude Code sessions after updating or moving Tokitty", and "move Tokitty to Applications before turning on autostart". Update the `python -m tokitty` instructions to present the source install as the developer path.
 9. **Manual gate on Windows (Nick).** Download the dry-run artifact, run it from a new folder, add an account in the dialog, confirm the WSL home still gets the `python3` hook, and confirm the cat reacts in a restarted session. Toggle autostart and reboot.
 
-Out of #48 and suggested as separate issues: Codex activity hooks (question 3), HTTP hooks as a no-spawn runner, and the `CodexProvider` docstring correction.
+Out of #48: Codex activity hooks (question 3) need their own design. HTTP hooks are recorded above as rejected and need no follow-up. The out-of-date `CodexProvider` docstring is fixed on its own branch.
