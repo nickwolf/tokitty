@@ -17,7 +17,13 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from tokitty.accounts import Account, save_accounts
+from tokitty.accounts import (
+    DEFAULT_PROVIDER,
+    Account,
+    canonicalize_locator,
+    load_accounts_result,
+    save_accounts,
+)
 from tokitty.paths import get_state_dir
 
 MARKER = "tokitty"
@@ -95,6 +101,24 @@ def _default_config_dir() -> str:
     return str(Path.home() / ".claude")
 
 
+def provider_has_hooks(kind: Optional[str]) -> bool:
+    """Whether an account of this provider kind gets tokitty's hooks.
+
+    Driven by the provider's declared activity capability, since the hooks
+    exist only to feed live activity. A kind this build does not know gets
+    no hooks: writing Claude Code settings into a directory that belongs to
+    some other harness is the one outcome worse than a missing pose.
+    """
+    # Imported here: the registry pulls in the poller and the API client,
+    # which the CLI's --install-hooks path has no other need for.
+    from tokitty.providers import UnknownProviderError, get_provider
+
+    try:
+        return get_provider(kind or DEFAULT_PROVIDER).capabilities.activity
+    except UnknownProviderError:
+        return False
+
+
 def get_config_dirs() -> List[str]:
     """Return the list of Claude Code config dirs to install/uninstall hooks in.
 
@@ -102,7 +126,10 @@ def get_config_dirs() -> List[str]:
     \\\\wsl.localhost dir where Claude Code actually lives -- see
     _default_config_dir). If <state-dir>/accounts.json exists and contains
     a list of config-dir paths under key "accounts" (each item an object
-    with a "config_dir" key), those are used instead.
+    with a "config_dir" key), those are used instead, minus any account
+    whose provider has no hooks. An accounts.json holding only such
+    accounts yields an empty list rather than the default dir, which is
+    not an account the user asked for.
     """
     state_dir = get_state_dir()
     accounts_file = state_dir / "accounts.json"
@@ -112,9 +139,11 @@ def get_config_dirs() -> List[str]:
                 data = json.load(f)
             accounts = data.get("accounts")
             if isinstance(accounts, list) and accounts:
-                dirs = [a["config_dir"] for a in accounts if isinstance(a, dict) and "config_dir" in a]
-                if dirs:
-                    return dirs
+                entries = [a for a in accounts if isinstance(a, dict) and "config_dir" in a]
+                if entries:
+                    return [
+                        a["config_dir"] for a in entries if provider_has_hooks(a.get("provider"))
+                    ]
         except Exception:
             pass
     return [_default_config_dir()]
@@ -303,9 +332,13 @@ def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 PENDING_HOOK_OP_FILENAME = "pending_hook_op.json"
 
 
-def save_pending_hook_op(state_dir: Path, op: str, config_dir: str) -> None:
+def save_pending_hook_op(
+    state_dir: Path, op: str, config_dir: str, provider: Optional[str] = None
+) -> None:
     path = Path(state_dir) / PENDING_HOOK_OP_FILENAME
     payload = {"op": op, "config_dir": config_dir}
+    if provider is not None:
+        payload["provider"] = provider
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
@@ -321,7 +354,10 @@ def load_pending_hook_op(state_dir: Path) -> Optional[dict]:
         return None
     if not isinstance(data, dict) or data.get("op") not in ("install", "remove") or not data.get("config_dir"):
         return None
-    return {"op": data["op"], "config_dir": data["config_dir"]}
+    pending = {"op": data["op"], "config_dir": data["config_dir"]}
+    if isinstance(data.get("provider"), str):
+        pending["provider"] = data["provider"]
+    return pending
 
 
 def clear_pending_hook_op(state_dir: Path) -> None:
@@ -339,6 +375,7 @@ def apply_account_mutation(
     config_dir: str,
     install_fn=install_hooks_for_dir,
     uninstall_fn=uninstall_hooks_for_dir,
+    provider: str = DEFAULT_PROVIDER,
 ) -> ConfigDirResult:
     """accounts.json first (durable desired state), then a pending hook
     op record, then the hook side effect, clearing the record only on
@@ -346,14 +383,43 @@ def apply_account_mutation(
     a slow filesystem or a stuck wsl.exe call must not freeze the UI.
     result.ok is False and a raised exception are both treated as "did
     not complete": both leave the pending-op record in place for
-    retry_pending_hook_op to pick up."""
+    retry_pending_hook_op to pick up.
+
+    A provider without hooks stops after the save: no pending op is
+    recorded and nothing is written inside config_dir."""
     save_accounts(state_dir, accounts)
-    save_pending_hook_op(state_dir, op, config_dir)
+    if not provider_has_hooks(provider):
+        return ConfigDirResult(config_dir, True, "saved, this harness has no hooks")
+    save_pending_hook_op(state_dir, op, config_dir, provider)
     fn = install_fn if op == "install" else uninstall_fn
     result = fn(config_dir)
     if result.ok:
         clear_pending_hook_op(state_dir)
     return result
+
+
+def _pending_dir_has_hooks(state_dir: Path, config_dir: str) -> bool:
+    """Whether a legacy pending op's dir is one that gets hooks. Records
+    written by this build carry their provider and never get here.
+
+    The account's own provider decides when it is still in accounts.json.
+    A removed account is gone from there, so its dir is judged by what is
+    in it; this runs off the Tk thread, like the hook op it gates.
+    """
+    from tokitty.manual_path import looks_like_codex_home
+
+    try:
+        locator = canonicalize_locator(config_dir)
+    except ValueError:
+        locator = None
+    if locator is not None:
+        for account in load_accounts_result(state_dir).accounts:
+            try:
+                if canonicalize_locator(account.config_dir) == locator:
+                    return provider_has_hooks(account.provider)
+            except ValueError:
+                continue
+    return not looks_like_codex_home(_local_config_path(config_dir))
 
 
 def retry_pending_hook_op(
@@ -364,6 +430,15 @@ def retry_pending_hook_op(
     pending = load_pending_hook_op(state_dir)
     if pending is None:
         return None
+    if "provider" in pending:
+        has_hooks = provider_has_hooks(pending["provider"])
+    else:
+        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"])
+    if not has_hooks:
+        # Left by a build that installed hooks into every account. Replaying
+        # it would write Claude Code settings into another harness's home.
+        clear_pending_hook_op(state_dir)
+        return None
     fn = install_fn if pending["op"] == "install" else uninstall_fn
     result = fn(pending["config_dir"])
     if result.ok:
@@ -373,6 +448,9 @@ def retry_pending_hook_op(
 
 def install_hooks() -> int:
     config_dirs = get_config_dirs()
+    if not config_dirs:
+        print("No accounts use a harness with hooks; nothing to install.")
+        return 0
     any_failed = False
     for config_dir in config_dirs:
         result = install_hooks_for_dir(config_dir)
@@ -391,6 +469,9 @@ def install_hooks() -> int:
 
 def uninstall_hooks() -> int:
     config_dirs = get_config_dirs()
+    if not config_dirs:
+        print("No accounts use a harness with hooks; nothing to uninstall.")
+        return 0
     any_failed = False
     for config_dir in config_dirs:
         result = uninstall_hooks_for_dir(config_dir)

@@ -162,9 +162,19 @@ def find_all_wsl_claude_dirs(run: Callable = subprocess.run) -> List[Tuple[str, 
 def wsl_dir_exists(distro: str, posix_path: str, run: Callable = subprocess.run) -> bool:
     """Whether a directory exists inside a distro, without touching the
     UNC path (which would boot a stopped distro)."""
+    return _wsl_test(distro, "-d", posix_path, run)
+
+
+def wsl_file_exists(distro: str, posix_path: str, run: Callable = subprocess.run) -> bool:
+    """Whether a regular file exists inside a distro. Same rules as
+    wsl_dir_exists."""
+    return _wsl_test(distro, "-f", posix_path, run)
+
+
+def _wsl_test(distro: str, flag: str, posix_path: str, run: Callable) -> bool:
     try:
         result = run(
-            ["wsl.exe", "-d", distro, "--exec", "sh", "-c", f'[ -d "{posix_path}" ]'],
+            ["wsl.exe", "-d", distro, "--exec", "sh", "-c", f'[ {flag} "{posix_path}" ]'],
             capture_output=True,
             timeout=10,
             check=False,

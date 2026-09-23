@@ -2,7 +2,7 @@ import json
 import sys
 
 from tokitty.accounts import canonicalize_locator
-from tokitty.manual_path import validate_manual_path
+from tokitty.manual_path import looks_like_codex_home, validate_codex_path, validate_manual_path
 
 
 def _oauth_json():
@@ -180,3 +180,130 @@ def test_invalid_credentials_still_accepted_when_transcripts_exist(tmp_path):
     result = validate_manual_path(str(tmp_path), [])
     assert result.ok
     assert result.capabilities == frozenset({"models"})
+
+
+# ---------------------------------------------------------------------------
+# Codex homes
+# ---------------------------------------------------------------------------
+
+
+def _codex_home(tmp_path, subdir="sessions"):
+    home = tmp_path / ".codex"
+    (home / subdir).mkdir(parents=True)
+    return home
+
+
+def test_codex_home_with_sessions_is_accepted(tmp_path):
+    home = _codex_home(tmp_path)
+    result = validate_codex_path(str(home), active_config_dirs=[])
+    assert result.ok
+    assert result.config_dir == str(home)
+
+
+def test_codex_home_with_only_archived_sessions_is_accepted(tmp_path):
+    home = _codex_home(tmp_path, "archived_sessions")
+    assert validate_codex_path(str(home), active_config_dirs=[]).ok
+
+
+def test_codex_sessions_dir_itself_is_normalized_to_the_home(tmp_path):
+    home = _codex_home(tmp_path)
+    result = validate_codex_path(str(home / "sessions"), active_config_dirs=[])
+    assert result.ok
+    assert result.config_dir == str(home)
+
+
+def test_codex_dir_without_sessions_is_rejected(tmp_path):
+    (tmp_path / ".codex").mkdir()
+    result = validate_codex_path(str(tmp_path / ".codex"), active_config_dirs=[])
+    assert not result.ok
+    assert "sessions" in result.error
+
+
+def test_codex_missing_dir_is_rejected(tmp_path):
+    result = validate_codex_path(str(tmp_path / "nope"), active_config_dirs=[])
+    assert not result.ok
+    assert "does not exist" in result.error
+
+
+def test_claude_dir_picked_as_codex_names_the_mistake(tmp_path):
+    claude = tmp_path / ".claude"
+    (claude / "projects").mkdir(parents=True)
+    # Claude Code has a sessions/ folder too, so that alone must not pass.
+    (claude / "sessions").mkdir()
+    result = validate_codex_path(str(claude), active_config_dirs=[])
+    assert not result.ok
+    assert "Claude Code" in result.error
+
+
+def test_codex_home_picked_as_claude_names_the_mistake(tmp_path):
+    home = _codex_home(tmp_path)
+    result = validate_manual_path(str(home), active_config_dirs=[])
+    assert not result.ok
+    assert "Codex" in result.error
+
+
+def test_codex_duplicate_is_detected_across_providers(tmp_path):
+    home = _codex_home(tmp_path)
+    result = validate_codex_path(str(home / "sessions"), active_config_dirs=[str(home)])
+    assert not result.ok
+    assert "already added" in result.error
+
+
+def test_codex_relative_path_is_rejected():
+    result = validate_codex_path("relative/.codex", active_config_dirs=[])
+    assert not result.ok
+    assert "absolute" in result.error.lower()
+
+
+def _fake_wsl_run(existing_dirs):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        test_expr = cmd[-1]
+        path = test_expr.split('"')[1]
+
+        class Result:
+            returncode = 0 if path in existing_dirs else 1
+
+        return Result()
+
+    return run, calls
+
+
+def test_codex_wsl_path_is_checked_through_wsl_exe():
+    run, calls = _fake_wsl_run({"/home/nick/.codex/sessions"})
+    result = validate_codex_path(
+        r"\\wsl.localhost\Ubuntu\home\nick\.codex", active_config_dirs=[], run=run
+    )
+    assert result.ok
+    assert result.config_dir == r"\\wsl.localhost\Ubuntu\home\nick\.codex"
+    assert all(cmd[0] == "wsl.exe" for cmd in calls)
+
+
+def test_codex_wsl_claude_dir_is_rejected():
+    run, _ = _fake_wsl_run({"/home/nick/.claude/projects", "/home/nick/.claude/sessions"})
+    result = validate_codex_path(
+        r"\\wsl.localhost\Ubuntu\home\nick\.claude", active_config_dirs=[], run=run
+    )
+    assert not result.ok
+    assert "Claude Code" in result.error
+
+
+def test_looks_like_codex_home(tmp_path):
+    home = _codex_home(tmp_path)
+    assert looks_like_codex_home(str(home))
+    claude = tmp_path / ".claude"
+    (claude / "sessions").mkdir(parents=True)
+    (claude / ".credentials.json").write_text(_oauth_json(), encoding="utf-8")
+    assert not looks_like_codex_home(str(claude))
+    assert not looks_like_codex_home(str(tmp_path / "missing"))
+
+
+def test_codex_wsl_dir_with_claude_credentials_is_rejected():
+    run, _ = _fake_wsl_run({"/home/nick/.claude/sessions", "/home/nick/.claude/.credentials.json"})
+    result = validate_codex_path(
+        r"\\wsl.localhost\Ubuntu\home\nick\.claude", active_config_dirs=[], run=run
+    )
+    assert not result.ok
+    assert "Claude Code" in result.error

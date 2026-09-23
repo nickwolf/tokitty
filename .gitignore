@@ -10,3 +10,6 @@ venv/
 
 # Private session handoff, project-root-anchored. Never tracked.
 /.handoff/
+
+# Linked worktrees for feature work. The primary checkout stays on main.
+/.worktrees/
