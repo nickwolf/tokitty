@@ -298,3 +298,12 @@ def test_looks_like_codex_home(tmp_path):
     (claude / ".credentials.json").write_text(_oauth_json(), encoding="utf-8")
     assert not looks_like_codex_home(str(claude))
     assert not looks_like_codex_home(str(tmp_path / "missing"))
+
+
+def test_codex_wsl_dir_with_claude_credentials_is_rejected():
+    run, _ = _fake_wsl_run({"/home/nick/.claude/sessions", "/home/nick/.claude/.credentials.json"})
+    result = validate_codex_path(
+        r"\\wsl.localhost\Ubuntu\home\nick\.claude", active_config_dirs=[], run=run
+    )
+    assert not result.ok
+    assert "Claude Code" in result.error

@@ -332,9 +332,13 @@ def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 PENDING_HOOK_OP_FILENAME = "pending_hook_op.json"
 
 
-def save_pending_hook_op(state_dir: Path, op: str, config_dir: str) -> None:
+def save_pending_hook_op(
+    state_dir: Path, op: str, config_dir: str, provider: Optional[str] = None
+) -> None:
     path = Path(state_dir) / PENDING_HOOK_OP_FILENAME
     payload = {"op": op, "config_dir": config_dir}
+    if provider is not None:
+        payload["provider"] = provider
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
@@ -350,7 +354,10 @@ def load_pending_hook_op(state_dir: Path) -> Optional[dict]:
         return None
     if not isinstance(data, dict) or data.get("op") not in ("install", "remove") or not data.get("config_dir"):
         return None
-    return {"op": data["op"], "config_dir": data["config_dir"]}
+    pending = {"op": data["op"], "config_dir": data["config_dir"]}
+    if isinstance(data.get("provider"), str):
+        pending["provider"] = data["provider"]
+    return pending
 
 
 def clear_pending_hook_op(state_dir: Path) -> None:
@@ -383,7 +390,7 @@ def apply_account_mutation(
     save_accounts(state_dir, accounts)
     if not provider_has_hooks(provider):
         return ConfigDirResult(config_dir, True, "saved, this harness has no hooks")
-    save_pending_hook_op(state_dir, op, config_dir)
+    save_pending_hook_op(state_dir, op, config_dir, provider)
     fn = install_fn if op == "install" else uninstall_fn
     result = fn(config_dir)
     if result.ok:
@@ -392,7 +399,8 @@ def apply_account_mutation(
 
 
 def _pending_dir_has_hooks(state_dir: Path, config_dir: str) -> bool:
-    """Whether a pending op's dir is one that gets hooks.
+    """Whether a legacy pending op's dir is one that gets hooks. Records
+    written by this build carry their provider and never get here.
 
     The account's own provider decides when it is still in accounts.json.
     A removed account is gone from there, so its dir is judged by what is
@@ -422,7 +430,11 @@ def retry_pending_hook_op(
     pending = load_pending_hook_op(state_dir)
     if pending is None:
         return None
-    if not _pending_dir_has_hooks(state_dir, pending["config_dir"]):
+    if "provider" in pending:
+        has_hooks = provider_has_hooks(pending["provider"])
+    else:
+        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"])
+    if not has_hooks:
         # Left by a build that installed hooks into every account. Replaying
         # it would write Claude Code settings into another harness's home.
         clear_pending_hook_op(state_dir)

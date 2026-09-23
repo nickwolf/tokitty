@@ -960,7 +960,7 @@ def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monke
         _assert_codex_home_untouched(home)
 
         _run_and_wait_for_mutation(
-            lambda: mgr._on_remove(codex[0].name, codex[0].config_dir),
+            lambda: mgr._on_remove(codex[0].name, codex[0].config_dir, "codex"),
             root, monkeypatch, manager=mgr,
         )
         assert [a.name for a in load_accounts(tmp_path)] == ["acct-claude"]
@@ -1111,5 +1111,76 @@ def test_codex_wsl_path_is_validated_off_the_tk_thread(tmp_path, monkeypatch):
 
         assert validated_on and main_thread not in validated_on
         assert errors and "No sessions folder found" in errors[-1][1]
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_a_stale_codex_row_is_never_removed_as_claude(tmp_path, monkeypatch):
+    """Another dialog removed the Codex account after this one drew it.
+    Clicking the stale Remove must not start any hook op."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import save_accounts
+
+    home = _codex_home(tmp_path)
+    save_accounts(tmp_path, [
+        Account(name="a", config_dir="/home/u/.claude-a"),
+        Account(name="b", config_dir="/home/u/.claude-b"),
+        Account(name="c", config_dir=str(home), provider="codex"),
+    ])
+    started = []
+    monkeypatch.setattr(
+        accounts_ui, "_run_mutation_off_thread", lambda *a, **k: started.append((a, k))
+    )
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        _pump_until(root, lambda: not mgr._retry_in_flight)
+        save_accounts(tmp_path, [
+            Account(name="a", config_dir="/home/u/.claude-a"),
+            Account(name="b", config_dir="/home/u/.claude-b"),
+        ])
+        mgr._on_remove("c", str(home), "codex")
+        assert started == []
+        _assert_codex_home_untouched(home)
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_add_rechecks_duplicates_after_slow_validation(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import load_accounts, save_accounts
+    from tokitty.manual_path import PathValidationResult
+
+    unc = r"\\wsl.localhost\Ubuntu\home\nick\.codex"
+    save_accounts(tmp_path, [Account(name="a", config_dir="/home/u/.claude-a")])
+
+    def validate_while_another_dialog_adds(provider, raw, active_dirs):
+        save_accounts(tmp_path, [
+            Account(name="a", config_dir="/home/u/.claude-a"),
+            Account(name="other", config_dir=unc, provider="codex"),
+        ])
+        return PathValidationResult(ok=True, config_dir=unc)
+
+    monkeypatch.setattr(accounts_ui, "validate_account_path", validate_while_another_dialog_adds)
+    errors = []
+    monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: unc)
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        _pump_until(root, lambda: not mgr._retry_in_flight)
+        mgr._add_provider_var.set("codex")
+        mgr._on_add()
+        _pump_until(root, lambda: not mgr._validation_in_flight)
+        assert errors and "already added" in errors[-1][1]
+        assert [a.name for a in load_accounts(tmp_path)] == ["a", "other"]
     finally:
         root.destroy()

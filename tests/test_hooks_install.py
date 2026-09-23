@@ -556,9 +556,9 @@ def test_apply_account_mutation_writes_accounts_before_pending_op_before_hook(tm
 
     original_save_pending = hi.save_pending_hook_op
 
-    def spy_save_pending(state_dir, op, config_dir):
+    def spy_save_pending(state_dir, op, config_dir, provider=None):
         order.append("save_pending")
-        return original_save_pending(state_dir, op, config_dir)
+        return original_save_pending(state_dir, op, config_dir, provider)
 
     import tokitty.accounts as accounts_mod
     monkeypatched_save_accounts = accounts_mod.save_accounts
@@ -593,7 +593,7 @@ def test_apply_account_mutation_leaves_pending_op_on_ok_false(tmp_path):
         tmp_path, accounts, "install", "/home/u/.claude",
         install_fn=lambda cd: ConfigDirResult(cd, False, "aborted"),
     )
-    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
+    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude", "provider": "claude"}
 
 
 def test_apply_account_mutation_leaves_pending_op_on_raised_exception(tmp_path):
@@ -606,7 +606,7 @@ def test_apply_account_mutation_leaves_pending_op_on_raised_exception(tmp_path):
         apply_account_mutation(tmp_path, accounts, "install", "/home/u/.claude", install_fn=raising_install)
     except OSError:
         pass
-    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude"}
+    assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude", "provider": "claude"}
 
 
 def test_retry_pending_hook_op_clears_on_success(tmp_path):
@@ -742,3 +742,34 @@ def test_retry_still_replays_a_pending_op_for_a_removed_claude_dir(tmp_path):
 
     retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=fake_uninstall)
     assert calls == [str(claude)]
+
+
+def test_new_pending_ops_record_their_provider(tmp_path):
+    apply_account_mutation(
+        tmp_path, [], "remove", "/home/u/.claude",
+        uninstall_fn=lambda d: ConfigDirResult(d, False, "failed"),
+    )
+    assert load_pending_hook_op(tmp_path)["provider"] == "claude"
+
+
+def test_retry_trusts_a_recorded_claude_provider_over_the_dir_shape(tmp_path):
+    # A Claude dir with hooks but, right now, no credentials or projects/
+    # looks like a Codex home. The recorded provider must win.
+    claude = tmp_path / ".claude"
+    (claude / "sessions").mkdir(parents=True)
+    save_pending_hook_op(tmp_path, "remove", str(claude), "claude")
+    calls = []
+
+    def fake_uninstall(config_dir):
+        calls.append(config_dir)
+        return ConfigDirResult(config_dir, True, "uninstalled")
+
+    retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=fake_uninstall)
+    assert calls == [str(claude)]
+
+
+def test_retry_clears_a_recorded_codex_provider(tmp_path):
+    home = _codex_home(tmp_path)
+    save_pending_hook_op(tmp_path, "install", str(home), "codex")
+    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    assert load_pending_hook_op(tmp_path) is None

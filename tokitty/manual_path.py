@@ -83,7 +83,8 @@ def _check_wsl_credentials(distro: str, posix_dir: str, run: Callable) -> PathVa
         capabilities.add(CAP_MODELS)
 
     if not capabilities:
-        if any(wsl_dir_exists(distro, posix_dir.rstrip("/") + "/" + name, run=run)
+        # An unreadable or non-OAuth credentials file is still a Claude marker.
+        if text is None and any(wsl_dir_exists(distro, posix_dir.rstrip("/") + "/" + name, run=run)
                for name in _CODEX_ROLLOUT_DIRS):
             return PathValidationResult(
                 ok=False, error=_codex_picked_as_claude(f"{distro}:{posix_dir}")
@@ -220,10 +221,12 @@ def _strip_rollout_dir(path: str) -> str:
 
 
 def _check_wsl_codex_home(distro: str, posix_dir: str, run: Callable) -> PathValidationResult:
-    from tokitty.wsl_probe import wsl_dir_exists
+    from tokitty.wsl_probe import wsl_dir_exists, wsl_file_exists
 
     base = posix_dir.rstrip("/")
-    if wsl_dir_exists(distro, base + "/projects", run=run):
+    if wsl_dir_exists(distro, base + "/projects", run=run) or wsl_file_exists(
+        distro, base + "/.credentials.json", run=run
+    ):
         return PathValidationResult(ok=False, error=_claude_picked_as_codex(f"{distro}:{posix_dir}"))
     if not any(wsl_dir_exists(distro, base + "/" + name, run=run) for name in _CODEX_ROLLOUT_DIRS):
         return PathValidationResult(

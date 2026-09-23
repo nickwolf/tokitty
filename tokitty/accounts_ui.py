@@ -186,6 +186,13 @@ def discover_local_codex_home(accounts: Sequence[Account]) -> Optional[str]:
     return home
 
 
+def _same_dir(a: str, b: str) -> bool:
+    try:
+        return canonicalize_locator(a) == canonicalize_locator(b)
+    except ValueError:
+        return False
+
+
 def _needs_off_thread_validation(provider: str, raw: str) -> bool:
     """A Codex UNC path is validated through wsl.exe. The Claude path keeps
     validating inline, exactly as it did before providers existed."""
@@ -621,7 +628,7 @@ class AccountsManager:
             tk.Button(frame, text="Rename…", command=lambda s=row.slug: self._on_rename(s)).pack(side="left")
             remove_state = "normal" if row.remove_enabled else "disabled"
             remove = tk.Button(frame, text="Remove", state=remove_state,
-                               command=lambda s=row.slug, c=row.config_dir: self._on_remove(s, c))
+                               command=lambda s=row.slug, c=row.config_dir, p=row.provider: self._on_remove(s, c, p))
             remove._account_mutation_control = True
             remove._account_enabled = row.remove_enabled
             remove.pack(side="left")
@@ -850,7 +857,7 @@ class AccountsManager:
             rename_account(self.state_dir, slug, result)
             self._refresh_rows()
 
-    def _on_remove(self, slug: str, config_dir: str) -> None:
+    def _on_remove(self, slug: str, config_dir: str, provider: str = DEFAULT_PROVIDER) -> None:
         if (
             self._retry_in_flight
             or self._mutation_in_flight
@@ -864,9 +871,15 @@ class AccountsManager:
         accounts = load_result.accounts
         if len(accounts) <= 1:
             return
-        provider = next(
-            (a.provider for a in accounts if a.name == slug), DEFAULT_PROVIDER
-        )
+        # The row may be stale: another dialog can have removed or replaced
+        # this account since it was drawn. Acting on it anyway would run a
+        # hook op chosen for whatever the row used to be.
+        if not any(
+            a.name == slug and a.provider == provider and _same_dir(a.config_dir, config_dir)
+            for a in accounts
+        ):
+            self._refresh_rows()
+            return
         remaining = [a for a in accounts if a.name != slug]
         try:
             remaining = reconcile_before_save(self.state_dir, remaining)
@@ -972,6 +985,11 @@ class AccountsManager:
             accounts = reconcile_before_save(self.state_dir, accounts)
         except ValueError as exc:
             messagebox.showerror("Accounts", str(exc), parent=self.toplevel)
+            return
+        # Validation may have run off the Tk thread, long enough for another
+        # dialog to add the same directory in the meantime.
+        if any(_same_dir(a.config_dir, validation.config_dir) for a in accounts):
+            messagebox.showerror("Add account", "This account is already added.", parent=self.toplevel)
             return
 
         history = load_identity_history(self.state_dir)
