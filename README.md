@@ -95,7 +95,9 @@ To price a model before the next release, put a `prices.json` of the same shape 
 
 A pane can track an OpenAI Codex account instead of a Claude Code one. It gets the same limit bars (whichever windows your plan has) and the same Per-model view, both read from the rollout files Codex writes under `<codex-home>/sessions/` and `archived_sessions/`. Nothing is fetched and no credentials are read, so a Codex pane works offline.
 
-For now a Codex account is added by editing `accounts.json` by hand; the Accounts dialog only adds Claude Code accounts so far. Add an entry with `"provider": "codex"` and `config_dir` pointing at the Codex home (`C:\Users\<you>\.codex` on Windows, `~/.codex` elsewhere):
+Add one from the Accounts dialog: pick **Codex** as the harness, click **Add by path…**, and enter the Codex home (`C:\Users\<you>\.codex` on Windows, `~/.codex` elsewhere). Pointing it at the `sessions` folder inside works too. If your own Codex home has rollouts and isn't an account yet, the dialog lists it as a one-click row. Tokitty installs no hooks for a Codex account, and `--install-hooks` skips it, so nothing is ever written inside the Codex home.
+
+You can still add one by hand. The entry in `accounts.json` needs `"provider": "codex"` and `config_dir` pointing at the Codex home:
 
 ```json
 {"name": "codex", "config_dir": "C:\\Users\\you\\.codex", "provider": "codex"}
@@ -161,7 +163,7 @@ The per-model view reads more than the credentials file: it opens the `.jsonl` t
 
 A Codex account (see [Codex](#codex)) is read-only in the same way and narrower: tokitty reads the rollout files under that Codex home's `sessions/` and `archived_sessions/`, never its `auth.json` or any other credentials, writes nothing there, and makes no network request for it.
 
-Multi-account mode (above) extends this picture the same way single-account mode already worked, just once per configured account: tokitty reads OAuth credentials and (if hooks are installed) hook/session state from each account's Claude Code config dir. Nothing about what's read, persisted, or transmitted changes. It's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains an identity slug and a config-dir path per account, both assigned by the Accounts dialog, not typed in by hand.
+Multi-account mode (above) extends this picture the same way single-account mode already worked, just once per configured account: tokitty reads OAuth credentials and (if hooks are installed) hook/session state from each account's Claude Code config dir. Nothing about what's read, persisted, or transmitted changes. It's the same read-only credentials access, the same opt-in hook installation, and the same locally-scoped session-state files, just applied per account instead of once. `accounts.json` itself only ever contains an identity slug, a config-dir path, and the harness kind per account, all assigned by the Accounts dialog, not typed in by hand.
 
 ## Platforms tested
 
