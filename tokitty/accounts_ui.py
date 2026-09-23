@@ -15,10 +15,12 @@ from tkinter import messagebox, simpledialog
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from tokitty.accounts import (
+    DEFAULT_PROVIDER,
     Account,
     AccountsLoadResult,
     backfill_identity_history,
     canonicalize_locator,
+    parse_wsl_unc,
     load_accounts_result,
     load_identity_history,
     save_identity_history,
@@ -32,8 +34,10 @@ from tokitty.customize import (
     save_customization_entry,
 )
 from tokitty.hooks_install import apply_account_mutation, retry_pending_hook_op
-from tokitty.manual_path import validate_manual_path
+from tokitty.manual_path import PathValidationResult, validate_codex_path, validate_manual_path
 from tokitty.migration import absorb_implicit_default
+from tokitty.providers import UnknownProviderError, get_provider, supported_kinds
+from tokitty.providers.codex import default_codex_home
 from tokitty.randomize import random_look
 from tokitty import sprites
 from tokitty.wsl_probe import (
@@ -60,6 +64,9 @@ _in_flight_operations_lock = threading.Lock()
 # not a continuous UI loop like __main__.py's UI_REFRESH_MS.
 _RETRY_POLL_MS = 100
 _MUTATION_POLL_MS = 100
+_VALIDATION_POLL_MS = 100
+
+CODEX_KIND = "codex"
 
 
 @dataclass(frozen=True)
@@ -68,6 +75,7 @@ class RowSpec:
     config_dir: str
     display_label: str
     remove_enabled: bool
+    provider: str = DEFAULT_PROVIDER
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,18 @@ def describe_capabilities(has_credentials: bool, has_transcripts: bool) -> Tuple
     return subscription, local
 
 
+def describe_codex_capabilities(has_rollouts: bool) -> Tuple[str, str]:
+    """The Codex row's fact lines. Codex has no credentials to check: its
+    rate limits ride along inside the same rollouts its ledger is read
+    from, so one directory answers both."""
+    local = (
+        "local usage: rollouts found"
+        if has_rollouts
+        else "local usage: no rollouts found"
+    )
+    return "rate limits: read from rollouts", local
+
+
 def build_row_specs(accounts: List[Account], customization_store: Dict[str, Customization]) -> List[RowSpec]:
     """Pure, Tk-free: one display row per account. Never shows the raw
     slug as a fallback label -- it's an opaque SHA-256-derived string."""
@@ -123,6 +143,7 @@ def build_row_specs(accounts: List[Account], customization_store: Dict[str, Cust
         rows.append(RowSpec(
             slug=account.name, config_dir=account.config_dir,
             display_label=label, remove_enabled=remove_enabled,
+            provider=account.provider,
         ))
     return rows
 
@@ -140,6 +161,43 @@ def build_discovered_path_specs(
         )
         for distro, credentials_path in matches
     ]
+
+
+def discover_local_codex_home(accounts: Sequence[Account]) -> Optional[str]:
+    """The local Codex home, when it has rollouts and is not an account yet.
+
+    Local only. Probing each WSL distro for a .codex dir would need
+    wsl.exe, which boots stopped distros; the Claude discovery already pays
+    that cost off the Tk thread, and this runs on it.
+    """
+    home = default_codex_home()
+    try:
+        if not any((Path(home) / name).is_dir() for name in ("sessions", "archived_sessions")):
+            return None
+        locator = canonicalize_locator(home)
+    except (OSError, ValueError):
+        return None
+    for account in accounts:
+        try:
+            if canonicalize_locator(account.config_dir) == locator:
+                return None
+        except ValueError:
+            continue
+    return home
+
+
+def _needs_off_thread_validation(provider: str, raw: str) -> bool:
+    """A Codex UNC path is validated through wsl.exe. The Claude path keeps
+    validating inline, exactly as it did before providers existed."""
+    return provider != DEFAULT_PROVIDER and parse_wsl_unc(raw.strip()) is not None
+
+
+def validate_account_path(provider: str, raw: str, active_config_dirs: List[str]) -> PathValidationResult:
+    if provider == CODEX_KIND:
+        return validate_codex_path(raw, active_config_dirs=active_config_dirs)
+    if provider == DEFAULT_PROVIDER:
+        return validate_manual_path(raw, active_config_dirs=active_config_dirs)
+    return PathValidationResult(ok=False, error=f"Adding a {provider} account is not supported.")
 
 
 def reconcile_before_save(state_dir: Path, in_memory_accounts: List[Account]) -> List[Account]:
@@ -191,12 +249,25 @@ def _complete_operation(
 
 
 def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
-                              config_dir: str, on_done) -> None:
+                              config_dir: str, on_done, provider: str = DEFAULT_PROVIDER) -> None:
     def worker():
         try:
-            outcome = apply_account_mutation(state_dir, accounts, op, config_dir)
+            outcome = apply_account_mutation(
+                state_dir, accounts, op, config_dir, provider=provider
+            )
         except Exception as exc:
             outcome = exc
+        on_done(outcome)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _run_validation_off_thread(provider: str, raw: str, active_dirs: List[str], on_done) -> None:
+    def worker():
+        try:
+            outcome = validate_account_path(provider, raw, active_dirs)
+        except Exception as exc:
+            outcome = PathValidationResult(ok=False, error=str(exc))
         on_done(outcome)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -215,6 +286,11 @@ def _run_retry_off_thread(state_dir: Path, on_done) -> None:
 class AccountsManager:
     """Singleton Toplevel per root: AccountsManager.open() raises the
     existing dialog instead of creating a second one."""
+
+    # Set while a Codex WSL path is being checked off the Tk thread. A class
+    # default so managers built without __init__ in tests still read it.
+    _validation_in_flight = False
+    _validation_after_id = None
 
     def __init__(
         self,
@@ -382,6 +458,7 @@ class AccountsManager:
             return
         self._cancel_pending_callback("_retry_after_id")
         self._cancel_pending_callback("_mutation_after_id")
+        self._cancel_pending_callback("_validation_after_id")
         _manager_instances.pop(id(self.root), None)
 
     def _build(self) -> None:
@@ -395,11 +472,29 @@ class AccountsManager:
         # Add… is disabled on the virtual-row path: there is nothing to
         # add to on macOS when the only account is the Keychain itself.
         if not self._showing_virtual_macos_row():
+            self._build_harness_picker()
             button = tk.Button(self.toplevel, text="Add by path…", command=self._on_add)
             button._account_mutation_control = True
             button._account_enabled = True
             button.pack(padx=8, pady=(0, 10))
         self._update_mutation_controls()
+
+    def _build_harness_picker(self) -> None:
+        """Which harness "Add by path…" adds. Claude Code is preselected,
+        so the old flow is still one click."""
+        self._add_provider_var = tk.StringVar(value=DEFAULT_PROVIDER)
+        row = tk.Frame(self.toplevel)
+        tk.Label(row, text="Harness:").pack(side="left")
+        for kind in supported_kinds():
+            tk.Radiobutton(
+                row, text=get_provider(kind).display_name,
+                value=kind, variable=self._add_provider_var,
+            ).pack(side="left")
+        row.pack(padx=8)
+
+    def _selected_add_provider(self) -> str:
+        variable = getattr(self, "_add_provider_var", None)
+        return variable.get() if variable is not None else DEFAULT_PROVIDER
 
     def _build_usage_section(self) -> None:
         """The same three global controls the right-click menu carries,
@@ -522,7 +617,7 @@ class AccountsManager:
             frame = tk.Frame(self.toplevel)
             frame._accounts_row = True
             tk.Label(frame, text=row.display_label).pack(side="left", padx=4)
-            self._render_capability_facts(frame, row.config_dir)
+            self._render_capability_facts(frame, row.config_dir, row.provider)
             tk.Button(frame, text="Rename…", command=lambda s=row.slug: self._on_rename(s)).pack(side="left")
             remove_state = "normal" if row.remove_enabled else "disabled"
             remove = tk.Button(frame, text="Remove", state=remove_state,
@@ -532,6 +627,7 @@ class AccountsManager:
             remove.pack(side="left")
             frame.pack(fill="x", padx=8, pady=2)
         self._render_discovered_rows()
+        self._render_discovered_codex_row(accounts)
         self._update_mutation_controls()
 
     def _render_discovered_rows(self) -> None:
@@ -553,6 +649,44 @@ class AccountsManager:
             button._account_enabled = True
             button.pack(side="left")
             frame.pack(fill="x", padx=8, pady=2)
+
+    def _render_discovered_codex_row(self, accounts: Sequence[Account]) -> None:
+        home = discover_local_codex_home(accounts)
+        if home is None:
+            return
+        frame = tk.Frame(self.toplevel)
+        frame._accounts_row = True
+        tk.Label(
+            frame,
+            text=f"Found {get_provider(CODEX_KIND).display_name}: {home}",
+            wraplength=300,
+            justify="left",
+        ).pack(side="left", padx=4)
+        button = tk.Button(
+            frame,
+            text="Add",
+            command=lambda path=home: self._on_add_discovered(path, provider=CODEX_KIND),
+        )
+        button._account_mutation_control = True
+        button._account_enabled = True
+        button.pack(side="left")
+        frame.pack(fill="x", padx=8, pady=2)
+
+    def _local_codex_facts(self, config_dir: str):
+        """(has_rollouts,) for a Codex home, or None when answering would
+        touch a WSL UNC path from the Tk thread. Same rules as
+        _local_capabilities."""
+        if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
+            return None
+        try:
+            path = Path(config_dir)
+            for name in ("sessions", "archived_sessions"):
+                folder = path / name
+                if folder.is_dir() and next(folder.iterdir(), None) is not None:
+                    return (True,)
+            return (False,)
+        except OSError:
+            return None
 
     def _local_capabilities(self, config_dir: str):
         """(has_credentials, has_transcripts) for a config dir, or None
@@ -576,12 +710,22 @@ class AccountsManager:
         except OSError:
             return None
 
-    def _render_capability_facts(self, frame, config_dir: str) -> None:
-        capabilities = self._local_capabilities(config_dir)
-        if capabilities is None:
+    def _render_capability_facts(self, frame, config_dir: str, provider: str = DEFAULT_PROVIDER) -> None:
+        if provider == CODEX_KIND:
+            facts = self._local_codex_facts(config_dir)
+            describe = describe_codex_capabilities
+        elif provider == DEFAULT_PROVIDER:
+            facts = self._local_capabilities(config_dir)
+            describe = describe_capabilities
+        else:
+            facts = None
+        if facts is None:
             return
-        subscription, local = describe_capabilities(*capabilities)
-        tk.Label(frame, text=f"{subscription} · {local}", fg="#666666").pack(side="left", padx=4)
+        first, local = describe(*facts)
+        text = f"{first} · {local}"
+        if provider != DEFAULT_PROVIDER:
+            text = f"{get_provider(provider).display_name} · {text}"
+        tk.Label(frame, text=text, fg="#666666").pack(side="left", padx=4)
 
     def _render_malformed_row(self) -> None:
         frame = tk.Frame(self.toplevel)
@@ -604,6 +748,7 @@ class AccountsManager:
                         if enabled
                         and not self._mutation_in_flight
                         and not self._retry_in_flight
+                        and not self._validation_in_flight
                         and not self._pending_hook_failure
                         else "disabled"
                     )
@@ -661,7 +806,8 @@ class AccountsManager:
             )
 
     def _start_mutation(
-        self, accounts: List[Account], op: str, config_dir: str
+        self, accounts: List[Account], op: str, config_dir: str,
+        provider: str = DEFAULT_PROVIDER,
     ) -> None:
         if self._mutation_in_flight or self._retry_in_flight:
             return
@@ -676,7 +822,7 @@ class AccountsManager:
 
         try:
             _run_mutation_off_thread(
-                self.state_dir, accounts, op, config_dir, on_done
+                self.state_dir, accounts, op, config_dir, on_done, provider=provider
             )
         except Exception as exc:
             _complete_operation(state_key, operation, exc)
@@ -708,6 +854,7 @@ class AccountsManager:
         if (
             self._retry_in_flight
             or self._mutation_in_flight
+            or self._validation_in_flight
             or self._pending_hook_failure
         ):
             return
@@ -717,6 +864,9 @@ class AccountsManager:
         accounts = load_result.accounts
         if len(accounts) <= 1:
             return
+        provider = next(
+            (a.provider for a in accounts if a.name == slug), DEFAULT_PROVIDER
+        )
         remaining = [a for a in accounts if a.name != slug]
         try:
             remaining = reconcile_before_save(self.state_dir, remaining)
@@ -725,38 +875,95 @@ class AccountsManager:
             return
         remaining = [a for a in remaining if a.name != slug]
 
-        self._start_mutation(remaining, "remove", config_dir)
+        self._start_mutation(remaining, "remove", config_dir, provider)
 
     def _on_add(self) -> None:
         if (
             self._retry_in_flight
             or self._mutation_in_flight
+            or self._validation_in_flight
             or self._pending_hook_failure
         ):
             return
         load_result = self._load_accounts_for_mutation()
         if load_result is None:
             return
-        raw = simpledialog.askstring("Add account", "Claude config directory:", parent=self.toplevel)
+        provider = self._selected_add_provider()
+        if provider == DEFAULT_PROVIDER:
+            prompt = "Claude config directory:"
+        else:
+            try:
+                prompt = f"{get_provider(provider).display_name} home directory:"
+            except UnknownProviderError:
+                return
+        raw = simpledialog.askstring("Add account", prompt, parent=self.toplevel)
         if not raw:
             return
-        self._add_path(raw, load_result)
+        self._add_path(raw, load_result, provider)
 
-    def _on_add_discovered(self, config_dir: str) -> None:
+    def _on_add_discovered(self, config_dir: str, provider: str = DEFAULT_PROVIDER) -> None:
         if (
             self._retry_in_flight
             or self._mutation_in_flight
+            or self._validation_in_flight
             or self._pending_hook_failure
         ):
             return
         load_result = self._load_accounts_for_mutation()
         if load_result is not None:
-            self._add_path(config_dir, load_result)
+            self._add_path(config_dir, load_result, provider)
 
-    def _add_path(self, raw: str, load_result: AccountsLoadResult) -> None:
+    def _add_path(
+        self, raw: str, load_result: AccountsLoadResult, provider: str = DEFAULT_PROVIDER
+    ) -> None:
+        active_dirs = [a.config_dir for a in load_result.accounts]
+        if _needs_off_thread_validation(provider, raw):
+            self._start_validation(raw, active_dirs, load_result, provider)
+            return
+        validation = validate_account_path(provider, raw, active_dirs)
+        self._finish_add(validation, load_result, provider)
+
+    def _start_validation(
+        self, raw: str, active_dirs: List[str], load_result: AccountsLoadResult, provider: str
+    ) -> None:
+        """Check a path through wsl.exe off the Tk thread, then finish the
+        add back on it. Same producer/consumer shape as the mutation: the
+        worker only writes the shared state, and only the Tk thread polls."""
+        lock = threading.Lock()
+        state: Dict[str, object] = {"done": False}
+
+        def on_done(outcome):
+            with lock:
+                state["outcome"] = outcome
+                state["done"] = True
+
+        self._validation_in_flight = True
+        self._update_mutation_controls()
+
+        def poll():
+            self._validation_after_id = None
+            if not self.toplevel.winfo_exists():
+                return
+            with lock:
+                done = state["done"]
+                outcome = state.get("outcome")
+            if not done:
+                self._validation_after_id = self.toplevel.after(_VALIDATION_POLL_MS, poll)
+                return
+            self._validation_in_flight = False
+            self._update_mutation_controls()
+            self._finish_add(outcome, load_result, provider)
+
+        try:
+            _run_validation_off_thread(provider, raw, active_dirs, on_done)
+        except Exception as exc:
+            on_done(PathValidationResult(ok=False, error=str(exc)))
+        self._validation_after_id = self.toplevel.after(_VALIDATION_POLL_MS, poll)
+
+    def _finish_add(
+        self, validation: PathValidationResult, load_result: AccountsLoadResult, provider: str
+    ) -> None:
         accounts = load_result.accounts
-        active_dirs = [a.config_dir for a in accounts]
-        validation = validate_manual_path(raw, active_config_dirs=active_dirs)
         if not validation.ok:
             messagebox.showerror("Add account", validation.error, parent=self.toplevel)
             return
@@ -774,7 +981,7 @@ class AccountsManager:
         save_identity_history(self.state_dir, history)
 
         was_implicit_only = load_result.state == "absent"
-        new_account = Account(name=slug, config_dir=validation.config_dir)
+        new_account = Account(name=slug, config_dir=validation.config_dir, provider=provider)
         new_accounts = accounts + [new_account]
 
         store = load_customization(self.state_dir)
@@ -788,4 +995,4 @@ class AccountsManager:
                 self.state_dir, slug, Customization(colorway=colorway, pattern=pattern)
             )
 
-        self._start_mutation(new_accounts, "install", validation.config_dir)
+        self._start_mutation(new_accounts, "install", validation.config_dir, provider)
