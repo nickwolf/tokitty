@@ -280,8 +280,8 @@ def read_latest_snapshot(config_dir: Optional[str] = None, now: Optional[datetim
 
 class CodexProvider:
     """Rate limits and a token ledger, both off disk. No activity: Codex
-    has no hook equivalent to the one that drives the thinking and working
-    poses, so those stay Claude-only until it does."""
+    has command hooks now (codex-cli 0.156.1), but tokitty installs none
+    into a Codex home, so the thinking and working poses stay Claude-only."""
 
     kind = "codex"
     display_name = "Codex"
