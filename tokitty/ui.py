@@ -13,7 +13,8 @@ from typing import Callable, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.usage_display import ROW_SLOTS
-from tokitty.geometry import clamp_position
+from tokitty import monitors
+from tokitty.geometry import clamp_to_area, default_position
 from tokitty.menu import MenuItem, build_menu
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
 from tokitty.transparency import (
@@ -932,15 +933,16 @@ class TokittyWindow:
             window.attributes("-topmost", self._always_on_top_bool)
 
     def _restore_position(self) -> None:
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        x, y = screen_w - self._width - 24, screen_h - self._height - 24
+        screen = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        x, y = default_position(self._width, self._height, monitors.primary_work_area() or screen)
 
         if self._position_path.is_file():
             try:
                 saved = json.loads(self._position_path.read_text(encoding="utf-8"))
-                x, y = clamp_position(int(saved["x"]), int(saved["y"]), self._width, self._height, screen_w, screen_h)
-            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                saved_x, saved_y = int(saved["x"]), int(saved["y"])
+                area = monitors.work_area_for(saved_x, saved_y, self._width, self._height) or screen
+                x, y = clamp_to_area(saved_x, saved_y, self._width, self._height, area)
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 pass
 
         for window in self._windows():
