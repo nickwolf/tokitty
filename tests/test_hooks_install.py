@@ -620,3 +620,125 @@ def test_retry_pending_hook_op_clears_on_success(tmp_path):
 
 def test_retry_pending_hook_op_returns_none_when_nothing_pending(tmp_path):
     assert retry_pending_hook_op(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Providers without hooks (Codex)
+# ---------------------------------------------------------------------------
+
+def _write_accounts(state_dir, entries):
+    (state_dir / "accounts.json").write_text(json.dumps({"accounts": entries}), encoding="utf-8")
+
+
+def _codex_home(tmp_path):
+    home = tmp_path / ".codex"
+    (home / "sessions").mkdir(parents=True)
+    return home
+
+
+def _assert_untouched(home):
+    assert sorted(p.name for p in home.iterdir()) == ["sessions"]
+
+
+def test_provider_has_hooks_follows_the_activity_capability():
+    assert hi.provider_has_hooks("claude")
+    assert hi.provider_has_hooks(None)
+    assert not hi.provider_has_hooks("codex")
+    assert not hi.provider_has_hooks("gemini")
+
+
+def test_get_config_dirs_skips_a_codex_account(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _write_accounts(state_dir, [
+        {"config_dir": "/a/.claude"},
+        {"config_dir": "/b/.codex", "provider": "codex"},
+    ])
+    monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
+    assert hi.get_config_dirs() == ["/a/.claude"]
+
+
+def test_get_config_dirs_with_only_codex_accounts_is_empty(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _write_accounts(state_dir, [{"config_dir": "/b/.codex", "provider": "codex"}])
+    monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
+    assert hi.get_config_dirs() == []
+
+
+def test_install_hooks_leaves_a_codex_home_untouched(monkeypatch, tmp_path, capsys):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    home = _codex_home(tmp_path)
+    _write_accounts(state_dir, [{"config_dir": str(home), "provider": "codex"}])
+    monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
+    assert hi.install_hooks() == 0
+    assert hi.uninstall_hooks() == 0
+    _assert_untouched(home)
+    assert "nothing to install" in capsys.readouterr().out
+
+
+def _forbidden(config_dir):
+    raise AssertionError(f"hook function called for {config_dir}")
+
+
+def test_adding_a_codex_account_never_calls_install_fn(tmp_path):
+    from tokitty.accounts import load_accounts
+
+    home = _codex_home(tmp_path)
+    accounts = [Account(name="c", config_dir=str(home), provider="codex")]
+    result = apply_account_mutation(
+        tmp_path, accounts, "install", str(home),
+        install_fn=_forbidden, uninstall_fn=_forbidden, provider="codex",
+    )
+    assert result.ok
+    assert [a.provider for a in load_accounts(tmp_path)] == ["codex"]
+    assert load_pending_hook_op(tmp_path) is None
+    _assert_untouched(home)
+
+
+def test_removing_a_codex_account_never_calls_uninstall_fn(tmp_path):
+    from tokitty.accounts import load_accounts
+
+    home = _codex_home(tmp_path)
+    remaining = [Account(name="a", config_dir="/home/u/.claude")]
+    result = apply_account_mutation(
+        tmp_path, remaining, "remove", str(home),
+        install_fn=_forbidden, uninstall_fn=_forbidden, provider="codex",
+    )
+    assert result.ok
+    assert [a.name for a in load_accounts(tmp_path)] == ["a"]
+    assert load_pending_hook_op(tmp_path) is None
+    _assert_untouched(home)
+
+
+def test_retry_clears_a_pending_op_for_a_codex_account(tmp_path):
+    home = _codex_home(tmp_path)
+    _write_accounts(tmp_path, [{"name": "c", "config_dir": str(home), "provider": "codex"}])
+    save_pending_hook_op(tmp_path, "install", str(home))
+    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    assert load_pending_hook_op(tmp_path) is None
+    _assert_untouched(home)
+
+
+def test_retry_clears_a_pending_remove_for_a_codex_home_no_longer_listed(tmp_path):
+    home = _codex_home(tmp_path)
+    _write_accounts(tmp_path, [{"name": "a", "config_dir": "/home/u/.claude"}])
+    save_pending_hook_op(tmp_path, "remove", str(home))
+    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    assert load_pending_hook_op(tmp_path) is None
+
+
+def test_retry_still_replays_a_pending_op_for_a_removed_claude_dir(tmp_path):
+    claude = tmp_path / ".claude"
+    (claude / "projects").mkdir(parents=True)
+    (claude / "sessions").mkdir()
+    save_pending_hook_op(tmp_path, "remove", str(claude))
+    calls = []
+
+    def fake_uninstall(config_dir):
+        calls.append(config_dir)
+        return ConfigDirResult(config_dir, True, "uninstalled")
+
+    retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=fake_uninstall)
+    assert calls == [str(claude)]
