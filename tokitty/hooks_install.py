@@ -420,11 +420,30 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
         entries = hooks[event]
         if not isinstance(entries, list):
             continue
-        kept = [e for e in entries if not _is_tokitty_entry(e, config_dir, provider)]
-        if len(kept) != len(entries):
+        new_entries = []
+        event_changed = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                new_entries.append(entry)
+                continue
+            entry_hooks = entry.get("hooks")
+            if not isinstance(entry_hooks, list):
+                new_entries.append(entry)
+                continue
+            kept_hooks = [h for h in entry_hooks if not _is_owned_hook(h, config_dir, provider)]
+            if len(kept_hooks) == len(entry_hooks):
+                new_entries.append(entry)
+                continue
+            event_changed = True
+            if kept_hooks:
+                kept_entry = dict(entry)
+                kept_entry["hooks"] = kept_hooks
+                new_entries.append(kept_entry)
+            # else: every handler in this entry was tokitty's, drop the entry.
+        if event_changed:
             removed.append(event)
-            if kept:
-                hooks[event] = kept
+            if new_entries:
+                hooks[event] = new_entries
             else:
                 del hooks[event]
 

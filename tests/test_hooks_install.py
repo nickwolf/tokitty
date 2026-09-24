@@ -514,6 +514,113 @@ def test_uninstall_preserves_non_tokitty_entries(tmp_path):
     ]
 
 
+def test_uninstall_keeps_user_handler_in_a_shared_entry(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "some-other-tool"},
+                        dict(owned_handler),
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
+def test_uninstall_drops_an_entry_left_with_no_handlers(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "", "hooks": [dict(owned_handler)]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
+def test_uninstall_drops_an_event_left_with_no_entries(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "Stop": [{"matcher": "", "hooks": [dict(owned_handler)]}],
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "Stop" not in data["hooks"]
+    assert result.installed_events == ["Stop"]
+
+
+def test_uninstall_keeps_the_position_of_user_entries_around_tokittys(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "Before", "hooks": [{"type": "command", "command": "before-tool"}]},
+                {"matcher": "", "hooks": [dict(owned_handler)]},
+                {"matcher": "After", "hooks": [{"type": "command", "command": "after-tool"}]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Before", "hooks": [{"type": "command", "command": "before-tool"}]},
+        {"matcher": "After", "hooks": [{"type": "command", "command": "after-tool"}]},
+    ]
+
+
+def test_uninstall_writes_nothing_and_no_backup_when_nothing_owned(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    original = (config_dir / "settings.json").read_text()
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    assert result.installed_events == []
+    assert (config_dir / "settings.json").read_text() == original
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
 def test_uninstall_leaves_settings_local_alone_but_reports(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
