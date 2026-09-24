@@ -871,7 +871,7 @@ def _spy_on_hooks(monkeypatch, accounts_ui):
 
     hook_calls = []
 
-    def spy(config_dir):
+    def spy(config_dir, provider):
         hook_calls.append(config_dir)
         return hooks_install.ConfigDirResult(config_dir, True, "spied")
 

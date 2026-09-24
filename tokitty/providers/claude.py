@@ -107,7 +107,7 @@ def resolve_activity_sessions(config_dir: Optional[str] = None, credentials=None
         try:
             from tokitty.hooks_install import get_config_dirs
 
-            config_dir = get_config_dirs()[0]
+            config_dir = get_config_dirs()[0][0]
         except Exception:
             config_dir = str(Path.home() / ".claude")
         return str(Path(config_dir) / "tokitty" / "sessions"), None
@@ -148,7 +148,7 @@ def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
         try:
             from tokitty.hooks_install import get_config_dirs
 
-            resolved = get_config_dirs()[0]
+            resolved = get_config_dirs()[0][0]
         except Exception:
             resolved = str(Path.home() / ".claude")
         return str(Path(resolved) / "projects"), None
