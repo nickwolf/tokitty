@@ -1132,6 +1132,16 @@ def test_run_gui_calls_ensure_current_at_startup(tmp_path, monkeypatch):
     assert calls == [(tmp_path, fake_backend)]
 
 
+def test_main_dispatches_self_check(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.frozen.self_check", lambda: calls.append("self-check") or 0)
+
+    assert main_module.main(["--self-check"]) == 0
+    assert calls == ["self-check"]
+
+
 def test_main_dispatches_install_autostart(monkeypatch):
     from tokitty import __main__ as main_module
 

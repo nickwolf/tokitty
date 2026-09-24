@@ -1001,6 +1001,10 @@ def run_gui() -> int:
 
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--self-check" in argv:
+        from tokitty.frozen import self_check
+
+        return self_check()
     if "--debug-print" in argv:
         return debug_print()
     if "--install-hooks" in argv:
