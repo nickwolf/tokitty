@@ -245,6 +245,24 @@ def _normalize_home_path(path: str) -> str:
     return normalized
 
 
+def _normalize_token_path(path: str) -> str:
+    """Normalise a path token pulled out of a hook command for comparison.
+
+    Unlike _normalize_home_path, a trailing separator is never stripped:
+    the home is ours to normalise (it comes from accounts.json or the
+    UI), but a script or sessions path out of an arbitrary hook command
+    is exactly what tokitty wrote or it is not owned, and
+    ".../hook_writer.py/" is not the file tokitty writes. Backslashes
+    still become forward slashes, repeated slashes still collapse, and a
+    drive-letter path is still case-folded -- those are equivalent
+    spellings regardless of where the string came from.
+    """
+    normalized = re.sub(r"/+", "/", path.replace("\\", "/"))
+    if _is_windows_local_path(normalized):
+        normalized = normalized.casefold()
+    return normalized
+
+
 def _command_owned_from_parts(parts, expected_script: str, expected_sessions: str) -> bool:
     if len(parts) != 4:
         return False
@@ -252,8 +270,8 @@ def _command_owned_from_parts(parts, expected_script: str, expected_sessions: st
     if interpreter not in ("python", "python3") or flag != "--sessions-dir":
         return False
     return (
-        _normalize_home_path(script) == expected_script
-        and _normalize_home_path(sessions_arg) == expected_sessions
+        _normalize_token_path(script) == expected_script
+        and _normalize_token_path(sessions_arg) == expected_sessions
     )
 
 
@@ -266,16 +284,21 @@ def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> b
     both paths normalise to this home's tokitty/hook_writer.py and
     tokitty/sessions. An equivalent spelling (quoting, a doubled slash, a
     differently-cased drive letter) is still owned; a hook aimed at
-    another home, or one that merely mentions tokitty, is not.
+    another home, one that merely mentions tokitty, one with an
+    unbalanced quote, or one whose script/sessions token carries a
+    trailing separator tokitty never wrote, is not.
 
     The split is tried two ways. shlex (posix mode) handles the quoted
     form and the historical unquoted POSIX form (9bab1b3). It does not
     handle the historical unquoted form on a drive-letter home: shlex
     reads the backslashes in "C:\\Users\\..." as escape characters and
-    mangles the path. When shlex's split is not an owned match, a plain
-    whitespace split with surrounding double quotes stripped from each
-    token is tried too -- exact for that shape, since an unquoted path
-    with spaces never worked either way.
+    mangles the path. A raised ValueError (an unbalanced quote) means the
+    command does not parse as anything tokitty wrote, full stop -- no
+    fallback. When shlex's split parses but is not an owned match, a
+    plain whitespace split is tried too, but only when the command has no
+    quote characters at all: the whitespace fallback exists solely for
+    the historical unquoted shape, which never had quotes, so any quote
+    in the command means that shape is not what this is.
 
     provider is accepted for forward compatibility with non-Claude
     shapes; only Claude's shape is recognised today.
@@ -292,11 +315,14 @@ def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> b
     try:
         shlex_parts = shlex.split(command, posix=True)
     except ValueError:
-        shlex_parts = []
+        return False
     if _command_owned_from_parts(shlex_parts, expected_script, expected_sessions):
         return True
 
-    whitespace_parts = [token.strip('"') for token in command.split()]
+    if '"' in command or "'" in command:
+        return False
+
+    whitespace_parts = command.split()
     return _command_owned_from_parts(whitespace_parts, expected_script, expected_sessions)
 
 

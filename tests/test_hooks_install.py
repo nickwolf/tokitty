@@ -223,6 +223,31 @@ def test_is_owned_hook_rejects_historical_unquoted_form_for_a_different_drive_le
     assert not hi._is_owned_hook(hook, r"D:\Users\nick\.claude")
 
 
+def test_is_owned_hook_rejects_unbalanced_quote():
+    # The whitespace fallback exists only for the historical unquoted
+    # shape, which never had quotes at all. A command with a stray quote
+    # is not that shape, even though stripping quotes per token happens
+    # to make it line up.
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py '
+        '--sessions-dir /h/.claude/tokitty/sessions',
+    }
+    assert not hi._is_owned_hook(hook, "/h/.claude")
+
+
+def test_is_owned_hook_rejects_trailing_slash_on_script_token():
+    # A quoted command with a trailing slash on the script path is not the
+    # command tokitty writes, even though the home itself normalises a
+    # trailing separator away.
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py/" '
+        '--sessions-dir "/h/.claude/tokitty/sessions"',
+    }
+    assert not hi._is_owned_hook(hook, "/h/.claude")
+
+
 # ---------------------------------------------------------------------------
 # get_config_dirs
 # ---------------------------------------------------------------------------
