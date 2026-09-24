@@ -323,11 +323,19 @@ def _events_with_tokitty_entries(data, config_dir: str, provider: str = DEFAULT_
 
 
 class ConfigDirResult:
-    def __init__(self, config_dir: str, ok: bool, message: str, installed_events: Optional[List[str]] = None):
+    def __init__(
+        self,
+        config_dir: str,
+        ok: bool,
+        message: str,
+        installed_events: Optional[List[str]] = None,
+        warning: Optional[str] = None,
+    ):
         self.config_dir = config_dir
         self.ok = ok
         self.message = message
         self.installed_events = installed_events or []
+        self.warning = warning
 
 
 def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
@@ -607,6 +615,8 @@ def install_hooks() -> int:
             print(f"{config_dir}: installed hooks for {', '.join(result.installed_events)}")
         else:
             print(f"{config_dir}: {result.message}")
+        if result.warning:
+            print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
     print("If the cat doesn't react, restart running Claude Code sessions "
           "(hook edits are not hot-reloaded).")
     return 1 if any_failed else 0
@@ -625,6 +635,8 @@ def uninstall_hooks() -> int:
             print(f"{config_dir}: {result.message}", file=sys.stderr)
             continue
         print(f"{config_dir}: {result.message}")
+        if result.warning:
+            print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
     print("The copied hook_writer.py and sessions state files were left in place; "
           "delete <config-dir>/tokitty/ manually if you want them gone.")
     return 1 if any_failed else 0

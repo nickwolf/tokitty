@@ -1112,3 +1112,77 @@ def test_retry_clears_a_recorded_codex_provider(tmp_path):
     save_pending_hook_op(tmp_path, "install", str(home), "codex")
     assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
     assert load_pending_hook_op(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# A warning on a successful result
+# ---------------------------------------------------------------------------
+
+def test_config_dir_result_warning_defaults_to_none():
+    result = ConfigDirResult("cd", True, "installed")
+    assert result.warning is None
+
+
+def test_config_dir_result_stores_a_warning():
+    result = ConfigDirResult("cd", True, "installed", warning="fallback used")
+    assert result.warning == "fallback used"
+
+
+def test_install_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed", warning="fallback used")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert f"{config_dir}: warning: fallback used" in err
+
+
+def test_install_hooks_prints_no_warning_line_without_one(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" not in err
+
+
+def test_uninstall_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_uninstall(cd, provider):
+        return ConfigDirResult(cd, True, "uninstalled", warning="fallback used")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "uninstall_hooks_for_dir", fake_uninstall)
+    rc = hi.uninstall_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert f"{config_dir}: warning: fallback used" in err
+
+
+def test_uninstall_hooks_prints_no_warning_line_without_one(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_uninstall(cd, provider):
+        return ConfigDirResult(cd, True, "uninstalled")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "uninstall_hooks_for_dir", fake_uninstall)
+    rc = hi.uninstall_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" not in err

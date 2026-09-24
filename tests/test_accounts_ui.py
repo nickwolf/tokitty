@@ -121,6 +121,110 @@ def test_mutation_completion_is_polled_only_from_the_tk_thread(tmp_path, monkeyp
     assert manager._mutation_in_flight is False
 
 
+def _bare_manager(accounts_ui):
+    """A manager built without a real Tk toplevel, for exercising a single
+    handler method in isolation (as test_mutation_completion_is_polled_only_from_the_tk_thread
+    above does), so these tests need neither a display nor @pytest.mark.gui."""
+    manager = accounts_ui.AccountsManager.__new__(accounts_ui.AccountsManager)
+    manager.toplevel = object()
+    manager._mutation_in_flight = False
+    manager._pending_hook_failure = False
+    manager._refresh_rows = lambda: None
+    return manager
+
+
+def test_finish_mutation_shows_warning_only_for_an_ok_result_with_one(monkeypatch):
+    from tokitty import accounts_ui
+
+    warnings = []
+    errors = []
+    monkeypatch.setattr(accounts_ui.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    manager = _bare_manager(accounts_ui)
+
+    class OkWithWarning:
+        ok = True
+        message = "installed"
+        warning = "hooks installed to a stable-link fallback"
+
+    manager._finish_mutation(OkWithWarning())
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert errors == []
+
+    class OkNoWarning:
+        ok = True
+        message = "installed"
+        warning = None
+
+    manager._finish_mutation(OkNoWarning())
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert errors == []
+
+    class Failed:
+        ok = False
+        message = "hook install failed"
+        warning = "should be ignored"
+
+    manager._finish_mutation(Failed())
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert len(errors) == 1
+    assert "hook install failed" in errors[0][1]
+
+
+def test_poll_retry_done_shows_warning_only_for_an_ok_result_with_one(monkeypatch):
+    import threading
+
+    from tokitty import accounts_ui
+
+    warnings = []
+    errors = []
+    monkeypatch.setattr(accounts_ui.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+
+    class FakeToplevel:
+        def winfo_exists(self):
+            return True
+
+    manager = accounts_ui.AccountsManager.__new__(accounts_ui.AccountsManager)
+    manager.toplevel = FakeToplevel()
+    manager._retry_after_id = None
+    manager._retry_in_flight = True
+    manager._pending_hook_failure = False
+    manager._refresh_rows = lambda: None
+    manager._retry_lock = threading.Lock()
+
+    class OkWithWarning:
+        ok = True
+        message = "installed"
+        warning = "hooks installed to a stable-link fallback"
+
+    manager._retry_state = {"done": True, "outcome": OkWithWarning()}
+    manager._poll_retry_done()
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert errors == []
+
+    class OkNoWarning:
+        ok = True
+        message = "installed"
+        warning = None
+
+    manager._retry_state = {"done": True, "outcome": OkNoWarning()}
+    manager._poll_retry_done()
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert errors == []
+
+    class Failed:
+        ok = False
+        message = "hook install failed"
+        warning = "should be ignored"
+
+    manager._retry_state = {"done": True, "outcome": Failed()}
+    manager._poll_retry_done()
+    assert warnings == [("Accounts", "hooks installed to a stable-link fallback")]
+    assert len(errors) == 1
+    assert "hook install failed" in errors[0][1]
+
+
 def test_build_row_specs_remove_disabled_at_one_account():
     accounts = [Account(name="acct-v1-a", config_dir="/home/u/.claude")]
     rows = build_row_specs(accounts, {})
