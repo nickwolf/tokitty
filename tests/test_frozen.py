@@ -1,13 +1,17 @@
 """Tests for tokitty/frozen.py: the translocation guard (#48 Task 3) and the
 windowed crash log / --self-check (#48 Task 6)."""
+import importlib.util
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 import tokitty.frozen as frozen
 from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError, is_translocated
+
+GUI_ENTRY_PATH = Path(__file__).resolve().parent.parent / "freeze" / "gui_entry.py"
 
 
 def test_is_translocated_true_for_apptranslocation_path():
@@ -76,7 +80,14 @@ def test_self_check_passes_in_dev(capsys):
     """The real pystray import needs a working GTK/AppIndicator (or xorg)
     backend, which a bare headless Linux box may not have even under xvfb --
     see test_self_check_passes_in_dev_headless for the check-logic-only
-    version that runs everywhere."""
+    version that runs everywhere. A box missing that backend raises
+    ValueError (not ImportError) out of pystray's own backend selection, so
+    skip cleanly on either rather than leaving the gui suite red; self_check()
+    itself is not weakened to work around this."""
+    try:
+        import pystray  # noqa: F401
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"pystray unavailable: {exc}")
     assert frozen.self_check() == 0
     report = json.loads(capsys.readouterr().out)
     assert all(c["ok"] for c in report["checks"].values())
@@ -99,3 +110,54 @@ def test_self_check_fails_without_prices(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(pricing, "PACKAGED_PRICES", tmp_path / "missing.json")
     assert frozen.self_check() == 1
     assert json.loads(capsys.readouterr().out)["checks"]["prices"]["ok"] is False
+
+
+def _point_state_dir_env_at(monkeypatch, tmp_path):
+    """Point every OS's state-dir env var at tmp_path, so whichever one the
+    host platform actually reads still resolves under the sandbox."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
+def _load_gui_entry_with_broken_frozen_import(monkeypatch):
+    """Load freeze/gui_entry.py as the last-line-of-defense case: even
+    ``tokitty.frozen`` fails to import. Poisoning sys.modules makes any
+    import of it raise, exactly like a bundle missing that module would.
+
+    freeze/gui_entry.py has no ``if __name__`` guard -- its last line is a
+    bare ``sys.exit(_run())`` -- so loading it always raises SystemExit.
+    exec_module still mutates the module object's __dict__ top to bottom as
+    it runs, so everything defined before that final line (_fallback_state_dir,
+    _run) survives on the returned module even though the exec call itself
+    raises. This never reaches the real GUI: the poisoned import fails before
+    _run() can construct main() or call run_gui_entry.
+    """
+    monkeypatch.setitem(sys.modules, "tokitty.frozen", None)
+    spec = importlib.util.spec_from_file_location("gui_entry_under_test", GUI_ENTRY_PATH)
+    module = importlib.util.module_from_spec(spec)
+    with pytest.raises(SystemExit) as exc_info:
+        spec.loader.exec_module(module)
+    assert exc_info.value.code == 1
+    return module
+
+
+def test_gui_entry_logs_crash_when_tokitty_frozen_fails_to_import(monkeypatch, tmp_path):
+    _point_state_dir_env_at(monkeypatch, tmp_path)
+    module = _load_gui_entry_with_broken_frozen_import(monkeypatch)
+
+    log = (Path(module._fallback_state_dir()) / "crash.log").read_text(encoding="utf-8")
+    assert "Traceback" in log
+    assert "tokitty.frozen" in log
+
+
+def test_fallback_state_dir_matches_paths_state_dir_path(monkeypatch, tmp_path):
+    """_fallback_state_dir() is a from-scratch reimplementation of
+    tokitty.paths.state_dir_path() for the case where tokitty itself is
+    unimportable. Pin them together so the two rules can't drift apart."""
+    _point_state_dir_env_at(monkeypatch, tmp_path)
+    module = _load_gui_entry_with_broken_frozen_import(monkeypatch)
+
+    from tokitty import paths
+
+    assert Path(module._fallback_state_dir()) == paths.state_dir_path()
