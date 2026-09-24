@@ -105,6 +105,104 @@ def test_hook_target_raises_for_unknown_provider():
 
 
 # ---------------------------------------------------------------------------
+# _is_owned_hook (exact ownership matcher)
+# ---------------------------------------------------------------------------
+
+def test_is_owned_hook_accepts_current_quoted_form():
+    config_dir = "/home/nick/.claude"
+    hook = hi._build_command(config_dir)
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_historical_unquoted_form():
+    config_dir = "/home/nick/.claude"
+    hook = {
+        "type": "command",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py "
+        "--sessions-dir /home/nick/.claude/tokitty/sessions",
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_windows_local_home_as_built():
+    # _build_command never rewrites the drive-letter home to forward
+    # slashes, so this is a mix of backslashes and forward slashes.
+    config_dir = r"C:\Users\nick\.claude"
+    hook = hi._build_command(config_dir)
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_windows_local_home_all_backslashes():
+    config_dir = r"C:\Users\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": (
+            r'python "C:\Users\nick\.claude\tokitty\hook_writer.py" '
+            r'--sessions-dir "C:\Users\nick\.claude\tokitty\sessions"'
+        ),
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_case_folds_drive_letter_home():
+    written_home = r"C:\Users\Nick\.claude"
+    hook = hi._build_command(written_home)
+    account_home = r"c:\users\nick\.claude"
+    assert hi._is_owned_hook(hook, account_home)
+
+
+def test_is_owned_hook_accepts_doubled_slash():
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/h/.claude//tokitty/sessions"',
+    }
+    assert hi._is_owned_hook(hook, "/h/.claude")
+
+
+def test_is_owned_hook_wsl_unc_home_matches_posix_written_hook():
+    config_dir = r"\\wsl.localhost\Ubuntu\home\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_unrelated_python_script():
+    hook = {"type": "command", "command": "python3 /opt/tokitty/myhook.py"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_non_python_interpreter():
+    hook = {"type": "command", "command": "bash ~/tokitty-scripts/run.sh"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_other_home():
+    config_dir = "/home/nick/.claude"
+    hook = hi._build_command(config_dir)
+    assert not hi._is_owned_hook(hook, "/other-home")
+
+
+def test_is_owned_hook_rejects_prompt_type():
+    hook = {
+        "type": "prompt",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py "
+        "--sessions-dir /home/nick/.claude/tokitty/sessions",
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_partial_lookalike_missing_sessions_flag():
+    # The old fixture shape used before ownership was exact: mentions
+    # tokitty, but is not the command tokitty actually writes.
+    hook = {"type": "command", "command": "python3 x/tokitty/hook_writer.py"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+# ---------------------------------------------------------------------------
 # get_config_dirs
 # ---------------------------------------------------------------------------
 
@@ -246,7 +344,7 @@ def test_install_is_additive_preserves_existing_hooks(tmp_path):
     pretool = data["hooks"]["PreToolUse"]
     assert len(pretool) == 2
     assert {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]} in pretool
-    assert any(hi._is_tokitty_entry(e) for e in pretool)
+    assert any(hi._is_tokitty_entry(e, str(config_dir)) for e in pretool)
 
 
 def test_install_writes_timestamped_backup(tmp_path):
@@ -301,10 +399,11 @@ def test_install_idempotent_running_twice_yields_identical_file(tmp_path):
 def test_install_skips_event_already_marked_in_settings_local(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
+    owned_command = hi._build_command(str(config_dir))["command"]
     local = {
         "hooks": {
             "Stop": [
-                {"matcher": "", "hooks": [{"type": "command", "command": "python3 x/tokitty/hook_writer.py"}]}
+                {"matcher": "", "hooks": [{"type": "command", "command": owned_command}]}
             ]
         }
     }
@@ -397,10 +496,11 @@ def test_uninstall_preserves_non_tokitty_entries(tmp_path):
 def test_uninstall_leaves_settings_local_alone_but_reports(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
+    owned_command = hi._build_command(str(config_dir))["command"]
     local = {
         "hooks": {
             "Stop": [
-                {"matcher": "", "hooks": [{"type": "command", "command": "python3 x/tokitty/hook_writer.py"}]}
+                {"matcher": "", "hooks": [{"type": "command", "command": owned_command}]}
             ]
         }
     }

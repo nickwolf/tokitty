@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import shutil
 import sys
 import time
@@ -227,16 +229,70 @@ def _write_settings(path: Path, data) -> None:
     os.replace(tmp_path, path)
 
 
-def _is_tokitty_entry(entry) -> bool:
+def _normalize_home_path(path: str) -> str:
+    """Normalise a home (or a path derived from one) for comparison.
+
+    Backslashes become forward slashes, repeated slashes collapse to one,
+    a trailing slash is stripped, and the result is case-folded when it
+    starts with a drive letter -- those are case-insensitive, unlike a
+    POSIX path, which must not be folded.
+    """
+    normalized = re.sub(r"/+", "/", path.replace("\\", "/"))
+    if len(normalized) > 1:
+        normalized = normalized.rstrip("/") or normalized
+    if _is_windows_local_path(normalized):
+        normalized = normalized.casefold()
+    return normalized
+
+
+def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
+    """Whether hook is the exact command tokitty writes for config_dir.
+
+    Ownership is yes-or-no only: a hook is owned if it is a "command"
+    hook whose command parses (shlex, posix mode -- handles both the
+    quoted and the historical unquoted form) into exactly an interpreter,
+    the hook_writer.py path, "--sessions-dir", and the sessions path, and
+    both paths normalise to this home's tokitty/hook_writer.py and
+    tokitty/sessions. An equivalent spelling (quoting, a doubled slash, a
+    differently-cased drive letter) is still owned; a hook aimed at
+    another home, or one that merely mentions tokitty, is not.
+
+    provider is accepted for forward compatibility with non-Claude
+    shapes; only Claude's shape is recognised today.
+    """
+    if not isinstance(hook, dict) or hook.get("type") != "command":
+        return False
+    command = hook.get("command")
+    if not isinstance(command, str):
+        return False
+    try:
+        parts = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    if len(parts) != 4:
+        return False
+    interpreter, script, flag, sessions_arg = parts
+    if interpreter not in ("python", "python3") or flag != "--sessions-dir":
+        return False
+    home = _normalize_home_path(_wsl_native_path(config_dir))
+    expected_script = f"{home}/tokitty/hook_writer.py"
+    expected_sessions = f"{home}/tokitty/sessions"
+    return (
+        _normalize_home_path(script) == expected_script
+        and _normalize_home_path(sessions_arg) == expected_sessions
+    )
+
+
+def _is_tokitty_entry(entry, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
     if not isinstance(entry, dict):
         return False
     for hook in entry.get("hooks", []):
-        if isinstance(hook, dict) and MARKER in str(hook.get("command", "")):
+        if _is_owned_hook(hook, config_dir, provider):
             return True
     return False
 
 
-def _events_with_tokitty_entries(data) -> set:
+def _events_with_tokitty_entries(data, config_dir: str, provider: str = DEFAULT_PROVIDER) -> set:
     events = set()
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -244,7 +300,7 @@ def _events_with_tokitty_entries(data) -> set:
     for event, entries in hooks.items():
         if not isinstance(entries, list):
             continue
-        if any(_is_tokitty_entry(e) for e in entries):
+        if any(_is_tokitty_entry(e, config_dir, provider) for e in entries):
             events.add(event)
     return events
 
@@ -274,7 +330,9 @@ def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> 
                 config_dir, False, f"aborted, could not parse {target.local_settings_file}: {local_error}"
             )
 
-    already_installed = _events_with_tokitty_entries(data) | _events_with_tokitty_entries(local_data)
+    already_installed = _events_with_tokitty_entries(data, config_dir, provider) | _events_with_tokitty_entries(
+        local_data, config_dir, provider
+    )
 
     handler = _build_command(config_dir)
 
@@ -330,7 +388,7 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
     if target.local_settings_file is not None:
         local_data, local_error = _load_settings(base / target.local_settings_file)
         if local_error is None and isinstance(local_data, dict):
-            if _events_with_tokitty_entries(local_data):
+            if _events_with_tokitty_entries(local_data, config_dir, provider):
                 warn_local = True
 
     hooks = data.get("hooks")
@@ -345,7 +403,7 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
         entries = hooks[event]
         if not isinstance(entries, list):
             continue
-        kept = [e for e in entries if not _is_tokitty_entry(e)]
+        kept = [e for e in entries if not _is_tokitty_entry(e, config_dir, provider)]
         if len(kept) != len(entries):
             removed.append(event)
             if kept:
