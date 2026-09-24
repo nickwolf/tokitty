@@ -11,6 +11,7 @@ import sys
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional
 
+from tokitty.frozen import AppTranslocatedError, is_translocated
 from tokitty.paths import get_state_dir
 
 LAUNCHER_FILENAME = "autostart_launcher.pyw"
@@ -306,12 +307,22 @@ def ensure_current(
     registration itself is rewritten only when the freshly resolved
     command actually differs from what is registered (e.g. an
     interpreter that moved or was upgraded in place). See the design
-    doc's "Correction, 2026-09-01, found while planning" note."""
+    doc's "Correction, 2026-09-01, found while planning" note.
+
+    A frozen build (#48) never writes the launcher file at all, and a
+    translocated one is left alone entirely -- a no-op, backend untouched."""
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    executable = sys.executable if executable is None else executable
     try:
         if not backend.is_registered():
             return False
-        resolved_repo_root = _default_repo_root() if repo_root is None else repo_root
-        write_launcher_file(state_dir, resolved_repo_root)
+        resolved_repo_root = None
+        if frozen:
+            if is_translocated(executable):
+                return False
+        else:
+            resolved_repo_root = _default_repo_root() if repo_root is None else repo_root
+            write_launcher_file(state_dir, resolved_repo_root)
         command = resolve_launch_command(
             state_dir, repo_root=resolved_repo_root, executable=executable, platform=platform, frozen=frozen,
         )
@@ -342,15 +353,27 @@ def get_backend(platform: Optional[str] = None):
     return None
 
 
-def write_launcher_and_register(state_dir: Path, backend) -> None:
+def write_launcher_and_register(
+    state_dir: Path, backend, *, frozen: Optional[bool] = None, executable: Optional[str] = None,
+) -> None:
     """Write the launcher file, then register the resolved command with
     the backend. This is the one place that does both steps, shared by
     install_autostart below and the menu toggle in __main__.py's
     run_gui, so turning autostart on from the CLI and from the tray/menu
     checkbox can never drift apart into two implementations of the same
-    thing."""
-    write_launcher_file(state_dir)
-    backend.register(resolve_launch_command(state_dir))
+    thing.
+
+    A frozen build skips the launcher file entirely, and raises
+    AppTranslocatedError (backend left untouched) rather than register
+    a path macOS is about to delete out from under it."""
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    executable = sys.executable if executable is None else executable
+    if frozen:
+        if is_translocated(executable):
+            raise AppTranslocatedError()
+    else:
+        write_launcher_file(state_dir)
+    backend.register(resolve_launch_command(state_dir, frozen=frozen, executable=executable))
 
 
 def install_autostart() -> int:

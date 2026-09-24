@@ -868,6 +868,7 @@ def run_gui() -> int:
         window.on_toggle_tray = toggle_tray
 
     from tokitty.autostart import ensure_current, get_backend, write_launcher_and_register
+    from tokitty.frozen import AppTranslocatedError
 
     autostart_backend = get_backend()
     if autostart_backend is not None:
@@ -895,7 +896,15 @@ def run_gui() -> int:
                 if autostart_state["enabled"]:
                     autostart_backend.deregister()
                 else:
-                    write_launcher_and_register(state_dir, autostart_backend)
+                    try:
+                        write_launcher_and_register(state_dir, autostart_backend)
+                    except AppTranslocatedError as exc:
+                        from tkinter import messagebox
+
+                        messagebox.showwarning("Start at login", str(exc), parent=root)
+                # Refused or not, the checkbox always reflects the
+                # backend's real state, never an assumption about what
+                # the branch above did.
                 autostart_state["enabled"] = autostart_backend.is_registered()
 
             window.on_toggle_autostart = toggle_autostart
