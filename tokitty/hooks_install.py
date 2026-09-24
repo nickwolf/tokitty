@@ -14,7 +14,7 @@ import os
 import shutil
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 from tokitty.accounts import (
@@ -24,9 +24,13 @@ from tokitty.accounts import (
     load_accounts_result,
     save_accounts,
 )
-from tokitty.paths import get_state_dir
+from tokitty.paths import get_state_dir, state_dir_path
 
 MARKER = "tokitty"
+
+HOOK_RUNNER_NAME = "tokitty-hook"
+
+_WSL_UNC_PREFIXES = ("\\\\wsl.localhost\\", "\\\\wsl$\\")
 
 HOOK_EVENTS = [
     ("UserPromptSubmit", ""),
@@ -52,7 +56,7 @@ def _wsl_native_path(config_dir: str) -> str:
     Windows-local path needs a different interpreter invocation.
     """
     normalized = config_dir.replace("/", "\\")
-    for prefix in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
+    for prefix in _WSL_UNC_PREFIXES:
         if normalized.lower().startswith(prefix.lower()):
             rest = normalized[len(prefix):]
             parts = rest.split("\\")
@@ -78,6 +82,11 @@ def _local_config_path(config_dir: str) -> str:
 
 def _is_windows_local_path(config_dir: str) -> bool:
     return len(config_dir) >= 2 and config_dir[1] == ":" and config_dir[0].isalpha()
+
+
+def _is_wsl_unc(config_dir: str) -> bool:
+    normalized = config_dir.replace("/", "\\").lower()
+    return normalized.startswith(_WSL_UNC_PREFIXES)
 
 
 def _default_config_dir() -> str:
@@ -149,12 +158,44 @@ def get_config_dirs() -> List[str]:
     return [_default_config_dir()]
 
 
-def _build_command(config_dir: str) -> str:
-    native = _wsl_native_path(config_dir)
+def hook_runner_path(executable: str, platform: str) -> str:
+    """The bundled tokitty-hook beside a frozen build's own executable."""
+    if platform == "win32":
+        return str(PureWindowsPath(executable).with_name(HOOK_RUNNER_NAME + ".exe"))
+    return str(PurePosixPath(executable).with_name(HOOK_RUNNER_NAME))
+
+
+def stable_runner_path(state_dir, platform: str) -> str:
+    """Where hooks run tokitty-hook from: a link in the state dir that each
+    launch repoints at the running release, so the registered command never
+    changes (spec Q2a)."""
+    if platform == "win32":
+        return str(PureWindowsPath(str(state_dir)) / "current" / (HOOK_RUNNER_NAME + ".exe"))
+    return str(Path(state_dir) / "current" / HOOK_RUNNER_NAME)
+
+
+def _build_command(config_dir: str, *, frozen=None, platform=None, runner=None) -> dict:
+    """The hook to register, chosen by where Claude Code runs (spec Q2).
+
+    A frozen build registers tokitty-hook in exec form (Claude Code
+    2.1.139+), except for a WSL home seen from Windows, which keeps python3:
+    WSL ships it and it is twice as fast as the exe through interop.
+    """
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    platform = sys.platform if platform is None else platform
+    native = _wsl_native_path(config_dir).rstrip("/\\") or _wsl_native_path(config_dir)
+    sessions_dir = f"{native}/tokitty/sessions"
+    if frozen and not (platform == "win32" and _is_wsl_unc(config_dir)):
+        return {
+            "type": "command",
+            "command": runner if runner is not None else stable_runner_path(state_dir_path(), platform),
+            "args": ["--sessions-dir", sessions_dir],
+        }
     interpreter = "python" if _is_windows_local_path(config_dir) else "python3"
-    script = f'"{native}/tokitty/hook_writer.py"'
-    sessions_dir = f'"{native}/tokitty/sessions"'
-    return f"{interpreter} {script} --sessions-dir {sessions_dir}"
+    return {
+        "type": "command",
+        "command": f'{interpreter} "{native}/tokitty/hook_writer.py" --sessions-dir "{sessions_dir}"',
+    }
 
 
 def _backup(path: Path) -> None:
@@ -238,7 +279,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 
     already_installed = _events_with_tokitty_entries(data) | _events_with_tokitty_entries(local_data)
 
-    command = _build_command(config_dir)
+    hook = _build_command(config_dir)
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -270,7 +311,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     for event, matcher in events_to_add:
         data["hooks"].setdefault(event, [])
         data["hooks"][event].append(
-            {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
+            {"matcher": matcher, "hooks": [dict(hook)]}
         )
         installed.append(event)
 

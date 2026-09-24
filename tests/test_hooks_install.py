@@ -44,32 +44,125 @@ def test_windows_local_path_detected():
 
 
 def test_build_command_posix_uses_python3():
-    cmd = hi._build_command("/home/nick/.claude")
-    assert cmd == (
+    hook = hi._build_command("/home/nick/.claude")
+    assert hook["command"] == (
         'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_wsl_unc_maps_to_native():
-    cmd = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude")
-    assert cmd == (
+    hook = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude")
+    assert hook["command"] == (
         'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_windows_local_uses_python():
-    cmd = hi._build_command(r"C:\Users\nick\.claude")
-    assert cmd.startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
+    hook = hi._build_command(r"C:\Users\nick\.claude")
+    assert hook["command"].startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
 
 
 def test_build_command_quotes_spaced_path():
-    cmd = hi._build_command("/home/nick 2/.claude")
-    assert cmd == (
+    hook = hi._build_command("/home/nick 2/.claude")
+    assert hook["command"] == (
         'python3 "/home/nick 2/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick 2/.claude/tokitty/sessions"'
     )
+
+
+def test_build_command_trailing_slash_posix_home_matches_no_slash():
+    trailing = hi._build_command("/home/n/.claude/", frozen=False, platform="linux")
+    bare = hi._build_command("/home/n/.claude", frozen=False, platform="linux")
+    assert trailing == bare
+    assert trailing["command"] == (
+        'python3 "/home/n/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/n/.claude/tokitty/sessions"'
+    )
+
+
+def test_build_command_trailing_backslash_windows_home_matches_no_slash():
+    trailing = hi._build_command("C:\\Users\\n\\.claude\\", frozen=False, platform="win32")
+    bare = hi._build_command("C:\\Users\\n\\.claude", frozen=False, platform="win32")
+    assert trailing == bare
+
+
+WIN_RUNNER = r"C:\Users\nick\AppData\Local\Tokitty\current\tokitty-hook.exe"
+
+
+def test_build_command_source_posix_unchanged():
+    hook = hi._build_command("/home/nick/.claude", frozen=False, platform="linux")
+    assert hook == {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" --sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+
+
+def test_build_command_source_windows_local_uses_python():
+    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=False, platform="win32")
+    assert hook["command"].startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
+    assert "args" not in hook
+
+
+def test_build_command_frozen_windows_wsl_home_keeps_python3():
+    hook = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook == {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" --sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+
+
+def test_build_command_frozen_windows_wsl_dollar_home_keeps_python3():
+    hook = hi._build_command(r"\\wsl$\Ubuntu\home\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook["command"].startswith("python3 ")
+    assert "args" not in hook
+
+
+def test_build_command_frozen_windows_local_home_uses_exec_form():
+    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook == {
+        "type": "command",
+        "command": WIN_RUNNER,
+        "args": ["--sessions-dir", "C:\\Users\\nick\\.claude/tokitty/sessions"],
+    }
+
+
+def test_build_command_frozen_linux_uses_exec_form():
+    hook = hi._build_command("/home/nick/.claude", frozen=True, runner="/home/nick/.config/tokitty/current/tokitty-hook", platform="linux")
+    assert hook == {
+        "type": "command",
+        "command": "/home/nick/.config/tokitty/current/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+
+
+def test_hook_runner_path_sits_beside_executable():
+    assert hi.hook_runner_path("/Applications/Tokitty.app/Contents/MacOS/Tokitty", "darwin") == "/Applications/Tokitty.app/Contents/MacOS/tokitty-hook"
+    assert hi.hook_runner_path(r"C:\T\Tokitty.exe", "win32") == r"C:\T\tokitty-hook.exe"
+
+
+def test_stable_runner_path():
+    assert hi.stable_runner_path(Path("/home/n/.config/tokitty"), "linux") == str(Path("/home/n/.config/tokitty") / "current" / "tokitty-hook")
+    assert hi.stable_runner_path(r"C:\Users\n\AppData\Local\Tokitty", "win32") == r"C:\Users\n\AppData\Local\Tokitty\current\tokitty-hook.exe"
+
+
+def test_build_command_default_runner_is_stable_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path)
+    hook = hi._build_command("/home/nick/.claude", frozen=True, platform="linux")
+    assert hook["command"] == str(tmp_path / "current" / "tokitty-hook")
+
+
+def test_install_writes_exec_form_entry_when_frozen(tmp_path, monkeypatch):
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path / "state")
+    home = tmp_path / "home"
+    result = hi.install_hooks_for_dir(str(home))
+    assert result.ok
+    data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["args"][0] == "--sessions-dir"
+    assert Path(hook["command"]).name in ("tokitty-hook", "tokitty-hook.exe")
 
 
 # ---------------------------------------------------------------------------
