@@ -1195,6 +1195,71 @@ def test_run_gui_toggle_autostart_registers_via_shared_path(tmp_path, monkeypatc
 
 
 @pytest.mark.gui
+def test_run_gui_toggle_autostart_shows_warning_on_translocation(tmp_path, monkeypatch):
+    """Third branch of toggle_autostart, alongside the register and
+    deregister cases above: a frozen build running from a macOS
+    App Translocation path must never reach backend.register, and the
+    user has to be told why the checkbox didn't move. write_launcher_
+    and_register is patched at its source in tokitty.autostart -- the
+    same module run_gui's local `from tokitty.autostart import ...`
+    resolves against on every call -- to raise AppTranslocatedError
+    without needing a real frozen executable. tkinter.messagebox.
+    showwarning is patched on the actual submodule object, not on
+    tokitty.__main__, because toggle_autostart's `from tkinter import
+    messagebox` is a local import inside the except branch and binds to
+    that same submodule at call time (see test_accounts_ui.py's
+    identical reasoning for messagebox.showerror)."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.autostart import AppTranslocatedError
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+
+    fake_backend = _FakeToggleBackend(registered=False)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: fake_backend)
+
+    def _raise_translocated(state_dir, backend, **kwargs):
+        raise AppTranslocatedError()
+
+    monkeypatch.setattr("tokitty.autostart.write_launcher_and_register", _raise_translocated)
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        window = holder["window"]
+        assert window.autostart_enabled() is False
+        window.on_toggle_autostart()
+        assert fake_backend.registered is False
+        assert window.autostart_enabled() is False
+        assert len(warnings) == 1
+        args, kwargs = warnings[0]
+        assert args[0] == "Start at login"
+        assert "Applications" in args[1]
+        assert kwargs.get("parent") is not None
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0
+
+
+@pytest.mark.gui
 def test_usage_setup_first_run_opens_the_dialog_focused_on_usage(tmp_path, monkeypatch):
     """The API-key user's first run: no credentials anywhere, transcripts
     on disk. Previously this path opened nothing at all and the pane just

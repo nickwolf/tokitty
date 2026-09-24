@@ -867,8 +867,12 @@ def run_gui() -> int:
 
         window.on_toggle_tray = toggle_tray
 
-    from tokitty.autostart import ensure_current, get_backend, write_launcher_and_register
-    from tokitty.frozen import AppTranslocatedError
+    from tokitty.autostart import (
+        AppTranslocatedError,
+        ensure_current,
+        get_backend,
+        write_launcher_and_register,
+    )
 
     autostart_backend = get_backend()
     if autostart_backend is not None:
