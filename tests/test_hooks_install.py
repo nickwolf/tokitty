@@ -4,10 +4,14 @@ SAFETY: every test operates on tmp_path fixtures only. Never touch the
 real ~/.claude or ~/.claude-work.
 """
 import json
+import os
+import sys
 from pathlib import Path
 
 from tokitty import hooks_install as hi
+from tokitty import runner_link
 from tokitty.accounts import Account
+from tokitty.frozen import MOVE_TO_APPLICATIONS
 from tokitty.hooks_install import (
     ConfigDirResult,
     apply_account_mutation,
@@ -16,6 +20,25 @@ from tokitty.hooks_install import (
     retry_pending_hook_op,
     save_pending_hook_op,
 )
+
+EXE_NAME = "tokitty.exe" if sys.platform == "win32" else "tokitty"
+RUNNER_NAME = "tokitty-hook.exe" if sys.platform == "win32" else "tokitty-hook"
+
+
+def _fake_release(root):
+    """A host-native fake frozen build: exe + tokitty-hook side by side.
+    Never a real directory outside tmp_path -- release lives under the
+    caller's own tmp_path."""
+    root.mkdir(parents=True)
+    (root / EXE_NAME).write_text("gui", encoding="utf-8")
+    (root / RUNNER_NAME).write_text("hook", encoding="utf-8")
+    return root / EXE_NAME
+
+
+def _unlink_current_link(state_dir):
+    link = state_dir / "current"
+    if runner_link._is_link(str(link)):
+        (os.rmdir if sys.platform == "win32" else os.unlink)(link)
 
 
 # ---------------------------------------------------------------------------
@@ -154,15 +177,97 @@ def test_build_command_default_runner_is_stable_path(tmp_path, monkeypatch):
 
 
 def test_install_writes_exec_form_entry_when_frozen(tmp_path, monkeypatch):
+    # A fake release under tmp_path with host-native names, sys.executable
+    # patched to it -- so this never links to a real directory (Task 3
+    # ruling: no test may link outside its own tmp_path).
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path / "state")
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
     home = tmp_path / "home"
+    try:
+        result = hi.install_hooks_for_dir(str(home))
+        assert result.ok
+        data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+        hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+        assert hook["args"][0] == "--sessions-dir"
+        assert Path(hook["command"]).name in ("tokitty-hook", "tokitty-hook.exe")
+        # Registered against the stable link path, not the release-specific
+        # bundled path -- this is the string Codex hashes.
+        assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+        assert runner_link._is_link(str(state_dir / "current"))
+    finally:
+        _unlink_current_link(state_dir)
+
+
+def test_install_maps_translocated_error_to_move_to_applications(tmp_path, monkeypatch):
+    exe = _fake_release(tmp_path / "release" / "AppTranslocation" / "x" / "rel")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
     result = hi.install_hooks_for_dir(str(home))
-    assert result.ok
-    data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
-    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
-    assert hook["args"][0] == "--sessions-dir"
-    assert Path(hook["command"]).name in ("tokitty-hook", "tokitty-hook.exe")
+
+    assert not result.ok
+    assert result.message == MOVE_TO_APPLICATIONS
+    assert not (home / "settings.json").exists()
+    assert not (home / "tokitty" / "hook_writer.py").exists()
+    assert not state_dir.exists()
+
+
+def test_install_leaves_stable_registration_untouched_on_link_failure(tmp_path, monkeypatch):
+    # A release with no bundled tokitty-hook: ensure_runner_link raises
+    # FileNotFoundError (an OSError), which must abort the install rather
+    # than fall back to writing a release-specific command -- a transient
+    # failure must never rewrite a stable registration.
+    bare = tmp_path / "release-bare"
+    bare.mkdir(parents=True)
+    exe = bare / EXE_NAME
+    exe.write_text("gui", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert not result.ok
+    assert not (home / "settings.json").exists()
+    assert not (home / "tokitty" / "hook_writer.py").exists()
+
+
+def test_install_twice_from_different_releases_is_byte_identical_and_link_moves(tmp_path, monkeypatch):
+    """hooks_install reconciliation across releases (install_hooks_for_dir
+    is idempotent once every event is already installed; a future
+    refresh_hooks_for_dir will share this same repoint-then-register
+    path). settings.json must be byte-identical after the second call,
+    and the link must end at the second release."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    a = _fake_release(tmp_path / "rel-a")
+    monkeypatch.setattr(hi.sys, "executable", str(a))
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        settings_bytes_first = (home / "settings.json").read_bytes()
+
+        b = _fake_release(tmp_path / "rel-b")
+        monkeypatch.setattr(hi.sys, "executable", str(b))
+        second = hi.install_hooks_for_dir(str(home))
+        assert second.ok
+        settings_bytes_second = (home / "settings.json").read_bytes()
+
+        assert settings_bytes_first == settings_bytes_second
+        assert os.path.realpath(state_dir / "current") == os.path.realpath(b.parent)
+    finally:
+        _unlink_current_link(state_dir)
 
 
 # ---------------------------------------------------------------------------

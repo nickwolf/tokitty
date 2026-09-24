@@ -24,6 +24,7 @@ from tokitty.accounts import (
     load_accounts_result,
     save_accounts,
 )
+from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
 from tokitty.paths import get_state_dir, state_dir_path
 
 MARKER = "tokitty"
@@ -280,6 +281,27 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     already_installed = _events_with_tokitty_entries(data) | _events_with_tokitty_entries(local_data)
 
     hook = _build_command(config_dir)
+    note = None
+    if "args" in hook:
+        # Exec form (a frozen build, not the WSL-from-Windows row): the
+        # command registered has to be the stable link path, never a
+        # release-specific one, so this repoints <state dir>/current
+        # before anything below is written. Lazy import: hooks_install
+        # and runner_link import each other (runner_link needs
+        # hook_runner_path/stable_runner_path back).
+        from tokitty.runner_link import ensure_runner_link
+
+        try:
+            outcome = ensure_runner_link(state_dir_path())
+        except AppTranslocatedError:
+            return ConfigDirResult(config_dir, False, MOVE_TO_APPLICATIONS)
+        except OSError as exc:
+            # Lock timeout or a failed repoint: both transient. Rewriting
+            # settings.json with the bundled absolute path here would
+            # change the string Codex hashes, so nothing is written.
+            return ConfigDirResult(config_dir, False, str(exc))
+        hook = _build_command(config_dir, runner=outcome.runner)
+        note = outcome.note
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -288,7 +310,10 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     events_to_add = [(event, matcher) for event, matcher in HOOK_EVENTS if event not in already_installed]
 
     if not events_to_add:
-        return ConfigDirResult(config_dir, True, "already installed, nothing to do", installed_events=[])
+        msg = "already installed, nothing to do"
+        if note:
+            msg += f" ({note})"
+        return ConfigDirResult(config_dir, True, msg, installed_events=[])
 
     existing_hooks = data.get("hooks")
     if existing_hooks is not None and not isinstance(existing_hooks, dict):
@@ -317,7 +342,10 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 
     _write_settings(settings_path, data)
 
-    return ConfigDirResult(config_dir, True, "installed", installed_events=installed)
+    msg = "installed"
+    if note:
+        msg += f" ({note})"
+    return ConfigDirResult(config_dir, True, msg, installed_events=installed)
 
 
 def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:

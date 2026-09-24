@@ -539,6 +539,19 @@ def run_gui() -> int:
         # philosophy of "resolution failure means run without it, never a
         # crash" -- never "auto-open silently never evaluates again."
         try:
+            if getattr(sys, "frozen", False):
+                # Repoints <state dir>/current at this release before the
+                # retry below, so a stale link from a previous release
+                # never lingers between launches (spec Q2a). AppTranslocatedError
+                # is an OSError subclass, so it's covered by the same except:
+                # a link failure here must not skip the pending-op retry.
+                try:
+                    from tokitty import runner_link
+
+                    runner_link.ensure_runner_link(state_dir)
+                except OSError:
+                    pass
+
             try:
                 retry_pending_hook_op(state_dir)
             except (OSError, PermissionError):

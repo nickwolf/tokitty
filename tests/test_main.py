@@ -781,6 +781,42 @@ def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, mon
 
 
 @pytest.mark.gui
+def test_run_discovery_repoints_runner_link_when_frozen(tmp_path, monkeypatch):
+    """Task 3 (spec Q2a): a frozen launch must repoint <state dir>/current
+    at the running release before retry_pending_hook_op runs, with no
+    --install-hooks call involved at all. Uses a fake host-native release
+    under tmp_path -- never a real directory outside it (Task 3's own
+    safety rule)."""
+    import os
+    import sys
+
+    tk = pytest.importorskip("tkinter")
+    from tokitty import runner_link
+
+    exe_name = "tokitty.exe" if sys.platform == "win32" else "tokitty"
+    runner_name = "tokitty-hook.exe" if sys.platform == "win32" else "tokitty-hook"
+    release = tmp_path / "release-a"
+    release.mkdir()
+    exe = release / exe_name
+    exe.write_text("gui", encoding="utf-8")
+    (release / runner_name).write_text("hook", encoding="utf-8")
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_module.sys, "executable", str(exe))
+
+    try:
+        result = main_module.run_gui()
+        assert result == 0
+        assert opened == [tmp_path]
+        assert os.path.realpath(tmp_path / "current") == os.path.realpath(release)
+    finally:
+        link = tmp_path / "current"
+        if runner_link._is_link(str(link)):
+            (os.rmdir if sys.platform == "win32" else os.unlink)(link)
+
+
+@pytest.mark.gui
 def test_auto_open_passes_discovered_wsl_matches_to_accounts_manager(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     from tokitty import __main__ as main_module
