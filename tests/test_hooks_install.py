@@ -202,6 +202,27 @@ def test_is_owned_hook_rejects_partial_lookalike_missing_sessions_flag():
     assert not hi._is_owned_hook(hook, "/home/nick/.claude")
 
 
+def test_is_owned_hook_accepts_historical_unquoted_drive_letter_form():
+    # Written by 9bab1b3 for a drive-letter home: unquoted, so shlex's
+    # posix parser reads the backslashes as escapes and mangles the path.
+    config_dir = r"C:\Users\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": r"python C:\Users\nick\.claude/tokitty/hook_writer.py "
+        r"--sessions-dir C:\Users\nick\.claude/tokitty/sessions",
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_historical_unquoted_form_for_a_different_drive_letter_home():
+    hook = {
+        "type": "command",
+        "command": r"python C:\Users\nick\.claude/tokitty/hook_writer.py "
+        r"--sessions-dir C:\Users\nick\.claude/tokitty/sessions",
+    }
+    assert not hi._is_owned_hook(hook, r"D:\Users\nick\.claude")
+
+
 # ---------------------------------------------------------------------------
 # get_config_dirs
 # ---------------------------------------------------------------------------

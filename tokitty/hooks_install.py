@@ -245,17 +245,37 @@ def _normalize_home_path(path: str) -> str:
     return normalized
 
 
+def _command_owned_from_parts(parts, expected_script: str, expected_sessions: str) -> bool:
+    if len(parts) != 4:
+        return False
+    interpreter, script, flag, sessions_arg = parts
+    if interpreter not in ("python", "python3") or flag != "--sessions-dir":
+        return False
+    return (
+        _normalize_home_path(script) == expected_script
+        and _normalize_home_path(sessions_arg) == expected_sessions
+    )
+
+
 def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
     """Whether hook is the exact command tokitty writes for config_dir.
 
     Ownership is yes-or-no only: a hook is owned if it is a "command"
-    hook whose command parses (shlex, posix mode -- handles both the
-    quoted and the historical unquoted form) into exactly an interpreter,
-    the hook_writer.py path, "--sessions-dir", and the sessions path, and
+    hook whose command splits into exactly an interpreter, the
+    hook_writer.py path, "--sessions-dir", and the sessions path, and
     both paths normalise to this home's tokitty/hook_writer.py and
     tokitty/sessions. An equivalent spelling (quoting, a doubled slash, a
     differently-cased drive letter) is still owned; a hook aimed at
     another home, or one that merely mentions tokitty, is not.
+
+    The split is tried two ways. shlex (posix mode) handles the quoted
+    form and the historical unquoted POSIX form (9bab1b3). It does not
+    handle the historical unquoted form on a drive-letter home: shlex
+    reads the backslashes in "C:\\Users\\..." as escape characters and
+    mangles the path. When shlex's split is not an owned match, a plain
+    whitespace split with surrounding double quotes stripped from each
+    token is tried too -- exact for that shape, since an unquoted path
+    with spaces never worked either way.
 
     provider is accepted for forward compatibility with non-Claude
     shapes; only Claude's shape is recognised today.
@@ -265,22 +285,19 @@ def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> b
     command = hook.get("command")
     if not isinstance(command, str):
         return False
-    try:
-        parts = shlex.split(command, posix=True)
-    except ValueError:
-        return False
-    if len(parts) != 4:
-        return False
-    interpreter, script, flag, sessions_arg = parts
-    if interpreter not in ("python", "python3") or flag != "--sessions-dir":
-        return False
     home = _normalize_home_path(_wsl_native_path(config_dir))
     expected_script = f"{home}/tokitty/hook_writer.py"
     expected_sessions = f"{home}/tokitty/sessions"
-    return (
-        _normalize_home_path(script) == expected_script
-        and _normalize_home_path(sessions_arg) == expected_sessions
-    )
+
+    try:
+        shlex_parts = shlex.split(command, posix=True)
+    except ValueError:
+        shlex_parts = []
+    if _command_owned_from_parts(shlex_parts, expected_script, expected_sessions):
+        return True
+
+    whitespace_parts = [token.strip('"') for token in command.split()]
+    return _command_owned_from_parts(whitespace_parts, expected_script, expected_sessions)
 
 
 def _is_tokitty_entry(entry, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
