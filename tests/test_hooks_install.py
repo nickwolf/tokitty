@@ -1015,6 +1015,393 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _reconcile_claude / refresh_hooks_for_dir / ensure_current (Task 4)
+# ---------------------------------------------------------------------------
+
+def test_refresh_never_adds_missing_events(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned = hi._build_command(str(config_dir))
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [dict(owned)]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.installed_events == []
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert set(data["hooks"].keys()) == {"Stop"}
+
+
+def test_refresh_on_never_installed_home_writes_nothing(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.message == "nothing to refresh"
+    assert not (config_dir / "settings.json").exists()
+    assert not (config_dir / "tokitty").exists()
+
+
+def test_refresh_identical_is_a_no_op_no_backup(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.installed_events == []
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_refresh_leaves_equivalent_spelling_python_handler_byte_identical(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    historical = (
+        f"python3 {config_dir}/tokitty/hook_writer.py "
+        f"--sessions-dir {config_dir}/tokitty/sessions"
+    )
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": historical}]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_collapses_duplicate_owned_handlers_to_one(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "", "hooks": [dict(handler)]},
+                {"matcher": "", "hooks": [dict(handler)]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == ["Stop"]
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["Stop"] == [{"matcher": "", "hooks": [dict(handler)]}]
+
+
+def test_install_rewrites_owned_handler_in_place_keeping_timeout_and_user_handler(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    stale_handler = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+        "timeout": 30,
+    }
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "user-tool"},
+                        stale_handler,
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    try:
+        result = hi.install_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert "PreToolUse" in result.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    entry = data["hooks"]["PreToolUse"][0]
+    assert entry["matcher"] == "Bash"
+    assert entry["hooks"][0] == {"type": "command", "command": "user-tool"}
+    rewritten = entry["hooks"][1]
+    assert rewritten["timeout"] == 30
+    assert rewritten["command"] == str(state_dir / "current" / RUNNER_NAME)
+    assert rewritten["args"] == ["--sessions-dir", f"{config_dir}/tokitty/sessions"]
+
+
+def test_refresh_rewrites_python_string_handler_to_stable_exec_form(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    first = hi.install_hooks_for_dir(str(config_dir))
+    assert first.ok
+    assert "args" not in json.loads((config_dir / "settings.json").read_text())["hooks"]["PreToolUse"][0]["hooks"][0]
+
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    try:
+        second = hi.refresh_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert "PreToolUse" in second.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+    assert hook["args"] == ["--sessions-dir", f"{config_dir}/tokitty/sessions"]
+
+
+def test_refresh_rewrites_old_absolute_release_exec_path_to_stable(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    old_absolute = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [old_absolute]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    try:
+        result = hi.refresh_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert result.refreshed_events == ["Stop"]
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["Stop"][0]["hooks"][0]
+    assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+
+
+def test_install_skips_stale_local_entry_and_removes_main_duplicate(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    # An equivalent-spelling local handler is never "stale" by design (see
+    # the byte-identical test above), so staleness here comes from local
+    # owning the event with an exec-form handler while the current build
+    # is non-frozen -- "desired" is the python string, a real difference.
+    stale_local = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    local = {"hooks": {"Stop": [{"matcher": "", "hooks": [stale_local]}]}}
+    (config_dir / "settings.local.json").write_text(json.dumps(local))
+    main_duplicate = hi._build_command(str(config_dir))
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [dict(main_duplicate)]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert "Stop" in result.refreshed_events
+    assert "Stop" in result.message
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "Stop" not in data["hooks"]
+    local_after = json.loads((config_dir / "settings.local.json").read_text())
+    assert local_after == local
+
+
+def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    before = (config_dir / "settings.json").read_bytes()
+    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+
+    results = hi.ensure_current(tmp_path / "state")
+
+    assert len(results) == 1
+    assert results[0].ok
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_refresh_across_two_releases_is_byte_identical_and_link_moves(tmp_path, monkeypatch):
+    """Replaces Task 3's stand-in (test_install_twice_from_different_
+    releases_is_byte_identical_and_link_moves, still above, unmodified):
+    the second call here is refresh_hooks_for_dir, not another install."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    a = _fake_release(tmp_path / "rel-a")
+    monkeypatch.setattr(hi.sys, "executable", str(a))
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        before = (home / "settings.json").read_bytes()
+
+        b = _fake_release(tmp_path / "rel-b")
+        monkeypatch.setattr(hi.sys, "executable", str(b))
+        second = hi.refresh_hooks_for_dir(str(home))
+        assert second.ok
+
+        after = (home / "settings.json").read_bytes()
+        assert after == before
+        assert os.path.realpath(state_dir / "current") == os.path.realpath(b.parent)
+    finally:
+        _unlink_current_link(state_dir)
+
+
+def test_fallback_with_no_stable_hook_registers_bundled_path_with_warning(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("timed out waiting for the lock")),
+    )
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert result.ok
+    assert result.warning is not None
+    assert "could not set up its stable hook path" in result.warning
+    assert "timed out waiting for the lock" in result.warning
+    data = json.loads((home / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    assert not runner_link._is_link(str(state_dir / "current"))
+
+
+def test_fallback_with_existing_stable_hook_leaves_it_and_warns(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        before = (home / "settings.json").read_bytes()
+
+        monkeypatch.setattr(
+            runner_link, "ensure_runner_link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+        )
+        second = hi.refresh_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert second.warning is not None
+    assert "boom" in second.warning
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_new_event_never_uses_a_broken_stable_path(tmp_path, monkeypatch):
+    """Codex review finding: the fallback decision is per event, not once
+    per home -- an existing owned handler for one event must not make a
+    *new* event (added in this same call) trust a link that isn't
+    working right now."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+
+        monkeypatch.setattr(
+            runner_link, "ensure_runner_link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+        )
+        # Remove one event's entry so install_hooks_for_dir has to add a
+        # brand new handler for it while every other event already has
+        # the (now-unreachable) stable path registered.
+        data = json.loads((home / "settings.json").read_text())
+        del data["hooks"]["SessionEnd"]
+        (home / "settings.json").write_text(json.dumps(data))
+
+        second = hi.install_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert "SessionEnd" in second.installed_events
+    data = json.loads((home / "settings.json").read_text())
+    new_hook = data["hooks"]["SessionEnd"][0]["hooks"][0]
+    assert new_hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    # The other events already had the stable path and are left alone.
+    other_hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert other_hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+
+
+def test_ensure_current_turns_oserror_into_failed_result(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+
+    def raising_refresh(cd, provider):
+        raise OSError("disk on fire")
+
+    results = hi.ensure_current(tmp_path / "state", refresh_fn=raising_refresh)
+
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "disk on fire" in results[0].message
+
+
+def test_ensure_current_looks_up_default_refresh_fn_at_call_time(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+
+    calls = []
+
+    def fake_refresh(cd, provider):
+        calls.append((cd, provider))
+        return hi.ConfigDirResult(cd, True, "spied")
+
+    monkeypatch.setattr(hi, "refresh_hooks_for_dir", fake_refresh)
+
+    results = hi.ensure_current(tmp_path / "state")
+
+    assert calls == [(str(config_dir), "claude")]
+    assert results[0].message == "spied"
+
+
+# ---------------------------------------------------------------------------
 # Top-level install_hooks / uninstall_hooks (exit codes, multi-dir)
 # ---------------------------------------------------------------------------
 
