@@ -1108,6 +1108,36 @@ def test_retry_still_replays_a_pending_op_for_a_removed_claude_dir(tmp_path):
     assert calls == [str(claude)]
 
 
+def test_retry_clears_a_legacy_pending_install_with_no_claude_evidence(tmp_path):
+    # A legacy record (no provider) whose dir matches no account and has
+    # neither Codex's rollout dirs nor any Claude marker must not be
+    # replayed as an install: that would create a Claude settings.json in
+    # a directory nothing here can identify. Fail closed instead.
+    orphan = tmp_path / "orphan"
+    orphan.mkdir()
+    save_pending_hook_op(tmp_path, "install", str(orphan))
+    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    assert load_pending_hook_op(tmp_path) is None
+    assert list(orphan.iterdir()) == []
+
+
+def test_retry_replays_a_legacy_pending_install_with_claude_settings_json(tmp_path):
+    # The other side of the fix above: affirmative Claude evidence (here,
+    # an existing settings.json) still earns the replay.
+    claude = tmp_path / "orphan"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{}", encoding="utf-8")
+    save_pending_hook_op(tmp_path, "install", str(claude))
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [(str(claude), "claude")]
+
+
 def test_new_pending_ops_record_their_provider(tmp_path):
     apply_account_mutation(
         tmp_path, [], "remove", "/home/u/.claude",

@@ -188,8 +188,17 @@ def _claude_picked_as_codex(where: str) -> str:
     )
 
 
-def _has_claude_markers(path: Path) -> bool:
-    return (path / ".credentials.json").is_file() or (path / "projects").is_dir()
+def looks_like_claude_home(path: Path) -> bool:
+    """Affirmative evidence that path is a Claude Code config directory:
+    an existing settings.json, a projects/ directory, or a
+    .credentials.json file. Any one is enough -- a fresh Claude Code
+    install, or an API-key user with no OAuth credentials, may not have
+    all three."""
+    return (
+        (path / ".credentials.json").is_file()
+        or (path / "projects").is_dir()
+        or (path / "settings.json").is_file()
+    )
 
 
 def looks_like_codex_home(local_path: str) -> bool:
@@ -200,7 +209,7 @@ def looks_like_codex_home(local_path: str) -> bool:
     """
     try:
         path = Path(local_path)
-        if _has_claude_markers(path):
+        if looks_like_claude_home(path):
             return False
         return any((path / name).is_dir() for name in _CODEX_ROLLOUT_DIRS)
     except OSError:
@@ -268,7 +277,7 @@ def validate_codex_path(
             )
         if not path.is_dir():
             return PathValidationResult(ok=False, error=f"{candidate} does not exist.")
-        if _has_claude_markers(path):
+        if looks_like_claude_home(path):
             return PathValidationResult(ok=False, error=_claude_picked_as_codex(candidate))
         if not any((path / name).is_dir() for name in _CODEX_ROLLOUT_DIRS):
             return PathValidationResult(

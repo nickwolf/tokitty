@@ -582,20 +582,36 @@ def _pending_dir_matched_provider(state_dir: Path, config_dir: str) -> Optional[
     return None
 
 
-def _pending_dir_has_hooks(state_dir: Path, config_dir: str) -> bool:
+def _pending_dir_has_hooks(state_dir: Path, config_dir: str, op: str) -> bool:
     """Whether a legacy pending op's dir is one that gets hooks. Records
     written by this build carry their provider and never get here.
 
     The account's own provider decides when it is still in accounts.json.
     A removed account is gone from there, so its dir is judged by what is
     in it; this runs off the Tk thread, like the hook op it gates.
+
+    An uninstall and an install are judged differently once the account
+    is gone. Replaying an uninstall just removes tokitty's own hook
+    entries, so it fails open the way it always has: not clearly a Codex
+    home is enough. Replaying an install writes a Claude settings.json,
+    so it fails closed instead -- only affirmative Claude evidence
+    (settings.json, projects/, or .credentials.json) earns the replay.
+    Otherwise the dir could be a former Codex home whose rollout dirs
+    were deleted, and looks_like_codex_home alone can't tell that from a
+    directory with no markers at all.
     """
-    from tokitty.manual_path import looks_like_codex_home
+    from tokitty.manual_path import looks_like_claude_home, looks_like_codex_home
 
     matched = _pending_dir_matched_provider(state_dir, config_dir)
     if matched is not None:
         return provider_has_hooks(matched)
-    return not looks_like_codex_home(_local_config_path(config_dir))
+    local_path = _local_config_path(config_dir)
+    if op == "install":
+        try:
+            return looks_like_claude_home(Path(local_path))
+        except OSError:
+            return False
+    return not looks_like_codex_home(local_path)
 
 
 def retry_pending_hook_op(
@@ -610,7 +626,7 @@ def retry_pending_hook_op(
         provider = pending["provider"]
         has_hooks = provider_has_hooks(provider)
     else:
-        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"])
+        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"], pending["op"])
         matched = _pending_dir_matched_provider(state_dir, pending["config_dir"])
         provider = matched if matched is not None else DEFAULT_PROVIDER
     if not has_hooks:
