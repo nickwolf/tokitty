@@ -28,6 +28,27 @@ from tokitty.sprites import COLORWAYS, PATTERNS
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_hook_refresh_at_startup(monkeypatch):
+    """run_discovery calls hooks_install.ensure_current(state_dir) on every
+    launch (Task 4). get_config_dirs falls back to Path.home() / ".claude"
+    -- the developer's real Claude Code config dir -- whenever a state_dir
+    has no accounts.json, which is true for nearly every run_gui test in
+    this file. Without this, running this file's own suite would read
+    (and, if anything ever drifted, try to rewrite) whoever's real
+    ~/.claude/settings.json runs it: the same class of bug
+    _no_real_autostart_registration in conftest.py already guards against
+    for autostart. Scoped to this file rather than conftest.py, and
+    patching ensure_current itself rather than _default_config_dir/
+    get_config_dirs, so it never interferes with test_hooks_install.py's
+    own dedicated tests for those functions. A test that cares about
+    ensure_current's output patches it back itself (see
+    test_startup_hook_warnings_show_once_via_messagebox below)."""
+    from tokitty import hooks_install
+
+    monkeypatch.setattr(hooks_install, "ensure_current", lambda state_dir, refresh_fn=None: [])
+
+
 def _limit(kind="session", percent=100.0, severity="normal", is_active=True, resets_at=None):
     return LimitInfo(kind=kind, percent=percent, severity=severity, resets_at=resets_at, is_active=is_active)
 
@@ -710,6 +731,56 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
 
     monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
     return main_module, opened
+
+
+@pytest.mark.gui
+def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
+    """Task 4: retry_pending_hook_op's warning and an ensure_current
+    result's warning both reach one messagebox.showwarning call on the Tk
+    thread, exactly once per launch -- today the retry result is
+    discarded (__main__.py's run_discovery), which is the bug this
+    fixes. messagebox.showwarning is patched on the actual submodule
+    object, not on tokitty.__main__, because tick()'s `from tkinter
+    import messagebox` is a local import that binds to that same
+    submodule at call time (see test_run_gui_toggle_autostart_shows_
+    warning_on_translocation's identical reasoning)."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import hooks_install as hooks_install_module
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op",
+        lambda state_dir: hooks_install_module.ConfigDirResult(
+            str(tmp_path / "a"), True, "installed", warning="retry warning"
+        ),
+    )
+    monkeypatch.setattr(
+        hooks_install_module, "ensure_current",
+        lambda state_dir, refresh_fn=None: [
+            hooks_install_module.ConfigDirResult(
+                str(tmp_path / "b"), True, "refreshed", warning="ensure warning"
+            )
+        ],
+    )
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert "retry warning" in args[1]
+    assert "ensure warning" in args[1]
+    assert kwargs.get("parent") is not None
 
 
 @pytest.mark.gui

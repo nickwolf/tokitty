@@ -459,6 +459,7 @@ def run_gui() -> int:
     discovery_result = {
         "wsl_matches": [],
         "transcript_matches": [],
+        "hook_warnings": [],
         "done": False,
         "consumed": False,
     }
@@ -539,6 +540,20 @@ def run_gui() -> int:
         # philosophy of "resolution failure means run without it, never a
         # crash" -- never "auto-open silently never evaluates again."
         try:
+            # De-duplicated, in order: a link failure's own message, the
+            # retry result's warning (and its message if it failed), then
+            # each ensure_current result's warning (and message if
+            # failed). tick() shows the union in one messagebox, at most
+            # once per launch (Task 4) -- today the retry result is
+            # discarded here, which is the bug that fixes.
+            hook_warnings = []
+            seen_hook_warnings = set()
+
+            def _note(text):
+                if text and text not in seen_hook_warnings:
+                    seen_hook_warnings.add(text)
+                    hook_warnings.append(text)
+
             if getattr(sys, "frozen", False):
                 # Repoints <state dir>/current at this release before the
                 # retry below, so a stale link from a previous release
@@ -549,13 +564,31 @@ def run_gui() -> int:
                     from tokitty import runner_link
 
                     runner_link.ensure_runner_link(state_dir)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    _note(str(exc))
 
             try:
-                retry_pending_hook_op(state_dir)
+                retry_result = retry_pending_hook_op(state_dir)
             except (OSError, PermissionError):
-                pass
+                retry_result = None
+            if retry_result is not None:
+                _note(retry_result.warning)
+                if not retry_result.ok:
+                    _note(retry_result.message)
+
+            try:
+                from tokitty import hooks_install
+
+                refresh_results = hooks_install.ensure_current(state_dir)
+            except OSError:
+                refresh_results = []
+            for refresh_result in refresh_results:
+                _note(refresh_result.warning)
+                if not refresh_result.ok:
+                    _note(refresh_result.message)
+
+            with discovery_lock:
+                discovery_result["hook_warnings"] = hook_warnings
 
             wsl_matches = []
             if (
@@ -947,8 +980,13 @@ def run_gui() -> int:
             ready = discovery_result["done"] and not discovery_result["consumed"]
             if ready:
                 discovery_result["consumed"] = True
+                hook_warnings = list(discovery_result["hook_warnings"])
         if ready:
             maybe_auto_open()
+            if hook_warnings:
+                from tkinter import messagebox
+
+                messagebox.showwarning("Tokitty", "\n\n".join(hook_warnings), parent=root)
 
         for unit in units:
             latest = unit["poller"].get_latest()
