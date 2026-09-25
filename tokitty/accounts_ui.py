@@ -404,6 +404,8 @@ class AccountsManager:
                     f"Reopen Accounts to retry it before making another change. {detail}",
                     parent=self.toplevel,
                 )
+            elif outcome is not None and getattr(outcome, "warning", None):
+                messagebox.showwarning("Accounts", outcome.warning, parent=self.toplevel)
         else:
             self._retry_after_id = self.toplevel.after(
                 _RETRY_POLL_MS, self._poll_retry_done
@@ -797,6 +799,8 @@ class AccountsManager:
                 f"making another change. {outcome.message}",
                 parent=self.toplevel,
             )
+        elif getattr(outcome, "warning", None):
+            messagebox.showwarning("Accounts", outcome.warning, parent=self.toplevel)
 
     def _poll_mutation_done(self) -> None:
         self._mutation_after_id = None
