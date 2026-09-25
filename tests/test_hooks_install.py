@@ -6,6 +6,8 @@ real ~/.claude or ~/.claude-work.
 import json
 from pathlib import Path
 
+import pytest
+
 from tokitty import hooks_install as hi
 from tokitty.accounts import Account
 from tokitty.hooks_install import (
@@ -44,32 +46,206 @@ def test_windows_local_path_detected():
 
 
 def test_build_command_posix_uses_python3():
-    cmd = hi._build_command("/home/nick/.claude")
-    assert cmd == (
+    handler = hi._build_command("/home/nick/.claude")
+    assert handler["type"] == "command"
+    assert handler["command"] == (
         'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_wsl_unc_maps_to_native():
-    cmd = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude")
-    assert cmd == (
+    handler = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude")
+    assert handler["command"] == (
         'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick/.claude/tokitty/sessions"'
     )
 
 
 def test_build_command_windows_local_uses_python():
-    cmd = hi._build_command(r"C:\Users\nick\.claude")
-    assert cmd.startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
+    handler = hi._build_command(r"C:\Users\nick\.claude")
+    assert handler["command"].startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
 
 
 def test_build_command_quotes_spaced_path():
-    cmd = hi._build_command("/home/nick 2/.claude")
-    assert cmd == (
+    handler = hi._build_command("/home/nick 2/.claude")
+    assert handler["command"] == (
         'python3 "/home/nick 2/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick 2/.claude/tokitty/sessions"'
     )
+
+
+def test_build_command_strips_trailing_slash_from_home():
+    with_slash = hi._build_command("/home/nick/.claude/")
+    without_slash = hi._build_command("/home/nick/.claude")
+    assert with_slash == without_slash
+
+
+def test_build_command_strips_trailing_backslash_from_windows_home():
+    with_slash = hi._build_command("C:\\Users\\nick\\.claude\\")
+    without_slash = hi._build_command("C:\\Users\\nick\\.claude")
+    assert with_slash == without_slash
+
+
+# ---------------------------------------------------------------------------
+# HookTarget / _hook_target
+# ---------------------------------------------------------------------------
+
+def test_hook_target_for_claude_and_default():
+    target = hi._hook_target("claude")
+    assert target.settings_file == "settings.json"
+    assert target.local_settings_file == "settings.local.json"
+    assert target.events == tuple(hi.HOOK_EVENTS)
+    assert hi._hook_target(None) == target
+
+
+def test_hook_target_raises_for_unknown_provider():
+    with pytest.raises(ValueError):
+        hi._hook_target("codex")
+
+
+# ---------------------------------------------------------------------------
+# _is_owned_hook (exact ownership matcher)
+# ---------------------------------------------------------------------------
+
+def test_is_owned_hook_accepts_current_quoted_form():
+    config_dir = "/home/nick/.claude"
+    hook = hi._build_command(config_dir)
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_historical_unquoted_form():
+    config_dir = "/home/nick/.claude"
+    hook = {
+        "type": "command",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py "
+        "--sessions-dir /home/nick/.claude/tokitty/sessions",
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_windows_local_home_as_built():
+    # _build_command never rewrites the drive-letter home to forward
+    # slashes, so this is a mix of backslashes and forward slashes.
+    config_dir = r"C:\Users\nick\.claude"
+    hook = hi._build_command(config_dir)
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_windows_local_home_all_backslashes():
+    config_dir = r"C:\Users\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": (
+            r'python "C:\Users\nick\.claude\tokitty\hook_writer.py" '
+            r'--sessions-dir "C:\Users\nick\.claude\tokitty\sessions"'
+        ),
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_case_folds_drive_letter_home():
+    written_home = r"C:\Users\Nick\.claude"
+    hook = hi._build_command(written_home)
+    account_home = r"c:\users\nick\.claude"
+    assert hi._is_owned_hook(hook, account_home)
+
+
+def test_is_owned_hook_accepts_doubled_slash():
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/h/.claude//tokitty/sessions"',
+    }
+    assert hi._is_owned_hook(hook, "/h/.claude")
+
+
+def test_is_owned_hook_wsl_unc_home_matches_posix_written_hook():
+    config_dir = r"\\wsl.localhost\Ubuntu\home\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_unrelated_python_script():
+    hook = {"type": "command", "command": "python3 /opt/tokitty/myhook.py"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_non_python_interpreter():
+    hook = {"type": "command", "command": "bash ~/tokitty-scripts/run.sh"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_other_home():
+    config_dir = "/home/nick/.claude"
+    hook = hi._build_command(config_dir)
+    assert not hi._is_owned_hook(hook, "/other-home")
+
+
+def test_is_owned_hook_rejects_prompt_type():
+    hook = {
+        "type": "prompt",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py "
+        "--sessions-dir /home/nick/.claude/tokitty/sessions",
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_partial_lookalike_missing_sessions_flag():
+    # The old fixture shape used before ownership was exact: mentions
+    # tokitty, but is not the command tokitty actually writes.
+    hook = {"type": "command", "command": "python3 x/tokitty/hook_writer.py"}
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_accepts_historical_unquoted_drive_letter_form():
+    # Written by 9bab1b3 for a drive-letter home: unquoted, so shlex's
+    # posix parser reads the backslashes as escapes and mangles the path.
+    config_dir = r"C:\Users\nick\.claude"
+    hook = {
+        "type": "command",
+        "command": r"python C:\Users\nick\.claude/tokitty/hook_writer.py "
+        r"--sessions-dir C:\Users\nick\.claude/tokitty/sessions",
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_historical_unquoted_form_for_a_different_drive_letter_home():
+    hook = {
+        "type": "command",
+        "command": r"python C:\Users\nick\.claude/tokitty/hook_writer.py "
+        r"--sessions-dir C:\Users\nick\.claude/tokitty/sessions",
+    }
+    assert not hi._is_owned_hook(hook, r"D:\Users\nick\.claude")
+
+
+def test_is_owned_hook_rejects_unbalanced_quote():
+    # The whitespace fallback exists only for the historical unquoted
+    # shape, which never had quotes at all. A command with a stray quote
+    # is not that shape, even though stripping quotes per token happens
+    # to make it line up.
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py '
+        '--sessions-dir /h/.claude/tokitty/sessions',
+    }
+    assert not hi._is_owned_hook(hook, "/h/.claude")
+
+
+def test_is_owned_hook_rejects_trailing_slash_on_script_token():
+    # A quoted command with a trailing slash on the script path is not the
+    # command tokitty writes, even though the home itself normalises a
+    # trailing separator away.
+    hook = {
+        "type": "command",
+        "command": 'python3 "/h/.claude/tokitty/hook_writer.py/" '
+        '--sessions-dir "/h/.claude/tokitty/sessions"',
+    }
+    assert not hi._is_owned_hook(hook, "/h/.claude")
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +260,7 @@ def test_get_config_dirs_defaults_to_home_claude(monkeypatch, tmp_path):
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     dirs = hi.get_config_dirs()
-    assert dirs == [str(fake_home / ".claude")]
+    assert dirs == [(str(fake_home / ".claude"), "claude")]
 
 
 def test_get_config_dirs_reads_accounts_json(monkeypatch, tmp_path):
@@ -95,7 +271,7 @@ def test_get_config_dirs_reads_accounts_json(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
     dirs = hi.get_config_dirs()
-    assert dirs == ["/a/.claude", "/b/.claude-work"]
+    assert dirs == [("/a/.claude", "claude"), ("/b/.claude-work", "claude")]
 
 
 def test_get_config_dirs_falls_back_on_malformed_accounts_json(monkeypatch, tmp_path):
@@ -107,7 +283,16 @@ def test_get_config_dirs_falls_back_on_malformed_accounts_json(monkeypatch, tmp_
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     dirs = hi.get_config_dirs()
-    assert dirs == [str(fake_home / ".claude")]
+    assert dirs == [(str(fake_home / ".claude"), "claude")]
+
+
+def test_get_config_dirs_accepts_explicit_state_dir(tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "accounts.json").write_text(
+        json.dumps({"accounts": [{"config_dir": "/a/.claude"}]})
+    )
+    assert hi.get_config_dirs(state_dir) == [("/a/.claude", "claude")]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +390,7 @@ def test_install_is_additive_preserves_existing_hooks(tmp_path):
     pretool = data["hooks"]["PreToolUse"]
     assert len(pretool) == 2
     assert {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]} in pretool
-    assert any(hi._is_tokitty_entry(e) for e in pretool)
+    assert any(hi._is_tokitty_entry(e, str(config_dir)) for e in pretool)
 
 
 def test_install_writes_timestamped_backup(tmp_path):
@@ -260,10 +445,11 @@ def test_install_idempotent_running_twice_yields_identical_file(tmp_path):
 def test_install_skips_event_already_marked_in_settings_local(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
+    owned_command = hi._build_command(str(config_dir))["command"]
     local = {
         "hooks": {
             "Stop": [
-                {"matcher": "", "hooks": [{"type": "command", "command": "python3 x/tokitty/hook_writer.py"}]}
+                {"matcher": "", "hooks": [{"type": "command", "command": owned_command}]}
             ]
         }
     }
@@ -353,13 +539,121 @@ def test_uninstall_preserves_non_tokitty_entries(tmp_path):
     ]
 
 
+def test_uninstall_keeps_user_handler_in_a_shared_entry(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "some-other-tool"},
+                        dict(owned_handler),
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
+def test_uninstall_drops_an_entry_left_with_no_handlers(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "", "hooks": [dict(owned_handler)]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
+def test_uninstall_drops_an_event_left_with_no_entries(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "Stop": [{"matcher": "", "hooks": [dict(owned_handler)]}],
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "Stop" not in data["hooks"]
+    assert result.installed_events == ["Stop"]
+
+
+def test_uninstall_keeps_the_position_of_user_entries_around_tokittys(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned_handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "Before", "hooks": [{"type": "command", "command": "before-tool"}]},
+                {"matcher": "", "hooks": [dict(owned_handler)]},
+                {"matcher": "After", "hooks": [{"type": "command", "command": "after-tool"}]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Before", "hooks": [{"type": "command", "command": "before-tool"}]},
+        {"matcher": "After", "hooks": [{"type": "command", "command": "after-tool"}]},
+    ]
+
+
+def test_uninstall_writes_nothing_and_no_backup_when_nothing_owned(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    original = (config_dir / "settings.json").read_text()
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    assert result.installed_events == []
+    assert (config_dir / "settings.json").read_text() == original
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
 def test_uninstall_leaves_settings_local_alone_but_reports(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
+    owned_command = hi._build_command(str(config_dir))["command"]
     local = {
         "hooks": {
             "Stop": [
-                {"matcher": "", "hooks": [{"type": "command", "command": "python3 x/tokitty/hook_writer.py"}]}
+                {"matcher": "", "hooks": [{"type": "command", "command": owned_command}]}
             ]
         }
     }
@@ -421,7 +715,7 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 def test_install_hooks_returns_0_on_success(monkeypatch, tmp_path, capsys):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    monkeypatch.setattr(hi, "get_config_dirs", lambda: [str(config_dir)])
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
     rc = hi.install_hooks()
     assert rc == 0
     out = capsys.readouterr().out
@@ -434,7 +728,7 @@ def test_install_hooks_returns_1_if_any_dir_fails(monkeypatch, tmp_path):
     bad = tmp_path / "bad" / ".claude"
     bad.mkdir(parents=True)
     (bad / "settings.json").write_text("{not valid json")
-    monkeypatch.setattr(hi, "get_config_dirs", lambda: [str(good), str(bad)])
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(good), "claude"), (str(bad), "claude")])
     rc = hi.install_hooks()
     assert rc == 1
     assert (good / "tokitty" / "hook_writer.py").exists()
@@ -444,9 +738,39 @@ def test_uninstall_hooks_returns_0_on_success(monkeypatch, tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     hi.install_hooks_for_dir(str(config_dir))
-    monkeypatch.setattr(hi, "get_config_dirs", lambda: [str(config_dir)])
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
     rc = hi.uninstall_hooks()
     assert rc == 0
+
+
+def test_install_hooks_passes_provider_to_install_fn(monkeypatch, tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    calls = []
+
+    def fake_install(cd, provider):
+        calls.append((cd, provider))
+        return ConfigDirResult(cd, True, "installed")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    hi.install_hooks()
+    assert calls == [(str(config_dir), "claude")]
+
+
+def test_uninstall_hooks_passes_provider_to_uninstall_fn(monkeypatch, tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    calls = []
+
+    def fake_uninstall(cd, provider):
+        calls.append((cd, provider))
+        return ConfigDirResult(cd, True, "uninstalled")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "uninstall_hooks_for_dir", fake_uninstall)
+    hi.uninstall_hooks()
+    assert calls == [(str(config_dir), "claude")]
 
 
 def test_multiple_config_dirs_get_independent_sessions_dirs(monkeypatch, tmp_path):
@@ -454,7 +778,7 @@ def test_multiple_config_dirs_get_independent_sessions_dirs(monkeypatch, tmp_pat
     dir_b = tmp_path / "b" / ".claude-work"
     dir_a.mkdir(parents=True)
     dir_b.mkdir(parents=True)
-    monkeypatch.setattr(hi, "get_config_dirs", lambda: [str(dir_a), str(dir_b)])
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(dir_a), "claude"), (str(dir_b), "claude")])
     hi.install_hooks()
     data_a = json.loads((dir_a / "settings.json").read_text())
     data_b = json.loads((dir_b / "settings.json").read_text())
@@ -544,7 +868,7 @@ def test_apply_account_mutation_writes_accounts_before_pending_op_before_hook(tm
     def fake_save_accounts(state_dir, accts):
         order.append("save_accounts")
 
-    def fake_install(config_dir):
+    def fake_install(config_dir, provider):
         order.append("hook_call")
         return ConfigDirResult(config_dir, True, "installed")
 
@@ -582,7 +906,7 @@ def test_apply_account_mutation_clears_pending_op_on_success(tmp_path):
     accounts = [Account(name="a", config_dir="/home/u/.claude")]
     apply_account_mutation(
         tmp_path, accounts, "install", "/home/u/.claude",
-        install_fn=lambda cd: ConfigDirResult(cd, True, "installed"),
+        install_fn=lambda cd, provider: ConfigDirResult(cd, True, "installed"),
     )
     assert load_pending_hook_op(tmp_path) is None
 
@@ -591,7 +915,7 @@ def test_apply_account_mutation_leaves_pending_op_on_ok_false(tmp_path):
     accounts = [Account(name="a", config_dir="/home/u/.claude")]
     apply_account_mutation(
         tmp_path, accounts, "install", "/home/u/.claude",
-        install_fn=lambda cd: ConfigDirResult(cd, False, "aborted"),
+        install_fn=lambda cd, provider: ConfigDirResult(cd, False, "aborted"),
     )
     assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude", "provider": "claude"}
 
@@ -599,7 +923,7 @@ def test_apply_account_mutation_leaves_pending_op_on_ok_false(tmp_path):
 def test_apply_account_mutation_leaves_pending_op_on_raised_exception(tmp_path):
     accounts = [Account(name="a", config_dir="/home/u/.claude")]
 
-    def raising_install(config_dir):
+    def raising_install(config_dir, provider):
         raise OSError("disk full")
 
     try:
@@ -609,10 +933,25 @@ def test_apply_account_mutation_leaves_pending_op_on_raised_exception(tmp_path):
     assert load_pending_hook_op(tmp_path) == {"op": "install", "config_dir": "/home/u/.claude", "provider": "claude"}
 
 
+def test_apply_account_mutation_passes_provider_to_install_fn(tmp_path):
+    accounts = [Account(name="a", config_dir="/home/u/.claude")]
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    apply_account_mutation(
+        tmp_path, accounts, "install", "/home/u/.claude",
+        install_fn=fake_install, provider="claude",
+    )
+    assert calls == [("/home/u/.claude", "claude")]
+
+
 def test_retry_pending_hook_op_clears_on_success(tmp_path):
     save_pending_hook_op(tmp_path, "remove", "/home/u/.claude")
     result = retry_pending_hook_op(
-        tmp_path, uninstall_fn=lambda cd: ConfigDirResult(cd, True, "uninstalled")
+        tmp_path, uninstall_fn=lambda cd, provider: ConfigDirResult(cd, True, "uninstalled")
     )
     assert result.ok
     assert load_pending_hook_op(tmp_path) is None
@@ -620,6 +959,31 @@ def test_retry_pending_hook_op_clears_on_success(tmp_path):
 
 def test_retry_pending_hook_op_returns_none_when_nothing_pending(tmp_path):
     assert retry_pending_hook_op(tmp_path) is None
+
+
+def test_retry_pending_hook_op_passes_recorded_provider_to_fn(tmp_path):
+    save_pending_hook_op(tmp_path, "install", "/home/u/.claude", "claude")
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [("/home/u/.claude", "claude")]
+
+
+def test_retry_resolves_provider_from_matching_account_for_legacy_record(tmp_path):
+    _write_accounts(tmp_path, [{"name": "a", "config_dir": "/home/u/.claude-work", "provider": "claude"}])
+    save_pending_hook_op(tmp_path, "install", "/home/u/.claude-work")  # legacy: no provider recorded
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [("/home/u/.claude-work", "claude")]
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +1019,7 @@ def test_get_config_dirs_skips_a_codex_account(monkeypatch, tmp_path):
         {"config_dir": "/b/.codex", "provider": "codex"},
     ])
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
-    assert hi.get_config_dirs() == ["/a/.claude"]
+    assert hi.get_config_dirs() == [("/a/.claude", "claude")]
 
 
 def test_get_config_dirs_with_only_codex_accounts_is_empty(monkeypatch, tmp_path):
@@ -678,7 +1042,7 @@ def test_install_hooks_leaves_a_codex_home_untouched(monkeypatch, tmp_path, caps
     assert "nothing to install" in capsys.readouterr().out
 
 
-def _forbidden(config_dir):
+def _forbidden(config_dir, provider):
     raise AssertionError(f"hook function called for {config_dir}")
 
 
@@ -736,7 +1100,7 @@ def test_retry_still_replays_a_pending_op_for_a_removed_claude_dir(tmp_path):
     save_pending_hook_op(tmp_path, "remove", str(claude))
     calls = []
 
-    def fake_uninstall(config_dir):
+    def fake_uninstall(config_dir, provider):
         calls.append(config_dir)
         return ConfigDirResult(config_dir, True, "uninstalled")
 
@@ -744,10 +1108,40 @@ def test_retry_still_replays_a_pending_op_for_a_removed_claude_dir(tmp_path):
     assert calls == [str(claude)]
 
 
+def test_retry_clears_a_legacy_pending_install_with_no_claude_evidence(tmp_path):
+    # A legacy record (no provider) whose dir matches no account and has
+    # neither Codex's rollout dirs nor any Claude marker must not be
+    # replayed as an install: that would create a Claude settings.json in
+    # a directory nothing here can identify. Fail closed instead.
+    orphan = tmp_path / "orphan"
+    orphan.mkdir()
+    save_pending_hook_op(tmp_path, "install", str(orphan))
+    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    assert load_pending_hook_op(tmp_path) is None
+    assert list(orphan.iterdir()) == []
+
+
+def test_retry_replays_a_legacy_pending_install_with_claude_settings_json(tmp_path):
+    # The other side of the fix above: affirmative Claude evidence (here,
+    # an existing settings.json) still earns the replay.
+    claude = tmp_path / "orphan"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{}", encoding="utf-8")
+    save_pending_hook_op(tmp_path, "install", str(claude))
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [(str(claude), "claude")]
+
+
 def test_new_pending_ops_record_their_provider(tmp_path):
     apply_account_mutation(
         tmp_path, [], "remove", "/home/u/.claude",
-        uninstall_fn=lambda d: ConfigDirResult(d, False, "failed"),
+        uninstall_fn=lambda d, provider: ConfigDirResult(d, False, "failed"),
     )
     assert load_pending_hook_op(tmp_path)["provider"] == "claude"
 
@@ -760,7 +1154,7 @@ def test_retry_trusts_a_recorded_claude_provider_over_the_dir_shape(tmp_path):
     save_pending_hook_op(tmp_path, "remove", str(claude), "claude")
     calls = []
 
-    def fake_uninstall(config_dir):
+    def fake_uninstall(config_dir, provider):
         calls.append(config_dir)
         return ConfigDirResult(config_dir, True, "uninstalled")
 
@@ -773,3 +1167,77 @@ def test_retry_clears_a_recorded_codex_provider(tmp_path):
     save_pending_hook_op(tmp_path, "install", str(home), "codex")
     assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
     assert load_pending_hook_op(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# A warning on a successful result
+# ---------------------------------------------------------------------------
+
+def test_config_dir_result_warning_defaults_to_none():
+    result = ConfigDirResult("cd", True, "installed")
+    assert result.warning is None
+
+
+def test_config_dir_result_stores_a_warning():
+    result = ConfigDirResult("cd", True, "installed", warning="fallback used")
+    assert result.warning == "fallback used"
+
+
+def test_install_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed", warning="fallback used")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert f"{config_dir}: warning: fallback used" in err
+
+
+def test_install_hooks_prints_no_warning_line_without_one(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" not in err
+
+
+def test_uninstall_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_uninstall(cd, provider):
+        return ConfigDirResult(cd, True, "uninstalled", warning="fallback used")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "uninstall_hooks_for_dir", fake_uninstall)
+    rc = hi.uninstall_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert f"{config_dir}: warning: fallback used" in err
+
+
+def test_uninstall_hooks_prints_no_warning_line_without_one(monkeypatch, tmp_path, capsys):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_uninstall(cd, provider):
+        return ConfigDirResult(cd, True, "uninstalled")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "uninstall_hooks_for_dir", fake_uninstall)
+    rc = hi.uninstall_hooks()
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" not in err

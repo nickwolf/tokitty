@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from tokitty.accounts import (
     DEFAULT_PROVIDER,
@@ -37,6 +40,34 @@ HOOK_EVENTS = [
     ("SubagentStop", ""),
     ("SessionEnd", ""),
 ]
+
+
+@dataclass(frozen=True)
+class HookTarget:
+    """Where a provider's hooks live and which events tokitty owns there."""
+    settings_file: str
+    local_settings_file: Optional[str]  # read-only; None if the harness has none
+    events: Tuple[Tuple[str, str], ...]
+
+
+_HOOK_TARGETS: Dict[str, HookTarget] = {
+    "claude": HookTarget("settings.json", "settings.local.json", tuple(HOOK_EVENTS)),
+}
+
+
+def _hook_target(provider: Optional[str]) -> HookTarget:
+    """The settings files and events tokitty owns for a provider.
+
+    Raises ValueError for a provider with no entry here. That can only
+    happen if a provider declares activity=True without a target, which
+    is a programming error, not something a caller needs to recover from.
+    """
+    key = provider or DEFAULT_PROVIDER
+    try:
+        return _HOOK_TARGETS[key]
+    except KeyError:
+        raise ValueError(f"no hook target registered for provider {key!r}") from None
+
 
 _HOOK_WRITER_SOURCE = Path(__file__).resolve().parent / "hook_writer.py"
 
@@ -119,20 +150,21 @@ def provider_has_hooks(kind: Optional[str]) -> bool:
         return False
 
 
-def get_config_dirs() -> List[str]:
-    """Return the list of Claude Code config dirs to install/uninstall hooks in.
+def get_config_dirs(state_dir: Optional[Path] = None) -> List[Tuple[str, str]]:
+    """Return the (config_dir, provider) pairs to install/uninstall hooks in.
 
     Default is the single dir ~/.claude (or, on Windows with WSL, the
     \\\\wsl.localhost dir where Claude Code actually lives -- see
-    _default_config_dir). If <state-dir>/accounts.json exists and contains
-    a list of config-dir paths under key "accounts" (each item an object
-    with a "config_dir" key), those are used instead, minus any account
-    whose provider has no hooks. An accounts.json holding only such
-    accounts yields an empty list rather than the default dir, which is
-    not an account the user asked for.
+    _default_config_dir), paired with DEFAULT_PROVIDER. If
+    <state-dir>/accounts.json exists and contains a list of config-dir
+    paths under key "accounts" (each item an object with a "config_dir"
+    key), those are used instead, minus any account whose provider has no
+    hooks. An accounts.json holding only such accounts yields an empty
+    list rather than the default dir, which is not an account the user
+    asked for. state_dir defaults to get_state_dir() when not given.
     """
-    state_dir = get_state_dir()
-    accounts_file = state_dir / "accounts.json"
+    state_dir = state_dir if state_dir is not None else get_state_dir()
+    accounts_file = Path(state_dir) / "accounts.json"
     if accounts_file.exists():
         try:
             with open(accounts_file, "r", encoding="utf-8") as f:
@@ -142,19 +174,23 @@ def get_config_dirs() -> List[str]:
                 entries = [a for a in accounts if isinstance(a, dict) and "config_dir" in a]
                 if entries:
                     return [
-                        a["config_dir"] for a in entries if provider_has_hooks(a.get("provider"))
+                        (a["config_dir"], a.get("provider") or DEFAULT_PROVIDER)
+                        for a in entries
+                        if provider_has_hooks(a.get("provider"))
                     ]
         except Exception:
             pass
-    return [_default_config_dir()]
+    return [(_default_config_dir(), DEFAULT_PROVIDER)]
 
 
-def _build_command(config_dir: str) -> str:
+def _build_command(config_dir: str) -> dict:
     native = _wsl_native_path(config_dir)
+    native = native.rstrip("/\\") or native
     interpreter = "python" if _is_windows_local_path(config_dir) else "python3"
     script = f'"{native}/tokitty/hook_writer.py"'
     sessions_dir = f'"{native}/tokitty/sessions"'
-    return f"{interpreter} {script} --sessions-dir {sessions_dir}"
+    command = f"{interpreter} {script} --sessions-dir {sessions_dir}"
+    return {"type": "command", "command": command}
 
 
 def _backup(path: Path) -> None:
@@ -193,16 +229,113 @@ def _write_settings(path: Path, data) -> None:
     os.replace(tmp_path, path)
 
 
-def _is_tokitty_entry(entry) -> bool:
+def _normalize_home_path(path: str) -> str:
+    """Normalise a home (or a path derived from one) for comparison.
+
+    Backslashes become forward slashes, repeated slashes collapse to one,
+    a trailing slash is stripped, and the result is case-folded when it
+    starts with a drive letter -- those are case-insensitive, unlike a
+    POSIX path, which must not be folded.
+    """
+    normalized = re.sub(r"/+", "/", path.replace("\\", "/"))
+    if len(normalized) > 1:
+        normalized = normalized.rstrip("/") or normalized
+    if _is_windows_local_path(normalized):
+        normalized = normalized.casefold()
+    return normalized
+
+
+def _normalize_token_path(path: str) -> str:
+    """Normalise a path token pulled out of a hook command for comparison.
+
+    Unlike _normalize_home_path, a trailing separator is never stripped:
+    the home is ours to normalise (it comes from accounts.json or the
+    UI), but a script or sessions path out of an arbitrary hook command
+    is exactly what tokitty wrote or it is not owned, and
+    ".../hook_writer.py/" is not the file tokitty writes. Backslashes
+    still become forward slashes, repeated slashes still collapse, and a
+    drive-letter path is still case-folded -- those are equivalent
+    spellings regardless of where the string came from.
+    """
+    normalized = re.sub(r"/+", "/", path.replace("\\", "/"))
+    if _is_windows_local_path(normalized):
+        normalized = normalized.casefold()
+    return normalized
+
+
+def _command_owned_from_parts(parts, expected_script: str, expected_sessions: str) -> bool:
+    if len(parts) != 4:
+        return False
+    interpreter, script, flag, sessions_arg = parts
+    if interpreter not in ("python", "python3") or flag != "--sessions-dir":
+        return False
+    return (
+        _normalize_token_path(script) == expected_script
+        and _normalize_token_path(sessions_arg) == expected_sessions
+    )
+
+
+def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
+    """Whether hook is the exact command tokitty writes for config_dir.
+
+    Ownership is yes-or-no only: a hook is owned if it is a "command"
+    hook whose command splits into exactly an interpreter, the
+    hook_writer.py path, "--sessions-dir", and the sessions path, and
+    both paths normalise to this home's tokitty/hook_writer.py and
+    tokitty/sessions. An equivalent spelling (quoting, a doubled slash, a
+    differently-cased drive letter) is still owned; a hook aimed at
+    another home, one that merely mentions tokitty, one with an
+    unbalanced quote, or one whose script/sessions token carries a
+    trailing separator tokitty never wrote, is not.
+
+    The split is tried two ways. shlex (posix mode) handles the quoted
+    form and the historical unquoted POSIX form (9bab1b3). It does not
+    handle the historical unquoted form on a drive-letter home: shlex
+    reads the backslashes in "C:\\Users\\..." as escape characters and
+    mangles the path. A raised ValueError (an unbalanced quote) means the
+    command does not parse as anything tokitty wrote, full stop -- no
+    fallback. When shlex's split parses but is not an owned match, a
+    plain whitespace split is tried too, but only when the command has no
+    quote characters at all: the whitespace fallback exists solely for
+    the historical unquoted shape, which never had quotes, so any quote
+    in the command means that shape is not what this is.
+
+    provider is accepted for forward compatibility with non-Claude
+    shapes; only Claude's shape is recognised today.
+    """
+    if not isinstance(hook, dict) or hook.get("type") != "command":
+        return False
+    command = hook.get("command")
+    if not isinstance(command, str):
+        return False
+    home = _normalize_home_path(_wsl_native_path(config_dir))
+    expected_script = f"{home}/tokitty/hook_writer.py"
+    expected_sessions = f"{home}/tokitty/sessions"
+
+    try:
+        shlex_parts = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    if _command_owned_from_parts(shlex_parts, expected_script, expected_sessions):
+        return True
+
+    if '"' in command or "'" in command:
+        return False
+
+    whitespace_parts = command.split()
+    return _command_owned_from_parts(whitespace_parts, expected_script, expected_sessions)
+
+
+def _is_tokitty_entry(entry, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
     if not isinstance(entry, dict):
         return False
     for hook in entry.get("hooks", []):
-        if isinstance(hook, dict) and MARKER in str(hook.get("command", "")):
+        if _is_owned_hook(hook, config_dir, provider):
             return True
     return False
 
 
-def _events_with_tokitty_entries(data) -> set:
+def _events_with_tokitty_entries(data, config_dir: str, provider: str = DEFAULT_PROVIDER) -> set:
     events = set()
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -210,41 +343,55 @@ def _events_with_tokitty_entries(data) -> set:
     for event, entries in hooks.items():
         if not isinstance(entries, list):
             continue
-        if any(_is_tokitty_entry(e) for e in entries):
+        if any(_is_tokitty_entry(e, config_dir, provider) for e in entries):
             events.add(event)
     return events
 
 
 class ConfigDirResult:
-    def __init__(self, config_dir: str, ok: bool, message: str, installed_events: Optional[List[str]] = None):
+    def __init__(
+        self,
+        config_dir: str,
+        ok: bool,
+        message: str,
+        installed_events: Optional[List[str]] = None,
+        warning: Optional[str] = None,
+    ):
         self.config_dir = config_dir
         self.ok = ok
         self.message = message
         self.installed_events = installed_events or []
+        self.warning = warning
 
 
-def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
+def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
+    target = _hook_target(provider)
     base = Path(_local_config_path(config_dir))
-    settings_path = base / "settings.json"
-    local_settings_path = base / "settings.local.json"
+    settings_path = base / target.settings_file
 
     data, error = _load_settings(settings_path)
     if error:
-        return ConfigDirResult(config_dir, False, f"aborted, could not parse settings.json: {error}")
+        return ConfigDirResult(config_dir, False, f"aborted, could not parse {target.settings_file}: {error}")
 
-    local_data, local_error = _load_settings(local_settings_path)
-    if local_error:
-        return ConfigDirResult(config_dir, False, f"aborted, could not parse settings.local.json: {local_error}")
+    local_data: dict = {}
+    if target.local_settings_file is not None:
+        local_data, local_error = _load_settings(base / target.local_settings_file)
+        if local_error:
+            return ConfigDirResult(
+                config_dir, False, f"aborted, could not parse {target.local_settings_file}: {local_error}"
+            )
 
-    already_installed = _events_with_tokitty_entries(data) | _events_with_tokitty_entries(local_data)
+    already_installed = _events_with_tokitty_entries(data, config_dir, provider) | _events_with_tokitty_entries(
+        local_data, config_dir, provider
+    )
 
-    command = _build_command(config_dir)
+    handler = _build_command(config_dir)
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(_HOOK_WRITER_SOURCE, hooks_dest)
 
-    events_to_add = [(event, matcher) for event, matcher in HOOK_EVENTS if event not in already_installed]
+    events_to_add = [(event, matcher) for event, matcher in target.events if event not in already_installed]
 
     if not events_to_add:
         return ConfigDirResult(config_dir, True, "already installed, nothing to do", installed_events=[])
@@ -252,7 +399,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     existing_hooks = data.get("hooks")
     if existing_hooks is not None and not isinstance(existing_hooks, dict):
         return ConfigDirResult(
-            config_dir, False, f"aborted, settings.json 'hooks' key is not an object: {existing_hooks!r}"
+            config_dir, False, f"aborted, {target.settings_file} 'hooks' key is not an object: {existing_hooks!r}"
         )
     for event, _matcher in events_to_add:
         entries = existing_hooks.get(event) if existing_hooks else None
@@ -260,7 +407,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
             return ConfigDirResult(
                 config_dir,
                 False,
-                f"aborted, settings.json 'hooks.{event}' is not a list: {entries!r}",
+                f"aborted, {target.settings_file} 'hooks.{event}' is not a list: {entries!r}",
             )
 
     _backup(settings_path)
@@ -270,7 +417,7 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     for event, matcher in events_to_add:
         data["hooks"].setdefault(event, [])
         data["hooks"][event].append(
-            {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
+            {"matcher": matcher, "hooks": [dict(handler)]}
         )
         installed.append(event)
 
@@ -279,26 +426,27 @@ def install_hooks_for_dir(config_dir: str) -> ConfigDirResult:
     return ConfigDirResult(config_dir, True, "installed", installed_events=installed)
 
 
-def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
+def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
+    target = _hook_target(provider)
     base = Path(_local_config_path(config_dir))
-    settings_path = base / "settings.json"
-    local_settings_path = base / "settings.local.json"
+    settings_path = base / target.settings_file
 
     data, error = _load_settings(settings_path)
     if error:
-        return ConfigDirResult(config_dir, False, f"aborted, could not parse settings.json: {error}")
+        return ConfigDirResult(config_dir, False, f"aborted, could not parse {target.settings_file}: {error}")
 
-    local_data, local_error = _load_settings(local_settings_path)
     warn_local = False
-    if local_error is None and isinstance(local_data, dict):
-        if _events_with_tokitty_entries(local_data):
-            warn_local = True
+    if target.local_settings_file is not None:
+        local_data, local_error = _load_settings(base / target.local_settings_file)
+        if local_error is None and isinstance(local_data, dict):
+            if _events_with_tokitty_entries(local_data, config_dir, provider):
+                warn_local = True
 
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         msg = "no tokitty hooks found"
         if warn_local:
-            msg += " (note: tokitty-marked entries found in settings.local.json, left untouched)"
+            msg += f" (note: tokitty-marked entries found in {target.local_settings_file}, left untouched)"
         return ConfigDirResult(config_dir, True, msg, installed_events=[])
 
     removed = []
@@ -306,18 +454,37 @@ def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
         entries = hooks[event]
         if not isinstance(entries, list):
             continue
-        kept = [e for e in entries if not _is_tokitty_entry(e)]
-        if len(kept) != len(entries):
+        new_entries = []
+        event_changed = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                new_entries.append(entry)
+                continue
+            entry_hooks = entry.get("hooks")
+            if not isinstance(entry_hooks, list):
+                new_entries.append(entry)
+                continue
+            kept_hooks = [h for h in entry_hooks if not _is_owned_hook(h, config_dir, provider)]
+            if len(kept_hooks) == len(entry_hooks):
+                new_entries.append(entry)
+                continue
+            event_changed = True
+            if kept_hooks:
+                kept_entry = dict(entry)
+                kept_entry["hooks"] = kept_hooks
+                new_entries.append(kept_entry)
+            # else: every handler in this entry was tokitty's, drop the entry.
+        if event_changed:
             removed.append(event)
-            if kept:
-                hooks[event] = kept
+            if new_entries:
+                hooks[event] = new_entries
             else:
                 del hooks[event]
 
     if not removed:
         msg = "no tokitty hooks found"
         if warn_local:
-            msg += " (note: tokitty-marked entries found in settings.local.json, left untouched)"
+            msg += f" (note: tokitty-marked entries found in {target.local_settings_file}, left untouched)"
         return ConfigDirResult(config_dir, True, msg, installed_events=[])
 
     _backup(settings_path)
@@ -325,7 +492,7 @@ def uninstall_hooks_for_dir(config_dir: str) -> ConfigDirResult:
 
     msg = "uninstalled"
     if warn_local:
-        msg += " (note: tokitty-marked entries found in settings.local.json, left untouched)"
+        msg += f" (note: tokitty-marked entries found in {target.local_settings_file}, left untouched)"
     return ConfigDirResult(config_dir, True, msg, installed_events=removed)
 
 
@@ -392,34 +559,59 @@ def apply_account_mutation(
         return ConfigDirResult(config_dir, True, "saved, this harness has no hooks")
     save_pending_hook_op(state_dir, op, config_dir, provider)
     fn = install_fn if op == "install" else uninstall_fn
-    result = fn(config_dir)
+    result = fn(config_dir, provider)
     if result.ok:
         clear_pending_hook_op(state_dir)
     return result
 
 
-def _pending_dir_has_hooks(state_dir: Path, config_dir: str) -> bool:
+def _pending_dir_matched_provider(state_dir: Path, config_dir: str) -> Optional[str]:
+    """Provider of the accounts.json entry matching config_dir, or None if
+    the account has been removed (or never existed) since a legacy pending
+    record without its own provider was written."""
+    try:
+        locator = canonicalize_locator(config_dir)
+    except ValueError:
+        return None
+    for account in load_accounts_result(state_dir).accounts:
+        try:
+            if canonicalize_locator(account.config_dir) == locator:
+                return account.provider
+        except ValueError:
+            continue
+    return None
+
+
+def _pending_dir_has_hooks(state_dir: Path, config_dir: str, op: str) -> bool:
     """Whether a legacy pending op's dir is one that gets hooks. Records
     written by this build carry their provider and never get here.
 
     The account's own provider decides when it is still in accounts.json.
     A removed account is gone from there, so its dir is judged by what is
     in it; this runs off the Tk thread, like the hook op it gates.
-    """
-    from tokitty.manual_path import looks_like_codex_home
 
-    try:
-        locator = canonicalize_locator(config_dir)
-    except ValueError:
-        locator = None
-    if locator is not None:
-        for account in load_accounts_result(state_dir).accounts:
-            try:
-                if canonicalize_locator(account.config_dir) == locator:
-                    return provider_has_hooks(account.provider)
-            except ValueError:
-                continue
-    return not looks_like_codex_home(_local_config_path(config_dir))
+    An uninstall and an install are judged differently once the account
+    is gone. Replaying an uninstall just removes tokitty's own hook
+    entries, so it fails open the way it always has: not clearly a Codex
+    home is enough. Replaying an install writes a Claude settings.json,
+    so it fails closed instead -- only affirmative Claude evidence
+    (settings.json, projects/, or .credentials.json) earns the replay.
+    Otherwise the dir could be a former Codex home whose rollout dirs
+    were deleted, and looks_like_codex_home alone can't tell that from a
+    directory with no markers at all.
+    """
+    from tokitty.manual_path import looks_like_claude_home, looks_like_codex_home
+
+    matched = _pending_dir_matched_provider(state_dir, config_dir)
+    if matched is not None:
+        return provider_has_hooks(matched)
+    local_path = _local_config_path(config_dir)
+    if op == "install":
+        try:
+            return looks_like_claude_home(Path(local_path))
+        except OSError:
+            return False
+    return not looks_like_codex_home(local_path)
 
 
 def retry_pending_hook_op(
@@ -431,16 +623,19 @@ def retry_pending_hook_op(
     if pending is None:
         return None
     if "provider" in pending:
-        has_hooks = provider_has_hooks(pending["provider"])
+        provider = pending["provider"]
+        has_hooks = provider_has_hooks(provider)
     else:
-        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"])
+        has_hooks = _pending_dir_has_hooks(state_dir, pending["config_dir"], pending["op"])
+        matched = _pending_dir_matched_provider(state_dir, pending["config_dir"])
+        provider = matched if matched is not None else DEFAULT_PROVIDER
     if not has_hooks:
         # Left by a build that installed hooks into every account. Replaying
         # it would write Claude Code settings into another harness's home.
         clear_pending_hook_op(state_dir)
         return None
     fn = install_fn if pending["op"] == "install" else uninstall_fn
-    result = fn(pending["config_dir"])
+    result = fn(pending["config_dir"], provider)
     if result.ok:
         clear_pending_hook_op(state_dir)
     return result
@@ -452,8 +647,8 @@ def install_hooks() -> int:
         print("No accounts use a harness with hooks; nothing to install.")
         return 0
     any_failed = False
-    for config_dir in config_dirs:
-        result = install_hooks_for_dir(config_dir)
+    for config_dir, provider in config_dirs:
+        result = install_hooks_for_dir(config_dir, provider)
         if not result.ok:
             any_failed = True
             print(f"{config_dir}: {result.message}", file=sys.stderr)
@@ -462,6 +657,8 @@ def install_hooks() -> int:
             print(f"{config_dir}: installed hooks for {', '.join(result.installed_events)}")
         else:
             print(f"{config_dir}: {result.message}")
+        if result.warning:
+            print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
     print("If the cat doesn't react, restart running Claude Code sessions "
           "(hook edits are not hot-reloaded).")
     return 1 if any_failed else 0
@@ -473,13 +670,15 @@ def uninstall_hooks() -> int:
         print("No accounts use a harness with hooks; nothing to uninstall.")
         return 0
     any_failed = False
-    for config_dir in config_dirs:
-        result = uninstall_hooks_for_dir(config_dir)
+    for config_dir, provider in config_dirs:
+        result = uninstall_hooks_for_dir(config_dir, provider)
         if not result.ok:
             any_failed = True
             print(f"{config_dir}: {result.message}", file=sys.stderr)
             continue
         print(f"{config_dir}: {result.message}")
+        if result.warning:
+            print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
     print("The copied hook_writer.py and sessions state files were left in place; "
           "delete <config-dir>/tokitty/ manually if you want them gone.")
     return 1 if any_failed else 0
