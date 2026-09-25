@@ -612,314 +612,35 @@ Then `tokitty/runner_link.py` per the criteria. Keep it stdlib; import `_winapi`
 
 ### Task 4: Hook ownership and refresh
 
-> **BLOCKED, re-plan before executing (2026-09-24).** The hooks groundwork PR (from #64, branched from main) now owns the provider plumbing, per-provider exact ownership matching, the hook file chosen by provider, and handler-only uninstall. Do not implement the ownership matcher, `_is_tokitty_entry`, or the uninstall narrowing below. Once that PR merges: merge main into this branch (`git merge --no-ff main`, resolving against Tasks 2 and 3 in `hooks_install.py`), then rewrite this task against the merged API. It keeps only #48's own parts: (1) add the exec-form shape (command ending in `tokitty-hook[.exe]`, `args` `["--sessions-dir", <dir>/tokitty/sessions]`) to the groundwork's Claude Code matcher, bound to the home; (2) the in-place rewrite and `refresh_hooks_for_dir`/`ensure_current`, dispatched per provider from the start, with only the Claude Code branch built (#64 adds Codex); (3) the order rule, where the link is made before any write on all three paths (CLI, Accounts dialog, startup refresh); (4) the never-silent fallback from spec Q2a's addendum, with a `warning` on the result that the CLI prints, the Accounts dialog shows with `messagebox.showwarning` on an ok outcome, and the startup refresh shows once per launch, saying every update will need hook approval again in Codex; an existing stable-path hook is never rewritten to a release path; (5) the equivalent-spelling and duplicate-collapse rules and their tests; (6) `run_discovery` today discards `retry_pending_hook_op`'s result (`__main__.py` ~543), so a warning on an ok retry would be lost while the pending record is cleared: collect warnings from the startup retry and from `ensure_current` into one list and show them through the same once-per-launch path; (7) a real `refresh_hooks_for_dir` test across two releases (settings.json byte-identical, link at release B), replacing Task 3's stand-in. The body below is the pre-groundwork draft, kept for reference.
+**Goal:** On top of the merged hooks groundwork (#65), Tokitty owns its exec-form hook, refreshes stale owned hooks in place (never adding one), makes the stable link before any write on every path, and never falls back silently.
 
-**Goal:** Only hooks Tokitty wrote count as Tokitty's; install and a new startup refresh rewrite stale owned hooks in place, and refresh never adds one.
+Re-planned 2026-09-25 against merge 03eda18. The groundwork already provides: `HookTarget`/`_hook_target(provider)`, `get_config_dirs(state_dir) -> [(config_dir, provider)]`, exact per-provider `_is_owned_hook(hook, config_dir, provider)` for the two python shapes, handler-only uninstall, `ConfigDirResult.warning`, the CLI printing warnings, and the Accounts dialog showing `outcome.warning` with `messagebox.showwarning` on an ok result (`accounts_ui.py` ~407 and ~802). Build on those; do not duplicate them.
 
 **Files:**
-- Modify: `tokitty/hooks_install.py`, `tokitty/__main__.py` (`run_discovery`)
+- Modify: `tokitty/hooks_install.py`, `tokitty/__main__.py` (`run_discovery` and the Tk-thread code that consumes its result)
 - Test: `tests/test_hooks_install.py`, `tests/test_main.py`
 
 **Acceptance Criteria:**
-- [ ] `_is_owned_hook(hook, config_dir)` is true only for a dict with `type == "command"` that is one of: the quoted legacy string `python|python3 "<d>/tokitty/hook_writer.py" --sessions-dir "<d>/tokitty/sessions"`; the unquoted legacy string (same with no quotes, written 2026-07-16 to 07-18); exec form whose `command` basename is `tokitty-hook` or `tokitty-hook.exe` (case-insensitive) with `args == ["--sessions-dir", s]`. In every shape the sessions dir must be this home's own: `<d>` or `s` must equal `_wsl_native_path(config_dir)` + `/tokitty/sessions` after `\` to `/`, trailing-slash stripping, and (for drive-letter paths) case folding. A lookalike aimed at another home is not owned. `_is_tokitty_entry(entry, config_dir)` is true iff any hook in it is owned. Every caller passes `config_dir`.
-- [ ] A user hook `python3 /opt/tokitty/myhook.py` and `bash ~/tokitty-scripts/run.sh` are not owned, are never rewritten or removed.
-- [ ] Install, per event in `HOOK_EVENTS`: owned hook in `settings.local.json` counts as installed and is never duplicated into `settings.json` (a stale one is reported in the message), and any owned hook for that event in `settings.json` is removed (user hooks kept), so the event never fires twice; owned hook in `settings.json` matching the desired `command`/`args` is a no-op; owned but different is rewritten in place keeping the entry's `matcher`, the hook's other keys (e.g. `timeout`), and neighbouring hooks; further owned hooks in the same event are removed (an entry left with no hooks is dropped); no owned hook means a new entry is appended.
-- [ ] `settings.json` is backed up before any write and written only if something changed. `hook_writer.py` is copied on every install, as today.
-- [ ] `refresh_hooks_for_dir(config_dir)` does the same reconcile but never appends. With no owned hook in either file it writes nothing at all (no copy, no mkdir). With owned hooks it copies `hook_writer.py`.
-- [ ] `ensure_current(state_dir=None, refresh_fn=refresh_hooks_for_dir) -> List[ConfigDirResult]` runs refresh over `get_config_dirs(state_dir)`, turning an `OSError` for one dir into a failed result and continuing.
-- [ ] `get_config_dirs` takes an optional `state_dir` (default `get_state_dir()`).
-- [ ] Uninstall removes only owned hooks, dropping an entry only if it ends up with no hooks, and an event only if it ends up with no entries.
-- [ ] `run_discovery` calls `hooks_install.ensure_current(state_dir)` right after `retry_pending_hook_op`, inside the same OSError guard, off the Tk thread.
-- [ ] Equivalent spellings: a hook written for `C:\Users\Nick\.claude` is owned and left byte-identical when the account says `c:\users\nick\.claude`; a hook written with a doubled slash (`/home/n/.claude//tokitty/sessions`, from a trailing-slash home) is owned and left as written. Tests for both.
-- [ ] Update the existing call at `tests/test_hooks_install.py:190-208` to the two-argument `_is_tokitty_entry(entry, config_dir)`.
-- [ ] The two existing fixtures that use `python3 x/tokitty/hook_writer.py` with no `--sessions-dir` (`test_install_skips_event_already_marked_in_settings_local`, `test_uninstall_leaves_settings_local_alone_but_reports`) switch to a command Tokitty really wrote for that home; a separate test proves the partial lookalike is not owned.
-- [ ] Tests from spec Task 4 all present: python to exe; an old absolute-path exec hook to the stable path; identical is a no-op (file mtime and content unchanged, no backup file created); user hook containing "tokitty" left alone; mixed entry keeps the user hook; `--uninstall-hooks` then `ensure_current` stays uninstalled; stale owned entry in `settings.local.json` reported and not duplicated. Plus: unquoted legacy form is owned and gets rewritten; duplicate owned hooks collapse to one; `timeout` key preserved on rewrite; uninstall of a mixed entry keeps the user hook.
+- [ ] **Exec-form ownership.** `_is_owned_hook(..., provider="claude")` also owns `{"type": "command", "command": X, "args": [..]}` when X's basename (after `\` to `/`) is `tokitty-hook` or `tokitty-hook.exe` case-insensitively, and `args` is exactly `["--sessions-dir", s]` with `_normalize_token_path(s) == <home>/tokitty/sessions` (same `home`/`expected_sessions` the function already computes). A handler with `args` is never matched by the python-string branch, and vice versa. Tests: owned for this home (POSIX, and `C:\` with mixed slashes and drive-letter case); not owned for another home, extra args, a different basename, `type != "command"`.
+- [ ] The test left failing by the merge, `test_install_twice_from_different_releases_is_byte_identical_and_link_moves`, passes.
+- [ ] **Reconcile per provider.** A single `_reconcile(config_dir, provider, add_missing)` behind `install_hooks_for_dir(config_dir, provider)` (add_missing=True) and a new `refresh_hooks_for_dir(config_dir, provider=DEFAULT_PROVIDER)` (add_missing=False), dispatched through a per-provider table (`{"claude": _reconcile_claude}`) so #64 can add a Codex branch that rewrites single command strings in `hooks.json`. Only the Claude Code branch is built here.
+- [ ] Claude Code reconcile, per event of `target.events`:
+  - owned handler in `settings.local.json`: counts as installed; the local file is never written; if it differs from the desired handler, the result message says so; any owned handler for that event in `settings.json` is removed (user handlers kept, emptied entries dropped) so the event cannot fire twice;
+  - first owned handler in `settings.json`: left alone if it matches the desired handler, else rewritten in place keeping the entry's `matcher`, the handler's other keys (e.g. `timeout`) and neighbouring handlers; further owned handlers in that event are removed;
+  - "matches" means same `command` and, for `args`, equal after `_normalize_token_path` element-wise; for the python string form, `_is_owned_hook` already accepts equivalent spellings, so an owned python handler whose command differs only in spelling from the desired one is left byte-for-byte (rewriting would change the string Codex hashes);
+  - no owned handler and `add_missing`: append `{"matcher": m, "hooks": [dict(handler)]}`;
+  - refresh with no owned handler in either file writes nothing at all (no copy, no mkdir, no link);
+  - `settings.json` is backed up and written only if something changed; `hook_writer.py` is copied whenever the home has or gets an owned handler;
+  - `ConfigDirResult` gains `refreshed_events` (default `[]`); the CLI install prints `refreshed hooks for ...` for it.
+- [ ] **Link first, on every path.** Inside `_reconcile`, before anything is written, an exec-form desired handler calls `runner_link.ensure_runner_link(state_dir_path())` (move the block Task 3 put in `install_hooks_for_dir`). So `--install-hooks`, the Accounts dialog (`apply_account_mutation`/`retry_pending_hook_op` both call `install_hooks_for_dir`) and the startup refresh all make the link before writing.
+- [ ] **Never-silent fallback** (spec Q2a addendum). `LINK_FALLBACK_WARNING = "Tokitty could not set up its stable hook path ({reason}), so its hooks point into this release folder. Every update will need the hooks approved again in Codex, and open Claude Code sessions restarted."`
+  - translocated: `ok=False`, `MOVE_TO_APPLICATIONS`, nothing written (unchanged from Task 3);
+  - any other link failure (real directory at `current`, failed repoint, lock timeout): if `settings.json` already has an owned handler whose `command` is the stable path, keep the stable path (never rewrite it to a release path) and return `ok=True` with the warning; otherwise register the bundled `hook_runner_path(realpath(sys.executable))` and return `ok=True` with the warning. Replaces Task 3's `ok=False` for OSError and its `note` for the real-directory case.
+- [ ] **`ensure_current(state_dir=None, refresh_fn=None) -> List[ConfigDirResult]`** iterates `get_config_dirs(state_dir)` pairs, calls `refresh_fn(config_dir, provider)` (default `refresh_hooks_for_dir`, looked up at call time), turns an `OSError` into a failed result, continues. Providers without a reconcile branch are skipped.
+- [ ] **Startup warnings, once per launch.** `run_discovery` keeps the frozen `ensure_runner_link` call, then runs `retry_pending_hook_op` and `hooks_install.ensure_current(state_dir)` (each in its own OSError guard) and collects, in order and de-duplicated: a link failure's message, the retry result's `warning` (and its `message` if not ok), and each `ensure_current` result's `warning` (and `message` if not ok). They go into the discovery result dict. The Tk-thread code that already reads that dict shows them in one `messagebox.showwarning("Tokitty", "\n\n".join(...))`, at most once per launch, and only when the list is non-empty. Today the retry result is discarded (`__main__.py` ~543); that is the bug this fixes.
+- [ ] Tests (headless unless they need Tk): python to stable exe; old absolute exe to stable; identical is a no-op (bytes unchanged, no backup file); equivalent-spelling python handler left byte-identical; refresh never adds; uninstall then `ensure_current` stays uninstalled; mixed entry keeps the user handler (with `timeout` kept); stale owned local entry reported and not duplicated, and a main-file duplicate for that event removed; duplicate owned handlers collapse to one; **refresh across two releases** (install from release A, `refresh_hooks_for_dir` from release B: `settings.json` byte-identical, link at B; replaces Task 3's stand-in); fallback with no stable hook yet registers the bundled path with the warning; fallback with an existing stable hook leaves it and warns; `ensure_current` OSError turned into a failed result; `tests/test_main.py` (gui marker like its neighbours): a warning from the retry and one from `ensure_current` both reach one patched `messagebox.showwarning` call, exactly once. Links only ever inside `tmp_path`, removed with `os.unlink`/`os.rmdir` in teardown, `sys.platform` never patched in link-creating tests.
 
-**Verify:** `python3 -m pytest -q tests/test_hooks_install.py tests/test_main.py` → pass.
-
-**Steps:**
-
-- [ ] **Step 1: failing tests.** Add to `tests/test_hooks_install.py` (helpers first, then one test per criterion). Core helpers and representative tests; write the rest in the same shape:
-
-```python
-def py_hook(home, quoted=True):
-    q = '"' if quoted else ""
-    return {"type": "command", "command": f"python3 {q}{home}/tokitty/hook_writer.py{q} --sessions-dir {q}{home}/tokitty/sessions{q}"}
-
-
-def exe_hook(home, runner="/old/release/tokitty-hook"):
-    return {"type": "command", "command": runner, "args": ["--sessions-dir", f"{home}/tokitty/sessions"]}
-
-
-USER_HOOK = {"type": "command", "command": "python3 /opt/tokitty/myhook.py"}
-
-
-def _write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-
-def _read(path):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _frozen(monkeypatch, tmp_path):
-    """A frozen build for the host OS whose release folder and state dir live
-    in tmp_path. Links are only ever created inside tmp_path, pointing at a
-    fake release. sys.platform is never patched here: link creation is real."""
-    win = sys.platform == "win32"
-    release = tmp_path / "release"
-    release.mkdir(exist_ok=True)
-    (release / ("tokitty-hook.exe" if win else "tokitty-hook")).write_text("", encoding="utf-8")
-    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(hi.sys, "executable", str(release / ("tokitty.exe" if win else "tokitty")))
-    monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path / "state")
-    return hi.stable_runner_path(tmp_path / "state", sys.platform)
-
-
-def _full_settings(hook):
-    return {"hooks": {ev: [{"matcher": m, "hooks": [dict(hook)]}] for ev, m in hi.HOOK_EVENTS}}
-
-
-def test_owned_shapes():
-    home = "/h"
-    assert hi._is_owned_hook(py_hook(home), home)
-    assert hi._is_owned_hook(py_hook(home, quoted=False), home)
-    assert hi._is_owned_hook(exe_hook(home), home)
-    assert hi._is_owned_hook({"type": "command", "command": r"C:\T\TOKITTY-HOOK.EXE",
-                              "args": ["--sessions-dir", "C:\\h/tokitty/sessions"]}, "C:\\h")
-    assert not hi._is_owned_hook(USER_HOOK, home)
-    assert not hi._is_owned_hook({"type": "command", "command": "bash ~/tokitty-scripts/run.sh"}, home)
-    assert not hi._is_owned_hook({"type": "command", "command": "/x/tokitty-hook", "args": ["--other"]}, home)
-    assert not hi._is_owned_hook({"type": "command", "command": "python3 x/tokitty/hook_writer.py"}, home)
-    assert not hi._is_owned_hook(py_hook("/other-home"), home)
-    assert not hi._is_owned_hook(exe_hook("/other-home"), home)
-    assert not hi._is_owned_hook(dict(py_hook(home), type="prompt"), home)
-
-
-def test_refresh_python_to_stable_exe(tmp_path, monkeypatch):
-    home = tmp_path / "h"
-    _write(home / "settings.json", _full_settings(py_hook(home)))
-    runner = _frozen(monkeypatch, tmp_path)
-    result = hi.refresh_hooks_for_dir(str(home))
-    assert result.ok and set(result.refreshed_events) == {e for e, _ in hi.HOOK_EVENTS}
-    hook = _read(home / "settings.json")["hooks"]["Stop"][0]["hooks"][0]
-    assert hook == {"type": "command", "command": runner, "args": ["--sessions-dir", f"{home}/tokitty/sessions"]}
-    assert (home / "tokitty" / "hook_writer.py").is_file()
-
-
-def test_refresh_old_absolute_exe_to_stable_path(tmp_path, monkeypatch):
-    home = tmp_path / "h"
-    _write(home / "settings.json", _full_settings(exe_hook(home)))
-    runner = _frozen(monkeypatch, tmp_path)
-    hi.refresh_hooks_for_dir(str(home))
-    assert _read(home / "settings.json")["hooks"]["Stop"][0]["hooks"][0]["command"] == runner
-
-
-def test_refresh_identical_is_noop(tmp_path, monkeypatch):
-    home = tmp_path / "h"
-    _frozen(monkeypatch, tmp_path)
-    _write(home / "settings.json", _full_settings(hi._build_command(str(home))))
-    before = (home / "settings.json").read_bytes()
-    result = hi.refresh_hooks_for_dir(str(home))
-    assert result.ok and result.refreshed_events == []
-    assert (home / "settings.json").read_bytes() == before
-    assert not list(home.glob("settings.json.tokitty-backup-*"))
-
-
-def test_refresh_never_adds(tmp_path):
-    home = tmp_path / "h"
-    _write(home / "settings.json", {"hooks": {}})
-    result = hi.refresh_hooks_for_dir(str(home))
-    assert result.ok
-    assert _read(home / "settings.json") == {"hooks": {}}
-    assert not (home / "tokitty").exists()
-
-
-def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path):
-    home = tmp_path / "h"
-    state = tmp_path / "state"
-    _write(state / "accounts.json", {"accounts": [{"name": "a", "config_dir": str(home), "provider": "claude"}]})
-    assert hi.install_hooks_for_dir(str(home)).ok
-    assert hi.uninstall_hooks_for_dir(str(home)).ok
-    hi.ensure_current(state)
-    assert not hi._events_with_tokitty_entries(_read(home / "settings.json"), str(home))
-
-
-def test_mixed_entry_keeps_user_hook_on_refresh_and_uninstall(tmp_path, monkeypatch):
-    home = tmp_path / "h"
-    timed = dict(py_hook(home), timeout=5)
-    _write(home / "settings.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [USER_HOOK, timed]}]}})
-    runner = _frozen(monkeypatch, tmp_path)
-    hi.refresh_hooks_for_dir(str(home))
-    entry = _read(home / "settings.json")["hooks"]["PreToolUse"][0]
-    assert entry["matcher"] == "Bash"
-    assert entry["hooks"][0] == USER_HOOK
-    assert entry["hooks"][1]["command"] == runner and entry["hooks"][1]["timeout"] == 5
-    hi.uninstall_hooks_for_dir(str(home))
-    assert _read(home / "settings.json")["hooks"]["PreToolUse"] == [{"matcher": "Bash", "hooks": [USER_HOOK]}]
-
-
-def test_stale_local_entry_reported_not_duplicated(tmp_path, monkeypatch):
-    home = tmp_path / "h"
-    _write(home / "settings.local.json", {"hooks": {"Stop": [{"matcher": "", "hooks": [py_hook(home)]}]}})
-    _write(home / "settings.json", {"hooks": {"Stop": [{"matcher": "", "hooks": [USER_HOOK, py_hook(home)]}]}})
-    _frozen(monkeypatch, tmp_path)
-    result = hi.install_hooks_for_dir(str(home))
-    assert result.ok
-    assert _read(home / "settings.json")["hooks"]["Stop"] == [{"matcher": "", "hooks": [USER_HOOK]}]
-    assert "settings.local.json" in result.message
-    assert _read(home / "settings.local.json")["hooks"]["Stop"][0]["hooks"][0] == py_hook(home)
-```
-
-Also: unquoted legacy rewritten, duplicates collapse (one event with `[py_hook]` and `[exe_hook]` entries ends with exactly one owned hook), user-only hook untouched by install/uninstall, a lookalike for another home untouched by install/refresh/uninstall, `ensure_current` turns `OSError` from `refresh_fn` into `ok=False` and continues to the next dir. In `tests/test_main.py`, extend the existing `run_discovery` test pattern to assert `hooks_install.ensure_current` is called with `state_dir` after `retry_pending_hook_op` and that an `OSError` from it is swallowed.
-
-- [ ] **Step 2: implement ownership** (`import re`):
-
-```python
-_LEGACY_COMMAND = re.compile(
-    r'^python3? (?P<q>"?)(?P<dir>.+)/tokitty/hook_writer\.py(?P=q)'
-    r' --sessions-dir (?P=q)(?P=dir)/tokitty/sessions(?P=q)$'
-)
-_RUNNER_NAMES = (HOOK_RUNNER_NAME, HOOK_RUNNER_NAME + ".exe")
-
-
-def _norm_dir(path: str) -> str:
-    path = re.sub(r"/{2,}", "/", path.replace("\\", "/")).rstrip("/")
-    return path.lower() if _is_windows_local_path(path) else path
-
-
-def _is_owned_hook(hook, config_dir: str) -> bool:
-    """Only the hook shapes tokitty itself has written for this home, never a
-    substring match."""
-    if not isinstance(hook, dict) or hook.get("type") != "command" or not isinstance(hook.get("command"), str):
-        return False
-    home = _norm_dir(_wsl_native_path(config_dir))
-    command = hook["command"]
-    args = hook.get("args")
-    if args is None:
-        m = _LEGACY_COMMAND.match(command)
-        return bool(m) and _norm_dir(m.group("dir")) == home
-    name = command.replace("\\", "/").rsplit("/", 1)[-1].lower()
-    return (
-        name in _RUNNER_NAMES
-        and isinstance(args, list)
-        and len(args) == 2
-        and args[0] == "--sessions-dir"
-        and isinstance(args[1], str)
-        and _norm_dir(args[1]) == home + "/tokitty/sessions"
-    )
-
-
-def _is_tokitty_entry(entry, config_dir: str) -> bool:
-    hooks = entry.get("hooks") if isinstance(entry, dict) else None
-    return isinstance(hooks, list) and any(_is_owned_hook(h, config_dir) for h in hooks)
-```
-
-`_events_with_tokitty_entries(data, config_dir)` takes the home too. Delete `MARKER` if nothing else uses it (`grep -rn MARKER tokitty tests`).
-
-- [ ] **Step 3: implement reconcile.** Replace the body of `install_hooks_for_dir` with a shared `_reconcile(config_dir, add_missing)`; `install_hooks_for_dir = lambda d: _reconcile(d, True)` as a real `def`, and `refresh_hooks_for_dir(d)` as `_reconcile(d, False)`. Add `refreshed_events` to `ConfigDirResult` (default `[]`). Outline:
-
-```python
-def _same_hook(hook: dict, desired: dict) -> bool:
-    """Equal, or equal up to how the home is spelled (case of a drive-letter
-    path, doubled or trailing separators). An equivalent spelling is kept as
-    written: rewriting it would change the command string Codex hashes."""
-    if hook.get("command") != desired["command"]:
-        return False
-    args, want = hook.get("args"), desired.get("args")
-    if args is None or want is None:
-        return args == want
-    return len(args) == len(want) and all(
-        a == w or (isinstance(a, str) and _norm_dir(a) == _norm_dir(w)) for a, w in zip(args, want)
-    )
-
-
-def _rewritten(hook: dict, desired: dict) -> dict:
-    new = dict(hook)
-    new["command"] = desired["command"]
-    if "args" in desired:
-        new["args"] = list(desired["args"])
-    else:
-        new.pop("args", None)
-    return new
-
-
-def _owned_in_file(data) -> dict:
-    """event -> list of owned hooks, over one settings file."""
-
-
-def _reconcile(config_dir: str, add_missing: bool) -> ConfigDirResult:
-    # 1. load settings.json / settings.local.json with the same parse-error
-    #    aborts as today; validate hooks is a dict and each HOOK_EVENTS
-    #    event's entries a list, with today's abort messages.
-    # 2. desired = _build_command(config_dir)
-    # 3. local_owned = events with an owned hook in settings.local.json;
-    #    stale_local = sorted(e for e in local_owned if any owned hook there
-    #    is not _same_hook(desired)).
-    # 4. owned_main = any owned hook in settings.json. If not add_missing and
-    #    not owned_main and not local_owned: return ok, "no tokitty hooks
-    #    found", touching nothing.
-    # 5. copy hook_writer.py (mkdir parents) as today.
-    # 6. for event, matcher in HOOK_EVENTS: if event in local_owned, remove
-    #    every owned hook for it from settings.json (keep user hooks, drop
-    #    emptied entries) and move on. Otherwise walk entries/hooks; first
-    #    owned hook: rewrite if not _same_hook
-    #    (record refreshed); later owned hooks: remove, drop emptied entries
-    #    (record refreshed); none found and add_missing: append
-    #    {"matcher": matcher, "hooks": [dict(desired)]} (record installed).
-    # 7. if anything changed: _backup(settings_path); _write_settings(...)
-    # 8. message: "installed" if installed, else "refreshed" if refreshed,
-    #    else "already installed, nothing to do"; append
-    #    f" (note: out-of-date tokitty hook in settings.local.json for {', '.join(stale_local)} left untouched, update it by hand)"
-    #    when stale_local.
-```
-
-The implementer writes this out in full; every branch above has a test from Step 1.
-
-- [ ] **Step 4: uninstall narrowing.** In `uninstall_hooks_for_dir`, replace `kept = [e for e in entries if not _is_tokitty_entry(e)]` with per-hook filtering: for each entry dict, drop owned hooks; keep the entry (with its other keys) if any hooks remain. An event counts as removed if any owned hook was dropped.
-
-- [ ] **Step 5: ensure_current and get_config_dirs.**
-
-```python
-def get_config_dirs(state_dir: Optional[Path] = None) -> List[str]:
-    state_dir = get_state_dir() if state_dir is None else Path(state_dir)
-    ...  # rest unchanged
-
-
-def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[ConfigDirResult]:
-    """Startup repair: rewrite tokitty hooks that are present but out of date
-    (a moved or updated app). Never adds one, so an uninstall stays put."""
-    refresh_fn = refresh_hooks_for_dir if refresh_fn is None else refresh_fn
-    results = []
-    for config_dir in get_config_dirs(state_dir):
-        try:
-            results.append(refresh_fn(config_dir))
-        except OSError as exc:
-            results.append(ConfigDirResult(config_dir, False, str(exc)))
-    return results
-```
-
-(`refresh_fn=None` default avoids binding the function at import, so tests can monkeypatch `refresh_hooks_for_dir`.)
-
-- [ ] **Step 6: startup wiring.** In `__main__.run_discovery`:
-
-```python
-            if getattr(sys, "frozen", False):
-                try:
-                    runner_link.ensure_runner_link(state_dir)
-                except OSError:
-                    pass
-            try:
-                retry_pending_hook_op(state_dir)
-                hooks_install.ensure_current(state_dir)
-            except (OSError, PermissionError):
-                pass
-```
-
-with `from tokitty import hooks_install, runner_link` at the top (the `runner_link` block is Task 3's; keep it) (keep the existing `retry_pending_hook_op` import). If the retry raises, the refresh is skipped for this launch; that is fine.
-
-- [ ] **Step 7:** `install_hooks()` CLI prints `refreshed hooks for ...` when `result.refreshed_events` is non-empty. Run the full suite. Commit: `git commit -m "Rewrite out-of-date tokitty hooks in place and refresh them at startup"`.
+**Verify:** `python3 -m pytest -q`, `xvfb-run -a python3 -m pytest -m gui -q`, `ruff check .` all green.
 
 ---
 
@@ -1290,4 +1011,4 @@ Not a subagent task, and nobody has a Mac today. Spec Q6 keeps the real-keychain
 
 ## Execution order and review gates
 
-Task 4 waits for the hooks groundwork PR to merge and is re-planned then; Tasks 5 to 9 do not depend on it and run first. Otherwise tasks run in order 1 to 9, one Sonnet subagent each, spec review then code-quality review, commit between tasks, full suite after each. Task 1 Step 7 is a hard gate: if `_internal` is not shared, stop and report before Task 2. After Task 9 the controller asks Nick before pushing the branch and before triggering `release.yml` via `workflow_dispatch`, then reads the dry-run logs (hook median per OS against 100 ms, keychain verdict), then hands Nick Task 10 and records Task 11 as open.
+Task 4 was re-planned on 2026-09-25 after the hooks groundwork (#65) merged. Tasks run in order 1 to 9, one Sonnet subagent each, spec review then code-quality review, commit between tasks, full suite after each. Task 1 Step 7 is a hard gate: if `_internal` is not shared, stop and report before Task 2. After Task 9 the controller asks Nick before pushing the branch and before triggering `release.yml` via `workflow_dispatch`, then reads the dry-run logs (hook median per OS against 100 ms, keychain verdict), then hands Nick Task 10 and records Task 11 as open.
