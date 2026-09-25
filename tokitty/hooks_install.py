@@ -315,30 +315,62 @@ def _command_owned_from_parts(parts, expected_script: str, expected_sessions: st
     )
 
 
+def _is_owned_exec_hook(command: str, args, expected_sessions: str) -> bool:
+    """Whether an exec-form hook ({"type": "command", "command": ...,
+    "args": [...]}, spec Q2a) is tokitty's own frozen-build registration.
+
+    Owned when command's basename (backslashes normalised to forward
+    slashes first) case-folds to "tokitty-hook" or "tokitty-hook.exe" --
+    the containing directory is deliberately never checked, since a
+    legitimately-owned exec hook may point at the stable <state
+    dir>/current link, at a fallback release-specific path, or at
+    wherever an older build put it, and all of those are still tokitty's
+    -- and args is exactly ["--sessions-dir", s] with s normalising to
+    this home's tokitty/sessions.
+    """
+    basename = PurePosixPath(command.replace("\\", "/")).name
+    owned_names = (HOOK_RUNNER_NAME.casefold(), f"{HOOK_RUNNER_NAME}.exe".casefold())
+    if basename.casefold() not in owned_names:
+        return False
+    if not isinstance(args, list) or len(args) != 2:
+        return False
+    flag, sessions_arg = args
+    if flag != "--sessions-dir" or not isinstance(sessions_arg, str):
+        return False
+    return _normalize_token_path(sessions_arg) == expected_sessions
+
+
 def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
     """Whether hook is the exact command tokitty writes for config_dir.
 
-    Ownership is yes-or-no only: a hook is owned if it is a "command"
-    hook whose command splits into exactly an interpreter, the
-    hook_writer.py path, "--sessions-dir", and the sessions path, and
-    both paths normalise to this home's tokitty/hook_writer.py and
-    tokitty/sessions. An equivalent spelling (quoting, a doubled slash, a
-    differently-cased drive letter) is still owned; a hook aimed at
-    another home, one that merely mentions tokitty, one with an
-    unbalanced quote, or one whose script/sessions token carries a
-    trailing separator tokitty never wrote, is not.
+    Ownership is yes-or-no only. Two shapes are recognised: the
+    interpreter-string form ("command" splits into exactly an
+    interpreter, the hook_writer.py path, "--sessions-dir", and the
+    sessions path, both normalising to this home's tokitty/hook_writer.py
+    and tokitty/sessions) and the exec form a frozen build registers
+    ("command" is a tokitty-hook[.exe] path and "args" is exactly
+    ["--sessions-dir", s] normalising to this home's tokitty/sessions --
+    see _is_owned_exec_hook). A hook with an "args" key is only ever
+    checked against the exec shape, and one without is only ever checked
+    against the interpreter-string shape -- the two never cross-match. An
+    equivalent spelling (quoting, a doubled slash, a differently-cased
+    drive letter) is still owned; a hook aimed at another home, one that
+    merely mentions tokitty, one with an unbalanced quote, or one whose
+    script/sessions token carries a trailing separator tokitty never
+    wrote, is not.
 
-    The split is tried two ways. shlex (posix mode) handles the quoted
-    form and the historical unquoted POSIX form (9bab1b3). It does not
-    handle the historical unquoted form on a drive-letter home: shlex
-    reads the backslashes in "C:\\Users\\..." as escape characters and
-    mangles the path. A raised ValueError (an unbalanced quote) means the
-    command does not parse as anything tokitty wrote, full stop -- no
-    fallback. When shlex's split parses but is not an owned match, a
-    plain whitespace split is tried too, but only when the command has no
-    quote characters at all: the whitespace fallback exists solely for
-    the historical unquoted shape, which never had quotes, so any quote
-    in the command means that shape is not what this is.
+    The interpreter-string split is tried two ways. shlex (posix mode)
+    handles the quoted form and the historical unquoted POSIX form
+    (9bab1b3). It does not handle the historical unquoted form on a
+    drive-letter home: shlex reads the backslashes in "C:\\Users\\..." as
+    escape characters and mangles the path. A raised ValueError (an
+    unbalanced quote) means the command does not parse as anything
+    tokitty wrote, full stop -- no fallback. When shlex's split parses
+    but is not an owned match, a plain whitespace split is tried too, but
+    only when the command has no quote characters at all: the whitespace
+    fallback exists solely for the historical unquoted shape, which
+    never had quotes, so any quote in the command means that shape is
+    not what this is.
 
     provider is accepted for forward compatibility with non-Claude
     shapes; only Claude's shape is recognised today.
@@ -351,6 +383,9 @@ def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> b
     home = _normalize_home_path(_wsl_native_path(config_dir))
     expected_script = f"{home}/tokitty/hook_writer.py"
     expected_sessions = f"{home}/tokitty/sessions"
+
+    if "args" in hook:
+        return _is_owned_exec_hook(command, hook.get("args"), expected_sessions)
 
     try:
         shlex_parts = shlex.split(command, posix=True)

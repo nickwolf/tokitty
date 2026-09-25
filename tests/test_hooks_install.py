@@ -447,6 +447,80 @@ def test_is_owned_hook_rejects_trailing_slash_on_script_token():
 
 
 # ---------------------------------------------------------------------------
+# _is_owned_hook -- exec form (spec Q2a, Task 4)
+# ---------------------------------------------------------------------------
+
+def test_is_owned_hook_accepts_exec_form_posix():
+    config_dir = "/home/nick/.claude"
+    hook = {
+        "type": "command",
+        "command": "/home/nick/.config/tokitty/current/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_exec_form_windows_mixed_slashes_and_case():
+    # The command's containing directory is never checked, only the
+    # basename -- and the sessions arg case-folds because the home starts
+    # with a drive letter, even though its casing differs from config_dir.
+    config_dir = r"C:\Users\Nick\.claude"
+    hook = {
+        "type": "command",
+        "command": r"c:\ProgramData\Tokitty\current\Tokitty-Hook.EXE",
+        "args": ["--sessions-dir", "C:/Users/nick/.claude/tokitty/sessions"],
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_exec_form_other_home():
+    hook = {
+        "type": "command",
+        "command": "/x/current/tokitty-hook",
+        "args": ["--sessions-dir", "/other/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_extra_args():
+    hook = {
+        "type": "command",
+        "command": "/x/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions", "--extra"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_wrong_basename():
+    hook = {
+        "type": "command",
+        "command": "/x/not-tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_wrong_type():
+    hook = {
+        "type": "prompt",
+        "command": "/x/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_exec_form_never_matches_interpreter_string_branch():
+    # A handler with args is checked only against the exec shape, even
+    # when its command string happens to look like a python invocation.
+    hook = {
+        "type": "command",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+# ---------------------------------------------------------------------------
 # get_config_dirs
 # ---------------------------------------------------------------------------
 
@@ -749,6 +823,40 @@ def test_uninstall_keeps_user_handler_in_a_shared_entry(tmp_path):
                     "hooks": [
                         {"type": "command", "command": "some-other-tool"},
                         dict(owned_handler),
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
+def test_uninstall_removes_exec_form_handler_keeps_user_handler_in_shared_entry(tmp_path):
+    # Task 4: uninstall's handler-level removal already only touches owned
+    # handlers (Task 3); this just proves that now covers the exec form
+    # too, now that _is_owned_hook recognises it.
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", str(config_dir) + "/tokitty/sessions"],
+    }
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "some-other-tool"},
+                        exec_handler,
                     ],
                 }
             ]
