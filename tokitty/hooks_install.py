@@ -34,6 +34,17 @@ MARKER = "tokitty"
 
 HOOK_RUNNER_NAME = "tokitty-hook"
 
+# Spec Q2a addendum: shown when the stable <state dir>/current link can't be
+# made (a real directory occupies it, a repoint failed, or the cross-process
+# lock timed out) and tokitty has fallen back to registering a path inside
+# this release folder instead. {reason} is filled with a short description
+# of what went wrong.
+LINK_FALLBACK_WARNING = (
+    "Tokitty could not set up its stable hook path ({reason}), so its hooks "
+    "point into this release folder. Every update will need the hooks "
+    "approved again in Codex, and open Claude Code sessions restarted."
+)
+
 _WSL_UNC_PREFIXES = ("\\\\wsl.localhost\\", "\\\\wsl$\\")
 
 HOOK_EVENTS = [
@@ -431,15 +442,120 @@ class ConfigDirResult:
         message: str,
         installed_events: Optional[List[str]] = None,
         warning: Optional[str] = None,
+        refreshed_events: Optional[List[str]] = None,
     ):
         self.config_dir = config_dir
         self.ok = ok
         self.message = message
         self.installed_events = installed_events or []
         self.warning = warning
+        self.refreshed_events = refreshed_events or []
 
 
-def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
+def _collect_owned_positions(entries, config_dir: str, provider: str) -> List[Tuple[int, int]]:
+    """[(entry_index, hook_index), ...] for every owned hook in entries, in
+    document order. entries may be missing or malformed; both yield []."""
+    positions: List[Tuple[int, int]] = []
+    if not isinstance(entries, list):
+        return positions
+    for entry_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        hooks_list = entry.get("hooks")
+        if not isinstance(hooks_list, list):
+            continue
+        for hook_index, hook in enumerate(hooks_list):
+            if _is_owned_hook(hook, config_dir, provider):
+                positions.append((entry_index, hook_index))
+    return positions
+
+
+def _rebuild_entries(entries, replace_pos=None, replacement=None, remove_positions=()):
+    """A new entries list built from entries: the hook at replace_pos (if
+    given) becomes replacement, every hook at a position in
+    remove_positions is dropped, and an entry left with no hooks at all is
+    dropped entirely. Everything else -- an entry's other keys, sibling
+    handlers, document order -- is unchanged, and an entry untouched by
+    either operation keeps its original object identity."""
+    remove_set = set(remove_positions)
+    new_entries = []
+    for entry_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            new_entries.append(entry)
+            continue
+        hooks_list = entry.get("hooks")
+        if not isinstance(hooks_list, list):
+            new_entries.append(entry)
+            continue
+        new_hooks = []
+        touched = False
+        for hook_index, hook in enumerate(hooks_list):
+            pos = (entry_index, hook_index)
+            if pos in remove_set:
+                touched = True
+                continue
+            if pos == replace_pos:
+                new_hooks.append(replacement)
+                touched = True
+            else:
+                new_hooks.append(hook)
+        if not touched:
+            new_entries.append(entry)
+        elif new_hooks:
+            new_entry = dict(entry)
+            new_entry["hooks"] = new_hooks
+            new_entries.append(new_entry)
+        # else: every hook in this entry was removed, so the entry is dropped.
+    return new_entries
+
+
+def _normalized_args(args):
+    return [_normalize_token_path(v) if isinstance(v, str) else v for v in args]
+
+
+def _handler_needs_rewrite(old_handler: dict, desired_handler: dict) -> bool:
+    """Whether an already-owned handler must be rewritten to match desired.
+
+    Both lacking "args" (the interpreter-string shape) is never a
+    rewrite: old_handler is already confirmed owned, and _is_owned_hook's
+    string match already accepts an equivalent spelling (quoting,
+    ``python`` vs ``python3``), so rewriting here would only change the
+    string Codex hashes for no semantic difference. Otherwise a match
+    needs the same "command" exactly and, for "args", each element equal
+    after _normalize_token_path.
+    """
+    if "args" not in old_handler and "args" not in desired_handler:
+        return False
+    if old_handler.get("command") != desired_handler.get("command"):
+        return True
+    old_args = old_handler.get("args")
+    desired_args = desired_handler.get("args")
+    if (old_args is None) != (desired_args is None):
+        return True
+    if old_args is None:
+        return False
+    if not isinstance(old_args, list) or not isinstance(desired_args, list):
+        return old_args != desired_args
+    if len(old_args) != len(desired_args):
+        return True
+    return _normalized_args(old_args) != _normalized_args(desired_args)
+
+
+def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
+    """Rewrite old_handler toward desired_handler in place: type/command/
+    args are overwritten, while any other key old_handler carried (e.g. a
+    "timeout") survives."""
+    merged = dict(old_handler)
+    merged.pop("args", None)
+    merged.update(desired_handler)
+    return merged
+
+
+def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
+    """Bring config_dir's Claude Code hooks in line with what tokitty would
+    write today, adding a missing handler only when add_missing is true.
+    Shared by install_hooks_for_dir (add_missing=True) and
+    refresh_hooks_for_dir (add_missing=False, the startup refresh)."""
     target = _hook_target(provider)
     base = Path(_local_config_path(config_dir))
     settings_path = base / target.settings_file
@@ -456,76 +572,231 @@ def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> 
                 config_dir, False, f"aborted, could not parse {target.local_settings_file}: {local_error}"
             )
 
-    already_installed = _events_with_tokitty_entries(data, config_dir, provider) | _events_with_tokitty_entries(
-        local_data, config_dir, provider
-    )
+    existing_hooks = data.get("hooks")
+    if existing_hooks is not None and not isinstance(existing_hooks, dict):
+        return ConfigDirResult(
+            config_dir, False, f"aborted, {target.settings_file} 'hooks' key is not an object: {existing_hooks!r}"
+        )
+    for event, _matcher in target.events:
+        entries = existing_hooks.get(event) if existing_hooks else None
+        if entries is not None and not isinstance(entries, list):
+            return ConfigDirResult(
+                config_dir, False, f"aborted, {target.settings_file} 'hooks.{event}' is not a list: {entries!r}"
+            )
 
-    handler = _build_command(config_dir)
-    note = None
-    if "args" in handler:
+    local_hooks = local_data.get("hooks") if isinstance(local_data, dict) else None
+    if not isinstance(local_hooks, dict):
+        local_hooks = {}
+
+    any_owned = any(
+        _collect_owned_positions(local_hooks.get(event), config_dir, provider)
+        or _collect_owned_positions((existing_hooks or {}).get(event), config_dir, provider)
+        for event, _matcher in target.events
+    )
+    if not add_missing and not any_owned:
+        # A refresh on a home tokitty has never touched: no copy, no
+        # mkdir, no link -- there is nothing here to bring current.
+        return ConfigDirResult(config_dir, True, "nothing to refresh", installed_events=[], refreshed_events=[])
+
+    skeleton = _build_command(config_dir)
+    is_exec = "args" in skeleton
+    warning = None
+    healthy_runner = None
+    stable = None
+    fallback_bundled = None
+
+    if is_exec:
         # Exec form (a frozen build, not the WSL-from-Windows row): the
-        # command registered has to be the stable link path, never a
-        # release-specific one, so this repoints <state dir>/current
-        # before anything below is written. Lazy import: hooks_install
-        # and runner_link import each other (runner_link needs
-        # hook_runner_path/stable_runner_path back).
+        # link has to be made, or the fallback below resolved, before
+        # anything is written. Lazy import: hooks_install and runner_link
+        # import each other (runner_link needs hook_runner_path/
+        # stable_runner_path back).
         from tokitty.runner_link import ensure_runner_link
 
         try:
             outcome = ensure_runner_link(state_dir_path())
         except AppTranslocatedError:
             return ConfigDirResult(config_dir, False, MOVE_TO_APPLICATIONS)
-        except OSError as exc:
-            # Lock timeout or a failed repoint: both transient. Rewriting
-            # settings.json with the bundled absolute path here would
-            # change the string Codex hashes, so nothing is written.
+        except FileNotFoundError as exc:
+            # This release has no bundled tokitty-hook at all -- a broken
+            # build, not a transient lock/repoint problem. Falling back
+            # would register a command pointing at a file that doesn't
+            # exist, so this aborts instead of warning.
             return ConfigDirResult(config_dir, False, str(exc))
-        handler = _build_command(config_dir, runner=outcome.runner)
-        note = outcome.note
+        except OSError as exc:
+            outcome = None
+            reason = str(exc)
+        else:
+            reason = outcome.note
+
+        platform = sys.platform
+        stable = stable_runner_path(state_dir_path(), platform)
+        if outcome is not None and not reason:
+            healthy_runner = stable
+        else:
+            # Real directory at "current", a failed repoint, or a lock
+            # timeout: never silent (spec Q2a addendum). Decided per
+            # event below, not once for the whole home -- an event
+            # that's never had a stable-path registration must not be
+            # pointed at a link that isn't working right now just
+            # because some *other* event already was.
+            fallback_bundled = hook_runner_path(os.path.realpath(sys.executable), platform)
+            warning = LINK_FALLBACK_WARNING.format(reason=reason)
+
+    def desired_for(existing_command):
+        if not is_exec:
+            return skeleton
+        if healthy_runner is not None:
+            runner = healthy_runner
+        elif existing_command == stable:
+            runner = stable
+        else:
+            runner = fallback_bundled
+        return _build_command(config_dir, runner=runner)
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(_HOOK_WRITER_SOURCE, hooks_dest)
 
-    events_to_add = [(event, matcher) for event, matcher in target.events if event not in already_installed]
+    hooks_dict = data.setdefault("hooks", {})
 
-    if not events_to_add:
-        msg = "already installed, nothing to do"
-        if note:
-            msg += f" ({note})"
-        return ConfigDirResult(config_dir, True, msg, installed_events=[])
+    installed_events: List[str] = []
+    refreshed_events: List[str] = []
+    stale_local_events: List[str] = []
+    changed = False
 
-    existing_hooks = data.get("hooks")
-    if existing_hooks is not None and not isinstance(existing_hooks, dict):
-        return ConfigDirResult(
-            config_dir, False, f"aborted, {target.settings_file} 'hooks' key is not an object: {existing_hooks!r}"
-        )
-    for event, _matcher in events_to_add:
-        entries = existing_hooks.get(event) if existing_hooks else None
-        if entries is not None and not isinstance(entries, list):
-            return ConfigDirResult(
-                config_dir,
-                False,
-                f"aborted, {target.settings_file} 'hooks.{event}' is not a list: {entries!r}",
+    for event, matcher in target.events:
+        local_entries = local_hooks.get(event)
+        local_positions = _collect_owned_positions(local_entries, config_dir, provider)
+
+        main_entries = hooks_dict.get(event)
+        if not isinstance(main_entries, list):
+            main_entries = []
+        main_positions = _collect_owned_positions(main_entries, config_dir, provider)
+
+        if local_positions:
+            # settings.local.json already owns this event: it counts as
+            # installed, the local file is never written, and any owned
+            # copy left in settings.json is removed so the event can't
+            # fire twice.
+            local_handler = local_entries[local_positions[0][0]]["hooks"][local_positions[0][1]]
+            if _handler_needs_rewrite(local_handler, desired_for(local_handler.get("command"))):
+                stale_local_events.append(event)
+            if main_positions:
+                new_entries = _rebuild_entries(main_entries, remove_positions=main_positions)
+                if new_entries:
+                    hooks_dict[event] = new_entries
+                else:
+                    hooks_dict.pop(event, None)
+                changed = True
+                refreshed_events.append(event)
+            continue
+
+        if not main_positions:
+            if add_missing:
+                desired = desired_for(None)
+                hooks_dict[event] = main_entries + [{"matcher": matcher, "hooks": [dict(desired)]}]
+                installed_events.append(event)
+                changed = True
+            # else: a refresh never adds a handler for an event nothing owns.
+            continue
+
+        primary_pos = main_positions[0]
+        extra_positions = main_positions[1:]
+        primary_handler = main_entries[primary_pos[0]]["hooks"][primary_pos[1]]
+        desired = desired_for(primary_handler.get("command"))
+
+        if _handler_needs_rewrite(primary_handler, desired):
+            replacement = _merge_handler(primary_handler, desired)
+            new_entries = _rebuild_entries(
+                main_entries, replace_pos=primary_pos, replacement=replacement, remove_positions=extra_positions
             )
+            hooks_dict[event] = new_entries
+            changed = True
+            refreshed_events.append(event)
+        elif extra_positions:
+            # Already matches; only duplicate owned handlers to collapse.
+            new_entries = _rebuild_entries(main_entries, remove_positions=extra_positions)
+            hooks_dict[event] = new_entries
+            changed = True
+            refreshed_events.append(event)
 
-    _backup(settings_path)
+    if changed:
+        _backup(settings_path)
+        _write_settings(settings_path, data)
 
-    data.setdefault("hooks", {})
-    installed = []
-    for event, matcher in events_to_add:
-        data["hooks"].setdefault(event, [])
-        data["hooks"][event].append(
-            {"matcher": matcher, "hooks": [dict(handler)]}
+    if installed_events or refreshed_events:
+        parts = []
+        if installed_events:
+            parts.append("installed")
+        if refreshed_events:
+            parts.append("refreshed")
+        msg = " and ".join(parts)
+    else:
+        msg = "already installed, nothing to do"
+    if stale_local_events:
+        msg += (
+            "; a locally-owned hook differs from what Tokitty would write for: "
+            + ", ".join(stale_local_events)
         )
-        installed.append(event)
 
-    _write_settings(settings_path, data)
+    return ConfigDirResult(
+        config_dir,
+        True,
+        msg,
+        installed_events=installed_events,
+        refreshed_events=refreshed_events,
+        warning=warning,
+    )
 
-    msg = "installed"
-    if note:
-        msg += f" ({note})"
-    return ConfigDirResult(config_dir, True, msg, installed_events=installed)
+
+_RECONCILE_TABLE = {"claude": _reconcile_claude}
+
+
+def _reconcile(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
+    key = provider or DEFAULT_PROVIDER
+    fn = _RECONCILE_TABLE.get(key)
+    if fn is None:
+        raise ValueError(f"no hook reconciler registered for provider {key!r}")
+    return fn(config_dir, provider, add_missing)
+
+
+def install_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
+    return _reconcile(config_dir, provider, add_missing=True)
+
+
+def refresh_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
+    """Bring config_dir's hooks current without ever adding a missing one --
+    the startup refresh (ensure_current) and every other path that must
+    never turn a partial or uninstalled home into an installed one."""
+    return _reconcile(config_dir, provider, add_missing=False)
+
+
+def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[ConfigDirResult]:
+    """Refresh every hook-enabled account's registration in place, called
+    from run_discovery on every launch so a stale owned handler (an old
+    release path, a spelling a past version wrote) gets corrected without
+    ever installing hooks into a home that never had them.
+
+    refresh_fn defaults to refresh_hooks_for_dir, looked up fresh on each
+    call rather than bound as a default argument, so a test can
+    monkeypatch the module attribute instead of passing it explicitly. A
+    pair whose provider has no reconcile branch is skipped -- today
+    get_config_dirs only ever returns hook-enabled providers, all of
+    which are in _RECONCILE_TABLE, but this keeps a future mismatch (a
+    provider gaining hooks before its own reconcile branch lands) from
+    raising instead of just doing nothing for that pair.
+    """
+    results = []
+    for config_dir, provider in get_config_dirs(state_dir):
+        if (provider or DEFAULT_PROVIDER) not in _RECONCILE_TABLE:
+            continue
+        fn = refresh_fn if refresh_fn is not None else refresh_hooks_for_dir
+        try:
+            results.append(fn(config_dir, provider))
+        except OSError as exc:
+            results.append(ConfigDirResult(config_dir, False, str(exc)))
+    return results
 
 
 def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> ConfigDirResult:
@@ -757,7 +1028,14 @@ def install_hooks() -> int:
             continue
         if result.installed_events:
             print(f"{config_dir}: installed hooks for {', '.join(result.installed_events)}")
-        else:
+        if result.refreshed_events:
+            print(f"{config_dir}: refreshed hooks for {', '.join(result.refreshed_events)}")
+        if not result.installed_events and not result.refreshed_events:
+            print(f"{config_dir}: {result.message}")
+        elif "; " in result.message:
+            # A note riding along with an otherwise-successful install (a
+            # stale settings.local.json entry, say) -- printed
+            # unconditionally so the lines above never swallow it.
             print(f"{config_dir}: {result.message}")
         if result.warning:
             print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
