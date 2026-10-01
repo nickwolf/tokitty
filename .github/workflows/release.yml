@@ -27,6 +27,7 @@ jobs:
             target: macos-arm64
           - os: macos-15-intel
             target: macos-x86_64
+            overhead_gate_ms: 60
           - os: ubuntu-22.04
             target: linux-x86_64
     steps:
@@ -103,7 +104,12 @@ jobs:
 
       - name: Verify artifact (macOS)
         if: startsWith(matrix.os, 'macos')
-        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+        run: |
+          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json")
+          if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
+            args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
+          fi
+          python freeze/verify_artifact.py "${args[@]}"
 
       - name: Verify artifact (Linux)
         if: matrix.os == 'ubuntu-22.04'
@@ -135,7 +141,7 @@ jobs:
               max_ms = timing.get("max_s", 0) * 1000
               print(
                   f"- hook cold: {cold_ms:.1f} ms, median: {timing['median_ms']:.1f} ms "
-                  f"(min {min_ms:.1f}, max {max_ms:.1f}), gate: {timing.get('gate_ms')} ms"
+                  f"(min {min_ms:.1f}, max {max_ms:.1f})"
               )
 
           # #48 Task 1: the plain-Python baseline on the same runner, for
@@ -163,7 +169,30 @@ jobs:
               print(f"  frozen series (ms): {frozen_series_ms}")
               print(f"  baseline series (ms): {baseline_series_ms}")
 
-          informational_steps = {"hook_timing_baseline"}
+          # #48 dry run 2: the gate decision, judged after both of the above
+          # have measured. gate_kind is "overhead" only for the matrix entry
+          # that passed --overhead-gate-ms (macos-15-intel); everyone else
+          # gets the absolute gate.
+          gate_step = data.get("steps", {}).get("hook_timing_gate", {})
+          gate = gate_step.get("detail", {})
+          if isinstance(gate, dict) and "gate_kind" in gate:
+              verdict = "PASS" if gate_step.get("ok") else "FAIL"
+              threshold_ms = gate.get("threshold_ms")
+              frozen_median_ms = gate.get("frozen_median_ms")
+              baseline_median_ms = gate.get("baseline_median_ms")
+              line = f"- gate ({gate['gate_kind']}): {verdict}, threshold {threshold_ms} ms, frozen median {frozen_median_ms} ms"
+              if baseline_median_ms is not None:
+                  line += f", baseline median {baseline_median_ms} ms"
+              print(line)
+              if gate.get("error"):
+                  print(f"  {gate['error']}")
+
+          # hook_timing and hook_timing_baseline are pure measurements that
+          # always run; only hook_timing_gate decides pass/fail for the
+          # hook-timing concern, so the two measurement steps are excluded
+          # here the same way verify_artifact.py's INFORMATIONAL_STEPS
+          # excludes them from report["ok"].
+          informational_steps = {"hook_timing", "hook_timing_baseline"}
           for name, step in data.get("steps", {}).items():
               if name in informational_steps:
                   continue

@@ -9,7 +9,8 @@ disk and subprocess output, the same way CI or a user would see it.
 
 Usage:
   verify_artifact.py --app-dir <extracted-dir> --work <scratch-dir> \\
-      --report <report.json> [--gate-ms 100] [--repo-root <repo>]
+      --report <report.json> [--gate-ms 100] [--overhead-gate-ms N] \\
+      [--repo-root <repo>]
 
 --app-dir is the extraction root: the directory that directly contains the
 GUI executable on Windows and Linux (dist/Tokitty, dist/tokitty), or the
@@ -17,22 +18,33 @@ directory containing Tokitty.app on macOS. --repo-root defaults to the
 parent of this script's own directory (freeze/), used only to byte-compare
 the bundled hook_writer.py against the repo's copy.
 
+--overhead-gate-ms replaces the absolute --gate-ms gate with a
+baseline-relative one (frozen_median_ms <= baseline_median_ms +
+overhead_gate_ms), for runners where only the overhead over a same-runner
+plain-Python hook is meaningful, not the absolute number. Nothing here
+checks the platform or OS name to decide which gate applies -- the caller
+(release.yml) passes the flag only for the matrix entries it wants it on.
+
 Steps, in order (stops at the first failure, always writes the report):
   1. locate the GUI and hook executables beside each other
   2. `<gui> --self-check`
   3. fail-closed accounts.json preflight, before anything can write hooks
   4. `<gui> --install-hooks`, checked against the repo and the state dir
   4b. a second simulated release, extracted separately, repoints `current`
-  5. time the registered PreToolUse hook argv (cold + 20 warm runs)
+  5. hook_timing: time the registered PreToolUse hook argv (cold + 20 warm
+     runs). Measurement only -- no gate is judged here.
   5b. hook_timing_baseline: the same cold + 20 warm loop against a copy of
       the repo's own tokitty/hook_writer.py, run with sys.executable
-      instead of the frozen tokitty-hook. Informational only -- the 100ms
-      gate stays on the frozen median alone -- and runs even when
-      hook_timing failed, which is the case it exists for (a frozen median
-      over the gate needs the plain-Python number alongside it). Its own
-      ok/fail can never mask hook_timing's: hook_timing's result is
-      recorded, and the run stops or continues on that, before this step
-      is even run.
+      instead of the frozen tokitty-hook. Always runs right after 5,
+      before the gate is judged, regardless of whether 5 measured cleanly.
+  5c. hook_timing_gate: judges 5 against 5b, after both have measured.
+      Absolute gate (default): frozen_median_ms <= gate_ms; the baseline
+      stays informational here, so a baseline that failed to measure
+      cannot fail this gate. Overhead gate (--overhead-gate-ms given):
+      frozen_median_ms <= baseline_median_ms + overhead_gate_ms; the
+      baseline is required for this gate, so a baseline that failed to
+      measure fails it closed instead of silently passing. Records which
+      gate applied, its threshold, and the measured numbers.
   6. run every registered hook by its own event name
   7. autostart install/uninstall round trip
 """
@@ -568,7 +580,10 @@ def _time_hook_argv(argv, env, sessions_dir: Path, label: str):
 
 
 def step_hook_timing(ctx):
-    gate_ms = ctx["gate_ms"]
+    """Times the registered PreToolUse hook argv (cold + 20 warm runs).
+    Measurement only: no gate is judged here (#48 dry run 2, Nick's
+    overhead gate decision) -- that happens in step_hook_timing_gate, after
+    step_hook_timing_baseline has also had a chance to measure."""
     realpath_err = _release_b_realpath_check(ctx)
     if realpath_err:
         return {"ok": False, "detail": realpath_err}
@@ -577,14 +592,7 @@ def step_hook_timing(ctx):
 
     ok, detail = _time_hook_argv(argv, ctx["env"], sessions_dir, "verify")
     detail["argv"] = argv
-    detail["gate_ms"] = gate_ms
-    if not ok:
-        return {"ok": False, "detail": detail}
-
-    gate_ok = detail["median_ms"] <= gate_ms
-    if not gate_ok:
-        detail["error"] = f"median {detail['median_ms']:.3f}ms exceeds gate {gate_ms}ms"
-    return {"ok": gate_ok, "detail": detail}
+    return {"ok": ok, "detail": detail}
 
 
 def step_hook_timing_baseline(ctx):
@@ -592,13 +600,14 @@ def step_hook_timing_baseline(ctx):
     same cold + 20 warm loop against a copy of the repo's own
     tokitty/hook_writer.py, run with sys.executable (the runner's
     setup-python interpreter that runs this verifier) instead of the frozen
-    tokitty-hook. The 100ms gate stays on the frozen median alone -- this
-    step's own ok/fail is never allowed to change whether the run as a
-    whole passes (see main()'s report["ok"] computation), and it is run
-    even when hook_timing itself failed, which is exactly the case it
-    exists for: a frozen median over the gate needs the plain-Python number
-    alongside it to show whether the gate is measuring PyInstaller startup
-    cost or something true of the runner itself."""
+    tokitty-hook. Always runs right after hook_timing, before the gate is
+    judged, and its own ok/fail is never allowed by name to change whether
+    the run as a whole passes (see main()'s report["ok"] computation and
+    INFORMATIONAL_STEPS) -- under the absolute gate a failed baseline stays
+    purely informational. Under the overhead gate (#48 dry run 2) a failed
+    baseline is not swallowed, though: step_hook_timing_gate reads this
+    step's result and fails itself closed when the overhead gate has no
+    baseline median to judge against."""
     frozen_result = ctx.get("hook_timing_result") or {}
     frozen_detail = frozen_result.get("detail")
     frozen_detail = frozen_detail if isinstance(frozen_detail, dict) else {}
@@ -628,9 +637,93 @@ def step_hook_timing_baseline(ctx):
     detail["diff_ms"] = diff_ms
 
     # `ok` here reports only whether the baseline's own cold/warm loop ran
-    # cleanly -- there is no gate to fail against. main()'s report["ok"]
+    # cleanly -- there is no gate judged in this step. main()'s report["ok"]
     # computation excludes this step by name, so a baseline-only failure
-    # here (or hook_timing having failed above) never fails the run.
+    # here never fails the run by itself; step_hook_timing_gate decides
+    # whether that failure matters.
+    return {"ok": ok, "detail": detail}
+
+
+def step_hook_timing_gate(ctx):
+    """Judges step_hook_timing's frozen median against step_hook_timing_baseline's
+    baseline median, now that both have measured (#48 dry run 2, Nick's
+    overhead gate decision: Linux 59.3 vs 35.9, macOS arm64 63.6 vs 30.0,
+    Windows 84.9 vs 51.1, macOS x86_64 125.9 vs 82.7 ms median pairs --
+    the Intel runner is slow outright, and its overhead over a same-runner
+    plain-Python hook is in line with the other three).
+
+    Two gates, chosen by whether --overhead-gate-ms was given (ctx
+    "overhead_gate_ms"), never by platform or OS name:
+      - absolute (default): frozen_median_ms <= gate_ms. The baseline
+        stays informational for this gate -- a baseline that failed to
+        measure cannot fail it.
+      - overhead (--overhead-gate-ms N): frozen_median_ms <=
+        baseline_median_ms + N. The baseline is required for this gate: if
+        it failed to measure, there is no threshold to judge against, so
+        this fails closed rather than silently passing.
+    """
+    overhead_gate_ms = ctx.get("overhead_gate_ms")
+    gate_kind = "overhead" if overhead_gate_ms is not None else "absolute"
+
+    timing_result = ctx.get("hook_timing_result") or {}
+    timing_detail = timing_result.get("detail")
+    timing_detail = timing_detail if isinstance(timing_detail, dict) else {}
+    frozen_median_ms = timing_detail.get("median_ms")
+
+    if not timing_result.get("ok") or not isinstance(frozen_median_ms, (int, float)):
+        return {
+            "ok": False,
+            "detail": {
+                "gate_kind": gate_kind,
+                "frozen_median_ms": frozen_median_ms,
+                "error": "hook_timing did not produce a median to judge",
+            },
+        }
+
+    baseline_result = ctx.get("hook_timing_baseline_result") or {}
+    baseline_detail = baseline_result.get("detail")
+    baseline_detail = baseline_detail if isinstance(baseline_detail, dict) else {}
+    baseline_median_ms = baseline_detail.get("median_ms")
+
+    if overhead_gate_ms is not None:
+        if not baseline_result.get("ok") or not isinstance(baseline_median_ms, (int, float)):
+            return {
+                "ok": False,
+                "detail": {
+                    "gate_kind": gate_kind,
+                    "overhead_gate_ms": overhead_gate_ms,
+                    "frozen_median_ms": frozen_median_ms,
+                    "baseline_median_ms": baseline_median_ms,
+                    "error": "overhead gate requires a baseline median; baseline measurement failed",
+                },
+            }
+        threshold_ms = baseline_median_ms + overhead_gate_ms
+        ok = frozen_median_ms <= threshold_ms
+        detail = {
+            "gate_kind": gate_kind,
+            "overhead_gate_ms": overhead_gate_ms,
+            "threshold_ms": threshold_ms,
+            "frozen_median_ms": frozen_median_ms,
+            "baseline_median_ms": baseline_median_ms,
+        }
+        if not ok:
+            detail["error"] = (
+                f"median {frozen_median_ms:.3f}ms exceeds overhead gate "
+                f"(baseline {baseline_median_ms:.3f}ms + {overhead_gate_ms}ms = {threshold_ms:.3f}ms)"
+            )
+        return {"ok": ok, "detail": detail}
+
+    gate_ms = ctx["gate_ms"]
+    ok = frozen_median_ms <= gate_ms
+    detail = {
+        "gate_kind": gate_kind,
+        "gate_ms": gate_ms,
+        "threshold_ms": gate_ms,
+        "frozen_median_ms": frozen_median_ms,
+        "baseline_median_ms": baseline_median_ms,
+    }
+    if not ok:
+        detail["error"] = f"median {frozen_median_ms:.3f}ms exceeds gate {gate_ms}ms"
     return {"ok": ok, "detail": detail}
 
 
@@ -881,14 +974,17 @@ STEPS = [
     ("second_release", step_second_release),
     ("hook_timing", step_hook_timing),
     ("hook_timing_baseline", step_hook_timing_baseline),
+    ("hook_timing_gate", step_hook_timing_gate),
     ("hook_events", step_hook_events),
     ("autostart", step_autostart),
 ]
 
 # Steps whose own ok/fail never counts toward report["ok"] and never stops
-# the run on its own (#48 Task 1): hook_timing_baseline is informational,
-# compared against hook_timing's gated median but not gated itself.
-INFORMATIONAL_STEPS = {"hook_timing_baseline"}
+# the run on its own (#48 dry run 2): hook_timing and hook_timing_baseline
+# are both pure measurements now, run unconditionally in that order; only
+# hook_timing_gate, which judges the two of them together, decides whether
+# the hook-timing concern passes or fails the overall run.
+INFORMATIONAL_STEPS = {"hook_timing", "hook_timing_baseline"}
 
 
 def write_report(path: Path, report: dict) -> None:
@@ -904,6 +1000,12 @@ def main() -> int:
     parser.add_argument("--work", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--gate-ms", type=float, default=100.0)
+    parser.add_argument(
+        "--overhead-gate-ms",
+        type=float,
+        default=None,
+        help="replaces --gate-ms with frozen_median_ms <= baseline_median_ms + this value",
+    )
     parser.add_argument("--repo-root", default=None)
     args = parser.parse_args()
 
@@ -927,6 +1029,7 @@ def main() -> int:
                 "work": str(work_arg),
                 "repo_root": str(repo_root),
                 "gate_ms": args.gate_ms,
+                "overhead_gate_ms": args.overhead_gate_ms,
                 "platform": sys.platform,
                 "steps": {},
                 "ok": False,
@@ -947,6 +1050,7 @@ def main() -> int:
         "env": env,
         "repo_root": repo_root,
         "gate_ms": args.gate_ms,
+        "overhead_gate_ms": args.overhead_gate_ms,
     }
 
     report = {
@@ -954,11 +1058,11 @@ def main() -> int:
         "work": str(work),
         "repo_root": str(repo_root),
         "gate_ms": args.gate_ms,
+        "overhead_gate_ms": args.overhead_gate_ms,
         "platform": sys.platform,
         "steps": {},
     }
 
-    pending_stop = False
     try:
         for name, fn in STEPS:
             print(f"[verify_artifact] running step: {name}", file=sys.stderr)
@@ -970,18 +1074,15 @@ def main() -> int:
             status = "ok" if result.get("ok") else "FAILED"
             print(f"[verify_artifact] step {name}: {status}", file=sys.stderr)
 
+            # hook_timing and hook_timing_baseline are both informational
+            # measurements that always run in order; hook_timing_gate reads
+            # both results back out of ctx to judge them together.
             if name == "hook_timing":
                 ctx["hook_timing_result"] = result
-                # hook_timing_baseline is next in STEPS and must run
-                # regardless of this result -- that's the case it exists
-                # for -- so defer stopping the run until after it has had
-                # its turn, rather than breaking here.
-                pending_stop = not result.get("ok")
-                continue
+            elif name == "hook_timing_baseline":
+                ctx["hook_timing_baseline_result"] = result
 
             if name in INFORMATIONAL_STEPS:
-                if pending_stop:
-                    break
                 continue
 
             if not result.get("ok"):
