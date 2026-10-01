@@ -150,6 +150,64 @@ jobs:
             ${{ steps.names.outputs.archive }}
             ${{ runner.temp }}/report.json
 
+  keychain:
+    name: macOS Keychain check (dry run, #48 Task 8)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install -e ".[packaging]"
+
+      - name: Build A
+        env:
+          TOKITTY_BUILD_ID: A
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-a --workpath build-a
+
+      - name: Build B
+        env:
+          TOKITTY_BUILD_ID: B
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-b --workpath build-b
+
+      - name: Confirm A and B are different binaries (codesign CDHash)
+        run: |
+          echo "--- build A ---"
+          codesign -dv --verbose=4 dist-a/Tokitty.app/Contents/MacOS/Tokitty 2>&1 | tee "$RUNNER_TEMP/codesign-a.txt"
+          echo "--- build B ---"
+          codesign -dv --verbose=4 dist-b/Tokitty.app/Contents/MacOS/Tokitty 2>&1 | tee "$RUNNER_TEMP/codesign-b.txt"
+          hash_a=$(grep -o 'CDHash=[0-9a-fA-F]*' "$RUNNER_TEMP/codesign-a.txt" | sort -u)
+          hash_b=$(grep -o 'CDHash=[0-9a-fA-F]*' "$RUNNER_TEMP/codesign-b.txt" | sort -u)
+          echo "A: $hash_a"
+          echo "B: $hash_b"
+          if [ -z "$hash_a" ] || [ -z "$hash_b" ]; then
+            echo "codesign produced no CDHash for one of the builds" >&2
+            exit 1
+          fi
+          if [ "$hash_a" == "$hash_b" ]; then
+            echo "build A and B have identical CDHash(es); the test would prove nothing" >&2
+            exit 1
+          fi
+
+      - name: Run keychain_check.py
+        run: |
+          python freeze/keychain_check.py \
+            --build-a dist-a/Tokitty.app \
+            --build-b dist-b/Tokitty.app \
+            --work "$RUNNER_TEMP/keychain-check"
+
+      - name: Upload keychain check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keychain-check-log
+          path: ${{ runner.temp }}/keychain-check/keychain_check.log
+
   release:
     name: Publish draft release
     needs: build
