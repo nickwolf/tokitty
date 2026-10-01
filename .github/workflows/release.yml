@@ -137,7 +137,36 @@ jobs:
                   f"- hook cold: {cold_ms:.1f} ms, median: {timing['median_ms']:.1f} ms "
                   f"(min {min_ms:.1f}, max {max_ms:.1f}), gate: {timing.get('gate_ms')} ms"
               )
+
+          # #48 Task 1: the plain-Python baseline on the same runner, for
+          # comparison against the frozen median above. Informational only
+          # -- it never changes the overall PASS/FAIL printed above.
+          baseline = data.get("steps", {}).get("hook_timing_baseline", {}).get("detail", {})
+          if isinstance(baseline, dict) and "median_ms" in baseline:
+              b_cold_ms = baseline.get("cold_s", 0) * 1000
+              b_min_ms = baseline.get("min_s", 0) * 1000
+              b_max_ms = baseline.get("max_s", 0) * 1000
+              frozen_median_ms = baseline.get("frozen_median_ms")
+              diff_ms = baseline.get("diff_ms")
+              print(
+                  f"- hook baseline (plain python, sys.executable={baseline.get('sys_executable')}): "
+                  f"cold {b_cold_ms:.1f} ms, median {baseline['median_ms']:.1f} ms "
+                  f"(min {b_min_ms:.1f}, max {b_max_ms:.1f})"
+              )
+              if frozen_median_ms is not None and diff_ms is not None:
+                  print(
+                      f"  frozen median {frozen_median_ms:.1f} ms vs baseline median "
+                      f"{baseline['median_ms']:.1f} ms, difference {diff_ms:.1f} ms"
+                  )
+              frozen_series_ms = [round(t * 1000, 3) for t in (baseline.get("frozen_timings_s") or [])]
+              baseline_series_ms = [round(t * 1000, 3) for t in (baseline.get("timings_s") or [])]
+              print(f"  frozen series (ms): {frozen_series_ms}")
+              print(f"  baseline series (ms): {baseline_series_ms}")
+
+          informational_steps = {"hook_timing_baseline"}
           for name, step in data.get("steps", {}).items():
+              if name in informational_steps:
+                  continue
               if not step.get("ok"):
                   print(f"- FAILED step `{name}`: {step.get('detail')}")
           PY

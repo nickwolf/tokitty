@@ -24,6 +24,15 @@ Steps, in order (stops at the first failure, always writes the report):
   4. `<gui> --install-hooks`, checked against the repo and the state dir
   4b. a second simulated release, extracted separately, repoints `current`
   5. time the registered PreToolUse hook argv (cold + 20 warm runs)
+  5b. hook_timing_baseline: the same cold + 20 warm loop against a copy of
+      the repo's own tokitty/hook_writer.py, run with sys.executable
+      instead of the frozen tokitty-hook. Informational only -- the 100ms
+      gate stays on the frozen median alone -- and runs even when
+      hook_timing failed, which is the case it exists for (a frozen median
+      over the gate needs the plain-Python number alongside it). Its own
+      ok/fail can never mask hook_timing's: hook_timing's result is
+      recorded, and the run stops or continues on that, before this step
+      is even run.
   6. run every registered hook by its own event name
   7. autostart install/uninstall round trip
 """
@@ -478,13 +487,16 @@ def step_second_release(ctx):
     return {"ok": True, "detail": {"release_b_dir": str(release_b_root), "current_link_target": link_real}}
 
 
-def step_hook_timing(ctx):
-    gate_ms = ctx["gate_ms"]
-    realpath_err = _release_b_realpath_check(ctx)
-    if realpath_err:
-        return {"ok": False, "detail": realpath_err}
-    argv = _hook_argv(ctx["settings_data"], "PreToolUse", "", ctx["expected_command"], ctx["sessions_dir_expected"])
-    sessions_dir = Path(_sessions_dir_from_argv(argv))
+def _time_hook_argv(argv, env, sessions_dir: Path, label: str):
+    """One cold + 20 warm invocations of `argv`, piping the same PreToolUse
+    payload shape to each and validating exit code, stdout, and state-file
+    seq the same way regardless of which hook runner `argv` points at (the
+    frozen tokitty-hook, or a plain-Python hook_writer.py copy run with
+    sys.executable). `label` namespaces the cold/warm session ids so two
+    callers can safely share one sessions_dir. Returns (ok, detail): detail
+    always carries whatever timings were collected, even on a failure
+    partway through the warm loop, so a fix round's report shows every
+    value gathered so far."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def _payload(session_id):
@@ -492,24 +504,24 @@ def step_hook_timing(ctx):
             {"session_id": session_id, "hook_event_name": "PreToolUse", "tool_name": "Bash"}
         ).encode("utf-8")
 
-    cold_id = "verify-cold"
+    cold_id = f"{label}-cold"
     cold_state = sessions_dir / f"{cold_id}.json"
     if cold_state.exists():
         cold_state.unlink()
     t0 = time.perf_counter()
-    proc, err = run_child(argv, ctx["env"], input_bytes=_payload(cold_id))
+    proc, err = run_child(argv, env, input_bytes=_payload(cold_id))
     cold_s = time.perf_counter() - t0
     if err:
-        return {"ok": False, "detail": f"cold run: {err}"}
+        return False, {"error": f"cold run: {err}"}
     if proc.returncode != 0 or proc.stdout != b"":
-        return {"ok": False, "detail": f"cold run: exit={proc.returncode} stdout={proc.stdout!r}"}
+        return False, {"error": f"cold run: exit={proc.returncode} stdout={proc.stdout!r}"}
     if not cold_state.is_file():
-        return {"ok": False, "detail": "cold run: state file missing"}
+        return False, {"error": "cold run: state file missing"}
     cold_data = json.loads(cold_state.read_text(encoding="utf-8"))
     if cold_data.get("seq") != 1:
-        return {"ok": False, "detail": f"cold run: seq {cold_data.get('seq')} != 1"}
+        return False, {"error": f"cold run: seq {cold_data.get('seq')} != 1"}
 
-    warm_id = "verify-warm"
+    warm_id = f"{label}-warm"
     warm_state = sessions_dir / f"{warm_id}.json"
     if warm_state.exists():
         warm_state.unlink()
@@ -517,47 +529,108 @@ def step_hook_timing(ctx):
     timings = []
     for i in range(1, 21):
         t0 = time.perf_counter()
-        proc, err = run_child(argv, ctx["env"], input_bytes=_payload(warm_id))
+        proc, err = run_child(argv, env, input_bytes=_payload(warm_id))
         elapsed = time.perf_counter() - t0
-        # Record before judging: a failing run's timing is still evidence,
-        # and a fix-round-1 report must show every value gathered so far.
         timings.append(elapsed)
         if err:
-            return {"ok": False, "detail": {"error": f"warm run {i}: {err}", "timings_s": timings}}
+            return False, {"error": f"warm run {i}: {err}", "timings_s": timings, "cold_s": cold_s}
         if proc.returncode != 0 or proc.stdout != b"":
-            return {
-                "ok": False,
-                "detail": {
-                    "error": f"warm run {i}: exit={proc.returncode} stdout={proc.stdout!r}",
-                    "timings_s": timings,
-                },
+            return False, {
+                "error": f"warm run {i}: exit={proc.returncode} stdout={proc.stdout!r}",
+                "timings_s": timings,
+                "cold_s": cold_s,
             }
         if not warm_state.is_file():
-            return {"ok": False, "detail": {"error": f"warm run {i}: state file missing", "timings_s": timings}}
+            return False, {
+                "error": f"warm run {i}: state file missing",
+                "timings_s": timings,
+                "cold_s": cold_s,
+            }
         data = json.loads(warm_state.read_text(encoding="utf-8"))
         if data.get("seq") != i:
-            return {
-                "ok": False,
-                "detail": {"error": f"warm run {i}: seq {data.get('seq')} != {i}", "timings_s": timings},
+            return False, {
+                "error": f"warm run {i}: seq {data.get('seq')} != {i}",
+                "timings_s": timings,
+                "cold_s": cold_s,
             }
 
     sorted_t = sorted(timings)
     n = len(sorted_t)
     median = sorted_t[n // 2] if n % 2 else (sorted_t[n // 2 - 1] + sorted_t[n // 2]) / 2
-    median_ms = median * 1000
-    ok = median_ms <= gate_ms
-    detail = {
-        "argv": argv,
+    return True, {
         "cold_s": cold_s,
         "timings_s": timings,
         "min_s": sorted_t[0],
         "median_s": median,
         "max_s": sorted_t[-1],
-        "median_ms": median_ms,
-        "gate_ms": gate_ms,
+        "median_ms": median * 1000,
     }
+
+
+def step_hook_timing(ctx):
+    gate_ms = ctx["gate_ms"]
+    realpath_err = _release_b_realpath_check(ctx)
+    if realpath_err:
+        return {"ok": False, "detail": realpath_err}
+    argv = _hook_argv(ctx["settings_data"], "PreToolUse", "", ctx["expected_command"], ctx["sessions_dir_expected"])
+    sessions_dir = Path(_sessions_dir_from_argv(argv))
+
+    ok, detail = _time_hook_argv(argv, ctx["env"], sessions_dir, "verify")
+    detail["argv"] = argv
+    detail["gate_ms"] = gate_ms
     if not ok:
-        detail["error"] = f"median {median_ms:.3f}ms exceeds gate {gate_ms}ms"
+        return {"ok": False, "detail": detail}
+
+    gate_ok = detail["median_ms"] <= gate_ms
+    if not gate_ok:
+        detail["error"] = f"median {detail['median_ms']:.3f}ms exceeds gate {gate_ms}ms"
+    return {"ok": gate_ok, "detail": detail}
+
+
+def step_hook_timing_baseline(ctx):
+    """Informational only (#48 Task 1, Nick's baseline decision): times the
+    same cold + 20 warm loop against a copy of the repo's own
+    tokitty/hook_writer.py, run with sys.executable (the runner's
+    setup-python interpreter that runs this verifier) instead of the frozen
+    tokitty-hook. The 100ms gate stays on the frozen median alone -- this
+    step's own ok/fail is never allowed to change whether the run as a
+    whole passes (see main()'s report["ok"] computation), and it is run
+    even when hook_timing itself failed, which is exactly the case it
+    exists for: a frozen median over the gate needs the plain-Python number
+    alongside it to show whether the gate is measuring PyInstaller startup
+    cost or something true of the runner itself."""
+    frozen_result = ctx.get("hook_timing_result") or {}
+    frozen_detail = frozen_result.get("detail")
+    frozen_detail = frozen_detail if isinstance(frozen_detail, dict) else {}
+
+    hook_writer_src = ctx["repo_root"] / "tokitty" / "hook_writer.py"
+    if not hook_writer_src.is_file():
+        return {"ok": False, "detail": f"repo hook_writer.py not found at {hook_writer_src}"}
+
+    baseline_dir = ctx["work"] / "baseline"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    hook_writer_copy = baseline_dir / "hook_writer.py"
+    shutil.copy2(hook_writer_src, hook_writer_copy)
+    sessions_dir = baseline_dir / "sessions"
+    argv = [sys.executable, str(hook_writer_copy), "--sessions-dir", str(sessions_dir)]
+
+    ok, detail = _time_hook_argv(argv, ctx["env"], sessions_dir, "baseline")
+    detail["argv"] = argv
+    detail["sys_executable"] = sys.executable
+
+    frozen_median_ms = frozen_detail.get("median_ms")
+    baseline_median_ms = detail.get("median_ms")
+    diff_ms = None
+    if isinstance(frozen_median_ms, (int, float)) and isinstance(baseline_median_ms, (int, float)):
+        diff_ms = frozen_median_ms - baseline_median_ms
+    detail["frozen_timings_s"] = frozen_detail.get("timings_s")
+    detail["frozen_median_ms"] = frozen_median_ms
+    detail["diff_ms"] = diff_ms
+
+    # `ok` here reports only whether the baseline's own cold/warm loop ran
+    # cleanly -- there is no gate to fail against. main()'s report["ok"]
+    # computation excludes this step by name, so a baseline-only failure
+    # here (or hook_timing having failed above) never fails the run.
     return {"ok": ok, "detail": detail}
 
 
@@ -686,7 +759,14 @@ def _reg_restore_and_verify(saved_value, had_value):
         return f"reg restore failed to launch: {exc}"
 
     if proc.returncode != 0:
-        return f"reg restore exit {proc.returncode}: {proc.stderr!r}"
+        # When there was no prior value, --uninstall-autostart already
+        # removed it during the round trip, so `reg delete` here finds
+        # nothing to delete: that is the saved state, not a failure. The
+        # post-restore re-query below still has the final say on whether
+        # the value is actually absent.
+        already_absent = not had_value and "unable to find" in proc.stderr.lower()
+        if not already_absent:
+            return f"reg restore exit {proc.returncode}: {proc.stderr!r}"
 
     try:
         value_after, present_after = _reg_read_tokitty()
@@ -800,9 +880,15 @@ STEPS = [
     ("install_hooks", step_install_hooks),
     ("second_release", step_second_release),
     ("hook_timing", step_hook_timing),
+    ("hook_timing_baseline", step_hook_timing_baseline),
     ("hook_events", step_hook_events),
     ("autostart", step_autostart),
 ]
+
+# Steps whose own ok/fail never counts toward report["ok"] and never stops
+# the run on its own (#48 Task 1): hook_timing_baseline is informational,
+# compared against hook_timing's gated median but not gated itself.
+INFORMATIONAL_STEPS = {"hook_timing_baseline"}
 
 
 def write_report(path: Path, report: dict) -> None:
@@ -872,6 +958,7 @@ def main() -> int:
         "steps": {},
     }
 
+    pending_stop = False
     try:
         for name, fn in STEPS:
             print(f"[verify_artifact] running step: {name}", file=sys.stderr)
@@ -882,6 +969,21 @@ def main() -> int:
             report["steps"][name] = result
             status = "ok" if result.get("ok") else "FAILED"
             print(f"[verify_artifact] step {name}: {status}", file=sys.stderr)
+
+            if name == "hook_timing":
+                ctx["hook_timing_result"] = result
+                # hook_timing_baseline is next in STEPS and must run
+                # regardless of this result -- that's the case it exists
+                # for -- so defer stopping the run until after it has had
+                # its turn, rather than breaking here.
+                pending_stop = not result.get("ok")
+                continue
+
+            if name in INFORMATIONAL_STEPS:
+                if pending_stop:
+                    break
+                continue
+
             if not result.get("ok"):
                 break
     finally:
@@ -902,7 +1004,9 @@ def main() -> int:
         sizes["release_b_dir_bytes"] = _dir_size(ctx["release_b_dir"])
     report["sizes"] = sizes
 
-    report["ok"] = bool(report["steps"]) and all(s.get("ok") for s in report["steps"].values())
+    report["ok"] = bool(report["steps"]) and all(
+        s.get("ok") for name, s in report["steps"].items() if name not in INFORMATIONAL_STEPS
+    )
     write_report(report_path, report)
     return 0 if report["ok"] else 1
 
