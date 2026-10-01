@@ -1,4 +1,4 @@
-"""A stable path for the hook runner (spec Q2a, #48 Task 3).
+"""A stable path for the hook runner (spec Q2a, #48).
 
 `<state dir>/current` is a directory junction on Windows or a symlink
 elsewhere, repointed at the running release on every launch and before

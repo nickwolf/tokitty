@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stdlib-only verifier for an extracted Tokitty release artifact (#48 Task 7).
+"""Stdlib-only verifier for an extracted Tokitty release artifact (#48).
 
 Runs the frozen GUI and hook executables exactly as a real install would:
 from an extracted onedir build, against a scratch state dir, through a
@@ -144,8 +144,8 @@ def _hook_argv(settings_data, event, matcher, expected_command, sessions_dir_exp
 
 
 def _release_b_realpath_check(ctx):
-    """Steps 5 and 6 run through the link at release-b (brief 4b): confirm
-    the stable command path still resolves inside release-b before either
+    """Steps 5 and 6 run through the link at release-b: confirm the
+    stable command path still resolves inside release-b before either
     step trusts it, rather than assuming step_second_release's repoint
     held."""
     command = ctx["expected_command"]
@@ -460,7 +460,7 @@ def step_second_release(ctx):
     if link_real != release2_real:
         return {"ok": False, "detail": f"current -> {link_real}, expected release-b dir {release2_real}"}
 
-    # Steps 5 and 6 run through the link at release-b, per the brief.
+    # Steps 5 and 6 run through the link at release-b.
     ctx["gui"] = gui2
     ctx["hook"] = hook2
     ctx["release_dir"] = gui2.parent

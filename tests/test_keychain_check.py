@@ -1,4 +1,4 @@
-"""Pure-logic tests for freeze/keychain_check.py (#48 Task 8 / spec Q6).
+"""Pure-logic tests for freeze/keychain_check.py (#48, spec Q6).
 
 The script is never imported as a package module (it stays stdlib-only and
 lives under freeze/, same as freeze/gui_entry.py), so it's loaded by path

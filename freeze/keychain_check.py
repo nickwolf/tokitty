@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stdlib-only CI probe for #48 Task 8 / spec Q6 ("macOS Keychain across
+"""Stdlib-only CI probe for #48, spec Q6 ("macOS Keychain across
 releases"). Tests the prediction that a new Tokitty build does not re-prompt
 for Keychain access, because the process that actually asks the Security
 framework is always `/usr/bin/security` -- `keychain.py` shells out to it and

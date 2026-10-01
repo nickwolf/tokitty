@@ -181,8 +181,8 @@ def test_build_command_default_runner_is_stable_path(tmp_path, monkeypatch):
 
 def test_install_writes_exec_form_entry_when_frozen(tmp_path, monkeypatch):
     # A fake release under tmp_path with host-native names, sys.executable
-    # patched to it -- so this never links to a real directory (Task 3
-    # ruling: no test may link outside its own tmp_path).
+    # patched to it -- so this never links to a real directory outside
+    # its own tmp_path.
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
@@ -447,7 +447,7 @@ def test_is_owned_hook_rejects_trailing_slash_on_script_token():
 
 
 # ---------------------------------------------------------------------------
-# _is_owned_hook -- exec form (spec Q2a, Task 4)
+# _is_owned_hook -- exec form (spec Q2a)
 # ---------------------------------------------------------------------------
 
 def test_is_owned_hook_accepts_exec_form_posix():
@@ -839,9 +839,9 @@ def test_uninstall_keeps_user_handler_in_a_shared_entry(tmp_path):
 
 
 def test_uninstall_removes_exec_form_handler_keeps_user_handler_in_shared_entry(tmp_path):
-    # Task 4: uninstall's handler-level removal already only touches owned
-    # handlers (Task 3); this just proves that now covers the exec form
-    # too, now that _is_owned_hook recognises it.
+    # uninstall's handler-level removal already only touches owned
+    # handlers; this just proves that now covers the exec form too, now
+    # that _is_owned_hook recognises it.
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     exec_handler = {
@@ -1015,7 +1015,7 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _reconcile_claude / refresh_hooks_for_dir / ensure_current (Task 4)
+# _reconcile_claude / refresh_hooks_for_dir / ensure_current
 # ---------------------------------------------------------------------------
 
 def test_refresh_never_adds_missing_events(tmp_path):
@@ -1224,7 +1224,7 @@ def test_install_skips_stale_local_entry_and_removes_main_duplicate(tmp_path):
     assert result.ok
     assert "Stop" in result.refreshed_events
     # Exact match, not a substring check: a SubagentStop-only note would
-    # also satisfy "Stop" in result.note (Task 4 review coverage gap).
+    # also satisfy "Stop" in result.note.
     assert result.note == "a locally-owned hook differs from what Tokitty would write for: Stop"
     data = json.loads((config_dir / "settings.json").read_text())
     assert "Stop" not in data["hooks"]
@@ -1240,10 +1240,10 @@ def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path):
     before = (config_dir / "settings.json").read_bytes()
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    # ensure_current reads its accounts explicitly from accounts.json now
-    # (Task 4 review finding 2): it never falls back to get_config_dirs's
-    # default-dir resolution, so this can no longer be driven by
-    # monkeypatching get_config_dirs -- a real accounts.json is required.
+    # ensure_current reads its accounts explicitly from accounts.json: it
+    # never falls back to get_config_dirs's default-dir resolution, so
+    # this can no longer be driven by monkeypatching get_config_dirs -- a
+    # real accounts.json is required.
     (state_dir / "accounts.json").write_text(
         json.dumps({"accounts": [{"config_dir": str(config_dir), "provider": "claude"}]})
     )
@@ -1257,8 +1257,8 @@ def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path):
 
 
 def test_refresh_across_two_releases_is_byte_identical_and_link_moves(tmp_path, monkeypatch):
-    """Replaces Task 3's stand-in (test_install_twice_from_different_
-    releases_is_byte_identical_and_link_moves, still above, unmodified):
+    """Companion to test_install_twice_from_different_
+    releases_is_byte_identical_and_link_moves (still above, unmodified):
     the second call here is refresh_hooks_for_dir, not another install."""
     state_dir = tmp_path / "state"
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
@@ -1337,10 +1337,10 @@ def test_fallback_with_existing_stable_hook_leaves_it_and_warns(tmp_path, monkey
 
 
 def test_fallback_new_event_never_uses_a_broken_stable_path(tmp_path, monkeypatch):
-    """Codex review finding: the fallback decision is per event, not once
-    per home -- an existing owned handler for one event must not make a
-    *new* event (added in this same call) trust a link that isn't
-    working right now."""
+    """The fallback decision is per event, not once per home -- an
+    existing owned handler for one event must not make a *new* event
+    (added in this same call) trust a link that isn't working right
+    now."""
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
@@ -1401,9 +1401,9 @@ def test_ensure_current_turns_oserror_into_failed_result(tmp_path):
 
 
 def test_ensure_current_turns_generic_exception_into_failed_result(tmp_path):
-    """Task 4 review finding 3: a non-OSError exception (e.g. the
-    AttributeError a malformed settings.json used to raise) must not
-    abort the rest of ensure_current's accounts, only this one's result."""
+    """A non-OSError exception (e.g. the AttributeError a malformed
+    settings.json used to raise) must not abort the rest of
+    ensure_current's accounts, only this one's result."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     state_dir = tmp_path / "state"
@@ -1440,8 +1440,8 @@ def test_ensure_current_looks_up_default_refresh_fn_at_call_time(tmp_path, monke
 
 
 def test_ensure_current_skips_default_dir_and_wsl_probe_without_accounts_json(tmp_path, monkeypatch):
-    """Task 4 review finding 2: with no accounts.json, ensure_current must
-    do nothing at all -- specifically, it must never call
+    """With no accounts.json, ensure_current must do nothing at all --
+    specifically, it must never call
     _default_config_dir() (whose non-Windows branch is harmless, but
     whose Windows branch shells into every WSL distro on every launch)."""
 
@@ -1470,12 +1470,12 @@ def test_ensure_current_skips_when_accounts_json_lists_no_hook_accounts(tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Task 4 review fix round 1
+# Reconcile edge cases
 # ---------------------------------------------------------------------------
 
 def test_refresh_leaves_exec_form_handler_alone_when_not_frozen(tmp_path):
-    """Finding 1: a source (non-frozen) launch's own startup refresh must
-    never demote a frozen install's exec-form handler back to the
+    """A source (non-frozen) launch's own startup refresh must never
+    demote a frozen install's exec-form handler back to the
     interpreter-string shape -- doing so would flip-flop the registered
     command (and the Codex hash) with every frozen launch's own refresh,
     which converts it back up."""
@@ -1500,9 +1500,9 @@ def test_refresh_leaves_exec_form_handler_alone_when_not_frozen(tmp_path):
 
 
 def test_install_still_converts_exec_form_to_python_when_not_frozen(tmp_path):
-    """Finding 1's other half: an explicit install (add_missing=True) keeps
-    today's behaviour and still performs the demotion -- only the
-    automatic startup refresh gained the new guard."""
+    """The other half: an explicit install (add_missing=True) still
+    performs the demotion -- only the automatic startup refresh skips
+    it."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     exec_handler = {
@@ -1523,7 +1523,7 @@ def test_install_still_converts_exec_form_to_python_when_not_frozen(tmp_path):
 
 
 def test_install_aborts_cleanly_on_non_dict_settings_json_root(tmp_path):
-    """Finding 3: settings.json parses fine but its root isn't an object."""
+    """settings.json parses fine but its root isn't an object."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     (config_dir / "settings.json").write_text(json.dumps([]))
@@ -1537,7 +1537,7 @@ def test_install_aborts_cleanly_on_non_dict_settings_json_root(tmp_path):
 
 
 def test_install_aborts_cleanly_on_null_hooks_key(tmp_path):
-    """Finding 3: {"hooks": null} used to reach a bare AttributeError."""
+    """{"hooks": null} used to reach a bare AttributeError."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     (config_dir / "settings.json").write_text(json.dumps({"hooks": None}))
@@ -1550,9 +1550,9 @@ def test_install_aborts_cleanly_on_null_hooks_key(tmp_path):
 
 
 def test_refresh_also_aborts_on_non_dict_settings_json_root(tmp_path):
-    """Finding 3 is a shape problem, not a parse problem -- finding 9's
-    quiet-skip leniency for refresh is for unparseable JSON only, so this
-    must still abort loudly during a refresh too."""
+    """A non-dict root is a shape problem, not a parse problem -- a
+    refresh's quiet-skip leniency applies to unparseable JSON only, so
+    this must still abort loudly during a refresh too."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     (config_dir / "settings.json").write_text(json.dumps([]))
@@ -1563,7 +1563,7 @@ def test_refresh_also_aborts_on_non_dict_settings_json_root(tmp_path):
 
 
 def test_ensure_current_survives_a_shape_error_via_the_real_reconcile(tmp_path):
-    """Finding 3, end to end: ensure_current must not let one account's
+    """End to end: ensure_current must not let one account's
     AttributeError-turned-abort take down the whole pass."""
     good = tmp_path / "good" / ".claude"
     good.mkdir(parents=True)
@@ -1592,8 +1592,8 @@ def test_ensure_current_survives_a_shape_error_via_the_real_reconcile(tmp_path):
 
 
 def test_handler_needs_rewrite_normalizes_drive_letter_case_in_command():
-    """Finding 5, drive-letter case: an equivalently-spelled stable command
-    (only its drive letter and directory casing differ) is not a rewrite."""
+    """Drive-letter case: an equivalently-spelled stable command (only
+    its drive letter and directory casing differ) is not a rewrite."""
     old = {
         "type": "command",
         "command": r"c:\users\nick\appdata\local\tokitty\current\tokitty-hook.exe",
@@ -1608,8 +1608,8 @@ def test_handler_needs_rewrite_normalizes_drive_letter_case_in_command():
 
 
 def test_refresh_leaves_doubled_slash_stable_spelling_byte_identical(tmp_path, monkeypatch):
-    """Finding 5, doubled slash, healthy link: the handler already spells
-    the (working) stable path with a doubled slash -- an equivalent
+    """Doubled slash, healthy link: the handler already spells the
+    (working) stable path with a doubled slash -- an equivalent
     spelling, so _handler_needs_rewrite's normalized command compare must
     not treat it as a rewrite."""
     state_dir = tmp_path / "state"
@@ -1641,8 +1641,8 @@ def test_refresh_leaves_doubled_slash_stable_spelling_byte_identical(tmp_path, m
 
 
 def test_fallback_recognizes_doubled_slash_stable_spelling_as_already_stable(tmp_path, monkeypatch):
-    """Finding 5, doubled slash, failing link: the existing handler's
-    command is a differently-spelled but equivalent stable path --
+    """Doubled slash, failing link: the existing handler's command is a
+    differently-spelled but equivalent stable path --
     desired_for's "already the stable path" check must recognise it via
     _normalize_token_path, not exact string equality, or it gets rewritten
     to a release path for no real reason."""
@@ -1676,8 +1676,8 @@ def test_fallback_recognizes_doubled_slash_stable_spelling_as_already_stable(tmp
 
 
 def test_fallback_duplicate_handlers_prefers_the_stable_one_as_primary(tmp_path, monkeypatch):
-    """Finding 6: with the link failing and two owned handlers for one
-    event -- an old release path and the current stable path -- the
+    """With the link failing and two owned handlers for one event -- an
+    old release path and the current stable path -- the
     stable one must be kept (and the old one dropped), never the other
     way around."""
     state_dir = tmp_path / "state"
@@ -1716,15 +1716,14 @@ def test_fallback_duplicate_handlers_prefers_the_stable_one_as_primary(tmp_path,
 
 
 def test_fallback_never_prefers_this_releases_own_bundled_duplicate_over_stable(tmp_path, monkeypatch):
-    """Round 2 finding 1: choose_primary used to return the first owned
-    handler that already matched what fallback mode would write today,
-    before it had looked at every position for a stable-path one. A
-    handler already sitting at *this release's own* bundled path needs no
-    rewrite, so when it is listed before the stable-path handler for the
-    same event, the old per-position early return picked it as primary and
-    deleted the stable duplicate -- backwards from the rule that a
-    stable-path hook is never dropped in favour of a release path. Listing
-    the bundled handler first is what exposes the bug."""
+    """choose_primary must check every position for a stable-path handler
+    before falling back to whichever one already matches what fallback
+    mode would write today. A handler sitting at *this release's own*
+    bundled path needs no rewrite, so when it is listed before the
+    stable-path handler for the same event, an early return keyed only
+    on "already matches desired" would pick it as primary and delete the
+    stable duplicate -- backwards from the rule that a stable-path hook
+    is never dropped in favour of a release path."""
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
@@ -1756,8 +1755,8 @@ def test_fallback_never_prefers_this_releases_own_bundled_duplicate_over_stable(
 
 
 def test_fallback_missing_bundled_runner_message_names_the_reason(tmp_path, monkeypatch):
-    """Finding 8: a missing bundled tokitty-hook used to surface only a
-    bare path as the whole result message."""
+    """A missing bundled tokitty-hook used to surface only a bare path
+    as the whole result message."""
     bare = tmp_path / "release-bare"
     bare.mkdir(parents=True)
     exe = bare / EXE_NAME
@@ -1775,8 +1774,8 @@ def test_fallback_missing_bundled_runner_message_names_the_reason(tmp_path, monk
 
 
 def test_refresh_quietly_skips_a_settings_json_that_wont_parse(tmp_path):
-    """Finding 9: a home Tokitty never touched whose settings.json just
-    happens not to parse must not warn on every launch."""
+    """A home Tokitty never touched whose settings.json just happens
+    not to parse must not warn on every launch."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     (config_dir / "settings.json").write_text("{not valid json")
@@ -1789,7 +1788,7 @@ def test_refresh_quietly_skips_a_settings_json_that_wont_parse(tmp_path):
 
 
 def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_path):
-    """Finding 9's contrast: an explicit install still fails loudly."""
+    """By contrast, an explicit install still fails loudly."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     (config_dir / "settings.json").write_text("{not valid json")
@@ -1801,9 +1800,9 @@ def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_p
 
 
 def test_fallback_real_directory_at_current_registers_bundled_path_with_warning(tmp_path, monkeypatch):
-    """Test gap named in the review: no reconcile-level test exercised the
-    real-directory-at-current outcome (runner_link's own note path, not
-    an exception) through _reconcile_claude."""
+    """No other reconcile-level test exercises the real-directory-at-
+    current outcome (runner_link's own note path, not an exception)
+    through _reconcile_claude."""
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)

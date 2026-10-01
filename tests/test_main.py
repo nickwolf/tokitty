@@ -40,10 +40,10 @@ NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def _no_real_hook_refresh_at_startup(monkeypatch):
     """run_discovery calls hooks_install.ensure_current(state_dir) on every
-    launch (Task 4). ensure_current reads <state_dir>/accounts.json itself
-    (it never falls back to get_config_dirs's default-dir resolution, Task
-    4 review finding 2), but a state_dir with no accounts.json is exactly
-    what nearly every run_gui test in this file uses, and a stray real
+    launch. ensure_current reads <state_dir>/accounts.json itself (it
+    never falls back to get_config_dirs's default-dir resolution), but a
+    state_dir with no accounts.json is exactly what nearly every run_gui
+    test in this file uses, and a stray real
     accounts.json on the machine running the suite (or a future change
     that reintroduces a default-dir fallback here) would make this read
     (and, if anything ever drifted, try to rewrite) whoever's real
@@ -569,10 +569,9 @@ def _capture_spawned_threads(monkeypatch):
 
 @pytest.mark.gui
 def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
-    """Controller ruling on Task 15's brief: retry_pending_hook_op
-    (hooks_install.py, Task 8/12) was never wired into run_gui through
-    Task 14 -- confirmed by grep. It must fire once from the startup
-    sequence, off the Tk thread alongside WSL discovery (run_discovery)."""
+    """retry_pending_hook_op (hooks_install.py) must fire once from the
+    startup sequence, off the Tk thread alongside WSL discovery
+    (run_discovery)."""
     tk = pytest.importorskip("tkinter")
     from tokitty import __main__ as main_module
     from tokitty.settings import Settings, save_settings
@@ -625,15 +624,14 @@ def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeyp
 
 @pytest.mark.gui
 def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(tmp_path, monkeypatch):
-    """Reviewer-confirmed Finding 1 (CRITICAL): the original implementation
-    called root.after(0, maybe_auto_open) from run_discovery's background
-    thread. root.after() called from a non-Tk thread before root.mainloop()
-    has actually started raises "main thread is not in main loop" --
-    reproduced directly -- and the scheduled callback is silently DROPPED
-    FOREVER, not merely delayed, even once mainloop() eventually starts.
-    Since run_discovery starts (well) before the synchronous unit-building
-    loop even begins, it is entirely plausible for discovery to finish
-    before mainloop() is reached on a real launch.
+    """root.after(0, maybe_auto_open) called directly from run_discovery's
+    background thread, before root.mainloop() has actually started,
+    raises "main thread is not in main loop" and the scheduled callback
+    is silently DROPPED FOREVER, not merely delayed, even once mainloop()
+    eventually starts. Since run_discovery starts well before the
+    synchronous unit-building loop even begins, it is entirely plausible
+    for discovery to finish before mainloop() is reached on a real
+    launch.
 
     The fix: run_discovery only ever writes discovery_result under a lock;
     maybe_auto_open is invoked exclusively from tick(), which polls that
@@ -641,21 +639,18 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
     root.after(UI_REFRESH_MS, tick) -- the same mechanism this file
     already uses for Poller/ActivityWatcher results.
 
-    This test proves the fix holds under the *exact* adversarial ordering
-    Finding 1 describes, deterministically rather than hoping a race lands
-    right: threading.Thread is patched so specifically run_discovery's
-    thread executes synchronously, in-place, the instant .start() is
-    called -- i.e. discovery_result["done"] becomes True before run_gui()
-    even reaches the unit-building loop, let alone root.mainloop(). Every
-    other thread run_gui spawns (Poller, ActivityWatcher) still runs as a
-    real background thread -- only run_discovery's target is forced
-    synchronous, identified by name at Thread construction time, same
-    technique as _capture_spawned_threads. resolve_first_run_action is forced to
-    return True (bypassing the real accounts.json/WSL-count precedence
-    logic covered separately by test_startup.py) and AccountsManager.open
-    is replaced with a spy, so this test only has to prove the wiring --
-    discovery-finishes-first still reaches AccountsManager.open() -- once
-    mainloop() actually starts pumping real Tcl events."""
+    This test proves the fix holds under that exact adversarial ordering,
+    deterministically rather than hoping a race lands right:
+    threading.Thread is patched so specifically run_discovery's thread
+    executes synchronously, in-place, the instant .start() is called --
+    i.e. discovery_result["done"] becomes True before run_gui() even
+    reaches the unit-building loop, let alone root.mainloop().
+    resolve_first_run_action is forced to return True (bypassing the real
+    accounts.json/WSL-count precedence logic covered separately by
+    test_startup.py) and AccountsManager.open is replaced with a spy, so
+    this test only has to prove the wiring -- discovery-finishes-first
+    still reaches AccountsManager.open() -- once mainloop() actually
+    starts pumping real Tcl events."""
     tk = pytest.importorskip("tkinter")
 
     from tokitty import __main__ as main_module
@@ -739,11 +734,11 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
         while time.monotonic() < deadline and not opened:
             self.update()
             time.sleep(0.01)
-        # tick() now shows a startup warning (if any) via root.after(0, ...)
-        # rather than synchronously (Task 4 review finding 7), so it fires
-        # on a later pass of the event loop than the one that populated
-        # `opened`. A handful of extra pumps here gives it that chance;
-        # harmless for the tests that don't care about it.
+        # tick() shows a startup warning (if any) via root.after(0, ...)
+        # rather than synchronously, so it fires on a later pass of the
+        # event loop than the one that populated `opened`. A handful of
+        # extra pumps here gives it that chance; harmless for the tests
+        # that don't care about it.
         for _ in range(5):
             self.update()
             time.sleep(0.01)
@@ -754,12 +749,11 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
 
 @pytest.mark.gui
 def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
-    """Task 4: retry_pending_hook_op's warning and an ensure_current
-    result's warning both reach one messagebox.showwarning call on the Tk
-    thread, exactly once per launch -- today the retry result is
-    discarded (__main__.py's run_discovery), which is the bug this
-    fixes. messagebox.showwarning is patched on the actual submodule
-    object, not on tokitty.__main__, because tick()'s `from tkinter
+    """retry_pending_hook_op's warning and an ensure_current result's
+    warning both reach one messagebox.showwarning call on the Tk thread,
+    exactly once per launch. messagebox.showwarning is patched on the
+    actual submodule object, not on tokitty.__main__, because tick()'s
+    `from tkinter
     import messagebox` is a local import that binds to that same
     submodule at call time (see test_run_gui_toggle_autostart_shows_
     warning_on_translocation's identical reasoning)."""
@@ -804,8 +798,8 @@ def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
 
 @pytest.mark.gui
 def test_startup_hook_warnings_reach_messagebox_via_real_ensure_current(tmp_path, monkeypatch):
-    """Test gap named in the Task 4 review: every other messagebox test in
-    this file (including the one directly above) stubs hooks_install.
+    """Every other messagebox test in this file (including the one
+    directly above) stubs hooks_install.
     ensure_current outright via the file's autouse fixture
     (_no_real_hook_refresh_at_startup), so none of them actually exercises
     ensure_current's own account resolution (reading accounts.json,
@@ -855,15 +849,14 @@ def test_startup_hook_warnings_reach_messagebox_via_real_ensure_current(tmp_path
 
 @pytest.mark.gui
 def test_run_discovery_notes_translocation_with_no_eligible_accounts(tmp_path, monkeypatch):
-    """Task 4 round 2 finding 2: with no accounts.json (so ensure_current,
-    stubbed by this file's autouse fixture to mirror its real "nothing to
-    do" behaviour, never reports anything), a frozen launch whose own
-    ensure_runner_link call raises AppTranslocatedError used to swallow it
-    silently -- the per-account path that was supposed to cover this never
-    ran. The fake release lives entirely under tmp_path and is never
-    touched: is_translocated only inspects the path string, so no files
-    need to exist for ensure_runner_link to raise before any filesystem
-    access."""
+    """With no accounts.json (so ensure_current, stubbed by this file's
+    autouse fixture to mirror its real "nothing to do" behaviour, never
+    reports anything), a frozen launch whose own ensure_runner_link call
+    raises AppTranslocatedError must still surface it, since no
+    per-account path covers this case. The fake release lives entirely
+    under tmp_path and is never touched: is_translocated only inspects
+    the path string, so no files need to exist for ensure_runner_link to
+    raise before any filesystem access."""
     tk = pytest.importorskip("tkinter")
     import tkinter.messagebox as messagebox_module
 
@@ -893,8 +886,8 @@ def test_run_discovery_notes_translocation_with_no_eligible_accounts(tmp_path, m
 
 @pytest.mark.gui
 def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypatch):
-    """Finding 2 (important, entangled with Finding 1): retry_pending_hook_op
-    can raise raw OSError/PermissionError from the underlying hook
+    """retry_pending_hook_op can raise raw OSError/PermissionError from
+    the underlying hook
     install/uninstall functions (documented in the design spec's Write
     ordering and crash consistency section -- they don't convert
     filesystem exceptions to a result object). Uncaught, this would abort
@@ -920,8 +913,8 @@ def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypa
 
 @pytest.mark.gui
 def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, monkeypatch):
-    """Finding 2: find_all_wsl_credentials can raise CredentialsError (a
-    real, common case: wsl.exe missing from PATH entirely, i.e. a
+    """find_all_wsl_credentials can raise CredentialsError (a real,
+    common case: wsl.exe missing from PATH entirely, i.e. a
     native-Windows Claude Code install with no WSL at all). Uncaught, this
     would abort run_discovery's thread before discovery_result["done"] is
     ever set, mirroring the exact "resolution failure means run without
@@ -961,11 +954,10 @@ def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, mon
 
 @pytest.mark.gui
 def test_run_discovery_repoints_runner_link_when_frozen(tmp_path, monkeypatch):
-    """Task 3 (spec Q2a): a frozen launch must repoint <state dir>/current
-    at the running release before retry_pending_hook_op runs, with no
-    --install-hooks call involved at all. Uses a fake host-native release
-    under tmp_path -- never a real directory outside it (Task 3's own
-    safety rule)."""
+    """A frozen launch must repoint <state dir>/current at the running
+    release before retry_pending_hook_op runs, with no --install-hooks
+    call involved at all. Uses a fake host-native release under
+    tmp_path -- never a real directory outside it."""
     import os
     import sys
 

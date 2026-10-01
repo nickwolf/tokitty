@@ -180,11 +180,10 @@ def _config_dirs_from_accounts_file(state_dir: Path) -> Optional[List[Tuple[str,
     None is the signal a caller uses to decide what "no explicit
     accounts" means: get_config_dirs falls back to a single default dir
     (a real end user's normal single-account case); ensure_current, the
-    once-per-launch startup refresh, does not -- see its own docstring
-    (Task 4 review finding 2: falling back there would mean resolving
-    _default_config_dir() on every launch with no accounts.json, which on
-    Windows shells into every WSL distro to look for credentials nobody
-    asked it to refresh).
+    once-per-launch startup refresh, does not. Falling back there would
+    mean resolving _default_config_dir() on every launch with no
+    accounts.json, which on Windows shells into every WSL distro looking
+    for credentials nobody asked it to refresh.
     """
     accounts_file = Path(state_dir) / "accounts.json"
     if accounts_file.exists():
@@ -544,10 +543,10 @@ def _handler_needs_rewrite(old_handler: dict, desired_handler: dict, *, refresh:
     """Whether an already-owned handler must be rewritten to match desired.
 
     refresh (the startup path, add_missing=False) never demotes an owned
-    exec-form handler back to the interpreter-string shape (Task 4 review
-    finding 1): a source (non-frozen) launch's own startup refresh must
-    leave a frozen install's hooks alone, or a machine that launches both
-    forms flip-flops the registered command on every launch. An explicit
+    exec-form handler back to the interpreter-string shape: a source
+    (non-frozen) launch's own startup refresh must leave a frozen
+    install's hooks alone, or a machine that launches both forms
+    flip-flops the registered command on every launch. An explicit
     install (add_missing=True) still performs that demotion, same as
     before -- the one-way python -> exec promotion a frozen refresh makes
     is untouched by this guard, since that direction isn't a demotion.
@@ -559,8 +558,8 @@ def _handler_needs_rewrite(old_handler: dict, desired_handler: dict, *, refresh:
     string Codex hashes for no semantic difference. Otherwise a match
     needs the same "command" after _normalize_token_path (an
     equivalently-spelled path -- a doubled slash, a differently-cased
-    drive letter -- is not a rewrite either, Task 4 review finding 5) and,
-    for "args", each element equal after the same normalisation.
+    drive letter -- is not a rewrite either) and, for "args", each
+    element equal after the same normalisation.
     """
     if refresh and "args" in old_handler and "args" not in desired_handler:
         return False
@@ -608,8 +607,8 @@ def _load_reconcile_state(base: Path, target: HookTarget):
     which used to reach a bare AttributeError further down -- or a
     per-event value isn't a list). The caller decides what a problem
     means: an explicit install always aborts on either kind; a refresh
-    aborts only on "shape" and quietly skips on "parse" (Task 4 review
-    findings 3 and 9). settings.local.json's shape is deliberately not
+    aborts only on "shape" and quietly skips on "parse".
+    settings.local.json's shape is deliberately not
     validated this strictly: it's read-only, and a malformed local file
     should never block reconciling the file tokitty actually writes.
     """
@@ -647,8 +646,7 @@ def _reconcile_problem_result(config_dir: str, problem, add_missing: bool) -> Co
         # Noise, not harm: nothing is written either way, and this is
         # reached on every launch for a home Tokitty has never touched
         # whose settings.json (or settings.local.json) just happens not
-        # to parse (Task 4 review finding 9). An explicit install still
-        # fails loudly, below.
+        # to parse. An explicit install still fails loudly, below.
         return ConfigDirResult(config_dir, True, f"skipped, {detail}")
     return ConfigDirResult(config_dir, False, f"aborted, {detail}")
 
@@ -721,14 +719,13 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             fallback_bundled = hook_runner_path(os.path.realpath(sys.executable), platform)
             warning = LINK_FALLBACK_WARNING.format(reason=reason)
 
-        # Task 4 review finding 4: ensure_runner_link can block up to 5s
-        # on current.lock. Re-read settings fresh right before deciding
-        # what to write, so a concurrent uninstall (or account removal)
-        # landing during that wait is never overwritten by a snapshot
-        # taken before it happened. A refresh naturally does nothing for
-        # an event the fresh read no longer shows as owned (the "no owned
-        # handler, not add_missing" branch below), so no separate re-check
-        # of any_owned is needed here.
+        # ensure_runner_link above can block up to 5s on current.lock. Re-read
+        # settings fresh right before deciding what to write, so a concurrent
+        # uninstall (or account removal) landing during that wait is never
+        # overwritten by a snapshot taken before it happened. A refresh
+        # naturally does nothing for an event the fresh read no longer shows
+        # as owned (the "no owned handler, not add_missing" branch below), so
+        # no separate re-check of any_owned is needed here.
         data, local_hooks, problem = _load_reconcile_state(base, target)
         if problem is not None:
             return _reconcile_problem_result(config_dir, problem, add_missing)
@@ -750,13 +747,13 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         return _build_command(config_dir, runner=runner)
 
     def choose_primary(main_entries, main_positions):
-        # Task 4 review finding 6, round 2 finding 1: when an event has
-        # more than one owned handler, a stable-path handler is checked
-        # FIRST -- it must never be dropped in favour of a release-path
-        # handler just because that release-path handler happens to
-        # already match what fallback mode would write for it today.
-        # Only once no stable-path handler is present do we fall back to
-        # whichever already matches desired, then the first found.
+        # When an event has more than one owned handler, a stable-path
+        # handler is checked FIRST -- it must never be dropped in favour
+        # of a release-path handler just because that release-path
+        # handler happens to already match what fallback mode would
+        # write for it today. Only once no stable-path handler is
+        # present do we fall back to whichever already matches desired,
+        # then the first found.
         if len(main_positions) == 1:
             return main_positions[0]
         for pos in main_positions:
@@ -906,11 +903,11 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     _default_config_dir() when accounts.json is absent is right for an
     explicit --install-hooks/Accounts-dialog call, but wrong for a call
     that fires on every single launch -- on Windows that fallback shells
-    into every WSL distro looking for credentials (Task 4 review finding
-    2, a regression of issue #52's WslCredentialsCache). With no
-    accounts.json, or nothing usable in it, there is by definition no
-    account the user has explicitly asked tokitty to watch, so this does
-    nothing at all: no default-dir resolution, no WSL probe.
+    into every WSL distro looking for credentials, a regression of issue
+    #52's WslCredentialsCache. With no accounts.json, or nothing usable
+    in it, there is by definition no account the user has explicitly
+    asked tokitty to watch, so this does nothing at all: no default-dir
+    resolution, no WSL probe.
 
     refresh_fn defaults to refresh_hooks_for_dir, looked up fresh on each
     call rather than bound as a default argument, so a test can
@@ -919,9 +916,9 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     every hook-enabled provider is in _RECONCILE_TABLE, but this keeps a
     future mismatch (a provider gaining hooks before its own reconcile
     branch lands) from raising instead of just doing nothing for that
-    pair. Any exception a reconcile call raises (not just OSError -- Task
-    4 review finding 3) becomes a failed result for that account instead
-    of aborting every account after it.
+    pair. Any exception a reconcile call raises (not just OSError)
+    becomes a failed result for that account instead of aborting every
+    account after it.
     """
     resolved_state_dir = state_dir if state_dir is not None else get_state_dir()
     pairs = _config_dirs_from_accounts_file(resolved_state_dir)

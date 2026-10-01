@@ -1,5 +1,5 @@
-"""Tests for tokitty/frozen.py: the translocation guard (#48 Task 3) and the
-windowed crash log / --self-check (#48 Task 6)."""
+"""Tests for tokitty/frozen.py: the translocation guard and the
+windowed crash log / --self-check (#48)."""
 import importlib.util
 import json
 import sys

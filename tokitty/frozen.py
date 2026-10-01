@@ -106,8 +106,9 @@ def _check_hook_runner():
 
 def self_check() -> int:
     """Hidden --self-check: prove a bundle carries what the app needs.
-    Task 7's CI verifier depends on this, including the state_dir field, to
-    fail closed rather than trust a bundle that merely launched."""
+    The release CI verifier depends on this, including the state_dir
+    field, to fail closed rather than trust a bundle that merely
+    launched."""
     from tokitty import paths
 
     checks = {

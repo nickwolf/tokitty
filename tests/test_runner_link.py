@@ -1,4 +1,4 @@
-"""Tests for tokitty/runner_link.py: the stable hook path (spec Q2a, #48 Task 3).
+"""Tests for tokitty/runner_link.py: the stable hook path (spec Q2a, #48).
 
 SAFETY: every link created here lives under its own tmp_path and is torn
 down with os.unlink (POSIX) / os.rmdir (Windows junction) in the `state`

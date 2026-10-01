@@ -544,8 +544,7 @@ def run_gui() -> int:
             # retry result's warning (and its message if it failed), then
             # each ensure_current result's warning (and message if
             # failed). tick() shows the union in one messagebox, at most
-            # once per launch (Task 4) -- today the retry result is
-            # discarded here, which is the bug that fixes.
+            # once per launch.
             hook_warnings = []
             seen_hook_warnings = set()
 
@@ -561,16 +560,14 @@ def run_gui() -> int:
                 # retry below, so a stale link from a previous release
                 # never lingers between launches (spec Q2a). Reported the
                 # same way ensure_current's own per-account reconcile
-                # reports the identical failure (Task 4 review finding 8),
-                # so the de-duplication above catches it instead of
-                # showing both a raw and a wrapped paragraph for the same
-                # lock timeout or failed repoint. AppTranslocatedError is
-                # noted here too (Task 4 round 2 finding 2) -- with no
+                # reports the identical failure, so the de-duplication
+                # above catches it instead of showing both a raw and a
+                # wrapped paragraph for the same lock timeout or failed
+                # repoint. AppTranslocatedError is noted here too: with no
                 # eligible account in accounts.json, ensure_current below
-                # never runs a single reconcile and so never reports
-                # MOVE_TO_APPLICATIONS itself; the de-duplication above
-                # still collapses this with any per-account copy of the
-                # same text. Doesn't skip the retry below either way.
+                # never reports MOVE_TO_APPLICATIONS itself, so this is
+                # the only place it surfaces. Doesn't skip the retry below
+                # either way.
                 try:
                     from tokitty import runner_link
                     from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
@@ -595,10 +592,9 @@ def run_gui() -> int:
             try:
                 refresh_results = hooks_install.ensure_current(state_dir)
             except Exception:
-                # Widened from OSError (Task 4 review finding 3): a
-                # reconcile call that somehow still raises something else
-                # must not lose the retry warning just collected above, or
-                # skip the WSL/transcript discovery below.
+                # Broad on purpose: a reconcile call that raises anything
+                # must not lose the retry warning just collected above,
+                # or skip the WSL/transcript discovery below.
                 refresh_results = []
             for refresh_result in refresh_results:
                 _note(refresh_result.warning)
@@ -1002,12 +998,12 @@ def run_gui() -> int:
         if ready:
             maybe_auto_open()
             if hook_warnings:
-                # Deferred (Task 4 review finding 7): showwarning is modal
-                # and would otherwise block tick() from finishing and
-                # rescheduling itself (root.after(UI_REFRESH_MS, tick),
-                # below) until the user dismisses it. root.after(0, ...)
-                # runs it as its own callback once this call returns, so
-                # tick's cadence is never held up by it.
+                # Deferred: showwarning is modal and would otherwise
+                # block tick() from finishing and rescheduling itself
+                # (root.after(UI_REFRESH_MS, tick), below) until the user
+                # dismisses it. root.after(0, ...) runs it as its own
+                # callback once this call returns, so tick's cadence is
+                # never held up by it.
                 def _show_hook_warnings(warnings=hook_warnings):
                     from tkinter import messagebox
 
