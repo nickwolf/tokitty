@@ -283,8 +283,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mapfile -t archives < <(find artifacts -type f \( -name 'tokitty-*.zip' -o -name 'tokitty-*.tar.gz' \))
+          if [ "${#archives[@]}" -ne 4 ]; then
+            echo "expected 4 archives, found ${#archives[@]}: ${archives[*]}" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --draft \
             --title "$GITHUB_REF_NAME" \
             --notes "Automated build of tokitty $GITHUB_REF_NAME. Unsigned, see README for the macOS first-launch steps." \
-            artifacts/*/*.zip artifacts/*/*.tar.gz
+            "${archives[@]}"
