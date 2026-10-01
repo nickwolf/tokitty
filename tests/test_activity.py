@@ -4,6 +4,7 @@ from tokitty.activity import (
     ACTIVITY_STATES,
     ActivityTracker,
     ActivityView,
+    SessionView,
     IDLE_DECAY_S,
     GONE_S,
     DONE_HOP_S,
@@ -363,3 +364,104 @@ def test_no_records_observed_ever_no_crash():
     t = ActivityTracker()
     view = t.aggregate(0.0)
     assert view.state == "idle"
+
+
+def test_sessions_empty_before_any_observe():
+    assert ActivityTracker().sessions(0.0) == []
+
+
+def test_sessions_lists_state_label_and_timestamps():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, tool_name="Bash")}, now=100.0)
+    assert t.sessions(100.0) == [
+        SessionView(session_id="s1", state="working", tool_label="Running", first_seen=100.0, last_ts=100.0)
+    ]
+
+
+def test_sessions_states_agree_with_aggregate_views():
+    t = ActivityTracker()
+    t.observe(
+        {
+            "p": rec("p", "Notification", 100.0),
+            "w": rec("w", "PreToolUse", 100.0, tool_name="Edit"),
+            "t": rec("t", "UserPromptSubmit", 100.0),
+        },
+        now=100.0,
+    )
+    states = {v.session_id: v.state for v in t.sessions(100.0)}
+    assert states == {"p": "permission", "w": "working", "t": "thinking"}
+    assert t.aggregate(100.0).state == states["p"]
+
+
+def test_sessions_done_hop_then_idle():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 100.0, seq=1)}, now=100.0)
+    t.observe({"s1": rec("s1", "Stop", 100.0 + WORK_STRETCH_MIN_S, seq=2)}, now=200.0)
+    assert t.sessions(200.0)[0].state == "done_hop"
+    assert t.sessions(200.0 + DONE_HOP_S)[0].state == "idle"
+
+
+def test_sessions_lists_idle_session_that_aggregate_skips():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 100.0, seq=1)}, now=100.0)
+    t.observe({"s1": rec("s1", "Stop", 101.0, seq=2)}, now=101.0)
+    assert t.aggregate(101.0).state == "idle"
+    views = t.sessions(101.0)
+    assert [(v.session_id, v.state) for v in views] == [("s1", "idle")]
+
+
+def test_sessions_decay_to_idle_after_idle_decay():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, tool_name="Bash")}, now=100.0)
+    view = t.sessions(100.0 + IDLE_DECAY_S)[0]
+    assert view.state == "idle"
+    assert view.tool_label == ""
+
+
+def test_sessions_ordered_by_first_seen_not_last_event():
+    t = ActivityTracker()
+    t.observe(
+        {
+            "a": rec("a", "UserPromptSubmit", 100.0),
+            "b": rec("b", "UserPromptSubmit", 110.0),
+        },
+        now=110.0,
+    )
+    t.observe(
+        {
+            "a": rec("a", "PreToolUse", 120.0, seq=2, tool_name="Bash"),
+            "b": rec("b", "UserPromptSubmit", 110.0),
+        },
+        now=120.0,
+    )
+    views = t.sessions(120.0)
+    assert [v.session_id for v in views] == ["a", "b"]
+    assert views[0].first_seen == 100.0
+    assert views[0].last_ts == 120.0
+
+
+def test_sessions_first_seen_is_stable_across_events():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 100.0, seq=1)}, now=100.0)
+    t.observe({"s1": rec("s1", "PreToolUse", 150.0, seq=2, tool_name="Bash")}, now=150.0)
+    assert t.sessions(150.0)[0].first_seen == 100.0
+
+
+def test_sessions_ignores_ignored_records_for_first_seen():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 100.0, seq=5)}, now=100.0)
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 90.0, seq=3)}, now=110.0)
+    assert t.sessions(110.0)[0].first_seen == 100.0
+
+
+def test_sessions_drops_deleted_session():
+    t = ActivityTracker()
+    t.observe({"a": rec("a", "UserPromptSubmit", 100.0), "b": rec("b", "UserPromptSubmit", 101.0)}, now=101.0)
+    t.observe({"b": rec("b", "UserPromptSubmit", 101.0)}, now=102.0)
+    assert [v.session_id for v in t.sessions(102.0)] == ["b"]
+
+
+def test_sessions_skips_session_with_only_malformed_records():
+    t = ActivityTracker()
+    t.observe({"s1": {"event": "Bogus", "seq": 1, "ts": 100.0}}, now=100.0)
+    assert t.sessions(100.0) == []

@@ -63,9 +63,19 @@ class ActivityView:
 
 
 @dataclass
+class SessionView:
+    session_id: str
+    state: str
+    tool_label: str
+    first_seen: float
+    last_ts: float
+
+
+@dataclass
 class _SessionState:
     last_seq: int = -1
     last_ts: float = 0.0
+    first_seen: Optional[float] = None
     last_event: str = ""
     base_state: str = "idle"  # "working" | "thinking" | "idle" | "done_hop"
     tool_label: str = ""
@@ -147,6 +157,8 @@ class ActivityTracker:
             # (higher-seq) event of any other kind.
             state.permission = event == "Notification"
 
+            if state.first_seen is None:
+                state.first_seen = ts
             state.last_seq = seq
             state.last_ts = ts
             state.last_event = event
@@ -188,6 +200,26 @@ class ActivityTracker:
                 best_key = key
                 best = view
         return best if best is not None else ActivityView(state="idle")
+
+    def sessions(self, now: float) -> List[SessionView]:
+        # Same per-session state aggregate() ranks, but every session is
+        # listed: one with no active view (decayed, stopped) reads as idle.
+        views = []
+        for session_id, state in self._sessions.items():
+            if state.first_seen is None:
+                continue  # only ever saw records that were ignored
+            view = self._effective_view(session_id, state, now)
+            views.append(
+                SessionView(
+                    session_id=session_id,
+                    state=view.state if view is not None else "idle",
+                    tool_label=view.tool_label if view is not None else "",
+                    first_seen=state.first_seen,
+                    last_ts=state.last_ts,
+                )
+            )
+        views.sort(key=lambda v: (v.first_seen, v.session_id))
+        return views
 
     def stale_session_ids(self, now: float) -> List[str]:
         return [

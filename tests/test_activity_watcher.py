@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from tokitty.activity import ActivityTracker, ActivityView
+from tokitty.activity import ActivityTracker, ActivityView, SessionView
 from tokitty.activity_watcher import ActivityWatcher, FAST_INTERVAL_S, SLOW_INTERVAL_S
 
 
@@ -74,6 +74,66 @@ def test_tick_once_parses_files_and_publishes_aggregate():
     assert view.state == "working"
     assert view.tool_label == "Editing"
     assert view.session_id == "s1"
+
+
+def test_get_sessions_is_empty_before_first_tick():
+    watcher = _watcher(FakeFs())
+    assert watcher.get_sessions() == []
+
+
+def test_tick_once_publishes_sessions_in_first_seen_order():
+    fs = FakeFs()
+    fs.files["a"] = rec("UserPromptSubmit", ts=100.0)
+    fs.files["b"] = rec("UserPromptSubmit", ts=110.0)
+    now = {"t": 110.0}
+    watcher = _watcher(fs, time_fn=lambda: now["t"])
+    watcher._tick_once()
+    fs.files["a"] = rec("PreToolUse", ts=120.0, seq=2, tool_name="Bash")
+    now["t"] = 120.0
+    watcher._tick_once()
+
+    assert watcher.get_sessions() == [
+        SessionView(session_id="a", state="working", tool_label="Running", first_seen=100.0, last_ts=120.0),
+        SessionView(session_id="b", state="thinking", tool_label="", first_seen=110.0, last_ts=110.0),
+    ]
+    assert watcher.get_latest().session_id == "a"
+
+
+def test_tick_once_lists_idle_session_and_drops_deleted_file():
+    fs = FakeFs()
+    fs.files["s1"] = rec("Stop", ts=100.0)
+    watcher = _watcher(fs)
+    watcher._tick_once()
+    assert [(v.session_id, v.state) for v in watcher.get_sessions()] == [("s1", "idle")]
+    assert watcher.get_latest() == ActivityView(state="idle")
+
+    del fs.files["s1"]
+    watcher._tick_once()
+    assert watcher.get_sessions() == []
+
+
+def test_get_sessions_empty_when_distro_stopped():
+    fs = FakeFs()
+    fs.files["s1"] = rec("UserPromptSubmit", ts=100.0)
+    running = ["Ubuntu"]
+    watcher = _watcher(fs, distro_name="Ubuntu", list_running_distros_fn=lambda: list(running))
+    watcher._tick_once()
+    assert len(watcher.get_sessions()) == 1
+
+    running.clear()
+    watcher._tick_once()
+    assert watcher.get_sessions() == []
+
+
+def test_get_sessions_empty_when_sessions_dir_missing():
+    watcher = ActivityWatcher(
+        sessions_dir=lambda: None,
+        tracker=ActivityTracker(),
+        time_fn=lambda: 100.0,
+        sleep_fn=lambda s: True,
+    )
+    watcher._tick_once()
+    assert watcher.get_sessions() == []
 
 
 def test_tick_once_ignores_unparseable_files():
