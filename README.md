@@ -29,13 +29,13 @@ There is a burn-rate projection too. When your current pace would hit a cap befo
 
 Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS.
 
-Hooks (the live activity feature below) need Claude Code 2.1.139 or newer when you're running a downloaded build, the version that added the exec form a downloaded build's hook command registers through. Hooks run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unzipping an update or moving the folder to a new location, launch the new copy once before deleting the old one. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and falls back to pointing hooks at the release folder directly.
+With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unzipping an update or moving the folder to a new location, launch the new copy once before deleting the old one. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
 
 ### Windows
 
 SmartScreen blocks the first launch because the build is unsigned. Click **More info**, then **Run anyway**.
 
-If your Claude Code home lives inside WSL, the common setup on Windows, the hook still runs through WSL's own `python3` rather than the Windows download, since that's where the Claude Code home actually is.
+If your Claude Code home lives inside WSL, the common setup on Windows, its hook keeps running through WSL's own `python3`, not the Windows download.
 
 ### macOS
 
@@ -43,7 +43,7 @@ Apple Silicon Macs take the `macos-arm64` build, Intel Macs take `macos-x86_64`.
 
 On macOS 15, Gatekeeper no longer lets Control-click ▸ Open bypass the warning. Open the app once, then go to System Settings ▸ Privacy & Security ▸ Open Anyway, or skip the dialog with `xattr -dr com.apple.quarantine Tokitty.app` from a terminal.
 
-Move Tokitty to Applications before turning on **Start at login** or adding an account. Run it straight from Downloads and it refuses, with an explanation: a freshly downloaded app is quarantined, and macOS runs it from a randomized, read-only App Translocation path instead of wherever you unzipped it, so there's nowhere stable for a login item or a hook to point at.
+Move Tokitty to Applications before turning on **Start at login** or adding an account. Run straight from Downloads, it refuses and says why: macOS runs a freshly downloaded app from a random, read-only App Translocation path, so there's nowhere stable for a login item or a hook to point at.
 
 ### Linux
 
