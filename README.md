@@ -51,7 +51,7 @@ Nothing to do on first launch. The tray icon in this build only supports X11 (xo
 
 ## Live activity (thinking / working / permission / done)
 
-Optional, off by default. Run:
+Optional, off by default. With a downloaded build, adding an account in the Accounts dialog installs its hooks automatically, or run the app from a terminal with `--install-hooks` (for example `Tokitty.exe --install-hooks` on Windows). From source, run:
 
 ```bash
 python -m tokitty --install-hooks
