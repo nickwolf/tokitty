@@ -1,0 +1,290 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+          - os: macos-15
+            target: macos-arm64
+          - os: macos-15-intel
+            target: macos-x86_64
+            overhead_gate_ms: 60
+          - os: ubuntu-22.04
+            target: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install -e ".[packaging]"
+
+      - name: Install xvfb (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dryrun-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine archive name
+        id: names
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            ext=tar.gz
+          else
+            ext=zip
+          fi
+          echo "archive=tokitty-${{ steps.version.outputs.version }}-${{ matrix.target }}.$ext" >> "$GITHUB_OUTPUT"
+
+      - name: Build with PyInstaller
+        env:
+          TOKITTY_BUILD_ID: ${{ steps.version.outputs.version }}
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist --workpath build
+
+      - name: Archive (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          python -c "import shutil; shutil.make_archive('tokitty-${{ steps.version.outputs.version }}-${{ matrix.target }}', 'zip', 'dist', 'Tokitty')"
+
+      - name: Archive (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: ditto -c -k --keepParent dist/Tokitty.app "${{ steps.names.outputs.archive }}"
+
+      - name: Archive (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: tar -czf "${{ steps.names.outputs.archive }}" -C dist tokitty
+
+      - name: Extract (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir -p "$RUNNER_TEMP/extracted"
+          python -c "import zipfile, os; zipfile.ZipFile('${{ steps.names.outputs.archive }}').extractall(os.path.join(os.environ['RUNNER_TEMP'], 'extracted'))"
+
+      - name: Extract (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          mkdir -p "$RUNNER_TEMP/extracted"
+          ditto -x -k "${{ steps.names.outputs.archive }}" "$RUNNER_TEMP/extracted"
+
+      - name: Extract (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mkdir -p "$RUNNER_TEMP/extracted"
+          tar -xzf "${{ steps.names.outputs.archive }}" -C "$RUNNER_TEMP/extracted"
+
+      - name: Verify artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+
+      - name: Verify artifact (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json")
+          if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
+            args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
+          fi
+          python freeze/verify_artifact.py "${args[@]}"
+
+      - name: Verify artifact (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+
+      - name: Append report summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+
+          report_path = os.path.join(os.environ["RUNNER_TEMP"], "report.json")
+          target = "${{ matrix.target }}"
+          print(f"### {target}")
+          if not os.path.exists(report_path):
+              print("- no report.json was written")
+              raise SystemExit(0)
+          with open(report_path, encoding="utf-8") as f:
+              data = json.load(f)
+          print(f"- overall: {'PASS' if data.get('ok') else 'FAIL'}")
+          sizes = data.get("sizes", {})
+          if "app_dir_bytes" in sizes:
+              print(f"- extracted size: {sizes['app_dir_bytes']} bytes")
+          timing = data.get("steps", {}).get("hook_timing", {}).get("detail", {})
+          if isinstance(timing, dict) and "median_ms" in timing:
+              cold_ms = timing.get("cold_s", 0) * 1000
+              min_ms = timing.get("min_s", 0) * 1000
+              max_ms = timing.get("max_s", 0) * 1000
+              print(
+                  f"- hook cold: {cold_ms:.1f} ms, median: {timing['median_ms']:.1f} ms "
+                  f"(min {min_ms:.1f}, max {max_ms:.1f})"
+              )
+
+          # #48 Task 1: the plain-Python baseline on the same runner, for
+          # comparison against the frozen median above. Informational only
+          # -- it never changes the overall PASS/FAIL printed above.
+          baseline = data.get("steps", {}).get("hook_timing_baseline", {}).get("detail", {})
+          if isinstance(baseline, dict) and "median_ms" in baseline:
+              b_cold_ms = baseline.get("cold_s", 0) * 1000
+              b_min_ms = baseline.get("min_s", 0) * 1000
+              b_max_ms = baseline.get("max_s", 0) * 1000
+              frozen_median_ms = baseline.get("frozen_median_ms")
+              diff_ms = baseline.get("diff_ms")
+              print(
+                  f"- hook baseline (plain python, sys.executable={baseline.get('sys_executable')}): "
+                  f"cold {b_cold_ms:.1f} ms, median {baseline['median_ms']:.1f} ms "
+                  f"(min {b_min_ms:.1f}, max {b_max_ms:.1f})"
+              )
+              if frozen_median_ms is not None and diff_ms is not None:
+                  print(
+                      f"  frozen median {frozen_median_ms:.1f} ms vs baseline median "
+                      f"{baseline['median_ms']:.1f} ms, difference {diff_ms:.1f} ms"
+                  )
+              frozen_series_ms = [round(t * 1000, 3) for t in (baseline.get("frozen_timings_s") or [])]
+              baseline_series_ms = [round(t * 1000, 3) for t in (baseline.get("timings_s") or [])]
+              print(f"  frozen series (ms): {frozen_series_ms}")
+              print(f"  baseline series (ms): {baseline_series_ms}")
+
+          # #48 dry run 2: the gate decision, judged after both of the above
+          # have measured. gate_kind is "overhead" only for the matrix entry
+          # that passed --overhead-gate-ms (macos-15-intel); everyone else
+          # gets the absolute gate.
+          gate_step = data.get("steps", {}).get("hook_timing_gate", {})
+          gate = gate_step.get("detail", {})
+          if isinstance(gate, dict) and "gate_kind" in gate:
+              verdict = "PASS" if gate_step.get("ok") else "FAIL"
+              threshold_ms = gate.get("threshold_ms")
+              frozen_median_ms = gate.get("frozen_median_ms")
+              baseline_median_ms = gate.get("baseline_median_ms")
+              line = f"- gate ({gate['gate_kind']}): {verdict}, threshold {threshold_ms} ms, frozen median {frozen_median_ms} ms"
+              if baseline_median_ms is not None:
+                  line += f", baseline median {baseline_median_ms} ms"
+              print(line)
+              if gate.get("error"):
+                  print(f"  {gate['error']}")
+
+          # hook_timing and hook_timing_baseline are pure measurements that
+          # always run; only hook_timing_gate decides pass/fail for the
+          # hook-timing concern, so the two measurement steps are excluded
+          # here the same way verify_artifact.py's INFORMATIONAL_STEPS
+          # excludes them from report["ok"].
+          informational_steps = {"hook_timing", "hook_timing_baseline"}
+          for name, step in data.get("steps", {}).items():
+              if name in informational_steps:
+                  continue
+              if not step.get("ok"):
+                  print(f"- FAILED step `{name}`: {step.get('detail')}")
+          PY
+
+      - name: Upload archive and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokitty-${{ matrix.target }}
+          path: |
+            ${{ steps.names.outputs.archive }}
+            ${{ runner.temp }}/report.json
+
+  keychain:
+    name: macOS Keychain check (dry run, #48 Task 8)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install -e ".[packaging]"
+
+      - name: Build A
+        env:
+          TOKITTY_BUILD_ID: A
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-a --workpath build-a
+
+      - name: Build B
+        env:
+          TOKITTY_BUILD_ID: B
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-b --workpath build-b
+
+      - name: Confirm A and B are different binaries (codesign CDHash)
+        run: |
+          echo "--- build A ---"
+          codesign -dv --verbose=4 dist-a/Tokitty.app/Contents/MacOS/Tokitty 2>&1 | tee "$RUNNER_TEMP/codesign-a.txt"
+          echo "--- build B ---"
+          codesign -dv --verbose=4 dist-b/Tokitty.app/Contents/MacOS/Tokitty 2>&1 | tee "$RUNNER_TEMP/codesign-b.txt"
+          hash_a=$(grep -o 'CDHash=[0-9a-fA-F]*' "$RUNNER_TEMP/codesign-a.txt" | sort -u)
+          hash_b=$(grep -o 'CDHash=[0-9a-fA-F]*' "$RUNNER_TEMP/codesign-b.txt" | sort -u)
+          echo "A: $hash_a"
+          echo "B: $hash_b"
+          if [ -z "$hash_a" ] || [ -z "$hash_b" ]; then
+            echo "codesign produced no CDHash for one of the builds" >&2
+            exit 1
+          fi
+          if [ "$hash_a" == "$hash_b" ]; then
+            echo "build A and B have identical CDHash(es); the test would prove nothing" >&2
+            exit 1
+          fi
+
+      - name: Run keychain_check.py
+        run: |
+          python freeze/keychain_check.py \
+            --build-a dist-a/Tokitty.app \
+            --build-b dist-b/Tokitty.app \
+            --work "$RUNNER_TEMP/keychain-check"
+
+      - name: Upload keychain check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keychain-check-log
+          path: ${{ runner.temp }}/keychain-check/keychain_check.log
+
+  release:
+    name: Publish draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Automated build of tokitty $GITHUB_REF_NAME. Unsigned, see README for the macOS first-launch steps." \
+            artifacts/*/*.zip artifacts/*/*.tar.gz

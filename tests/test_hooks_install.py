@@ -4,12 +4,16 @@ SAFETY: every test operates on tmp_path fixtures only. Never touch the
 real ~/.claude or ~/.claude-work.
 """
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from tokitty import hooks_install as hi
+from tokitty import runner_link
 from tokitty.accounts import Account
+from tokitty.frozen import MOVE_TO_APPLICATIONS
 from tokitty.hooks_install import (
     ConfigDirResult,
     apply_account_mutation,
@@ -18,6 +22,25 @@ from tokitty.hooks_install import (
     retry_pending_hook_op,
     save_pending_hook_op,
 )
+
+EXE_NAME = "tokitty.exe" if sys.platform == "win32" else "tokitty"
+RUNNER_NAME = "tokitty-hook.exe" if sys.platform == "win32" else "tokitty-hook"
+
+
+def _fake_release(root):
+    """A host-native fake frozen build: exe + tokitty-hook side by side.
+    Never a real directory outside tmp_path -- release lives under the
+    caller's own tmp_path."""
+    root.mkdir(parents=True)
+    (root / EXE_NAME).write_text("gui", encoding="utf-8")
+    (root / RUNNER_NAME).write_text("hook", encoding="utf-8")
+    return root / EXE_NAME
+
+
+def _unlink_current_link(state_dir):
+    link = state_dir / "current"
+    if runner_link._is_link(str(link)):
+        (os.rmdir if sys.platform == "win32" else os.unlink)(link)
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +96,181 @@ def test_build_command_quotes_spaced_path():
         'python3 "/home/nick 2/.claude/tokitty/hook_writer.py" '
         '--sessions-dir "/home/nick 2/.claude/tokitty/sessions"'
     )
+
+
+def test_build_command_trailing_slash_posix_home_matches_no_slash():
+    trailing = hi._build_command("/home/n/.claude/", frozen=False, platform="linux")
+    bare = hi._build_command("/home/n/.claude", frozen=False, platform="linux")
+    assert trailing == bare
+    assert trailing["command"] == (
+        'python3 "/home/n/.claude/tokitty/hook_writer.py" '
+        '--sessions-dir "/home/n/.claude/tokitty/sessions"'
+    )
+
+
+def test_build_command_trailing_backslash_windows_home_matches_no_slash():
+    trailing = hi._build_command("C:\\Users\\n\\.claude\\", frozen=False, platform="win32")
+    bare = hi._build_command("C:\\Users\\n\\.claude", frozen=False, platform="win32")
+    assert trailing == bare
+
+
+WIN_RUNNER = r"C:\Users\nick\AppData\Local\Tokitty\current\tokitty-hook.exe"
+
+
+def test_build_command_source_posix_unchanged():
+    hook = hi._build_command("/home/nick/.claude", frozen=False, platform="linux")
+    assert hook == {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" --sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+
+
+def test_build_command_source_windows_local_uses_python():
+    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=False, platform="win32")
+    assert hook["command"].startswith('python "C:\\Users\\nick\\.claude/tokitty/hook_writer.py"')
+    assert "args" not in hook
+
+
+def test_build_command_frozen_windows_wsl_home_keeps_python3():
+    hook = hi._build_command(r"\\wsl.localhost\Ubuntu\home\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook == {
+        "type": "command",
+        "command": 'python3 "/home/nick/.claude/tokitty/hook_writer.py" --sessions-dir "/home/nick/.claude/tokitty/sessions"',
+    }
+
+
+def test_build_command_frozen_windows_wsl_dollar_home_keeps_python3():
+    hook = hi._build_command(r"\\wsl$\Ubuntu\home\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook["command"].startswith("python3 ")
+    assert "args" not in hook
+
+
+def test_build_command_frozen_windows_local_home_uses_exec_form():
+    hook = hi._build_command(r"C:\Users\nick\.claude", frozen=True, runner=WIN_RUNNER, platform="win32")
+    assert hook == {
+        "type": "command",
+        "command": WIN_RUNNER,
+        "args": ["--sessions-dir", "C:\\Users\\nick\\.claude/tokitty/sessions"],
+    }
+
+
+def test_build_command_frozen_linux_uses_exec_form():
+    hook = hi._build_command("/home/nick/.claude", frozen=True, runner="/home/nick/.config/tokitty/current/tokitty-hook", platform="linux")
+    assert hook == {
+        "type": "command",
+        "command": "/home/nick/.config/tokitty/current/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+
+
+def test_hook_runner_path_sits_beside_executable():
+    assert hi.hook_runner_path("/Applications/Tokitty.app/Contents/MacOS/Tokitty", "darwin") == "/Applications/Tokitty.app/Contents/MacOS/tokitty-hook"
+    assert hi.hook_runner_path(r"C:\T\Tokitty.exe", "win32") == r"C:\T\tokitty-hook.exe"
+
+
+def test_stable_runner_path():
+    assert hi.stable_runner_path(Path("/home/n/.config/tokitty"), "linux") == str(Path("/home/n/.config/tokitty") / "current" / "tokitty-hook")
+    assert hi.stable_runner_path(r"C:\Users\n\AppData\Local\Tokitty", "win32") == r"C:\Users\n\AppData\Local\Tokitty\current\tokitty-hook.exe"
+
+
+def test_build_command_default_runner_is_stable_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(hi, "state_dir_path", lambda: tmp_path)
+    hook = hi._build_command("/home/nick/.claude", frozen=True, platform="linux")
+    assert hook["command"] == str(tmp_path / "current" / "tokitty-hook")
+
+
+def test_install_writes_exec_form_entry_when_frozen(tmp_path, monkeypatch):
+    # A fake release under tmp_path with host-native names, sys.executable
+    # patched to it -- so this never links to a real directory outside
+    # its own tmp_path.
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    try:
+        result = hi.install_hooks_for_dir(str(home))
+        assert result.ok
+        data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+        hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+        assert hook["args"][0] == "--sessions-dir"
+        assert Path(hook["command"]).name in ("tokitty-hook", "tokitty-hook.exe")
+        # Registered against the stable link path, not the release-specific
+        # bundled path -- this is the string Codex hashes.
+        assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+        assert runner_link._is_link(str(state_dir / "current"))
+    finally:
+        _unlink_current_link(state_dir)
+
+
+def test_install_maps_translocated_error_to_move_to_applications(tmp_path, monkeypatch):
+    exe = _fake_release(tmp_path / "release" / "AppTranslocation" / "x" / "rel")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert not result.ok
+    assert result.message == MOVE_TO_APPLICATIONS
+    assert not (home / "settings.json").exists()
+    assert not (home / "tokitty" / "hook_writer.py").exists()
+    assert not state_dir.exists()
+
+
+def test_install_leaves_stable_registration_untouched_on_link_failure(tmp_path, monkeypatch):
+    # A release with no bundled tokitty-hook: ensure_runner_link raises
+    # FileNotFoundError (an OSError), which must abort the install rather
+    # than fall back to writing a release-specific command -- a transient
+    # failure must never rewrite a stable registration.
+    bare = tmp_path / "release-bare"
+    bare.mkdir(parents=True)
+    exe = bare / EXE_NAME
+    exe.write_text("gui", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert not result.ok
+    assert not (home / "settings.json").exists()
+    assert not (home / "tokitty" / "hook_writer.py").exists()
+
+
+def test_install_twice_from_different_releases_is_byte_identical_and_link_moves(tmp_path, monkeypatch):
+    """hooks_install reconciliation across releases (install_hooks_for_dir
+    is idempotent once every event is already installed; a future
+    refresh_hooks_for_dir will share this same repoint-then-register
+    path). settings.json must be byte-identical after the second call,
+    and the link must end at the second release."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    a = _fake_release(tmp_path / "rel-a")
+    monkeypatch.setattr(hi.sys, "executable", str(a))
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        settings_bytes_first = (home / "settings.json").read_bytes()
+
+        b = _fake_release(tmp_path / "rel-b")
+        monkeypatch.setattr(hi.sys, "executable", str(b))
+        second = hi.install_hooks_for_dir(str(home))
+        assert second.ok
+        settings_bytes_second = (home / "settings.json").read_bytes()
+
+        assert settings_bytes_first == settings_bytes_second
+        assert os.path.realpath(state_dir / "current") == os.path.realpath(b.parent)
+    finally:
+        _unlink_current_link(state_dir)
 
 
 def test_build_command_strips_trailing_slash_from_home():
@@ -246,6 +444,80 @@ def test_is_owned_hook_rejects_trailing_slash_on_script_token():
         '--sessions-dir "/h/.claude/tokitty/sessions"',
     }
     assert not hi._is_owned_hook(hook, "/h/.claude")
+
+
+# ---------------------------------------------------------------------------
+# _is_owned_hook -- exec form (spec Q2a)
+# ---------------------------------------------------------------------------
+
+def test_is_owned_hook_accepts_exec_form_posix():
+    config_dir = "/home/nick/.claude"
+    hook = {
+        "type": "command",
+        "command": "/home/nick/.config/tokitty/current/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_accepts_exec_form_windows_mixed_slashes_and_case():
+    # The command's containing directory is never checked, only the
+    # basename -- and the sessions arg case-folds because the home starts
+    # with a drive letter, even though its casing differs from config_dir.
+    config_dir = r"C:\Users\Nick\.claude"
+    hook = {
+        "type": "command",
+        "command": r"c:\ProgramData\Tokitty\current\Tokitty-Hook.EXE",
+        "args": ["--sessions-dir", "C:/Users/nick/.claude/tokitty/sessions"],
+    }
+    assert hi._is_owned_hook(hook, config_dir)
+
+
+def test_is_owned_hook_rejects_exec_form_other_home():
+    hook = {
+        "type": "command",
+        "command": "/x/current/tokitty-hook",
+        "args": ["--sessions-dir", "/other/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_extra_args():
+    hook = {
+        "type": "command",
+        "command": "/x/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions", "--extra"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_wrong_basename():
+    hook = {
+        "type": "command",
+        "command": "/x/not-tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_rejects_exec_form_wrong_type():
+    hook = {
+        "type": "prompt",
+        "command": "/x/tokitty-hook",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
+
+
+def test_is_owned_hook_exec_form_never_matches_interpreter_string_branch():
+    # A handler with args is checked only against the exec shape, even
+    # when its command string happens to look like a python invocation.
+    hook = {
+        "type": "command",
+        "command": "python3 /home/nick/.claude/tokitty/hook_writer.py",
+        "args": ["--sessions-dir", "/home/nick/.claude/tokitty/sessions"],
+    }
+    assert not hi._is_owned_hook(hook, "/home/nick/.claude")
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +838,40 @@ def test_uninstall_keeps_user_handler_in_a_shared_entry(tmp_path):
     assert result.installed_events == ["PreToolUse"]
 
 
+def test_uninstall_removes_exec_form_handler_keeps_user_handler_in_shared_entry(tmp_path):
+    # uninstall's handler-level removal already only touches owned
+    # handlers; this just proves that now covers the exec form too, now
+    # that _is_owned_hook recognises it.
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", str(config_dir) + "/tokitty/sessions"],
+    }
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "some-other-tool"},
+                        exec_handler,
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    result = hi.uninstall_hooks_for_dir(str(config_dir))
+    assert result.ok
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "some-other-tool"}]}
+    ]
+    assert result.installed_events == ["PreToolUse"]
+
+
 def test_uninstall_drops_an_entry_left_with_no_handlers(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
@@ -706,6 +1012,814 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
     result = hi.uninstall_hooks_for_dir(str(config_dir))
     assert result.ok
     assert result.installed_events == []
+
+
+# ---------------------------------------------------------------------------
+# _reconcile_claude / refresh_hooks_for_dir / ensure_current
+# ---------------------------------------------------------------------------
+
+def test_refresh_never_adds_missing_events(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned = hi._build_command(str(config_dir))
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [dict(owned)]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.installed_events == []
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert set(data["hooks"].keys()) == {"Stop"}
+
+
+def test_refresh_on_never_installed_home_writes_nothing(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.message == "nothing to refresh"
+    assert not (config_dir / "settings.json").exists()
+    assert not (config_dir / "tokitty").exists()
+
+
+def test_refresh_identical_is_a_no_op_no_backup(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.installed_events == []
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_refresh_leaves_equivalent_spelling_python_handler_byte_identical(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    historical = (
+        f"python3 {config_dir}/tokitty/hook_writer.py "
+        f"--sessions-dir {config_dir}/tokitty/sessions"
+    )
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": historical}]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_collapses_duplicate_owned_handlers_to_one(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    handler = hi._build_command(str(config_dir))
+    existing = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "", "hooks": [dict(handler)]},
+                {"matcher": "", "hooks": [dict(handler)]},
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == ["Stop"]
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert data["hooks"]["Stop"] == [{"matcher": "", "hooks": [dict(handler)]}]
+
+
+def test_install_rewrites_owned_handler_in_place_keeping_timeout_and_user_handler(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    stale_handler = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+        "timeout": 30,
+    }
+    existing = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "user-tool"},
+                        stale_handler,
+                    ],
+                }
+            ]
+        }
+    }
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    try:
+        result = hi.install_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert "PreToolUse" in result.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    entry = data["hooks"]["PreToolUse"][0]
+    assert entry["matcher"] == "Bash"
+    assert entry["hooks"][0] == {"type": "command", "command": "user-tool"}
+    rewritten = entry["hooks"][1]
+    assert rewritten["timeout"] == 30
+    assert rewritten["command"] == str(state_dir / "current" / RUNNER_NAME)
+    assert rewritten["args"] == ["--sessions-dir", f"{config_dir}/tokitty/sessions"]
+
+
+def test_refresh_rewrites_python_string_handler_to_stable_exec_form(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    first = hi.install_hooks_for_dir(str(config_dir))
+    assert first.ok
+    assert "args" not in json.loads((config_dir / "settings.json").read_text())["hooks"]["PreToolUse"][0]["hooks"][0]
+
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    try:
+        second = hi.refresh_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert "PreToolUse" in second.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+    assert hook["args"] == ["--sessions-dir", f"{config_dir}/tokitty/sessions"]
+
+
+def test_refresh_rewrites_old_absolute_release_exec_path_to_stable(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    old_absolute = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [old_absolute]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    try:
+        result = hi.refresh_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert result.refreshed_events == ["Stop"]
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["Stop"][0]["hooks"][0]
+    assert hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+
+
+def test_install_skips_stale_local_entry_and_removes_main_duplicate(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    # An equivalent-spelling local handler is never "stale" by design (see
+    # the byte-identical test above), so staleness here comes from local
+    # owning the event with an exec-form handler while the current build
+    # is non-frozen -- "desired" is the python string, a real difference.
+    stale_local = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    local = {"hooks": {"Stop": [{"matcher": "", "hooks": [stale_local]}]}}
+    (config_dir / "settings.local.json").write_text(json.dumps(local))
+    main_duplicate = hi._build_command(str(config_dir))
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [dict(main_duplicate)]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert "Stop" in result.refreshed_events
+    # Exact match, not a substring check: a SubagentStop-only note would
+    # also satisfy "Stop" in result.note.
+    assert result.note == "a locally-owned hook differs from what Tokitty would write for: Stop"
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "Stop" not in data["hooks"]
+    local_after = json.loads((config_dir / "settings.local.json").read_text())
+    assert local_after == local
+
+
+def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    before = (config_dir / "settings.json").read_bytes()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # ensure_current reads its accounts explicitly from accounts.json: it
+    # never falls back to get_config_dirs's default-dir resolution, so
+    # this can no longer be driven by monkeypatching get_config_dirs -- a
+    # real accounts.json is required.
+    (state_dir / "accounts.json").write_text(
+        json.dumps({"accounts": [{"config_dir": str(config_dir), "provider": "claude"}]})
+    )
+
+    results = hi.ensure_current(state_dir)
+
+    assert len(results) == 1
+    assert results[0].ok
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_refresh_across_two_releases_is_byte_identical_and_link_moves(tmp_path, monkeypatch):
+    """Companion to test_install_twice_from_different_
+    releases_is_byte_identical_and_link_moves (still above, unmodified):
+    the second call here is refresh_hooks_for_dir, not another install."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    a = _fake_release(tmp_path / "rel-a")
+    monkeypatch.setattr(hi.sys, "executable", str(a))
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        before = (home / "settings.json").read_bytes()
+
+        b = _fake_release(tmp_path / "rel-b")
+        monkeypatch.setattr(hi.sys, "executable", str(b))
+        second = hi.refresh_hooks_for_dir(str(home))
+        assert second.ok
+
+        after = (home / "settings.json").read_bytes()
+        assert after == before
+        assert os.path.realpath(state_dir / "current") == os.path.realpath(b.parent)
+    finally:
+        _unlink_current_link(state_dir)
+
+
+def test_fallback_with_no_stable_hook_registers_bundled_path_with_warning(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("timed out waiting for the lock")),
+    )
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert result.ok
+    assert result.warning is not None
+    assert "could not set up its stable hook path" in result.warning
+    assert "timed out waiting for the lock" in result.warning
+    data = json.loads((home / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    assert not runner_link._is_link(str(state_dir / "current"))
+
+
+def test_fallback_with_existing_stable_hook_leaves_it_and_warns(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+        before = (home / "settings.json").read_bytes()
+
+        monkeypatch.setattr(
+            runner_link, "ensure_runner_link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+        )
+        second = hi.refresh_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert second.warning is not None
+    assert "boom" in second.warning
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_new_event_never_uses_a_broken_stable_path(tmp_path, monkeypatch):
+    """The fallback decision is per event, not once per home -- an
+    existing owned handler for one event must not make a *new* event
+    (added in this same call) trust a link that isn't working right
+    now."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    try:
+        first = hi.install_hooks_for_dir(str(home))
+        assert first.ok
+
+        monkeypatch.setattr(
+            runner_link, "ensure_runner_link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+        )
+        # Remove one event's entry so install_hooks_for_dir has to add a
+        # brand new handler for it while every other event already has
+        # the (now-unreachable) stable path registered.
+        data = json.loads((home / "settings.json").read_text())
+        del data["hooks"]["SessionEnd"]
+        (home / "settings.json").write_text(json.dumps(data))
+
+        second = hi.install_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert second.ok
+    assert "SessionEnd" in second.installed_events
+    data = json.loads((home / "settings.json").read_text())
+    new_hook = data["hooks"]["SessionEnd"][0]["hooks"][0]
+    assert new_hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    # The other events already had the stable path and are left alone.
+    other_hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert other_hook["command"] == str(state_dir / "current" / RUNNER_NAME)
+
+
+def _write_accounts_json(state_dir: Path, config_dir, provider="claude") -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "accounts.json").write_text(
+        json.dumps({"accounts": [{"config_dir": str(config_dir), "provider": provider}]})
+    )
+
+
+def test_ensure_current_turns_oserror_into_failed_result(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
+
+    def raising_refresh(cd, provider):
+        raise OSError("disk on fire")
+
+    results = hi.ensure_current(state_dir, refresh_fn=raising_refresh)
+
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "disk on fire" in results[0].message
+
+
+def test_ensure_current_turns_generic_exception_into_failed_result(tmp_path):
+    """A non-OSError exception (e.g. the AttributeError a malformed
+    settings.json used to raise) must not abort the rest of
+    ensure_current's accounts, only this one's result."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
+
+    def raising_refresh(cd, provider):
+        raise ValueError("not an OSError at all")
+
+    results = hi.ensure_current(state_dir, refresh_fn=raising_refresh)
+
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "not an OSError at all" in results[0].message
+
+
+def test_ensure_current_looks_up_default_refresh_fn_at_call_time(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
+
+    calls = []
+
+    def fake_refresh(cd, provider):
+        calls.append((cd, provider))
+        return hi.ConfigDirResult(cd, True, "spied")
+
+    monkeypatch.setattr(hi, "refresh_hooks_for_dir", fake_refresh)
+
+    results = hi.ensure_current(state_dir)
+
+    assert calls == [(str(config_dir), "claude")]
+    assert results[0].message == "spied"
+
+
+def test_ensure_current_skips_default_dir_and_wsl_probe_without_accounts_json(tmp_path, monkeypatch):
+    """With no accounts.json, ensure_current must do nothing at all --
+    specifically, it must never call
+    _default_config_dir() (whose non-Windows branch is harmless, but
+    whose Windows branch shells into every WSL distro on every launch)."""
+
+    def boom():
+        raise AssertionError("_default_config_dir must not be called by ensure_current")
+
+    monkeypatch.setattr(hi, "_default_config_dir", boom)
+
+    results = hi.ensure_current(tmp_path / "state")
+
+    assert results == []
+
+
+def test_ensure_current_skips_when_accounts_json_lists_no_hook_accounts(tmp_path, monkeypatch):
+    def boom():
+        raise AssertionError("_default_config_dir must not be called by ensure_current")
+
+    monkeypatch.setattr(hi, "_default_config_dir", boom)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "accounts.json").write_text(json.dumps({"accounts": []}))
+
+    results = hi.ensure_current(state_dir)
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Reconcile edge cases
+# ---------------------------------------------------------------------------
+
+def test_refresh_leaves_exec_form_handler_alone_when_not_frozen(tmp_path):
+    """A source (non-frozen) launch's own startup refresh must never
+    demote a frozen install's exec-form handler back to the
+    interpreter-string shape -- doing so would flip-flop the registered
+    command (and the Codex hash) with every frozen launch's own refresh,
+    which converts it back up."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_still_converts_exec_form_to_python_when_not_frozen(tmp_path):
+    """The other half: an explicit install (add_missing=True) still
+    performs the demotion -- only the automatic startup refresh skips
+    it."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert "Stop" in result.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["Stop"][0]["hooks"][0]
+    assert "args" not in hook
+
+
+def test_install_aborts_cleanly_on_non_dict_settings_json_root(tmp_path):
+    """settings.json parses fine but its root isn't an object."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps([]))
+    original = (config_dir / "settings.json").read_text()
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
+    assert not (config_dir / "tokitty").exists()
+
+
+def test_install_aborts_cleanly_on_null_hooks_key(tmp_path):
+    """{"hooks": null} used to reach a bare AttributeError."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps({"hooks": None}))
+    original = (config_dir / "settings.json").read_text()
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
+
+
+def test_refresh_also_aborts_on_non_dict_settings_json_root(tmp_path):
+    """A non-dict root is a shape problem, not a parse problem -- a
+    refresh's quiet-skip leniency applies to unparseable JSON only, so
+    this must still abort loudly during a refresh too."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps([]))
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+
+
+def test_ensure_current_survives_a_shape_error_via_the_real_reconcile(tmp_path):
+    """End to end: ensure_current must not let one account's
+    AttributeError-turned-abort take down the whole pass."""
+    good = tmp_path / "good" / ".claude"
+    good.mkdir(parents=True)
+    bad = tmp_path / "bad" / ".claude"
+    bad.mkdir(parents=True)
+    (bad / "settings.json").write_text(json.dumps({"hooks": None}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"config_dir": str(good), "provider": "claude"},
+                    {"config_dir": str(bad), "provider": "claude"},
+                ]
+            }
+        )
+    )
+    hi.install_hooks_for_dir(str(good))
+
+    results = hi.ensure_current(state_dir)
+
+    by_dir = {r.config_dir: r for r in results}
+    assert by_dir[str(good)].ok
+    assert not by_dir[str(bad)].ok
+
+
+def test_handler_needs_rewrite_normalizes_drive_letter_case_in_command():
+    """Drive-letter case: an equivalently-spelled stable command (only
+    its drive letter and directory casing differ) is not a rewrite."""
+    old = {
+        "type": "command",
+        "command": r"c:\users\nick\appdata\local\tokitty\current\tokitty-hook.exe",
+        "args": ["--sessions-dir", r"C:\Users\Nick\.claude/tokitty/sessions"],
+    }
+    desired = {
+        "type": "command",
+        "command": r"C:\Users\Nick\AppData\Local\Tokitty\current\tokitty-hook.exe",
+        "args": ["--sessions-dir", r"C:\Users\Nick\.claude/tokitty/sessions"],
+    }
+    assert not hi._handler_needs_rewrite(old, desired)
+
+
+def test_refresh_leaves_doubled_slash_stable_spelling_byte_identical(tmp_path, monkeypatch):
+    """Doubled slash, healthy link: the handler already spells the
+    (working) stable path with a doubled slash -- an equivalent
+    spelling, so _handler_needs_rewrite's normalized command compare must
+    not treat it as a rewrite."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    doubled_stable = str(state_dir / "current") + "//" + RUNNER_NAME
+    handler = {
+        "type": "command",
+        "command": doubled_stable,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+    before = (home / "settings.json").read_bytes()
+
+    try:
+        result = hi.refresh_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_recognizes_doubled_slash_stable_spelling_as_already_stable(tmp_path, monkeypatch):
+    """Doubled slash, failing link: the existing handler's command is a
+    differently-spelled but equivalent stable path --
+    desired_for's "already the stable path" check must recognise it via
+    _normalize_token_path, not exact string equality, or it gets rewritten
+    to a release path for no real reason."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    doubled_stable = str(state_dir / "current") + "//" + RUNNER_NAME
+    handler = {
+        "type": "command",
+        "command": doubled_stable,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+    before = (home / "settings.json").read_bytes()
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_duplicate_handlers_prefers_the_stable_one_as_primary(tmp_path, monkeypatch):
+    """With the link failing and two owned handlers for one event -- an
+    old release path and the current stable path -- the
+    stable one must be kept (and the old one dropped), never the other
+    way around."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    stable_path = str(state_dir / "current" / RUNNER_NAME)
+    old_release_handler = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    stable_handler = {
+        "type": "command",
+        "command": stable_path,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [old_release_handler, stable_handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    data = json.loads((home / "settings.json").read_text())
+    hooks = data["hooks"]["Stop"][0]["hooks"]
+    assert len(hooks) == 1
+    assert hooks[0]["command"] == stable_path
+
+
+def test_fallback_never_prefers_this_releases_own_bundled_duplicate_over_stable(tmp_path, monkeypatch):
+    """choose_primary must check every position for a stable-path handler
+    before falling back to whichever one already matches what fallback
+    mode would write today. A handler sitting at *this release's own*
+    bundled path needs no rewrite, so when it is listed before the
+    stable-path handler for the same event, an early return keyed only
+    on "already matches desired" would pick it as primary and delete the
+    stable duplicate -- backwards from the rule that a stable-path hook
+    is never dropped in favour of a release path."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    bundled_path = hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    stable_path = str(state_dir / "current" / RUNNER_NAME)
+    sessions_args = ["--sessions-dir", f"{home}/tokitty/sessions"]
+    bundled_handler = {"type": "command", "command": bundled_path, "args": list(sessions_args)}
+    stable_handler = {"type": "command", "command": stable_path, "args": list(sessions_args)}
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [bundled_handler, stable_handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    data = json.loads((home / "settings.json").read_text())
+    hooks = data["hooks"]["Stop"][0]["hooks"]
+    assert len(hooks) == 1
+    assert hooks[0]["command"] == stable_path
+
+
+def test_fallback_missing_bundled_runner_message_names_the_reason(tmp_path, monkeypatch):
+    """A missing bundled tokitty-hook used to surface only a bare path
+    as the whole result message."""
+    bare = tmp_path / "release-bare"
+    bare.mkdir(parents=True)
+    exe = bare / EXE_NAME
+    exe.write_text("gui", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert not result.ok
+    assert result.message == "this copy of Tokitty has no tokitty-hook next to it"
+
+
+def test_refresh_quietly_skips_a_settings_json_that_wont_parse(tmp_path):
+    """A home Tokitty never touched whose settings.json just happens
+    not to parse must not warn on every launch."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text("{not valid json")
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.warning is None
+    assert result.message.startswith("skipped, could not parse")
+
+
+def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_path):
+    """By contrast, an explicit install still fails loudly."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text("{not valid json")
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert result.message.startswith("aborted, could not parse")
+
+
+def test_fallback_real_directory_at_current_registers_bundled_path_with_warning(tmp_path, monkeypatch):
+    """No other reconcile-level test exercises the real-directory-at-
+    current outcome (runner_link's own note path, not an exception)
+    through _reconcile_claude."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    (state_dir / "current").mkdir(parents=True)
+    (state_dir / "current" / "keep.txt").write_text("mine", encoding="utf-8")
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert result.ok
+    assert result.warning is not None
+    data = json.loads((home / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    assert (state_dir / "current" / "keep.txt").read_text(encoding="utf-8") == "mine"
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +2295,23 @@ def test_config_dir_result_warning_defaults_to_none():
 def test_config_dir_result_stores_a_warning():
     result = ConfigDirResult("cd", True, "installed", warning="fallback used")
     assert result.warning == "fallback used"
+
+
+def test_install_hooks_prints_note_to_stdout_for_ok_result(monkeypatch, tmp_path, capsys):
+    """Replaces the brittle '"; " in message' detection with a dedicated
+    ConfigDirResult.note field the CLI prints directly."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed and refreshed", note="a stale local entry for: Stop")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"{config_dir}: a stale local entry for: Stop" in out
 
 
 def test_install_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):
