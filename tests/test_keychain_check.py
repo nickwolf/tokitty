@@ -12,6 +12,7 @@ built Tokitty.app binaries) can only run on the macos-latest runner.
 """
 import importlib.util
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,7 @@ class _FakeTimeoutProc:
         return b"", b""
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only; keychain_check runs on macOS")
 def test_run_probe_timeout_is_would_prompt_and_kills_process_group(tmp_path, monkeypatch):
     killed = []
     monkeypatch.setattr(kc.subprocess, "Popen", lambda *a, **k: _FakeTimeoutProc())
