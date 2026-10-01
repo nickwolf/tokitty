@@ -25,7 +25,39 @@ from tokitty.customize import Customization
 from tokitty.poller import PollResult
 from tokitty.sprites import COLORWAYS, PATTERNS
 
+# Captured at collection time, before _no_real_hook_refresh_at_startup (below)
+# patches hooks_install.ensure_current for every test in this file. The one
+# test that wants the real function (test_startup_hook_warnings_reach_
+# messagebox_via_real_ensure_current) restores this reference over that
+# per-test stub; a lookup of hooks_install.ensure_current done inside a test
+# body would see the already-patched stub instead, since fixtures run before
+# the test body.
+from tokitty.hooks_install import ensure_current as _real_ensure_current
+
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_hook_refresh_at_startup(monkeypatch):
+    """run_discovery calls hooks_install.ensure_current(state_dir) on every
+    launch. ensure_current reads <state_dir>/accounts.json itself (it
+    never falls back to get_config_dirs's default-dir resolution), but a
+    state_dir with no accounts.json is exactly what nearly every run_gui
+    test in this file uses, and a stray real
+    accounts.json on the machine running the suite (or a future change
+    that reintroduces a default-dir fallback here) would make this read
+    (and, if anything ever drifted, try to rewrite) whoever's real
+    ~/.claude/settings.json runs it: the same class of bug
+    _no_real_autostart_registration in conftest.py already guards against
+    for autostart. Scoped to this file rather than conftest.py, and
+    patching ensure_current itself rather than _default_config_dir/
+    get_config_dirs, so it never interferes with test_hooks_install.py's
+    own dedicated tests for those functions. A test that cares about
+    ensure_current's output patches it back itself (see
+    test_startup_hook_warnings_show_once_via_messagebox below)."""
+    from tokitty import hooks_install
+
+    monkeypatch.setattr(hooks_install, "ensure_current", lambda state_dir, refresh_fn=None: [])
 
 
 def _limit(kind="session", percent=100.0, severity="normal", is_active=True, resets_at=None):
@@ -537,10 +569,9 @@ def _capture_spawned_threads(monkeypatch):
 
 @pytest.mark.gui
 def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
-    """Controller ruling on Task 15's brief: retry_pending_hook_op
-    (hooks_install.py, Task 8/12) was never wired into run_gui through
-    Task 14 -- confirmed by grep. It must fire once from the startup
-    sequence, off the Tk thread alongside WSL discovery (run_discovery)."""
+    """retry_pending_hook_op (hooks_install.py) must fire once from the
+    startup sequence, off the Tk thread alongside WSL discovery
+    (run_discovery)."""
     tk = pytest.importorskip("tkinter")
     from tokitty import __main__ as main_module
     from tokitty.settings import Settings, save_settings
@@ -593,15 +624,14 @@ def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeyp
 
 @pytest.mark.gui
 def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(tmp_path, monkeypatch):
-    """Reviewer-confirmed Finding 1 (CRITICAL): the original implementation
-    called root.after(0, maybe_auto_open) from run_discovery's background
-    thread. root.after() called from a non-Tk thread before root.mainloop()
-    has actually started raises "main thread is not in main loop" --
-    reproduced directly -- and the scheduled callback is silently DROPPED
-    FOREVER, not merely delayed, even once mainloop() eventually starts.
-    Since run_discovery starts (well) before the synchronous unit-building
-    loop even begins, it is entirely plausible for discovery to finish
-    before mainloop() is reached on a real launch.
+    """root.after(0, maybe_auto_open) called directly from run_discovery's
+    background thread, before root.mainloop() has actually started,
+    raises "main thread is not in main loop" and the scheduled callback
+    is silently DROPPED FOREVER, not merely delayed, even once mainloop()
+    eventually starts. Since run_discovery starts well before the
+    synchronous unit-building loop even begins, it is entirely plausible
+    for discovery to finish before mainloop() is reached on a real
+    launch.
 
     The fix: run_discovery only ever writes discovery_result under a lock;
     maybe_auto_open is invoked exclusively from tick(), which polls that
@@ -609,21 +639,18 @@ def test_auto_open_fires_via_tick_even_when_discovery_finishes_before_mainloop(t
     root.after(UI_REFRESH_MS, tick) -- the same mechanism this file
     already uses for Poller/ActivityWatcher results.
 
-    This test proves the fix holds under the *exact* adversarial ordering
-    Finding 1 describes, deterministically rather than hoping a race lands
-    right: threading.Thread is patched so specifically run_discovery's
-    thread executes synchronously, in-place, the instant .start() is
-    called -- i.e. discovery_result["done"] becomes True before run_gui()
-    even reaches the unit-building loop, let alone root.mainloop(). Every
-    other thread run_gui spawns (Poller, ActivityWatcher) still runs as a
-    real background thread -- only run_discovery's target is forced
-    synchronous, identified by name at Thread construction time, same
-    technique as _capture_spawned_threads. resolve_first_run_action is forced to
-    return True (bypassing the real accounts.json/WSL-count precedence
-    logic covered separately by test_startup.py) and AccountsManager.open
-    is replaced with a spy, so this test only has to prove the wiring --
-    discovery-finishes-first still reaches AccountsManager.open() -- once
-    mainloop() actually starts pumping real Tcl events."""
+    This test proves the fix holds under that exact adversarial ordering,
+    deterministically rather than hoping a race lands right:
+    threading.Thread is patched so specifically run_discovery's thread
+    executes synchronously, in-place, the instant .start() is called --
+    i.e. discovery_result["done"] becomes True before run_gui() even
+    reaches the unit-building loop, let alone root.mainloop().
+    resolve_first_run_action is forced to return True (bypassing the real
+    accounts.json/WSL-count precedence logic covered separately by
+    test_startup.py) and AccountsManager.open is replaced with a spy, so
+    this test only has to prove the wiring -- discovery-finishes-first
+    still reaches AccountsManager.open() -- once mainloop() actually
+    starts pumping real Tcl events."""
     tk = pytest.importorskip("tkinter")
 
     from tokitty import __main__ as main_module
@@ -707,15 +734,160 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
         while time.monotonic() < deadline and not opened:
             self.update()
             time.sleep(0.01)
+        # tick() shows a startup warning (if any) via root.after(0, ...)
+        # rather than synchronously, so it fires on a later pass of the
+        # event loop than the one that populated `opened`. A handful of
+        # extra pumps here gives it that chance; harmless for the tests
+        # that don't care about it.
+        for _ in range(5):
+            self.update()
+            time.sleep(0.01)
 
     monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
     return main_module, opened
 
 
 @pytest.mark.gui
+def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
+    """retry_pending_hook_op's warning and an ensure_current result's
+    warning both reach one messagebox.showwarning call on the Tk thread,
+    exactly once per launch. messagebox.showwarning is patched on the
+    actual submodule object, not on tokitty.__main__, because tick()'s
+    `from tkinter
+    import messagebox` is a local import that binds to that same
+    submodule at call time (see test_run_gui_toggle_autostart_shows_
+    warning_on_translocation's identical reasoning)."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import hooks_install as hooks_install_module
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    monkeypatch.setattr(
+        main_module, "retry_pending_hook_op",
+        lambda state_dir: hooks_install_module.ConfigDirResult(
+            str(tmp_path / "a"), True, "installed", warning="retry warning"
+        ),
+    )
+    monkeypatch.setattr(
+        hooks_install_module, "ensure_current",
+        lambda state_dir, refresh_fn=None: [
+            hooks_install_module.ConfigDirResult(
+                str(tmp_path / "b"), True, "refreshed", warning="ensure warning"
+            )
+        ],
+    )
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert "retry warning" in args[1]
+    assert "ensure warning" in args[1]
+    assert kwargs.get("parent") is not None
+
+
+@pytest.mark.gui
+def test_startup_hook_warnings_reach_messagebox_via_real_ensure_current(tmp_path, monkeypatch):
+    """Every other messagebox test in this file (including the one
+    directly above) stubs hooks_install.
+    ensure_current outright via the file's autouse fixture
+    (_no_real_hook_refresh_at_startup), so none of them actually exercises
+    ensure_current's own account resolution (reading accounts.json,
+    filtering by provider, the per-account try/except) through
+    run_discovery. This test does: a real accounts.json is written to
+    tmp_path via save_accounts, and only refresh_hooks_for_dir (what the
+    real ensure_current calls per account) is faked, to get a
+    deterministic warning without a full frozen-build/link fixture.
+    Overrides the autouse stub for this test only, restoring the real
+    ensure_current captured at module import time, before any per-test
+    patching happened."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import hooks_install as hooks_install_module
+    from tokitty.accounts import Account, save_accounts
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    monkeypatch.setattr(hooks_install_module, "ensure_current", _real_ensure_current)
+
+    config_dir = tmp_path / "acct" / ".claude"
+    save_accounts(tmp_path, [Account(name="acct-v1-a", config_dir=str(config_dir))])
+
+    monkeypatch.setattr(
+        hooks_install_module, "refresh_hooks_for_dir",
+        lambda cd, provider: hooks_install_module.ConfigDirResult(
+            cd, True, "refreshed", warning="real ensure_current warning"
+        ),
+    )
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert "real ensure_current warning" in args[1]
+    assert kwargs.get("parent") is not None
+
+
+@pytest.mark.gui
+def test_run_discovery_notes_translocation_with_no_eligible_accounts(tmp_path, monkeypatch):
+    """With no accounts.json (so ensure_current, stubbed by this file's
+    autouse fixture to mirror its real "nothing to do" behaviour, never
+    reports anything), a frozen launch whose own ensure_runner_link call
+    raises AppTranslocatedError must still surface it, since no
+    per-account path covers this case. The fake release lives entirely
+    under tmp_path and is never touched: is_translocated only inspects
+    the path string, so no files need to exist for ensure_runner_link to
+    raise before any filesystem access."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty.frozen import MOVE_TO_APPLICATIONS
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    translocated_exe = tmp_path / "AppTranslocation" / "abc123" / "Tokitty.app" / "Contents" / "MacOS" / "tokitty"
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_module.sys, "executable", str(translocated_exe))
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert args[1].count(MOVE_TO_APPLICATIONS) == 1
+    assert kwargs.get("parent") is not None
+
+
+@pytest.mark.gui
 def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypatch):
-    """Finding 2 (important, entangled with Finding 1): retry_pending_hook_op
-    can raise raw OSError/PermissionError from the underlying hook
+    """retry_pending_hook_op can raise raw OSError/PermissionError from
+    the underlying hook
     install/uninstall functions (documented in the design spec's Write
     ordering and crash consistency section -- they don't convert
     filesystem exceptions to a result object). Uncaught, this would abort
@@ -741,8 +913,8 @@ def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypa
 
 @pytest.mark.gui
 def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, monkeypatch):
-    """Finding 2: find_all_wsl_credentials can raise CredentialsError (a
-    real, common case: wsl.exe missing from PATH entirely, i.e. a
+    """find_all_wsl_credentials can raise CredentialsError (a real,
+    common case: wsl.exe missing from PATH entirely, i.e. a
     native-Windows Claude Code install with no WSL at all). Uncaught, this
     would abort run_discovery's thread before discovery_result["done"] is
     ever set, mirroring the exact "resolution failure means run without
@@ -778,6 +950,41 @@ def test_run_discovery_survives_wsl_scan_raising_credentials_error(tmp_path, mon
     assert opened == [tmp_path], (
         "discovery_result['done'] must still get set despite the WSL scan raising CredentialsError"
     )
+
+
+@pytest.mark.gui
+def test_run_discovery_repoints_runner_link_when_frozen(tmp_path, monkeypatch):
+    """A frozen launch must repoint <state dir>/current at the running
+    release before retry_pending_hook_op runs, with no --install-hooks
+    call involved at all. Uses a fake host-native release under
+    tmp_path -- never a real directory outside it."""
+    import os
+    import sys
+
+    tk = pytest.importorskip("tkinter")
+    from tokitty import runner_link
+
+    exe_name = "tokitty.exe" if sys.platform == "win32" else "tokitty"
+    runner_name = "tokitty-hook.exe" if sys.platform == "win32" else "tokitty-hook"
+    release = tmp_path / "release-a"
+    release.mkdir()
+    exe = release / exe_name
+    exe.write_text("gui", encoding="utf-8")
+    (release / runner_name).write_text("hook", encoding="utf-8")
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_module.sys, "executable", str(exe))
+
+    try:
+        result = main_module.run_gui()
+        assert result == 0
+        assert opened == [tmp_path]
+        assert os.path.realpath(tmp_path / "current") == os.path.realpath(release)
+    finally:
+        link = tmp_path / "current"
+        if runner_link._is_link(str(link)):
+            (os.rmdir if sys.platform == "win32" else os.unlink)(link)
 
 
 @pytest.mark.gui
@@ -1096,6 +1303,16 @@ def test_run_gui_calls_ensure_current_at_startup(tmp_path, monkeypatch):
     assert calls == [(tmp_path, fake_backend)]
 
 
+def test_main_dispatches_self_check(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.frozen.self_check", lambda: calls.append("self-check") or 0)
+
+    assert main_module.main(["--self-check"]) == 0
+    assert calls == ["self-check"]
+
+
 def test_main_dispatches_install_autostart(monkeypatch):
     from tokitty import __main__ as main_module
 
@@ -1153,6 +1370,71 @@ def test_run_gui_toggle_autostart_registers_via_shared_path(tmp_path, monkeypatc
         assert fake_backend.last_registered_command == resolve_launch_command(tmp_path)
         assert (tmp_path / LAUNCHER_FILENAME).is_file()
         assert window.autostart_enabled() is True
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0
+
+
+@pytest.mark.gui
+def test_run_gui_toggle_autostart_shows_warning_on_translocation(tmp_path, monkeypatch):
+    """Third branch of toggle_autostart, alongside the register and
+    deregister cases above: a frozen build running from a macOS
+    App Translocation path must never reach backend.register, and the
+    user has to be told why the checkbox didn't move. write_launcher_
+    and_register is patched at its source in tokitty.autostart -- the
+    same module run_gui's local `from tokitty.autostart import ...`
+    resolves against on every call -- to raise AppTranslocatedError
+    without needing a real frozen executable. tkinter.messagebox.
+    showwarning is patched on the actual submodule object, not on
+    tokitty.__main__, because toggle_autostart's `from tkinter import
+    messagebox` is a local import inside the except branch and binds to
+    that same submodule at call time (see test_accounts_ui.py's
+    identical reasoning for messagebox.showerror)."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.autostart import AppTranslocatedError
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+
+    fake_backend = _FakeToggleBackend(registered=False)
+    monkeypatch.setattr("tokitty.autostart.get_backend", lambda: fake_backend)
+
+    def _raise_translocated(state_dir, backend, **kwargs):
+        raise AppTranslocatedError()
+
+    monkeypatch.setattr("tokitty.autostart.write_launcher_and_register", _raise_translocated)
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        window = holder["window"]
+        assert window.autostart_enabled() is False
+        window.on_toggle_autostart()
+        assert fake_backend.registered is False
+        assert window.autostart_enabled() is False
+        assert len(warnings) == 1
+        args, kwargs = warnings[0]
+        assert args[0] == "Start at login"
+        assert "Applications" in args[1]
+        assert kwargs.get("parent") is not None
 
     monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
     assert main_module.run_gui() == 0

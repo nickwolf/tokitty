@@ -25,9 +25,33 @@ There is a burn-rate projection too. When your current pace would hit a cap befo
 
 **Not affiliated with Anthropic or OpenAI (but I am open to it with either, *wink wink*).** "Claude" and "Claude Code" are Anthropic's marks, and "Codex" and "OpenAI" are OpenAI's, used here only to describe compatibility.
 
+## Install
+
+Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS.
+
+With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unzipping an update or moving the folder to a new location, launch the new copy once before deleting the old one. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
+
+### Windows
+
+SmartScreen blocks the first launch because the build is unsigned. Click **More info**, then **Run anyway**.
+
+If your Claude Code home lives inside WSL, the common setup on Windows, its hook keeps running through WSL's own `python3`, not the Windows download.
+
+### macOS
+
+Apple Silicon Macs take the `macos-arm64` build, Intel Macs take `macos-x86_64`.
+
+On macOS 15, Gatekeeper no longer lets Control-click ▸ Open bypass the warning. Open the app once, then go to System Settings ▸ Privacy & Security ▸ Open Anyway, or skip the dialog with `xattr -dr com.apple.quarantine Tokitty.app` from a terminal.
+
+Move Tokitty to Applications before turning on **Start at login** or adding an account. Run straight from Downloads, it refuses and says why: macOS runs a freshly downloaded app from a random, read-only App Translocation path, so there's nowhere stable for a login item or a hook to point at.
+
+### Linux
+
+Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
+
 ## Live activity (thinking / working / permission / done)
 
-Optional, off by default. Run:
+Optional, off by default. With a downloaded build, adding an account in the Accounts dialog installs its hooks automatically, or run the app from a terminal with `--install-hooks` (for example `Tokitty.exe --install-hooks` on Windows). From source, run:
 
 ```bash
 python -m tokitty --install-hooks
@@ -90,6 +114,12 @@ To price a model before the next release, put a `prices.json` of the same shape 
 `python3 scripts/refresh_prices.py` rewrites the packaged file from the live Anthropic and OpenAI pricing pages and prints what was added, changed, and kept; `--check` only reports. It refuses to write if a page's columns no longer line up with its rates.
 
 `python -m tokitty --debug-print` prints the same breakdown per account as text, which is the first thing to look at if a number looks wrong.
+
+## Checking usage from an agent
+
+`--debug-print` needs no display and exits when it's done, so a coding agent can run it in the middle of a task and read its own limits. For each account it prints a `session:` and a `weekly:` line, each with the percentage used and the reset time in UTC, followed by the per-model breakdown above.
+
+I have Claude Code run `python3 -m tokitty --debug-print` at natural checkpoints in long sessions, before dispatching a subagent or starting a long build. When the weekly figure gets close to 100% it stops starting new work, commits what's finished, and writes down where it got to. Before this, sessions and their subagents would hit the limit mid-change and leave uncommitted edits behind. Each run makes one usage request per account, the same one the widget makes on every poll.
 
 ## Codex
 
@@ -176,7 +206,9 @@ Multi-account mode (above) extends this picture the same way single-account mode
   One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live.
 - **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work, but nobody has run it there interactively yet.
 
-## Setup
+## Running from source
+
+This is the developer path. Most people should use Install above instead.
 
 ### Windows (Claude Code in WSL2, recommended path)
 

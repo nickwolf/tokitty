@@ -4,6 +4,8 @@ import plistlib
 import subprocess
 from pathlib import Path, PureWindowsPath
 
+import pytest
+
 from tokitty.autostart import (
     LAUNCHER_FILENAME,
     LinuxDesktopEntryBackend,
@@ -14,8 +16,12 @@ from tokitty.autostart import (
     get_backend,
     launcher_content,
     resolve_launch_command,
+    write_launcher_and_register,
     write_launcher_file,
 )
+from tokitty.frozen import AppTranslocatedError
+
+TRANSLOCATED = "/private/var/folders/xy/T/AppTranslocation/1234/d/Tokitty.app/Contents/MacOS/Tokitty"
 
 
 def test_frozen_returns_executable_alone(tmp_path):
@@ -487,12 +493,51 @@ def test_write_launcher_and_register_writes_launcher_then_registers(tmp_path):
     """The shared helper behind both install_autostart and the menu
     toggle: write_launcher_file, then backend.register with the resolved
     command, in that order and nothing else."""
-    from tokitty.autostart import write_launcher_and_register
-
     backend = _RecordingBackend(registered=False)
     write_launcher_and_register(tmp_path, backend)
     assert (tmp_path / LAUNCHER_FILENAME).is_file()
     assert backend.registered_calls == [resolve_launch_command(tmp_path)]
+
+
+class FakeBackend:
+    def __init__(self, registered=True, current=False):
+        self.registered, self.current, self.commands = registered, current, []
+
+    def is_registered(self):
+        return self.registered
+
+    def is_current(self, command):
+        return self.current
+
+    def register(self, command):
+        self.commands.append(command)
+
+
+def test_ensure_current_frozen_writes_no_launcher(tmp_path):
+    backend = FakeBackend()
+    ensure_current(tmp_path, backend, frozen=True, executable="/opt/tokitty/tokitty", platform="linux")
+    assert not (tmp_path / LAUNCHER_FILENAME).exists()
+    assert backend.commands == [["/opt/tokitty/tokitty"]]
+
+
+def test_ensure_current_translocated_leaves_backend_alone(tmp_path):
+    backend = FakeBackend()
+    assert ensure_current(tmp_path, backend, frozen=True, executable=TRANSLOCATED, platform="darwin") is False
+    assert backend.commands == []
+
+
+def test_register_refuses_translocated(tmp_path):
+    backend = FakeBackend(registered=False)
+    with pytest.raises(AppTranslocatedError):
+        write_launcher_and_register(tmp_path, backend, frozen=True, executable=TRANSLOCATED)
+    assert backend.commands == [] and not (tmp_path / LAUNCHER_FILENAME).exists()
+
+
+def test_register_frozen_skips_launcher(tmp_path):
+    backend = FakeBackend(registered=False)
+    write_launcher_and_register(tmp_path, backend, frozen=True, executable="/Applications/Tokitty.app/Contents/MacOS/Tokitty")
+    assert backend.commands == [["/Applications/Tokitty.app/Contents/MacOS/Tokitty"]]
+    assert not (tmp_path / LAUNCHER_FILENAME).exists()
 
 
 def test_install_autostart_registers_via_backend(tmp_path, monkeypatch):

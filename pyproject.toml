@@ -9,6 +9,7 @@ dependencies = ["pystray", "Pillow"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff==0.15.22"]
+packaging = ["pyinstaller==6.22.3", "pyinstaller-hooks-contrib==2026.7"]
 
 [project.scripts]
 tokitty = "tokitty.__main__:main"

@@ -459,6 +459,7 @@ def run_gui() -> int:
     discovery_result = {
         "wsl_matches": [],
         "transcript_matches": [],
+        "hook_warnings": [],
         "done": False,
         "consumed": False,
     }
@@ -539,10 +540,69 @@ def run_gui() -> int:
         # philosophy of "resolution failure means run without it, never a
         # crash" -- never "auto-open silently never evaluates again."
         try:
+            # De-duplicated, in order: a link failure's own message, the
+            # retry result's warning (and its message if it failed), then
+            # each ensure_current result's warning (and message if
+            # failed). tick() shows the union in one messagebox, at most
+            # once per launch.
+            hook_warnings = []
+            seen_hook_warnings = set()
+
+            def _note(text):
+                if text and text not in seen_hook_warnings:
+                    seen_hook_warnings.add(text)
+                    hook_warnings.append(text)
+
+            from tokitty import hooks_install
+
+            if getattr(sys, "frozen", False):
+                # Repoints <state dir>/current at this release before the
+                # retry below, so a stale link from a previous release
+                # never lingers between launches (spec Q2a). Reported the
+                # same way ensure_current's own per-account reconcile
+                # reports the identical failure, so the de-duplication
+                # above catches it instead of showing both a raw and a
+                # wrapped paragraph for the same lock timeout or failed
+                # repoint. AppTranslocatedError is noted here too: with no
+                # eligible account in accounts.json, ensure_current below
+                # never reports MOVE_TO_APPLICATIONS itself, so this is
+                # the only place it surfaces. Doesn't skip the retry below
+                # either way.
+                try:
+                    from tokitty import runner_link
+                    from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
+
+                    runner_link.ensure_runner_link(state_dir)
+                except AppTranslocatedError:
+                    _note(MOVE_TO_APPLICATIONS)
+                except FileNotFoundError:
+                    _note("Tokitty can't set up its hooks: this copy of Tokitty has no tokitty-hook next to it")
+                except OSError as exc:
+                    _note(hooks_install.LINK_FALLBACK_WARNING.format(reason=str(exc)))
+
             try:
-                retry_pending_hook_op(state_dir)
+                retry_result = retry_pending_hook_op(state_dir)
             except (OSError, PermissionError):
-                pass
+                retry_result = None
+            if retry_result is not None:
+                _note(retry_result.warning)
+                if not retry_result.ok:
+                    _note(retry_result.message)
+
+            try:
+                refresh_results = hooks_install.ensure_current(state_dir)
+            except Exception:
+                # Broad on purpose: a reconcile call that raises anything
+                # must not lose the retry warning just collected above,
+                # or skip the WSL/transcript discovery below.
+                refresh_results = []
+            for refresh_result in refresh_results:
+                _note(refresh_result.warning)
+                if not refresh_result.ok:
+                    _note(refresh_result.message)
+
+            with discovery_lock:
+                discovery_result["hook_warnings"] = hook_warnings
 
             wsl_matches = []
             if (
@@ -854,7 +914,12 @@ def run_gui() -> int:
 
         window.on_toggle_tray = toggle_tray
 
-    from tokitty.autostart import ensure_current, get_backend, write_launcher_and_register
+    from tokitty.autostart import (
+        AppTranslocatedError,
+        ensure_current,
+        get_backend,
+        write_launcher_and_register,
+    )
 
     autostart_backend = get_backend()
     if autostart_backend is not None:
@@ -882,7 +947,15 @@ def run_gui() -> int:
                 if autostart_state["enabled"]:
                     autostart_backend.deregister()
                 else:
-                    write_launcher_and_register(state_dir, autostart_backend)
+                    try:
+                        write_launcher_and_register(state_dir, autostart_backend)
+                    except AppTranslocatedError as exc:
+                        from tkinter import messagebox
+
+                        messagebox.showwarning("Start at login", str(exc), parent=root)
+                # Refused or not, the checkbox always reflects the
+                # backend's real state, never an assumption about what
+                # the branch above did.
                 autostart_state["enabled"] = autostart_backend.is_registered()
 
             window.on_toggle_autostart = toggle_autostart
@@ -921,8 +994,22 @@ def run_gui() -> int:
             ready = discovery_result["done"] and not discovery_result["consumed"]
             if ready:
                 discovery_result["consumed"] = True
+                hook_warnings = list(discovery_result["hook_warnings"])
         if ready:
             maybe_auto_open()
+            if hook_warnings:
+                # Deferred: showwarning is modal and would otherwise
+                # block tick() from finishing and rescheduling itself
+                # (root.after(UI_REFRESH_MS, tick), below) until the user
+                # dismisses it. root.after(0, ...) runs it as its own
+                # callback once this call returns, so tick's cadence is
+                # never held up by it.
+                def _show_hook_warnings(warnings=hook_warnings):
+                    from tkinter import messagebox
+
+                    messagebox.showwarning("Tokitty", "\n\n".join(warnings), parent=root)
+
+                root.after(0, _show_hook_warnings)
 
         for unit in units:
             latest = unit["poller"].get_latest()
@@ -975,6 +1062,10 @@ def run_gui() -> int:
 
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--self-check" in argv:
+        from tokitty.frozen import self_check
+
+        return self_check()
     if "--debug-print" in argv:
         return debug_print()
     if "--install-hooks" in argv:
