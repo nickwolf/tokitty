@@ -104,6 +104,30 @@ def test_self_check_passes_in_dev_headless(monkeypatch, capsys):
     assert all(c["ok"] for c in report["checks"].values())
 
 
+def test_self_check_omits_tk_root_without_the_env_var(monkeypatch, capsys):
+    """tkinter.Tcl() in _check_tkinter never opens a window, so without
+    TOKITTY_SELF_CHECK_TK the tk_root check must be absent, not just
+    unchecked, keeping headless unit tests headless."""
+    monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
+    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    assert frozen.self_check() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert "tk_root" not in report["checks"]
+
+
+@pytest.mark.gui
+def test_self_check_tk_root_when_env_var_set(monkeypatch, capsys):
+    """TOKITTY_SELF_CHECK_TK=1 opens a real tkinter.Tk() window and reports
+    its patchlevel as check tk_root, catching a bundle whose window can't
+    actually open even though tkinter.Tcl() above it passed."""
+    monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
+    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    assert frozen.self_check() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["checks"]["tk_root"]["ok"] is True
+    assert report["checks"]["tk_root"]["detail"]
+
+
 def test_self_check_fails_without_prices(monkeypatch, tmp_path, capsys):
     from tokitty import pricing
 

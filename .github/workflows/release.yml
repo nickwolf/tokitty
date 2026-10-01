@@ -22,7 +22,7 @@ jobs:
         include:
           - os: windows-latest
             target: windows-x64
-          - os: macos-latest
+          - os: macos-15
             target: macos-arm64
           - os: macos-15-intel
             target: macos-x86_64
@@ -153,7 +153,7 @@ jobs:
   keychain:
     name: macOS Keychain check (dry run, #48 Task 8)
     if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
     steps:

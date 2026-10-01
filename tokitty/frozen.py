@@ -64,6 +64,21 @@ def _check_tkinter():
     return tkinter.Tcl().eval("info patchlevel")
 
 
+def _check_tk_root():
+    """tkinter.Tcl() above only starts the Tcl interpreter; it never opens
+    a window, so a bundle whose Tk can't actually initialise (missing
+    display, broken Tcl/Tk libs in the onedir layout) would still pass.
+    Gated behind TOKITTY_SELF_CHECK_TK so headless unit tests stay headless."""
+    import tkinter
+
+    root = tkinter.Tk()
+    try:
+        root.update_idletasks()
+        return root.eval("info patchlevel")
+    finally:
+        root.destroy()
+
+
 def _check_pil():
     from PIL import Image
 
@@ -120,6 +135,8 @@ def self_check() -> int:
     }
     if getattr(sys, "frozen", False):
         checks["hook_runner"] = _check(_check_hook_runner)
+    if os.environ.get("TOKITTY_SELF_CHECK_TK") == "1":
+        checks["tk_root"] = _check(_check_tk_root)
 
     report = {
         "checks": checks,

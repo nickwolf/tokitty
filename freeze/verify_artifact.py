@@ -264,7 +264,15 @@ def step_locate_binaries(ctx):
 
 
 def step_self_check(ctx):
-    proc, err = run_child([str(ctx["gui"]), "--self-check"], ctx["env"])
+    # TOKITTY_SELF_CHECK_TK=1 makes self-check also open a real tkinter.Tk()
+    # window (check tk_root), not just start the Tcl interpreter: a bundle
+    # whose window can't open must fail here, not slip through as a pass.
+    # On Linux CI runs this under xvfb-run, which wraps this whole process
+    # so DISPLAY is already set for this child. Windows and macOS hosted
+    # runners provide a real GUI session directly.
+    env = dict(ctx["env"])
+    env["TOKITTY_SELF_CHECK_TK"] = "1"
+    proc, err = run_child([str(ctx["gui"]), "--self-check"], env)
     if err:
         return {"ok": False, "detail": err}
     if proc.returncode != 0:
@@ -276,6 +284,8 @@ def step_self_check(ctx):
     checks = data.get("checks")
     if not isinstance(checks, dict) or not checks:
         return {"ok": False, "detail": f"self-check report has no checks: {data!r}"}
+    if "tk_root" not in checks:
+        return {"ok": False, "detail": f"self-check report missing tk_root check: {data!r}"}
     failed = {k: v for k, v in checks.items() if not v.get("ok")}
     if failed:
         return {"ok": False, "detail": f"failing self-check(s): {failed}"}
@@ -812,18 +822,23 @@ def main() -> int:
     args = parser.parse_args()
 
     app_dir = Path(args.app_dir).resolve()
-    work = Path(args.work).resolve()
+    # Check the unresolved --work path for being a link/junction before
+    # resolving it: .resolve() follows a symlink straight through to its
+    # target, so checking afterward would test the target, not the
+    # argument a caller actually passed, and silently let a symlinked
+    # --work through unrefused.
+    work_arg = Path(args.work)
     report_path = Path(args.report)
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parent.parent
 
-    unusable_reason = _work_dir_unusable_reason(work)
+    unusable_reason = _work_dir_unusable_reason(work_arg)
     if unusable_reason:
         print(f"[verify_artifact] refusing to run: {unusable_reason}", file=sys.stderr)
         write_report(
             report_path,
             {
                 "app_dir": str(app_dir),
-                "work": str(work),
+                "work": str(work_arg),
                 "repo_root": str(repo_root),
                 "gate_ms": args.gate_ms,
                 "platform": sys.platform,
@@ -834,6 +849,7 @@ def main() -> int:
         )
         return 1
 
+    work = work_arg.resolve()
     work.mkdir(parents=True, exist_ok=True)
     env = _scratch_env(work)
     for sub in ("home", "xdg", "localappdata"):
