@@ -118,13 +118,45 @@ def _sessions_dir_from_argv(argv):
     raise ValueError(f"--sessions-dir not found in {argv!r}")
 
 
-def _hook_argv(settings_data, event):
+def _hook_argv(settings_data, event, matcher, expected_command, sessions_dir_expected):
+    """Picks the hook entry that matches exactly: matcher, command == the
+    stable runner path --install-hooks was proved to write, and args == the
+    expected --sessions-dir pair. Never "the first command hook" -- a stray
+    extra entry with the right type but wrong matcher/command/args must not
+    get run in its place."""
     entries = settings_data["hooks"][event]
+    expected_args = ["--sessions-dir", sessions_dir_expected]
     for entry in entries:
+        if entry.get("matcher") != matcher:
+            continue
         for h in entry.get("hooks", []):
-            if h.get("type") == "command":
-                return [h["command"]] + list(h.get("args", []))
-    raise KeyError(f"no command hook registered for {event}")
+            if h.get("type") != "command":
+                continue
+            if h.get("command") != expected_command:
+                continue
+            if h.get("args") != expected_args:
+                continue
+            return [h["command"]] + list(h.get("args", []))
+    raise KeyError(
+        f"no validated command hook for {event} (matcher={matcher!r}, "
+        f"command={expected_command!r}, args={expected_args!r}): {entries!r}"
+    )
+
+
+def _release_b_realpath_check(ctx):
+    """Steps 5 and 6 run through the link at release-b (brief 4b): confirm
+    the stable command path still resolves inside release-b before either
+    step trusts it, rather than assuming step_second_release's repoint
+    held."""
+    command = ctx["expected_command"]
+    release_b_dir = ctx.get("release_b_dir")
+    if release_b_dir is None:
+        return "release_b_dir not set on ctx; step_second_release must run first"
+    real = os.path.realpath(command)
+    release_b_real = os.path.realpath(str(release_b_dir))
+    if not _is_relative_to(Path(real), Path(release_b_real)):
+        return f"{command} resolves to {real}, expected under release-b {release_b_real}"
+    return None
 
 
 def _dir_size(path: Path) -> int:
@@ -152,6 +184,23 @@ def _scratch_env(work: Path) -> dict:
         env["HOME"] = str(work / "home")
         env["XDG_CONFIG_HOME"] = str(work / "xdg")
     return env
+
+
+def _work_dir_unusable_reason(work: Path):
+    """None if `work` is safe to adopt as a fresh scratch root: it does not
+    exist yet, or it exists as a plain, empty directory. Anything else
+    (a file, a link/junction, a non-empty directory) is refused, so no step
+    can ever follow, overwrite, or delete state a previous run -- or a real
+    install -- left at that path."""
+    if not os.path.lexists(str(work)):
+        return None
+    if _is_link(work):
+        return f"--work {work} exists and is a link/junction, refusing to reuse it"
+    if not work.is_dir():
+        return f"--work {work} exists and is not a directory"
+    if any(work.iterdir()):
+        return f"--work {work} exists and is not empty"
+    return None
 
 
 def run_child(argv, env, input_bytes=None, timeout=CHILD_TIMEOUT):
@@ -239,8 +288,11 @@ def step_self_check(ctx):
 
 
 def step_preflight_accounts(ctx):
-    state_dir = ctx["state_dir"]
-    work = ctx["work"]
+    # Resolve before the containment check: an unresolved state_dir could
+    # contain ".." or a symlink component that makes a naive prefix
+    # comparison pass for a path that isn't really under `work`.
+    state_dir = ctx["state_dir"].resolve()
+    work = ctx["work"].resolve()
     if not (state_dir == work or _is_relative_to(state_dir, work)):
         return {"ok": False, "detail": f"state_dir {state_dir} does not sit under work {work}"}
 
@@ -258,6 +310,13 @@ def step_preflight_accounts(ctx):
     if not (isinstance(accounts, list) and len(accounts) == 1 and accounts[0].get("config_dir") == str(claude_home)):
         return {"ok": False, "detail": f"accounts.json does not name only {claude_home}: {read_back!r}"}
 
+    # Only now is it proved that state_dir resolves under work: commit the
+    # resolved path and set the flag that lets main()'s cleanup touch
+    # `<state_dir>/current`. Before this point ctx["state_dir"] came
+    # straight from the frozen exe's self-check report and must never be
+    # used to remove anything -- that report is not trusted input.
+    ctx["state_dir"] = state_dir
+    ctx["state_dir_verified"] = True
     ctx["claude_home"] = claude_home
     return {"ok": True, "detail": {"accounts_json": str(accounts_path), "claude_home": str(claude_home)}}
 
@@ -344,6 +403,7 @@ def step_install_hooks(ctx):
     ctx["settings_bytes_after_4"] = settings_bytes
     ctx["settings_data"] = settings_data
     ctx["expected_command"] = expected_command
+    ctx["sessions_dir_expected"] = sessions_dir_expected
     return {
         "ok": True,
         "detail": {
@@ -357,9 +417,18 @@ def step_install_hooks(ctx):
 
 def step_second_release(ctx):
     release_b_root = ctx["work"] / "release-b"
-    if release_b_root.exists():
+    if os.path.lexists(str(release_b_root)):
+        # The startup guard means work started empty, so reaching this with
+        # release-b already present means something outside this run put it
+        # there. Never rmtree a link/junction (it would follow it), and
+        # never delete anything this step did not itself create this run.
+        if _is_link(release_b_root):
+            return {"ok": False, "detail": f"{release_b_root} already exists as a link, refusing to remove it"}
+        if not ctx.get("release_b_created"):
+            return {"ok": False, "detail": f"{release_b_root} already exists and was not created by this run"}
         shutil.rmtree(release_b_root)
     shutil.copytree(ctx["app_dir"], release_b_root, symlinks=True)
+    ctx["release_b_created"] = True
 
     gui2, hook2 = _locate_binaries(release_b_root)
     missing = [str(p) for p in (gui2, hook2) if not p.is_file()]
@@ -401,7 +470,10 @@ def step_second_release(ctx):
 
 def step_hook_timing(ctx):
     gate_ms = ctx["gate_ms"]
-    argv = _hook_argv(ctx["settings_data"], "PreToolUse")
+    realpath_err = _release_b_realpath_check(ctx)
+    if realpath_err:
+        return {"ok": False, "detail": realpath_err}
+    argv = _hook_argv(ctx["settings_data"], "PreToolUse", "", ctx["expected_command"], ctx["sessions_dir_expected"])
     sessions_dir = Path(_sessions_dir_from_argv(argv))
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -437,16 +509,27 @@ def step_hook_timing(ctx):
         t0 = time.perf_counter()
         proc, err = run_child(argv, ctx["env"], input_bytes=_payload(warm_id))
         elapsed = time.perf_counter() - t0
+        # Record before judging: a failing run's timing is still evidence,
+        # and a fix-round-1 report must show every value gathered so far.
+        timings.append(elapsed)
         if err:
-            return {"ok": False, "detail": f"warm run {i}: {err}"}
+            return {"ok": False, "detail": {"error": f"warm run {i}: {err}", "timings_s": timings}}
         if proc.returncode != 0 or proc.stdout != b"":
-            return {"ok": False, "detail": f"warm run {i}: exit={proc.returncode} stdout={proc.stdout!r}"}
+            return {
+                "ok": False,
+                "detail": {
+                    "error": f"warm run {i}: exit={proc.returncode} stdout={proc.stdout!r}",
+                    "timings_s": timings,
+                },
+            }
         if not warm_state.is_file():
-            return {"ok": False, "detail": f"warm run {i}: state file missing"}
+            return {"ok": False, "detail": {"error": f"warm run {i}: state file missing", "timings_s": timings}}
         data = json.loads(warm_state.read_text(encoding="utf-8"))
         if data.get("seq") != i:
-            return {"ok": False, "detail": f"warm run {i}: seq {data.get('seq')} != {i}"}
-        timings.append(elapsed)
+            return {
+                "ok": False,
+                "detail": {"error": f"warm run {i}: seq {data.get('seq')} != {i}", "timings_s": timings},
+            }
 
     sorted_t = sorted(timings)
     n = len(sorted_t)
@@ -470,9 +553,14 @@ def step_hook_timing(ctx):
 
 def step_hook_events(ctx):
     settings_data = ctx["settings_data"]
+    realpath_err = _release_b_realpath_check(ctx)
+    if realpath_err:
+        return {"ok": False, "detail": realpath_err}
+    expected_command = ctx["expected_command"]
+    sessions_dir_expected = ctx["sessions_dir_expected"]
     results = {}
-    for event, _matcher in HOOK_EVENTS:
-        argv = _hook_argv(settings_data, event)
+    for event, matcher in HOOK_EVENTS:
+        argv = _hook_argv(settings_data, event, matcher, expected_command, sessions_dir_expected)
         sessions_dir = Path(_sessions_dir_from_argv(argv))
         sessions_dir.mkdir(parents=True, exist_ok=True)
         session_id = f"verify-event-{event.lower()}"
@@ -481,7 +569,7 @@ def step_hook_events(ctx):
             state_file.unlink()
 
         if event == "SessionEnd":
-            create_argv = _hook_argv(settings_data, "PreToolUse")
+            create_argv = _hook_argv(settings_data, "PreToolUse", "", expected_command, sessions_dir_expected)
             payload = json.dumps(
                 {"session_id": session_id, "hook_event_name": "PreToolUse", "tool_name": "Bash"}
             ).encode("utf-8")
@@ -521,31 +609,147 @@ def step_hook_events(ctx):
     return {"ok": True, "detail": results}
 
 
+class _RegQueryFailed(RuntimeError):
+    """A `reg query` call did not cleanly resolve to "value present" or the
+    well-known "value absent" case. Raised instead of returning a fake
+    absent result, so a genuine query failure (bad exit for some other
+    reason, a timeout, a launch error) always aborts rather than being
+    read as "nothing to restore"."""
+
+
 def _reg_read_tokitty():
-    """(value_or_None, present). Best-effort: only ever exercised on
+    """(value, present) on a clean query. present=False only for reg.exe's
+    documented "unable to find the specified registry key or value" exit;
+    anything else raises _RegQueryFailed. Only ever exercised on
     windows-latest in CI, never in the Linux rehearsal."""
-    proc = subprocess.run(
-        ["reg", "query", WINDOWS_RUN_KEY, "/v", "Tokitty"], capture_output=True, text=True
-    )
+    try:
+        proc = subprocess.run(
+            ["reg", "query", WINDOWS_RUN_KEY, "/v", "Tokitty"],
+            capture_output=True,
+            text=True,
+            timeout=CHILD_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _RegQueryFailed(f"reg query timed out after {CHILD_TIMEOUT}s") from exc
+    except OSError as exc:
+        raise _RegQueryFailed(f"reg query failed to launch: {exc}") from exc
+
     if proc.returncode != 0:
-        return None, False
+        if "unable to find" in proc.stderr.lower():
+            return None, False
+        raise _RegQueryFailed(
+            f"reg query exit {proc.returncode}, stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
     for line in proc.stdout.splitlines():
         line = line.strip()
         if line.startswith("Tokitty"):
             parts = line.split(None, 2)
             if len(parts) == 3:
                 return parts[2], True
-    return None, False
+    raise _RegQueryFailed(f"reg query exit 0 but no Tokitty value line found: {proc.stdout!r}")
 
 
-def _reg_restore_tokitty(value, present):
-    if present:
-        subprocess.run(
-            ["reg", "add", WINDOWS_RUN_KEY, "/v", "Tokitty", "/t", "REG_SZ", "/d", value, "/f"],
-            capture_output=True,
-        )
+def _reg_restore_and_verify(saved_value, had_value):
+    """Restores the Run key to its pre-test state, then re-queries to
+    confirm the restore actually took. Returns an error string on any
+    write failure, timeout, or mismatch; None on a verified restore. Never
+    swallowed into a bare finally -- the caller must fail the step (and so
+    the whole run) on a non-None return."""
+    try:
+        if had_value:
+            proc = subprocess.run(
+                ["reg", "add", WINDOWS_RUN_KEY, "/v", "Tokitty", "/t", "REG_SZ", "/d", saved_value, "/f"],
+                capture_output=True,
+                text=True,
+                timeout=CHILD_TIMEOUT,
+            )
+        else:
+            proc = subprocess.run(
+                ["reg", "delete", WINDOWS_RUN_KEY, "/v", "Tokitty", "/f"],
+                capture_output=True,
+                text=True,
+                timeout=CHILD_TIMEOUT,
+            )
+    except subprocess.TimeoutExpired as exc:
+        return f"reg restore timed out after {CHILD_TIMEOUT}s: {exc}"
+    except OSError as exc:
+        return f"reg restore failed to launch: {exc}"
+
+    if proc.returncode != 0:
+        return f"reg restore exit {proc.returncode}: {proc.stderr!r}"
+
+    try:
+        value_after, present_after = _reg_read_tokitty()
+    except _RegQueryFailed as exc:
+        return f"post-restore verification query failed: {exc}"
+
+    if had_value:
+        if not present_after or value_after != saved_value:
+            return f"expected {saved_value!r} restored, found present={present_after} value={value_after!r}"
     else:
-        subprocess.run(["reg", "delete", WINDOWS_RUN_KEY, "/v", "Tokitty", "/f"], capture_output=True)
+        if present_after:
+            return f"expected value absent after restore, found {value_after!r}"
+    return None
+
+
+def _autostart_round_trip(gui, env, state_dir, plat):
+    proc, err = run_child([gui, "--install-autostart"], env)
+    if err:
+        return {"ok": False, "detail": err}
+    if proc.returncode != 0:
+        return {"ok": False, "detail": f"--install-autostart exit {proc.returncode}: {proc.stderr!r}"}
+
+    launcher = state_dir / "autostart_launcher.pyw"
+    if launcher.exists():
+        return {"ok": False, "detail": f"{launcher} should not exist for a frozen build"}
+
+    desktop_path = None
+    plist_path = None
+    if plat.startswith("linux"):
+        desktop_path = Path(env["XDG_CONFIG_HOME"]) / "autostart" / "tokitty.desktop"
+        if not desktop_path.is_file():
+            return {"ok": False, "detail": f"{desktop_path} not written"}
+        expected = f"Exec={_render_exec_line([gui])}"
+        lines = desktop_path.read_text(encoding="utf-8").splitlines()
+        if expected not in lines:
+            return {"ok": False, "detail": f"{desktop_path} Exec line {lines!r} missing {expected!r}"}
+    elif plat == "darwin":
+        plist_path = Path(env["HOME"]) / "Library" / "LaunchAgents" / MAC_LAUNCH_AGENT_PLIST
+        if not plist_path.is_file():
+            return {"ok": False, "detail": f"{plist_path} not written"}
+        data = plistlib.loads(plist_path.read_bytes())
+        if data.get("ProgramArguments") != [gui]:
+            return {"ok": False, "detail": f"ProgramArguments {data.get('ProgramArguments')!r} != [{gui!r}]"}
+    elif plat == "win32":
+        try:
+            value, _present = _reg_read_tokitty()
+        except _RegQueryFailed as exc:
+            return {"ok": False, "detail": f"post-install reg query failed: {exc}"}
+        expected = subprocess.list2cmdline([gui])
+        if value != expected:
+            return {"ok": False, "detail": f"registry value {value!r} != {expected!r}"}
+    else:
+        return {"ok": False, "detail": f"unsupported platform for autostart: {plat}"}
+
+    proc, err = run_child([gui, "--uninstall-autostart"], env)
+    if err:
+        return {"ok": False, "detail": err}
+    if proc.returncode != 0:
+        return {"ok": False, "detail": f"--uninstall-autostart exit {proc.returncode}: {proc.stderr!r}"}
+
+    if plat.startswith("linux") and desktop_path.exists():
+        return {"ok": False, "detail": f"{desktop_path} still present after uninstall"}
+    if plat == "darwin" and plist_path.exists():
+        return {"ok": False, "detail": f"{plist_path} still present after uninstall"}
+    if plat == "win32":
+        try:
+            _value, present = _reg_read_tokitty()
+        except _RegQueryFailed as exc:
+            return {"ok": False, "detail": f"post-uninstall reg query failed: {exc}"}
+        if present:
+            return {"ok": False, "detail": "registry value still present after uninstall"}
+
+    return {"ok": True, "detail": "install/uninstall autostart round trip ok"}
 
 
 def step_autostart(ctx):
@@ -558,64 +762,25 @@ def step_autostart(ctx):
         return {"ok": True, "detail": "skipped: HKCU Run key has no scratch location outside CI"}
 
     saved_value, had_value = (None, False)
-    try:
-        if plat == "win32":
+    if plat == "win32":
+        # A failed pre-check must abort before --install-autostart runs at
+        # all: without a trustworthy saved_value/had_value, a later restore
+        # could not tell "put it back" from "leave it alone".
+        try:
             saved_value, had_value = _reg_read_tokitty()
+        except _RegQueryFailed as exc:
+            return {"ok": False, "detail": f"pre-check reg query failed, aborting before any write: {exc}"}
 
-        proc, err = run_child([gui, "--install-autostart"], env)
-        if err:
-            return {"ok": False, "detail": err}
-        if proc.returncode != 0:
-            return {"ok": False, "detail": f"--install-autostart exit {proc.returncode}: {proc.stderr!r}"}
-
-        launcher = state_dir / "autostart_launcher.pyw"
-        if launcher.exists():
-            return {"ok": False, "detail": f"{launcher} should not exist for a frozen build"}
-
-        desktop_path = None
-        plist_path = None
-        if plat.startswith("linux"):
-            desktop_path = Path(env["XDG_CONFIG_HOME"]) / "autostart" / "tokitty.desktop"
-            if not desktop_path.is_file():
-                return {"ok": False, "detail": f"{desktop_path} not written"}
-            expected = f"Exec={_render_exec_line([gui])}"
-            lines = desktop_path.read_text(encoding="utf-8").splitlines()
-            if expected not in lines:
-                return {"ok": False, "detail": f"{desktop_path} Exec line {lines!r} missing {expected!r}"}
-        elif plat == "darwin":
-            plist_path = Path(env["HOME"]) / "Library" / "LaunchAgents" / MAC_LAUNCH_AGENT_PLIST
-            if not plist_path.is_file():
-                return {"ok": False, "detail": f"{plist_path} not written"}
-            data = plistlib.loads(plist_path.read_bytes())
-            if data.get("ProgramArguments") != [gui]:
-                return {"ok": False, "detail": f"ProgramArguments {data.get('ProgramArguments')!r} != [{gui!r}]"}
-        elif plat == "win32":
-            value, _present = _reg_read_tokitty()
-            expected = subprocess.list2cmdline([gui])
-            if value != expected:
-                return {"ok": False, "detail": f"registry value {value!r} != {expected!r}"}
-        else:
-            return {"ok": False, "detail": f"unsupported platform for autostart: {plat}"}
-
-        proc, err = run_child([gui, "--uninstall-autostart"], env)
-        if err:
-            return {"ok": False, "detail": err}
-        if proc.returncode != 0:
-            return {"ok": False, "detail": f"--uninstall-autostart exit {proc.returncode}: {proc.stderr!r}"}
-
-        if plat.startswith("linux") and desktop_path.exists():
-            return {"ok": False, "detail": f"{desktop_path} still present after uninstall"}
-        if plat == "darwin" and plist_path.exists():
-            return {"ok": False, "detail": f"{plist_path} still present after uninstall"}
-        if plat == "win32":
-            _value, present = _reg_read_tokitty()
-            if present:
-                return {"ok": False, "detail": "registry value still present after uninstall"}
-
-        return {"ok": True, "detail": "install/uninstall autostart round trip ok"}
+    result = {"ok": False, "detail": "autostart step did not complete"}
+    try:
+        result = _autostart_round_trip(gui, env, state_dir, plat)
     finally:
         if plat == "win32":
-            _reg_restore_tokitty(saved_value, had_value)
+            restore_err = _reg_restore_and_verify(saved_value, had_value)
+            if restore_err:
+                prior = result.get("detail") if isinstance(result, dict) else result
+                result = {"ok": False, "detail": f"{prior}; restore failed: {restore_err}"}
+    return result
 
 
 STEPS = [
@@ -650,6 +815,24 @@ def main() -> int:
     work = Path(args.work).resolve()
     report_path = Path(args.report)
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parent.parent
+
+    unusable_reason = _work_dir_unusable_reason(work)
+    if unusable_reason:
+        print(f"[verify_artifact] refusing to run: {unusable_reason}", file=sys.stderr)
+        write_report(
+            report_path,
+            {
+                "app_dir": str(app_dir),
+                "work": str(work),
+                "repo_root": str(repo_root),
+                "gate_ms": args.gate_ms,
+                "platform": sys.platform,
+                "steps": {},
+                "ok": False,
+                "error": unusable_reason,
+            },
+        )
+        return 1
 
     work.mkdir(parents=True, exist_ok=True)
     env = _scratch_env(work)
@@ -686,8 +869,13 @@ def main() -> int:
             if not result.get("ok"):
                 break
     finally:
-        state_dir = ctx.get("state_dir")
-        if state_dir is not None:
+        # Only touch `<state_dir>/current` once step_preflight_accounts has
+        # actually proved state_dir resolves under work (P0): before that,
+        # ctx["state_dir"] is unverified input straight from the frozen
+        # exe's self-check report, and removing a link there could destroy
+        # a real install's current release symlink.
+        if ctx.get("state_dir_verified"):
+            state_dir = ctx.get("state_dir")
             try:
                 _remove_current_link(state_dir)
             except OSError as exc:
