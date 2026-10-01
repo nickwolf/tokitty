@@ -212,21 +212,27 @@ def compute_overall(results: Dict[str, Dict[str, Tuple[str, str]]]) -> Tuple[str
             "the negative control (-T '') passed without a prompt; the instrument cannot see a real denial",
         )
 
-    trusted_a_ok = results["trusted"]["A"][0] == "no_prompt"
+    # trusted/A is the positive control: it must pass, or nothing else this
+    # run found is trustworthy either. Unlike the negative control above,
+    # this is not "disproved" -- a denied positive control means the
+    # synthetic keychain or harness itself cannot show a permitted read, so
+    # no verdict about Q6's prediction can be drawn from this run at all.
+    if results["trusted"]["A"][0] != "no_prompt":
+        return (
+            "harness_error",
+            "trusted/A was denied: the synthetic keychain or harness cannot show a permitted read",
+        )
+
     trusted_b_ok = results["trusted"]["B"][0] == "no_prompt"
     binary_only_a_denied = results["binary-only"]["A"][0] == "would_prompt"
     binary_only_b_denied = results["binary-only"]["B"][0] == "would_prompt"
 
-    if trusted_a_ok and trusted_b_ok and binary_only_a_denied and binary_only_b_denied:
+    if trusted_b_ok and binary_only_a_denied and binary_only_b_denied:
         return "confirmed", None
 
     reasons = []
-    if trusted_a_ok and not trusted_b_ok:
+    if not trusted_b_ok:
         reasons.append("trusted: B was denied where A passed")
-    elif trusted_b_ok and not trusted_a_ok:
-        reasons.append("trusted: A was denied where B passed")
-    elif not trusted_a_ok and not trusted_b_ok:
-        reasons.append("trusted: both A and B were denied (no release would pass)")
     if not binary_only_a_denied:
         reasons.append("binary-only: A passed (ACL may key on Tokitty's own binary identity)")
     if not binary_only_b_denied:
@@ -236,6 +242,21 @@ def compute_overall(results: Dict[str, Dict[str, Tuple[str, str]]]) -> Tuple[str
 
 def exit_code_for(overall: str) -> int:
     return 1 if overall in ("harness_error", "broken_instrument") else 0
+
+
+def fold_cleanup_errors(overall: str, reason: Optional[str], cleanup_errors: List[str]) -> Tuple[str, Optional[str]]:
+    """If `finally`'s cleanup (search-list restore, keychain delete) failed,
+    the overall verdict becomes "harness_error" regardless of what the
+    probes found: a search list or synthetic keychain left behind on the
+    runner corrupts whatever runs there next, so a clean CONFIRMED/DISPROVED
+    exit must never be reported alongside a cleanup that silently failed."""
+    if not cleanup_errors:
+        return overall, reason
+    cleanup_text = "; ".join(cleanup_errors)
+    if overall == "harness_error":
+        return overall, f"{reason}; cleanup also failed: {cleanup_text}"
+    prior = overall if not reason else f"{overall} ({reason})"
+    return "harness_error", f"cleanup failed after a {prior} result: {cleanup_text}"
 
 
 def render_verdict_table(results: Dict[str, Dict[str, Tuple[str, str]]], overall: str, reason: Optional[str]) -> str:
@@ -326,8 +347,16 @@ def capture_search_list(log: Logger) -> List[str]:
     return parse_keychain_list(stdout)
 
 
-def create_keychain(keychain_path: Path, log: Logger) -> None:
+def create_keychain_file(keychain_path: Path, log: Logger) -> None:
+    """Just `security create-keychain`. Split out from `configure_keychain`
+    so the caller can mark the keychain as needing cleanup the moment this
+    one call succeeds, rather than after settings and unlock too -- a
+    keychain file that exists on disk needs `delete-keychain` in `finally`
+    even if the two calls after this one fail."""
     _run(["security", "create-keychain", "-p", KEYCHAIN_PASSWORD, str(keychain_path)], log)
+
+
+def configure_keychain(keychain_path: Path, log: Logger) -> None:
     _run(["security", "set-keychain-settings", str(keychain_path)], log)
     _run(["security", "unlock-keychain", "-p", KEYCHAIN_PASSWORD, str(keychain_path)], log)
 
@@ -341,11 +370,20 @@ def restore_search_list(original_list: List[str], log: Logger) -> None:
 
 
 def delete_keychain(keychain_path: Path, log: Logger) -> None:
-    _run(["security", "delete-keychain", str(keychain_path)], log, check=False)
+    _run(["security", "delete-keychain", str(keychain_path)], log)
 
 
-def dump_keychain(keychain_path: Path, log: Logger) -> None:
-    _run(["security", "dump-keychain", "-a", str(keychain_path)], log, check=False)
+def dump_keychain(keychain_path: Path, log: Logger) -> Tuple[bool, str]:
+    """Spec Q6 step 6: dump the item's ACL/partition list before every probe.
+    Logged either way via `_run`, regardless of outcome. Returns (ok, detail):
+    a nonzero exit, or a dump that doesn't even mention the service name this
+    case just added, means the next probe's result can't be trusted."""
+    proc, stdout, stderr = _run(["security", "dump-keychain", "-a", str(keychain_path)], log, check=False)
+    if proc.returncode != 0:
+        return False, f"dump-keychain exited {proc.returncode}: {stderr or stdout}"
+    if KEYCHAIN_SERVICE not in (stdout + stderr):
+        return False, f"dump-keychain output did not mention {KEYCHAIN_SERVICE!r}"
+    return True, "ok"
 
 
 def add_item(keychain_path: Path, trusted_app: str, log: Logger) -> None:
@@ -488,8 +526,12 @@ def main() -> int:
         check_cdhashes_differ(build_a_bin, build_b_bin, log)
 
         original_search_list = capture_search_list(log)
-        create_keychain(keychain_path, log)
+        create_keychain_file(keychain_path, log)
+        # Mark the keychain as needing cleanup now, before the settings and
+        # unlock calls below: the file already exists on disk, so `finally`
+        # must delete it even if one of those two calls raises.
         keychain_created = True
+        configure_keychain(keychain_path, log)
         prepend_to_search_list(keychain_path, original_search_list, log)
 
         for item in ITEMS:
@@ -498,7 +540,14 @@ def main() -> int:
             try:
                 for build, binary in (("A", build_a_bin), ("B", build_b_bin)):
                     wait_for_no_security(log)
-                    dump_keychain(keychain_path, log)
+                    dump_ok, dump_detail = dump_keychain(keychain_path, log)
+                    if not dump_ok:
+                        results[item][build] = (
+                            "harness_error",
+                            f"keychain dump failed before the probe: {dump_detail}",
+                        )
+                        log.write(f"=> {item}/{build}: harness_error -- {dump_detail}")
+                        continue
                     home = work / "home" / f"{item}-{build}"
                     results[item][build] = run_probe(binary, home, log)
                     verdict, detail = results[item][build]
@@ -509,7 +558,7 @@ def main() -> int:
         harness_error = str(exc)
         log.write(f"HARNESS ERROR: {harness_error}")
     finally:
-        _cleanup(keychain_path, original_search_list, keychain_created, log)
+        cleanup_errors = _cleanup(keychain_path, original_search_list, keychain_created, log)
 
     # Any cell a harness error cut short (including every cell, if the error
     # struck before the loop even started) is still owed a table entry.
@@ -521,6 +570,7 @@ def main() -> int:
         overall, reason = "harness_error", harness_error
     else:
         overall, reason = compute_overall(results)
+    overall, reason = fold_cleanup_errors(overall, reason, cleanup_errors)
 
     table_text = render_verdict_table(results, overall, reason)
     log.write(table_text)
@@ -529,20 +579,31 @@ def main() -> int:
     return exit_code_for(overall)
 
 
-def _cleanup(keychain_path: Path, original_search_list: Optional[List[str]], keychain_created: bool, log: Logger) -> None:
+def _cleanup(
+    keychain_path: Path, original_search_list: Optional[List[str]], keychain_created: bool, log: Logger
+) -> List[str]:
     """Best-effort: restore the search list, then delete the keychain.
-    Logged, never raised -- a cleanup failure on an ephemeral CI runner must
-    not mask the actual experiment's result."""
+    Never raised -- a cleanup failure on an ephemeral CI runner must not
+    stop the verdict from being written. But it is logged and returned:
+    a search list or synthetic keychain left behind corrupts whatever runs
+    on this runner next, so the caller folds any returned error into the
+    overall verdict as a harness error instead of letting it pass silently."""
+    errors: List[str] = []
     if original_search_list is not None:
         try:
             restore_search_list(original_search_list, log)
         except HarnessError as exc:
-            log.write(f"cleanup warning: could not restore search list: {exc}")
+            msg = f"could not restore search list: {exc}"
+            log.write(f"cleanup warning: {msg}")
+            errors.append(msg)
     if keychain_created:
         try:
             delete_keychain(keychain_path, log)
         except HarnessError as exc:
-            log.write(f"cleanup warning: could not delete keychain: {exc}")
+            msg = f"could not delete keychain: {exc}"
+            log.write(f"cleanup warning: {msg}")
+            errors.append(msg)
+    return errors
 
 
 if __name__ == "__main__":
