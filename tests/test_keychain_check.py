@@ -120,6 +120,37 @@ def test_run_probe_timeout_is_would_prompt_and_kills_process_group(tmp_path, mon
 
 
 # ---------------------------------------------------------------------------
+# classify_preflight (round-2 fix: the pre-flight find-generic-password
+# check run under each probe's own scratch HOME, before Tokitty is launched)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_preflight_zero_exit_is_found():
+    ok, detail = kc.classify_preflight(0, "keychain: \"/work/tk.keychain-db\"\n", "")
+    assert ok is True
+    assert "tk.keychain-db" in detail
+
+
+def test_classify_preflight_nonzero_exit_is_not_found():
+    ok, detail = kc.classify_preflight(44, "", "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n")
+    assert ok is False
+    assert "exit 44" in detail
+    assert "could not be found" in detail
+
+
+def test_classify_preflight_prefers_stderr_in_detail_when_both_present():
+    ok, detail = kc.classify_preflight(1, "stdout noise", "the real error")
+    assert ok is False
+    assert "the real error" in detail
+
+
+def test_classify_preflight_strips_whitespace():
+    ok, detail = kc.classify_preflight(0, "  trailing text  \n", "")
+    assert ok is True
+    assert detail == "trailing text"
+
+
+# ---------------------------------------------------------------------------
 # parse_cdhash
 # ---------------------------------------------------------------------------
 

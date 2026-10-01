@@ -16,8 +16,7 @@ Procedure (spec Q6 steps 1 to 6):
   1. Confirm build A and B really are different binaries (different CDHash),
      via `codesign -dv --verbose=4`. Equal CDHashes means the test would
      prove nothing -- a harness error, not a result.
-  2. Create a throwaway keychain under --work, unlock it, prepend it to the
-     user search list.
+  2. Create a throwaway keychain under --work, unlock it.
   3. Three items under service "Claude Code-credentials", one at a time:
      `trusted` (-T /usr/bin/security), `negative` (-T '', the control),
      `binary-only` (-T <build A's binary path>).
@@ -26,7 +25,12 @@ Procedure (spec Q6 steps 1 to 6):
      every credentials-path override env var stripped. 30s external timeout;
      on timeout the whole process group is SIGKILLed and reaped so a
      `security -w` child (120s timeout, keychain.py:69) cannot outlive the
-     case.
+     case. Before each run, that scratch HOME's own user search list is
+     pointed at the throwaway keychain (the list is HOME-relative, not tied
+     to the real login session) and a preflight `find-generic-password`
+     under the same HOME/env confirms the item actually resolves there --
+     Tokitty's own Keychain lookup takes no explicit path either, so this
+     checks exactly what it is about to rely on.
   5. Classify each run from its --debug-print output.
   6. Dump the keychain's ACL/partition list before every run, into the log.
 
@@ -297,10 +301,17 @@ def write_step_summary(table_text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run(argv: List[str], log: Logger, timeout: int = SUBPROCESS_TIMEOUT, check: bool = True):
-    log.write(f"$ {' '.join(argv)}")
+def _run(
+    argv: List[str],
+    log: Logger,
+    timeout: int = SUBPROCESS_TIMEOUT,
+    check: bool = True,
+    env: Optional[dict] = None,
+):
+    prefix = f"HOME={env['HOME']} " if env is not None and "HOME" in env else ""
+    log.write(f"$ {prefix}{' '.join(argv)}")
     try:
-        proc = subprocess.run(argv, capture_output=True, timeout=timeout)
+        proc = subprocess.run(argv, capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired as exc:
         raise HarnessError(f"timed out after {timeout}s: {argv!r}") from exc
     except OSError as exc:
@@ -342,8 +353,14 @@ def check_cdhashes_differ(build_a_bin: Path, build_b_bin: Path, log: Logger) -> 
     log.write(f"CDHash B: {sorted(cdhash_b)}")
 
 
-def capture_search_list(log: Logger) -> List[str]:
-    _proc, stdout, _stderr = _run(["security", "list-keychains", "-d", "user"], log)
+def capture_search_list(home: Path, log: Logger) -> List[str]:
+    """The user-domain search list `security list-keychains -d user` reads
+    and writes is resolved relative to $HOME, not to the real login session,
+    so this must run under the same HOME as the call it is meant to let a
+    later restore undo. Each probe gets its own scratch HOME with its own
+    independent list (round-2 fix: this used to run under the runner's real
+    HOME, which is not the HOME the probe process itself sees)."""
+    _proc, stdout, _stderr = _run(["security", "list-keychains", "-d", "user"], log, env=_scratch_env(home))
     return parse_keychain_list(stdout)
 
 
@@ -361,12 +378,51 @@ def configure_keychain(keychain_path: Path, log: Logger) -> None:
     _run(["security", "unlock-keychain", "-p", KEYCHAIN_PASSWORD, str(keychain_path)], log)
 
 
-def prepend_to_search_list(keychain_path: Path, original_list: List[str], log: Logger) -> None:
-    _run(["security", "list-keychains", "-d", "user", "-s", str(keychain_path)] + original_list, log)
+def set_search_list(home: Path, keychain_paths: List[str], log: Logger) -> None:
+    """Replace the user-domain search list for `home`. Used both to point a
+    probe's scratch HOME at the throwaway keychain before launching Tokitty,
+    and to restore that same HOME's list back to whatever capture_search_list
+    found there beforehand."""
+    _run(["security", "list-keychains", "-d", "user", "-s"] + keychain_paths, log, env=_scratch_env(home))
 
 
-def restore_search_list(original_list: List[str], log: Logger) -> None:
-    _run(["security", "list-keychains", "-d", "user", "-s"] + original_list, log)
+def classify_preflight(returncode: int, stdout_text: str, stderr_text: str) -> Tuple[bool, str]:
+    """Pure classifier for a completed (non-timeout, non-launch-error)
+    `find-generic-password` preflight: exit 0 means the item resolved under
+    the search list just set for this HOME, anything else means it did
+    not. Split out from preflight_find_item so this decision -- the same
+    shape as classify_output -- can be unit-tested without a real
+    `security` binary."""
+    if returncode != 0:
+        return False, f"exit {returncode}: {(stderr_text or stdout_text).strip()}"
+    return True, (stdout_text + stderr_text).strip()
+
+
+def preflight_find_item(home: Path, log: Logger) -> Tuple[bool, str]:
+    """Round-2 fix: before launching Tokitty, confirm the search list just
+    set for `home` actually resolves the throwaway item -- without reading
+    the secret (no `-w`), and with no explicit keychain path, mirroring
+    tokitty.keychain._base_command's own `security find-generic-password -s
+    <service>` call exactly (no account, no path: every credentials.py call
+    site passes account=None). If this can't find the item, the probe that
+    follows can't either, and the case is a harness error carrying this
+    output rather than a misleading credentials_unreachable."""
+    env = _scratch_env(home)
+    argv = ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE]
+    log.write(f"$ HOME={home} {' '.join(argv)}")
+    try:
+        proc = subprocess.run(argv, capture_output=True, env=env, timeout=SUBPROCESS_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        return False, f"timed out after {SUBPROCESS_TIMEOUT}s: {exc}"
+    except OSError as exc:
+        return False, f"failed to launch: {exc}"
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    if stdout:
+        log.write(stdout)
+    if stderr:
+        log.write(stderr)
+    return classify_preflight(proc.returncode, stdout, stderr)
 
 
 def delete_keychain(keychain_path: Path, log: Logger) -> None:
@@ -515,9 +571,14 @@ def main() -> int:
 
     results: Dict[str, Dict[str, Tuple[str, str]]] = {item: {} for item in ITEMS}
     keychain_path = work / KEYCHAIN_FILENAME
-    original_search_list: Optional[List[str]] = None
     keychain_created = False
     harness_error: Optional[str] = None
+    # Restore failures for a probe's own scratch-HOME search list (set
+    # below, per cell) -- folded into cleanup_errors alongside _cleanup's,
+    # same treatment: a leftover search list on a throwaway HOME is less
+    # of a risk than one left on the runner's real HOME, but still corrupts
+    # that HOME for any later reuse within this run.
+    per_probe_errors: List[str] = []
 
     try:
         build_a_bin = _locate_binary(Path(args.build_a).resolve())
@@ -525,14 +586,16 @@ def main() -> int:
 
         check_cdhashes_differ(build_a_bin, build_b_bin, log)
 
-        original_search_list = capture_search_list(log)
         create_keychain_file(keychain_path, log)
         # Mark the keychain as needing cleanup now, before the settings and
         # unlock calls below: the file already exists on disk, so `finally`
         # must delete it even if one of those two calls raises.
         keychain_created = True
         configure_keychain(keychain_path, log)
-        prepend_to_search_list(keychain_path, original_search_list, log)
+        # No change to the runner's real HOME search list here (round-1 had
+        # one): nothing else in this script reads the search list through
+        # the real HOME -- every other keychain call takes the keychain's
+        # path directly -- so there is nothing there for a probe to need.
 
         for item in ITEMS:
             trusted_app = trusted_app_for(item, build_a_bin)
@@ -549,7 +612,32 @@ def main() -> int:
                         log.write(f"=> {item}/{build}: harness_error -- {dump_detail}")
                         continue
                     home = work / "home" / f"{item}-{build}"
-                    results[item][build] = run_probe(binary, home, log)
+                    home.mkdir(parents=True, exist_ok=True)
+                    # Round-2 fix: point this probe's own scratch HOME at
+                    # the throwaway keychain -- `security`'s user search
+                    # list is HOME-relative, so setting it under the real
+                    # HOME (round 1) never reached the `security` child
+                    # Tokitty spawns under HOME=<scratch>.
+                    home_original_list = capture_search_list(home, log)
+                    try:
+                        set_search_list(home, [str(keychain_path)], log)
+                        preflight_ok, preflight_detail = preflight_find_item(home, log)
+                        if not preflight_ok:
+                            results[item][build] = (
+                                "harness_error",
+                                f"preflight could not find {KEYCHAIN_SERVICE!r} under "
+                                f"HOME={home}: {preflight_detail}",
+                            )
+                            log.write(f"=> {item}/{build}: harness_error -- preflight: {preflight_detail}")
+                            continue
+                        results[item][build] = run_probe(binary, home, log)
+                    finally:
+                        try:
+                            set_search_list(home, home_original_list, log)
+                        except HarnessError as exc:
+                            msg = f"could not restore search list for HOME={home}: {exc}"
+                            log.write(f"cleanup warning: {msg}")
+                            per_probe_errors.append(msg)
                     verdict, detail = results[item][build]
                     log.write(f"=> {item}/{build}: {verdict} -- {detail}")
             finally:
@@ -558,7 +646,7 @@ def main() -> int:
         harness_error = str(exc)
         log.write(f"HARNESS ERROR: {harness_error}")
     finally:
-        cleanup_errors = _cleanup(keychain_path, original_search_list, keychain_created, log)
+        cleanup_errors = per_probe_errors + _cleanup(keychain_path, keychain_created, log)
 
     # Any cell a harness error cut short (including every cell, if the error
     # struck before the loop even started) is still owed a table entry.
@@ -579,23 +667,16 @@ def main() -> int:
     return exit_code_for(overall)
 
 
-def _cleanup(
-    keychain_path: Path, original_search_list: Optional[List[str]], keychain_created: bool, log: Logger
-) -> List[str]:
-    """Best-effort: restore the search list, then delete the keychain.
-    Never raised -- a cleanup failure on an ephemeral CI runner must not
-    stop the verdict from being written. But it is logged and returned:
-    a search list or synthetic keychain left behind corrupts whatever runs
-    on this runner next, so the caller folds any returned error into the
-    overall verdict as a harness error instead of letting it pass silently."""
+def _cleanup(keychain_path: Path, keychain_created: bool, log: Logger) -> List[str]:
+    """Best-effort: delete the synthetic keychain. Never raised -- a cleanup
+    failure on an ephemeral CI runner must not stop the verdict from being
+    written. But it is logged and returned: a synthetic keychain left
+    behind corrupts whatever runs on this runner next, so the caller folds
+    any returned error into the overall verdict as a harness error instead
+    of letting it pass silently. Per-probe search-list restores are a
+    separate concern (main()'s per_probe_errors), folded in by the caller
+    the same way."""
     errors: List[str] = []
-    if original_search_list is not None:
-        try:
-            restore_search_list(original_search_list, log)
-        except HarnessError as exc:
-            msg = f"could not restore search list: {exc}"
-            log.write(f"cleanup warning: {msg}")
-            errors.append(msg)
     if keychain_created:
         try:
             delete_keychain(keychain_path, log)
