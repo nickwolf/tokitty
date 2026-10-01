@@ -750,27 +750,29 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         return _build_command(config_dir, runner=runner)
 
     def choose_primary(main_entries, main_positions):
-        # Task 4 review finding 6: when an event has more than one owned
-        # handler, prefer whichever already matches what would be written
-        # for it, else whichever is already the stable path, else the
-        # first found -- never let a fallback pick an old release path as
-        # primary while deleting a perfectly good stable-path duplicate.
+        # Task 4 review finding 6, round 2 finding 1: when an event has
+        # more than one owned handler, a stable-path handler is checked
+        # FIRST -- it must never be dropped in favour of a release-path
+        # handler just because that release-path handler happens to
+        # already match what fallback mode would write for it today.
+        # Only once no stable-path handler is present do we fall back to
+        # whichever already matches desired, then the first found.
         if len(main_positions) == 1:
             return main_positions[0]
-        stable_pos = None
+        for pos in main_positions:
+            handler = main_entries[pos[0]]["hooks"][pos[1]]
+            command = handler.get("command")
+            if (
+                stable is not None
+                and isinstance(command, str)
+                and _normalize_token_path(command) == _normalize_token_path(stable)
+            ):
+                return pos
         for pos in main_positions:
             handler = main_entries[pos[0]]["hooks"][pos[1]]
             if not _handler_needs_rewrite(handler, desired_for(handler.get("command")), refresh=refresh):
                 return pos
-            command = handler.get("command")
-            if (
-                stable_pos is None
-                and stable is not None
-                and isinstance(command, str)
-                and _normalize_token_path(command) == _normalize_token_path(stable)
-            ):
-                stable_pos = pos
-        return stable_pos if stable_pos is not None else main_positions[0]
+        return main_positions[0]
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)

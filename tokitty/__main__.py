@@ -565,19 +565,21 @@ def run_gui() -> int:
                 # so the de-duplication above catches it instead of
                 # showing both a raw and a wrapped paragraph for the same
                 # lock timeout or failed repoint. AppTranslocatedError is
-                # deliberately swallowed here -- ensure_current's own
-                # per-account result already reports MOVE_TO_APPLICATIONS
-                # for any account this affects -- and doesn't skip the
-                # retry below either way.
+                # noted here too (Task 4 round 2 finding 2) -- with no
+                # eligible account in accounts.json, ensure_current below
+                # never runs a single reconcile and so never reports
+                # MOVE_TO_APPLICATIONS itself; the de-duplication above
+                # still collapses this with any per-account copy of the
+                # same text. Doesn't skip the retry below either way.
                 try:
                     from tokitty import runner_link
-                    from tokitty.frozen import AppTranslocatedError
+                    from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
 
                     runner_link.ensure_runner_link(state_dir)
                 except AppTranslocatedError:
-                    pass
+                    _note(MOVE_TO_APPLICATIONS)
                 except FileNotFoundError:
-                    _note("this copy of Tokitty has no tokitty-hook next to it")
+                    _note("Tokitty can't set up its hooks: this copy of Tokitty has no tokitty-hook next to it")
                 except OSError as exc:
                     _note(hooks_install.LINK_FALLBACK_WARNING.format(reason=str(exc)))
 

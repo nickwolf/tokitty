@@ -854,6 +854,44 @@ def test_startup_hook_warnings_reach_messagebox_via_real_ensure_current(tmp_path
 
 
 @pytest.mark.gui
+def test_run_discovery_notes_translocation_with_no_eligible_accounts(tmp_path, monkeypatch):
+    """Task 4 round 2 finding 2: with no accounts.json (so ensure_current,
+    stubbed by this file's autouse fixture to mirror its real "nothing to
+    do" behaviour, never reports anything), a frozen launch whose own
+    ensure_runner_link call raises AppTranslocatedError used to swallow it
+    silently -- the per-account path that was supposed to cover this never
+    ran. The fake release lives entirely under tmp_path and is never
+    touched: is_translocated only inspects the path string, so no files
+    need to exist for ensure_runner_link to raise before any filesystem
+    access."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty.frozen import MOVE_TO_APPLICATIONS
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    translocated_exe = tmp_path / "AppTranslocation" / "abc123" / "Tokitty.app" / "Contents" / "MacOS" / "tokitty"
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_module.sys, "executable", str(translocated_exe))
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert args[1].count(MOVE_TO_APPLICATIONS) == 1
+    assert kwargs.get("parent") is not None
+
+
+@pytest.mark.gui
 def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypatch):
     """Finding 2 (important, entangled with Finding 1): retry_pending_hook_op
     can raise raw OSError/PermissionError from the underlying hook

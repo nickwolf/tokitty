@@ -1715,6 +1715,46 @@ def test_fallback_duplicate_handlers_prefers_the_stable_one_as_primary(tmp_path,
     assert hooks[0]["command"] == stable_path
 
 
+def test_fallback_never_prefers_this_releases_own_bundled_duplicate_over_stable(tmp_path, monkeypatch):
+    """Round 2 finding 1: choose_primary used to return the first owned
+    handler that already matched what fallback mode would write today,
+    before it had looked at every position for a stable-path one. A
+    handler already sitting at *this release's own* bundled path needs no
+    rewrite, so when it is listed before the stable-path handler for the
+    same event, the old per-position early return picked it as primary and
+    deleted the stable duplicate -- backwards from the rule that a
+    stable-path hook is never dropped in favour of a release path. Listing
+    the bundled handler first is what exposes the bug."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    bundled_path = hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    stable_path = str(state_dir / "current" / RUNNER_NAME)
+    sessions_args = ["--sessions-dir", f"{home}/tokitty/sessions"]
+    bundled_handler = {"type": "command", "command": bundled_path, "args": list(sessions_args)}
+    stable_handler = {"type": "command", "command": stable_path, "args": list(sessions_args)}
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [bundled_handler, stable_handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    data = json.loads((home / "settings.json").read_text())
+    hooks = data["hooks"]["Stop"][0]["hooks"]
+    assert len(hooks) == 1
+    assert hooks[0]["command"] == stable_path
+
+
 def test_fallback_missing_bundled_runner_message_names_the_reason(tmp_path, monkeypatch):
     """Finding 8: a missing bundled tokitty-hook used to surface only a
     bare path as the whole result message."""
