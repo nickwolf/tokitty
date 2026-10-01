@@ -554,18 +554,32 @@ def run_gui() -> int:
                     seen_hook_warnings.add(text)
                     hook_warnings.append(text)
 
+            from tokitty import hooks_install
+
             if getattr(sys, "frozen", False):
                 # Repoints <state dir>/current at this release before the
                 # retry below, so a stale link from a previous release
-                # never lingers between launches (spec Q2a). AppTranslocatedError
-                # is an OSError subclass, so it's covered by the same except:
-                # a link failure here must not skip the pending-op retry.
+                # never lingers between launches (spec Q2a). Reported the
+                # same way ensure_current's own per-account reconcile
+                # reports the identical failure (Task 4 review finding 8),
+                # so the de-duplication above catches it instead of
+                # showing both a raw and a wrapped paragraph for the same
+                # lock timeout or failed repoint. AppTranslocatedError is
+                # deliberately swallowed here -- ensure_current's own
+                # per-account result already reports MOVE_TO_APPLICATIONS
+                # for any account this affects -- and doesn't skip the
+                # retry below either way.
                 try:
                     from tokitty import runner_link
+                    from tokitty.frozen import AppTranslocatedError
 
                     runner_link.ensure_runner_link(state_dir)
+                except AppTranslocatedError:
+                    pass
+                except FileNotFoundError:
+                    _note("this copy of Tokitty has no tokitty-hook next to it")
                 except OSError as exc:
-                    _note(str(exc))
+                    _note(hooks_install.LINK_FALLBACK_WARNING.format(reason=str(exc)))
 
             try:
                 retry_result = retry_pending_hook_op(state_dir)
@@ -577,10 +591,12 @@ def run_gui() -> int:
                     _note(retry_result.message)
 
             try:
-                from tokitty import hooks_install
-
                 refresh_results = hooks_install.ensure_current(state_dir)
-            except OSError:
+            except Exception:
+                # Widened from OSError (Task 4 review finding 3): a
+                # reconcile call that somehow still raises something else
+                # must not lose the retry warning just collected above, or
+                # skip the WSL/transcript discovery below.
                 refresh_results = []
             for refresh_result in refresh_results:
                 _note(refresh_result.warning)
@@ -984,9 +1000,18 @@ def run_gui() -> int:
         if ready:
             maybe_auto_open()
             if hook_warnings:
-                from tkinter import messagebox
+                # Deferred (Task 4 review finding 7): showwarning is modal
+                # and would otherwise block tick() from finishing and
+                # rescheduling itself (root.after(UI_REFRESH_MS, tick),
+                # below) until the user dismisses it. root.after(0, ...)
+                # runs it as its own callback once this call returns, so
+                # tick's cadence is never held up by it.
+                def _show_hook_warnings(warnings=hook_warnings):
+                    from tkinter import messagebox
 
-                messagebox.showwarning("Tokitty", "\n\n".join(hook_warnings), parent=root)
+                    messagebox.showwarning("Tokitty", "\n\n".join(warnings), parent=root)
+
+                root.after(0, _show_hook_warnings)
 
         for unit in units:
             latest = unit["poller"].get_latest()

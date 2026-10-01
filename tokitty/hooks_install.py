@@ -171,20 +171,21 @@ def provider_has_hooks(kind: Optional[str]) -> bool:
         return False
 
 
-def get_config_dirs(state_dir: Optional[Path] = None) -> List[Tuple[str, str]]:
-    """Return the (config_dir, provider) pairs to install/uninstall hooks in.
+def _config_dirs_from_accounts_file(state_dir: Path) -> Optional[List[Tuple[str, str]]]:
+    """(config_dir, provider) pairs explicitly listed in
+    <state_dir>/accounts.json, minus any account whose provider has no
+    hooks -- or None if the file is absent, malformed, or lists no
+    config_dir entries at all.
 
-    Default is the single dir ~/.claude (or, on Windows with WSL, the
-    \\\\wsl.localhost dir where Claude Code actually lives -- see
-    _default_config_dir), paired with DEFAULT_PROVIDER. If
-    <state-dir>/accounts.json exists and contains a list of config-dir
-    paths under key "accounts" (each item an object with a "config_dir"
-    key), those are used instead, minus any account whose provider has no
-    hooks. An accounts.json holding only such accounts yields an empty
-    list rather than the default dir, which is not an account the user
-    asked for. state_dir defaults to get_state_dir() when not given.
+    None is the signal a caller uses to decide what "no explicit
+    accounts" means: get_config_dirs falls back to a single default dir
+    (a real end user's normal single-account case); ensure_current, the
+    once-per-launch startup refresh, does not -- see its own docstring
+    (Task 4 review finding 2: falling back there would mean resolving
+    _default_config_dir() on every launch with no accounts.json, which on
+    Windows shells into every WSL distro to look for credentials nobody
+    asked it to refresh).
     """
-    state_dir = state_dir if state_dir is not None else get_state_dir()
     accounts_file = Path(state_dir) / "accounts.json"
     if accounts_file.exists():
         try:
@@ -201,6 +202,26 @@ def get_config_dirs(state_dir: Optional[Path] = None) -> List[Tuple[str, str]]:
                     ]
         except Exception:
             pass
+    return None
+
+
+def get_config_dirs(state_dir: Optional[Path] = None) -> List[Tuple[str, str]]:
+    """Return the (config_dir, provider) pairs to install/uninstall hooks in.
+
+    Default is the single dir ~/.claude (or, on Windows with WSL, the
+    \\\\wsl.localhost dir where Claude Code actually lives -- see
+    _default_config_dir), paired with DEFAULT_PROVIDER. If
+    <state-dir>/accounts.json exists and contains a list of config-dir
+    paths under key "accounts" (each item an object with a "config_dir"
+    key), those are used instead, minus any account whose provider has no
+    hooks. An accounts.json holding only such accounts yields an empty
+    list rather than the default dir, which is not an account the user
+    asked for. state_dir defaults to get_state_dir() when not given.
+    """
+    state_dir = state_dir if state_dir is not None else get_state_dir()
+    explicit = _config_dirs_from_accounts_file(state_dir)
+    if explicit is not None:
+        return explicit
     return [(_default_config_dir(), DEFAULT_PROVIDER)]
 
 
@@ -443,6 +464,7 @@ class ConfigDirResult:
         installed_events: Optional[List[str]] = None,
         warning: Optional[str] = None,
         refreshed_events: Optional[List[str]] = None,
+        note: Optional[str] = None,
     ):
         self.config_dir = config_dir
         self.ok = ok
@@ -450,6 +472,11 @@ class ConfigDirResult:
         self.installed_events = installed_events or []
         self.warning = warning
         self.refreshed_events = refreshed_events or []
+        # A soft, informational note distinct from `warning` (reserved for
+        # the link-fallback case, spec Q2a) -- e.g. a settings.local.json
+        # entry that owns an event but differs from what tokitty would
+        # write today. Never blocks anything; the CLI prints it plainly.
+        self.note = note
 
 
 def _collect_owned_positions(entries, config_dir: str, provider: str) -> List[Tuple[int, int]]:
@@ -513,20 +540,39 @@ def _normalized_args(args):
     return [_normalize_token_path(v) if isinstance(v, str) else v for v in args]
 
 
-def _handler_needs_rewrite(old_handler: dict, desired_handler: dict) -> bool:
+def _handler_needs_rewrite(old_handler: dict, desired_handler: dict, *, refresh: bool = False) -> bool:
     """Whether an already-owned handler must be rewritten to match desired.
+
+    refresh (the startup path, add_missing=False) never demotes an owned
+    exec-form handler back to the interpreter-string shape (Task 4 review
+    finding 1): a source (non-frozen) launch's own startup refresh must
+    leave a frozen install's hooks alone, or a machine that launches both
+    forms flip-flops the registered command on every launch. An explicit
+    install (add_missing=True) still performs that demotion, same as
+    before -- the one-way python -> exec promotion a frozen refresh makes
+    is untouched by this guard, since that direction isn't a demotion.
 
     Both lacking "args" (the interpreter-string shape) is never a
     rewrite: old_handler is already confirmed owned, and _is_owned_hook's
     string match already accepts an equivalent spelling (quoting,
     ``python`` vs ``python3``), so rewriting here would only change the
     string Codex hashes for no semantic difference. Otherwise a match
-    needs the same "command" exactly and, for "args", each element equal
-    after _normalize_token_path.
+    needs the same "command" after _normalize_token_path (an
+    equivalently-spelled path -- a doubled slash, a differently-cased
+    drive letter -- is not a rewrite either, Task 4 review finding 5) and,
+    for "args", each element equal after the same normalisation.
     """
+    if refresh and "args" in old_handler and "args" not in desired_handler:
+        return False
     if "args" not in old_handler and "args" not in desired_handler:
         return False
-    if old_handler.get("command") != desired_handler.get("command"):
+    old_command = old_handler.get("command")
+    desired_command = desired_handler.get("command")
+    if isinstance(old_command, str) and isinstance(desired_command, str):
+        commands_match = _normalize_token_path(old_command) == _normalize_token_path(desired_command)
+    else:
+        commands_match = old_command == desired_command
+    if not commands_match:
         return True
     old_args = old_handler.get("args")
     desired_args = desired_handler.get("args")
@@ -551,6 +597,62 @@ def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
     return merged
 
 
+def _load_reconcile_state(base: Path, target: HookTarget):
+    """Load and validate config_dir's settings for reconcile.
+
+    Returns (data, local_hooks, problem). problem is None on success, or
+    a (kind, detail) pair: kind is "parse" for a JSON parse failure in
+    either file, or "shape" for valid JSON that isn't the shape reconcile
+    needs (settings.json's root isn't an object, its "hooks" key is
+    present but isn't an object -- this also catches "hooks": null,
+    which used to reach a bare AttributeError further down -- or a
+    per-event value isn't a list). The caller decides what a problem
+    means: an explicit install always aborts on either kind; a refresh
+    aborts only on "shape" and quietly skips on "parse" (Task 4 review
+    findings 3 and 9). settings.local.json's shape is deliberately not
+    validated this strictly: it's read-only, and a malformed local file
+    should never block reconciling the file tokitty actually writes.
+    """
+    settings_path = base / target.settings_file
+    data, error = _load_settings(settings_path)
+    if error:
+        return None, None, ("parse", f"could not parse {target.settings_file}: {error}")
+    if not isinstance(data, dict):
+        return None, None, ("shape", f"{target.settings_file} is not an object: {data!r}")
+
+    local_data: dict = {}
+    if target.local_settings_file is not None:
+        local_data, local_error = _load_settings(base / target.local_settings_file)
+        if local_error:
+            return None, None, ("parse", f"could not parse {target.local_settings_file}: {local_error}")
+
+    existing_hooks = data.get("hooks")
+    if "hooks" in data and not isinstance(existing_hooks, dict):
+        return None, None, ("shape", f"{target.settings_file} 'hooks' key is not an object: {existing_hooks!r}")
+    for event, _matcher in target.events:
+        entries = existing_hooks.get(event) if existing_hooks else None
+        if entries is not None and not isinstance(entries, list):
+            return None, None, ("shape", f"{target.settings_file} 'hooks.{event}' is not a list: {entries!r}")
+
+    local_hooks = local_data.get("hooks") if isinstance(local_data, dict) else None
+    if not isinstance(local_hooks, dict):
+        local_hooks = {}
+
+    return data, local_hooks, None
+
+
+def _reconcile_problem_result(config_dir: str, problem, add_missing: bool) -> ConfigDirResult:
+    kind, detail = problem
+    if kind == "parse" and not add_missing:
+        # Noise, not harm: nothing is written either way, and this is
+        # reached on every launch for a home Tokitty has never touched
+        # whose settings.json (or settings.local.json) just happens not
+        # to parse (Task 4 review finding 9). An explicit install still
+        # fails loudly, below.
+        return ConfigDirResult(config_dir, True, f"skipped, {detail}")
+    return ConfigDirResult(config_dir, False, f"aborted, {detail}")
+
+
 def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
     """Bring config_dir's Claude Code hooks in line with what tokitty would
     write today, adding a missing handler only when add_missing is true.
@@ -560,37 +662,13 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
     base = Path(_local_config_path(config_dir))
     settings_path = base / target.settings_file
 
-    data, error = _load_settings(settings_path)
-    if error:
-        return ConfigDirResult(config_dir, False, f"aborted, could not parse {target.settings_file}: {error}")
-
-    local_data: dict = {}
-    if target.local_settings_file is not None:
-        local_data, local_error = _load_settings(base / target.local_settings_file)
-        if local_error:
-            return ConfigDirResult(
-                config_dir, False, f"aborted, could not parse {target.local_settings_file}: {local_error}"
-            )
-
-    existing_hooks = data.get("hooks")
-    if existing_hooks is not None and not isinstance(existing_hooks, dict):
-        return ConfigDirResult(
-            config_dir, False, f"aborted, {target.settings_file} 'hooks' key is not an object: {existing_hooks!r}"
-        )
-    for event, _matcher in target.events:
-        entries = existing_hooks.get(event) if existing_hooks else None
-        if entries is not None and not isinstance(entries, list):
-            return ConfigDirResult(
-                config_dir, False, f"aborted, {target.settings_file} 'hooks.{event}' is not a list: {entries!r}"
-            )
-
-    local_hooks = local_data.get("hooks") if isinstance(local_data, dict) else None
-    if not isinstance(local_hooks, dict):
-        local_hooks = {}
+    data, local_hooks, problem = _load_reconcile_state(base, target)
+    if problem is not None:
+        return _reconcile_problem_result(config_dir, problem, add_missing)
 
     any_owned = any(
         _collect_owned_positions(local_hooks.get(event), config_dir, provider)
-        or _collect_owned_positions((existing_hooks or {}).get(event), config_dir, provider)
+        or _collect_owned_positions((data.get("hooks") or {}).get(event), config_dir, provider)
         for event, _matcher in target.events
     )
     if not add_missing and not any_owned:
@@ -617,12 +695,12 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             outcome = ensure_runner_link(state_dir_path())
         except AppTranslocatedError:
             return ConfigDirResult(config_dir, False, MOVE_TO_APPLICATIONS)
-        except FileNotFoundError as exc:
+        except FileNotFoundError:
             # This release has no bundled tokitty-hook at all -- a broken
             # build, not a transient lock/repoint problem. Falling back
             # would register a command pointing at a file that doesn't
             # exist, so this aborts instead of warning.
-            return ConfigDirResult(config_dir, False, str(exc))
+            return ConfigDirResult(config_dir, False, "this copy of Tokitty has no tokitty-hook next to it")
         except OSError as exc:
             outcome = None
             reason = str(exc)
@@ -643,16 +721,56 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             fallback_bundled = hook_runner_path(os.path.realpath(sys.executable), platform)
             warning = LINK_FALLBACK_WARNING.format(reason=reason)
 
+        # Task 4 review finding 4: ensure_runner_link can block up to 5s
+        # on current.lock. Re-read settings fresh right before deciding
+        # what to write, so a concurrent uninstall (or account removal)
+        # landing during that wait is never overwritten by a snapshot
+        # taken before it happened. A refresh naturally does nothing for
+        # an event the fresh read no longer shows as owned (the "no owned
+        # handler, not add_missing" branch below), so no separate re-check
+        # of any_owned is needed here.
+        data, local_hooks, problem = _load_reconcile_state(base, target)
+        if problem is not None:
+            return _reconcile_problem_result(config_dir, problem, add_missing)
+
+    refresh = not add_missing
+
     def desired_for(existing_command):
         if not is_exec:
             return skeleton
         if healthy_runner is not None:
             runner = healthy_runner
-        elif existing_command == stable:
+        elif (
+            isinstance(existing_command, str)
+            and _normalize_token_path(existing_command) == _normalize_token_path(stable)
+        ):
             runner = stable
         else:
             runner = fallback_bundled
         return _build_command(config_dir, runner=runner)
+
+    def choose_primary(main_entries, main_positions):
+        # Task 4 review finding 6: when an event has more than one owned
+        # handler, prefer whichever already matches what would be written
+        # for it, else whichever is already the stable path, else the
+        # first found -- never let a fallback pick an old release path as
+        # primary while deleting a perfectly good stable-path duplicate.
+        if len(main_positions) == 1:
+            return main_positions[0]
+        stable_pos = None
+        for pos in main_positions:
+            handler = main_entries[pos[0]]["hooks"][pos[1]]
+            if not _handler_needs_rewrite(handler, desired_for(handler.get("command")), refresh=refresh):
+                return pos
+            command = handler.get("command")
+            if (
+                stable_pos is None
+                and stable is not None
+                and isinstance(command, str)
+                and _normalize_token_path(command) == _normalize_token_path(stable)
+            ):
+                stable_pos = pos
+        return stable_pos if stable_pos is not None else main_positions[0]
 
     hooks_dest = base / "tokitty" / "hook_writer.py"
     hooks_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -680,7 +798,7 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             # copy left in settings.json is removed so the event can't
             # fire twice.
             local_handler = local_entries[local_positions[0][0]]["hooks"][local_positions[0][1]]
-            if _handler_needs_rewrite(local_handler, desired_for(local_handler.get("command"))):
+            if _handler_needs_rewrite(local_handler, desired_for(local_handler.get("command")), refresh=refresh):
                 stale_local_events.append(event)
             if main_positions:
                 new_entries = _rebuild_entries(main_entries, remove_positions=main_positions)
@@ -701,12 +819,12 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             # else: a refresh never adds a handler for an event nothing owns.
             continue
 
-        primary_pos = main_positions[0]
-        extra_positions = main_positions[1:]
+        primary_pos = choose_primary(main_entries, main_positions)
+        extra_positions = [pos for pos in main_positions if pos != primary_pos]
         primary_handler = main_entries[primary_pos[0]]["hooks"][primary_pos[1]]
         desired = desired_for(primary_handler.get("command"))
 
-        if _handler_needs_rewrite(primary_handler, desired):
+        if _handler_needs_rewrite(primary_handler, desired, refresh=refresh):
             replacement = _merge_handler(primary_handler, desired)
             new_entries = _rebuild_entries(
                 main_entries, replace_pos=primary_pos, replacement=replacement, remove_positions=extra_positions
@@ -734,9 +852,11 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         msg = " and ".join(parts)
     else:
         msg = "already installed, nothing to do"
+
+    note = None
     if stale_local_events:
-        msg += (
-            "; a locally-owned hook differs from what Tokitty would write for: "
+        note = (
+            "a locally-owned hook differs from what Tokitty would write for: "
             + ", ".join(stale_local_events)
         )
 
@@ -747,6 +867,7 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         installed_events=installed_events,
         refreshed_events=refreshed_events,
         warning=warning,
+        note=note,
     )
 
 
@@ -773,28 +894,45 @@ def refresh_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> 
 
 
 def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[ConfigDirResult]:
-    """Refresh every hook-enabled account's registration in place, called
-    from run_discovery on every launch so a stale owned handler (an old
-    release path, a spelling a past version wrote) gets corrected without
-    ever installing hooks into a home that never had them.
+    """Refresh every explicitly-configured hook-enabled account's
+    registration in place, called from run_discovery on every launch so a
+    stale owned handler (an old release path, a spelling a past version
+    wrote) gets corrected without ever installing hooks into a home that
+    never had them.
+
+    Deliberately does not call get_config_dirs: its fallback to
+    _default_config_dir() when accounts.json is absent is right for an
+    explicit --install-hooks/Accounts-dialog call, but wrong for a call
+    that fires on every single launch -- on Windows that fallback shells
+    into every WSL distro looking for credentials (Task 4 review finding
+    2, a regression of issue #52's WslCredentialsCache). With no
+    accounts.json, or nothing usable in it, there is by definition no
+    account the user has explicitly asked tokitty to watch, so this does
+    nothing at all: no default-dir resolution, no WSL probe.
 
     refresh_fn defaults to refresh_hooks_for_dir, looked up fresh on each
     call rather than bound as a default argument, so a test can
     monkeypatch the module attribute instead of passing it explicitly. A
     pair whose provider has no reconcile branch is skipped -- today
-    get_config_dirs only ever returns hook-enabled providers, all of
-    which are in _RECONCILE_TABLE, but this keeps a future mismatch (a
-    provider gaining hooks before its own reconcile branch lands) from
-    raising instead of just doing nothing for that pair.
+    every hook-enabled provider is in _RECONCILE_TABLE, but this keeps a
+    future mismatch (a provider gaining hooks before its own reconcile
+    branch lands) from raising instead of just doing nothing for that
+    pair. Any exception a reconcile call raises (not just OSError -- Task
+    4 review finding 3) becomes a failed result for that account instead
+    of aborting every account after it.
     """
+    resolved_state_dir = state_dir if state_dir is not None else get_state_dir()
+    pairs = _config_dirs_from_accounts_file(resolved_state_dir)
+    if pairs is None:
+        return []
     results = []
-    for config_dir, provider in get_config_dirs(state_dir):
+    for config_dir, provider in pairs:
         if (provider or DEFAULT_PROVIDER) not in _RECONCILE_TABLE:
             continue
         fn = refresh_fn if refresh_fn is not None else refresh_hooks_for_dir
         try:
             results.append(fn(config_dir, provider))
-        except OSError as exc:
+        except Exception as exc:
             results.append(ConfigDirResult(config_dir, False, str(exc)))
     return results
 
@@ -1032,11 +1170,8 @@ def install_hooks() -> int:
             print(f"{config_dir}: refreshed hooks for {', '.join(result.refreshed_events)}")
         if not result.installed_events and not result.refreshed_events:
             print(f"{config_dir}: {result.message}")
-        elif "; " in result.message:
-            # A note riding along with an otherwise-successful install (a
-            # stale settings.local.json entry, say) -- printed
-            # unconditionally so the lines above never swallow it.
-            print(f"{config_dir}: {result.message}")
+        if result.note:
+            print(f"{config_dir}: {result.note}")
         if result.warning:
             print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
     print("If the cat doesn't react, restart running Claude Code sessions "

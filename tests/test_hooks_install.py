@@ -1223,22 +1223,32 @@ def test_install_skips_stale_local_entry_and_removes_main_duplicate(tmp_path):
 
     assert result.ok
     assert "Stop" in result.refreshed_events
-    assert "Stop" in result.message
+    # Exact match, not a substring check: a SubagentStop-only note would
+    # also satisfy "Stop" in result.note (Task 4 review coverage gap).
+    assert result.note == "a locally-owned hook differs from what Tokitty would write for: Stop"
     data = json.loads((config_dir / "settings.json").read_text())
     assert "Stop" not in data["hooks"]
     local_after = json.loads((config_dir / "settings.local.json").read_text())
     assert local_after == local
 
 
-def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path, monkeypatch):
+def test_uninstall_then_ensure_current_stays_uninstalled(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     hi.install_hooks_for_dir(str(config_dir))
     hi.uninstall_hooks_for_dir(str(config_dir))
     before = (config_dir / "settings.json").read_bytes()
-    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # ensure_current reads its accounts explicitly from accounts.json now
+    # (Task 4 review finding 2): it never falls back to get_config_dirs's
+    # default-dir resolution, so this can no longer be driven by
+    # monkeypatching get_config_dirs -- a real accounts.json is required.
+    (state_dir / "accounts.json").write_text(
+        json.dumps({"accounts": [{"config_dir": str(config_dir), "provider": "claude"}]})
+    )
 
-    results = hi.ensure_current(tmp_path / "state")
+    results = hi.ensure_current(state_dir)
 
     assert len(results) == 1
     assert results[0].ok
@@ -1367,25 +1377,53 @@ def test_fallback_new_event_never_uses_a_broken_stable_path(tmp_path, monkeypatc
     assert other_hook["command"] == str(state_dir / "current" / RUNNER_NAME)
 
 
-def test_ensure_current_turns_oserror_into_failed_result(tmp_path, monkeypatch):
+def _write_accounts_json(state_dir: Path, config_dir, provider="claude") -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "accounts.json").write_text(
+        json.dumps({"accounts": [{"config_dir": str(config_dir), "provider": provider}]})
+    )
+
+
+def test_ensure_current_turns_oserror_into_failed_result(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
 
     def raising_refresh(cd, provider):
         raise OSError("disk on fire")
 
-    results = hi.ensure_current(tmp_path / "state", refresh_fn=raising_refresh)
+    results = hi.ensure_current(state_dir, refresh_fn=raising_refresh)
 
     assert len(results) == 1
     assert results[0].ok is False
     assert "disk on fire" in results[0].message
 
 
+def test_ensure_current_turns_generic_exception_into_failed_result(tmp_path):
+    """Task 4 review finding 3: a non-OSError exception (e.g. the
+    AttributeError a malformed settings.json used to raise) must not
+    abort the rest of ensure_current's accounts, only this one's result."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
+
+    def raising_refresh(cd, provider):
+        raise ValueError("not an OSError at all")
+
+    results = hi.ensure_current(state_dir, refresh_fn=raising_refresh)
+
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "not an OSError at all" in results[0].message
+
+
 def test_ensure_current_looks_up_default_refresh_fn_at_call_time(tmp_path, monkeypatch):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    monkeypatch.setattr(hi, "get_config_dirs", lambda state_dir=None: [(str(config_dir), "claude")])
+    state_dir = tmp_path / "state"
+    _write_accounts_json(state_dir, config_dir)
 
     calls = []
 
@@ -1395,10 +1433,354 @@ def test_ensure_current_looks_up_default_refresh_fn_at_call_time(tmp_path, monke
 
     monkeypatch.setattr(hi, "refresh_hooks_for_dir", fake_refresh)
 
-    results = hi.ensure_current(tmp_path / "state")
+    results = hi.ensure_current(state_dir)
 
     assert calls == [(str(config_dir), "claude")]
     assert results[0].message == "spied"
+
+
+def test_ensure_current_skips_default_dir_and_wsl_probe_without_accounts_json(tmp_path, monkeypatch):
+    """Task 4 review finding 2: with no accounts.json, ensure_current must
+    do nothing at all -- specifically, it must never call
+    _default_config_dir() (whose non-Windows branch is harmless, but
+    whose Windows branch shells into every WSL distro on every launch)."""
+
+    def boom():
+        raise AssertionError("_default_config_dir must not be called by ensure_current")
+
+    monkeypatch.setattr(hi, "_default_config_dir", boom)
+
+    results = hi.ensure_current(tmp_path / "state")
+
+    assert results == []
+
+
+def test_ensure_current_skips_when_accounts_json_lists_no_hook_accounts(tmp_path, monkeypatch):
+    def boom():
+        raise AssertionError("_default_config_dir must not be called by ensure_current")
+
+    monkeypatch.setattr(hi, "_default_config_dir", boom)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "accounts.json").write_text(json.dumps({"accounts": []}))
+
+    results = hi.ensure_current(state_dir)
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4 review fix round 1
+# ---------------------------------------------------------------------------
+
+def test_refresh_leaves_exec_form_handler_alone_when_not_frozen(tmp_path):
+    """Finding 1: a source (non-frozen) launch's own startup refresh must
+    never demote a frozen install's exec-form handler back to the
+    interpreter-string shape -- doing so would flip-flop the registered
+    command (and the Codex hash) with every frozen launch's own refresh,
+    which converts it back up."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+    before = (config_dir / "settings.json").read_bytes()
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (config_dir / "settings.json").read_bytes()
+    assert after == before
+    assert list(config_dir.glob("settings.json.tokitty-backup-*")) == []
+
+
+def test_install_still_converts_exec_form_to_python_when_not_frozen(tmp_path):
+    """Finding 1's other half: an explicit install (add_missing=True) keeps
+    today's behaviour and still performs the demotion -- only the
+    automatic startup refresh gained the new guard."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    exec_handler = {
+        "type": "command",
+        "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert "Stop" in result.refreshed_events
+    data = json.loads((config_dir / "settings.json").read_text())
+    hook = data["hooks"]["Stop"][0]["hooks"][0]
+    assert "args" not in hook
+
+
+def test_install_aborts_cleanly_on_non_dict_settings_json_root(tmp_path):
+    """Finding 3: settings.json parses fine but its root isn't an object."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps([]))
+    original = (config_dir / "settings.json").read_text()
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
+    assert not (config_dir / "tokitty").exists()
+
+
+def test_install_aborts_cleanly_on_null_hooks_key(tmp_path):
+    """Finding 3: {"hooks": null} used to reach a bare AttributeError."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps({"hooks": None}))
+    original = (config_dir / "settings.json").read_text()
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert (config_dir / "settings.json").read_text() == original
+
+
+def test_refresh_also_aborts_on_non_dict_settings_json_root(tmp_path):
+    """Finding 3 is a shape problem, not a parse problem -- finding 9's
+    quiet-skip leniency for refresh is for unparseable JSON only, so this
+    must still abort loudly during a refresh too."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps([]))
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+
+
+def test_ensure_current_survives_a_shape_error_via_the_real_reconcile(tmp_path):
+    """Finding 3, end to end: ensure_current must not let one account's
+    AttributeError-turned-abort take down the whole pass."""
+    good = tmp_path / "good" / ".claude"
+    good.mkdir(parents=True)
+    bad = tmp_path / "bad" / ".claude"
+    bad.mkdir(parents=True)
+    (bad / "settings.json").write_text(json.dumps({"hooks": None}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"config_dir": str(good), "provider": "claude"},
+                    {"config_dir": str(bad), "provider": "claude"},
+                ]
+            }
+        )
+    )
+    hi.install_hooks_for_dir(str(good))
+
+    results = hi.ensure_current(state_dir)
+
+    by_dir = {r.config_dir: r for r in results}
+    assert by_dir[str(good)].ok
+    assert not by_dir[str(bad)].ok
+
+
+def test_handler_needs_rewrite_normalizes_drive_letter_case_in_command():
+    """Finding 5, drive-letter case: an equivalently-spelled stable command
+    (only its drive letter and directory casing differ) is not a rewrite."""
+    old = {
+        "type": "command",
+        "command": r"c:\users\nick\appdata\local\tokitty\current\tokitty-hook.exe",
+        "args": ["--sessions-dir", r"C:\Users\Nick\.claude/tokitty/sessions"],
+    }
+    desired = {
+        "type": "command",
+        "command": r"C:\Users\Nick\AppData\Local\Tokitty\current\tokitty-hook.exe",
+        "args": ["--sessions-dir", r"C:\Users\Nick\.claude/tokitty/sessions"],
+    }
+    assert not hi._handler_needs_rewrite(old, desired)
+
+
+def test_refresh_leaves_doubled_slash_stable_spelling_byte_identical(tmp_path, monkeypatch):
+    """Finding 5, doubled slash, healthy link: the handler already spells
+    the (working) stable path with a doubled slash -- an equivalent
+    spelling, so _handler_needs_rewrite's normalized command compare must
+    not treat it as a rewrite."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    doubled_stable = str(state_dir / "current") + "//" + RUNNER_NAME
+    handler = {
+        "type": "command",
+        "command": doubled_stable,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+    before = (home / "settings.json").read_bytes()
+
+    try:
+        result = hi.refresh_hooks_for_dir(str(home))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    assert result.refreshed_events == []
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_recognizes_doubled_slash_stable_spelling_as_already_stable(tmp_path, monkeypatch):
+    """Finding 5, doubled slash, failing link: the existing handler's
+    command is a differently-spelled but equivalent stable path --
+    desired_for's "already the stable path" check must recognise it via
+    _normalize_token_path, not exact string equality, or it gets rewritten
+    to a release path for no real reason."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    doubled_stable = str(state_dir / "current") + "//" + RUNNER_NAME
+    handler = {
+        "type": "command",
+        "command": doubled_stable,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+    before = (home / "settings.json").read_bytes()
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    after = (home / "settings.json").read_bytes()
+    assert after == before
+
+
+def test_fallback_duplicate_handlers_prefers_the_stable_one_as_primary(tmp_path, monkeypatch):
+    """Finding 6: with the link failing and two owned handlers for one
+    event -- an old release path and the current stable path -- the
+    stable one must be kept (and the old one dropped), never the other
+    way around."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    stable_path = str(state_dir / "current" / RUNNER_NAME)
+    old_release_handler = {
+        "type": "command",
+        "command": str(tmp_path / "old-release" / RUNNER_NAME),
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    stable_handler = {
+        "type": "command",
+        "command": stable_path,
+        "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
+    }
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [old_release_handler, stable_handler]}]}}
+    (home / "settings.json").write_text(json.dumps(existing))
+
+    monkeypatch.setattr(
+        runner_link, "ensure_runner_link",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = hi.refresh_hooks_for_dir(str(home))
+
+    assert result.ok
+    data = json.loads((home / "settings.json").read_text())
+    hooks = data["hooks"]["Stop"][0]["hooks"]
+    assert len(hooks) == 1
+    assert hooks[0]["command"] == stable_path
+
+
+def test_fallback_missing_bundled_runner_message_names_the_reason(tmp_path, monkeypatch):
+    """Finding 8: a missing bundled tokitty-hook used to surface only a
+    bare path as the whole result message."""
+    bare = tmp_path / "release-bare"
+    bare.mkdir(parents=True)
+    exe = bare / EXE_NAME
+    exe.write_text("gui", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert not result.ok
+    assert result.message == "this copy of Tokitty has no tokitty-hook next to it"
+
+
+def test_refresh_quietly_skips_a_settings_json_that_wont_parse(tmp_path):
+    """Finding 9: a home Tokitty never touched whose settings.json just
+    happens not to parse must not warn on every launch."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text("{not valid json")
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.ok
+    assert result.warning is None
+    assert result.message.startswith("skipped, could not parse")
+
+
+def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_path):
+    """Finding 9's contrast: an explicit install still fails loudly."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text("{not valid json")
+
+    result = hi.install_hooks_for_dir(str(config_dir))
+
+    assert not result.ok
+    assert result.message.startswith("aborted, could not parse")
+
+
+def test_fallback_real_directory_at_current_registers_bundled_path_with_warning(tmp_path, monkeypatch):
+    """Test gap named in the review: no reconcile-level test exercised the
+    real-directory-at-current outcome (runner_link's own note path, not
+    an exception) through _reconcile_claude."""
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    (state_dir / "current").mkdir(parents=True)
+    (state_dir / "current" / "keep.txt").write_text("mine", encoding="utf-8")
+    home = tmp_path / "home"
+
+    result = hi.install_hooks_for_dir(str(home))
+
+    assert result.ok
+    assert result.warning is not None
+    data = json.loads((home / "settings.json").read_text())
+    hook = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == hi.hook_runner_path(os.path.realpath(str(exe)), sys.platform)
+    assert (state_dir / "current" / "keep.txt").read_text(encoding="utf-8") == "mine"
 
 
 # ---------------------------------------------------------------------------
@@ -1874,6 +2256,23 @@ def test_config_dir_result_warning_defaults_to_none():
 def test_config_dir_result_stores_a_warning():
     result = ConfigDirResult("cd", True, "installed", warning="fallback used")
     assert result.warning == "fallback used"
+
+
+def test_install_hooks_prints_note_to_stdout_for_ok_result(monkeypatch, tmp_path, capsys):
+    """Replaces the brittle '"; " in message' detection with a dedicated
+    ConfigDirResult.note field the CLI prints directly."""
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+
+    def fake_install(cd, provider):
+        return ConfigDirResult(cd, True, "installed and refreshed", note="a stale local entry for: Stop")
+
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(config_dir), "claude")])
+    monkeypatch.setattr(hi, "install_hooks_for_dir", fake_install)
+    rc = hi.install_hooks()
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"{config_dir}: a stale local entry for: Stop" in out
 
 
 def test_install_hooks_prints_warning_to_stderr_for_ok_result(monkeypatch, tmp_path, capsys):

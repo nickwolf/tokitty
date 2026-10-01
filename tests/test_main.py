@@ -25,16 +25,27 @@ from tokitty.customize import Customization
 from tokitty.poller import PollResult
 from tokitty.sprites import COLORWAYS, PATTERNS
 
+# Captured at collection time, before _no_real_hook_refresh_at_startup (below)
+# patches hooks_install.ensure_current for every test in this file. The one
+# test that wants the real function (test_startup_hook_warnings_reach_
+# messagebox_via_real_ensure_current) restores this reference over that
+# per-test stub; a lookup of hooks_install.ensure_current done inside a test
+# body would see the already-patched stub instead, since fixtures run before
+# the test body.
+from tokitty.hooks_install import ensure_current as _real_ensure_current
+
 NOW = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
 def _no_real_hook_refresh_at_startup(monkeypatch):
     """run_discovery calls hooks_install.ensure_current(state_dir) on every
-    launch (Task 4). get_config_dirs falls back to Path.home() / ".claude"
-    -- the developer's real Claude Code config dir -- whenever a state_dir
-    has no accounts.json, which is true for nearly every run_gui test in
-    this file. Without this, running this file's own suite would read
+    launch (Task 4). ensure_current reads <state_dir>/accounts.json itself
+    (it never falls back to get_config_dirs's default-dir resolution, Task
+    4 review finding 2), but a state_dir with no accounts.json is exactly
+    what nearly every run_gui test in this file uses, and a stray real
+    accounts.json on the machine running the suite (or a future change
+    that reintroduces a default-dir fallback here) would make this read
     (and, if anything ever drifted, try to rewrite) whoever's real
     ~/.claude/settings.json runs it: the same class of bug
     _no_real_autostart_registration in conftest.py already guards against
@@ -728,6 +739,14 @@ def _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk):
         while time.monotonic() < deadline and not opened:
             self.update()
             time.sleep(0.01)
+        # tick() now shows a startup warning (if any) via root.after(0, ...)
+        # rather than synchronously (Task 4 review finding 7), so it fires
+        # on a later pass of the event loop than the one that populated
+        # `opened`. A handful of extra pumps here gives it that chance;
+        # harmless for the tests that don't care about it.
+        for _ in range(5):
+            self.update()
+            time.sleep(0.01)
 
     monkeypatch.setattr(tk.Tk, "mainloop", _pumping_mainloop)
     return main_module, opened
@@ -780,6 +799,57 @@ def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
     assert args[0] == "Tokitty"
     assert "retry warning" in args[1]
     assert "ensure warning" in args[1]
+    assert kwargs.get("parent") is not None
+
+
+@pytest.mark.gui
+def test_startup_hook_warnings_reach_messagebox_via_real_ensure_current(tmp_path, monkeypatch):
+    """Test gap named in the Task 4 review: every other messagebox test in
+    this file (including the one directly above) stubs hooks_install.
+    ensure_current outright via the file's autouse fixture
+    (_no_real_hook_refresh_at_startup), so none of them actually exercises
+    ensure_current's own account resolution (reading accounts.json,
+    filtering by provider, the per-account try/except) through
+    run_discovery. This test does: a real accounts.json is written to
+    tmp_path via save_accounts, and only refresh_hooks_for_dir (what the
+    real ensure_current calls per account) is faked, to get a
+    deterministic warning without a full frozen-build/link fixture.
+    Overrides the autouse stub for this test only, restoring the real
+    ensure_current captured at module import time, before any per-test
+    patching happened."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import hooks_install as hooks_install_module
+    from tokitty.accounts import Account, save_accounts
+
+    main_module, opened = _run_gui_with_forced_auto_open(tmp_path, monkeypatch, tk)
+
+    monkeypatch.setattr(hooks_install_module, "ensure_current", _real_ensure_current)
+
+    config_dir = tmp_path / "acct" / ".claude"
+    save_accounts(tmp_path, [Account(name="acct-v1-a", config_dir=str(config_dir))])
+
+    monkeypatch.setattr(
+        hooks_install_module, "refresh_hooks_for_dir",
+        lambda cd, provider: hooks_install_module.ConfigDirResult(
+            cd, True, "refreshed", warning="real ensure_current warning"
+        ),
+    )
+
+    warnings = []
+    monkeypatch.setattr(
+        messagebox_module, "showwarning", lambda *a, **k: warnings.append((a, k))
+    )
+
+    result = main_module.run_gui()
+
+    assert result == 0
+    assert opened == [tmp_path]
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[0] == "Tokitty"
+    assert "real ensure_current warning" in args[1]
     assert kwargs.get("parent") is not None
 
 
