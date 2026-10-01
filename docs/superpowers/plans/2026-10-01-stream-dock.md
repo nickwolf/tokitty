@@ -6,6 +6,8 @@
 
 **Branch:** `streamdock-design`, cut from `main` at 8789f79, worktree `.worktrees/streamdock-design`. Merge back with `git merge --no-ff`.
 
+**Session handoff:** if `.handoff/session.md` exists at the worktree root, read it after this plan and the spec. It is untracked and machine-specific (leftover probe tooling, local gotchas, open questions for the owner). Treat it as advisory and check live state before relying on any of it.
+
 ## Global constraints
 
 - Baseline: `python3 -m pytest -q` gives 926 passed, 3 skipped on `main`. Every task ends with the full suite green and `ruff check` clean.
