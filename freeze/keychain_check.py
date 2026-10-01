@@ -287,7 +287,7 @@ def write_step_summary(table_text: str) -> None:
     if not summary_path:
         return
     with open(summary_path, "a", encoding="utf-8") as f:
-        f.write("## Keychain check (Task 8 / spec Q6)\n\n```\n")
+        f.write("## Keychain check (spec Q6)\n\n```\n")
         f.write(table_text)
         f.write("```\n")
 
