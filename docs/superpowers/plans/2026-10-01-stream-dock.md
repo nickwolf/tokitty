@@ -21,7 +21,7 @@
 `installable-app-design` (#48) rewrites `hooks_install.py` heavily (frozen builds register a bundled `tokitty-hook` runner in exec form, and ownership matching learns that form). `codex-activity-hooks` (#64) adds a Codex hook target. To keep both merges mechanical:
 
 - Do not add a second hook script, a second command shape, or new ownership rules. The permission wait lives inside `hook_writer.py` as one more event, so frozen builds and ownership pick it up for free.
-- The only change to `hooks_install.py` is appending `("PermissionRequest", "")` to `HOOK_EVENTS`. If #48 has merged to `main` by then, rebase this branch first and make the same one-line change on top.
+- The only change to `hooks_install.py` is one more entry in the `HOOK_EVENTS` list literal. If #48 has merged to `main` by then, rebase this branch first and make the same one-line change on top.
 - Do not touch `_build_command`, `_is_owned_hook`, or the `HookTarget` table.
 
 ## Task 0: Spec amendments
@@ -55,12 +55,12 @@ This is the safety-critical task. Keep it small, injectable, and boring.
 **Behaviour, on `hook_event_name == "PermissionRequest"`:**
 1. Resolve `tokitty_dir` as the parent of `--sessions-dir`. If `tokitty_dir/streamdock.enabled` is missing or its mtime is 120 s old or more, exit 0 with no output.
 2. Generate `nonce = secrets.token_hex(8)`. Compute `digest = sha256(json.dumps(tool_input, sort_keys=True, separators=(",", ":")))`.
-3. Find the tool use id: read at most the last 256 KiB of `transcript_path`, walk assistant entries newest first, and take the newest `tool_use` block whose `name == tool_name` and whose `input` digests to `digest`, and which has no later `tool_result` with that id. If the transcript is missing, unreadable, or the match is not unique among unresolved calls, use `None`. Retry the lookup up to 5 times, 100 ms apart, because the spike measured the `tool_use` line landing only about 150 ms ahead of the hook.
-4. Write `tokitty_dir/pending/<nonce>.json` atomically (temp file then `os.replace`, the same helper the session writer uses): `{"v": 1, "nonce", "session_id", "tool_use_id", "tool_name", "digest", "preview", "cwd", "started": time.time(), "pid": os.getpid()}`. `preview` is the first 2,000 characters of a tool-specific summary: the `command` for Bash, `file_path` for Edit/Write/Read, `url` for WebFetch, otherwise compact JSON of `tool_input`.
+3. Find the tool use id: read at most the last 256 KiB of `transcript_path`, walk assistant entries newest first, and take the newest `tool_use` block whose `name == tool_name` and whose `input` digests to `digest`, and which has no later `tool_result` with that id. Retry the lookup up to 5 times, 100 ms apart, because the spike measured the `tool_use` line landing only about 150 ms ahead of the hook. If it still fails (transcript missing or unreadable, no match, or more than one unresolved match), exit 0 with no output and write no pending file. Without the id the hook has no way to notice an answer given elsewhere, so it must not wait; the prompt simply stays a terminal-only prompt.
+4. Write `tokitty_dir/pending/<nonce>.json` atomically (temp file then `os.replace`, the same helper the session writer uses): `{"v": 1, "nonce", "session_id", "tool_use_id", "tool_name", "tool_input", "digest", "preview", "cwd", "started": time.time(), "pid": os.getpid()}`. `tool_input` is the complete input, so the in-window view (Task 11) can show everything that would be approved. `preview` is a short tool-specific summary for the 64 px keys only: the `command` for Bash, `file_path` for Edit/Write/Read, `url` for WebFetch, otherwise compact JSON, cut to 200 characters. The keys never count as showing the request.
 5. Loop every 250 ms until a stop condition:
    - Every 5 s, `os.utime` the pending file (heartbeat).
    - If `tokitty_dir/decisions/<nonce>.json` exists, read it, delete it, and apply it only if its `nonce`, `session_id`, and `digest` all match. A valid decision prints the `hookSpecificOutput` for `allow` or `deny` and stops. A mismatched one is deleted and ignored.
-   - If `tool_use_id` is known and the transcript tail now contains a `tool_result` for it, the prompt was answered elsewhere: stop with no output.
+   - If the transcript tail now contains a `tool_result` for it, the prompt was answered elsewhere: stop with no output.
    - If `streamdock.enabled` has gone stale (step 1 rule), stop with no output.
    - If 590 s have passed since start, stop with no output. That is just under Claude Code's 600 s default hook timeout, so the hook exits on its own terms and cleans up rather than being killed.
 6. On every exit path, including exceptions, delete the pending file (`try/finally`).
@@ -69,13 +69,13 @@ This is the safety-critical task. Keep it small, injectable, and boring.
 
 **Testability:** factor the loop as `wait_for_decision(payload, tokitty_dir, *, now_fn, sleep_fn, read_tail_fn, rand_fn)` so tests drive time and files without real sleeps.
 
-**Tests:** disabled marker gives no output and no pending file; stale marker same; a matching decision prints allow and removes both files; a decision with the wrong digest or session is ignored and deleted; a `tool_result` appearing for the looked-up id ends the wait silently; marker going stale mid-wait ends it; the 590 s cap; the pending file is removed when the loop raises; tool use id lookup picks the newest unresolved match, returns `None` for two identical unresolved calls, and survives a truncated first line in the tail; a non-PermissionRequest event still writes the session state file exactly as today.
+**Tests:** disabled marker gives no output and no pending file; stale marker same; a matching decision prints allow and removes both files; a decision with the wrong digest or session is ignored and deleted; a `tool_result` appearing for the looked-up id ends the wait silently; marker going stale mid-wait ends it; the 590 s cap; the pending file is removed when the loop raises; tool use id lookup picks the newest unresolved match and survives a truncated first line in the tail; a failed lookup (missing transcript, no match, two identical unresolved calls) gives no output and no pending file; a non-PermissionRequest event still writes the session state file exactly as today.
 
 ## Task 3: Register the event
 
 **Files:** `tokitty/hooks_install.py`, `tests/test_hooks_install.py`.
 
-- Append `("PermissionRequest", "")` to `HOOK_EVENTS`. No other change in this file.
+- Add `("PermissionRequest", "")` to the `HOOK_EVENTS` list literal in the source (not a runtime append: `_HOOK_TARGETS["claude"]` takes `tuple(HOOK_EVENTS)` at import, so the literal is what counts). No other change in this file. A test asserts `install_hooks_for_dir` writes a `PermissionRequest` entry to `settings.json`.
 - Update the tests that enumerate installed events. Add one test that an existing install missing only `PermissionRequest` gets exactly that event added on the next `install_hooks_for_dir`, which is the upgrade path for current users.
 - README, "Live activity" section: one paragraph saying the permission hook is registered but inert unless a Stream Dock is connected, and that restarting running Claude Code sessions picks it up.
 
@@ -113,13 +113,15 @@ A pure, thread-safe state machine. No I/O, no Tk, no Windows calls. This is wher
 
 - Keys are identified by VSD's `context` string. Each has `coordinates`, `device`, and `settings` (the role from the property inspector: `slot`, `usage:<account_index>`, `interrupt`, `new:<preset_name>`). `appear(context, coords, device, settings)` and `disappear(context)` are idempotent, since VSD sends every `willDisappear` twice.
 - Slots are the visible `slot` keys ordered by (row, column). Sessions get slots in `first_seen` order and keep them until they end. A new session takes the lowest free slot. With more sessions than slots, the last slot shows `+N` and pressing it cycles which overflow session it shows.
+- **Threading:** the model is owned by the Tk thread and is not itself thread-safe. Only `tick()` calls into it. After each tick it publishes an immutable render snapshot (revision plus plan) under a lock, which is all the HTTP thread ever reads.
 - `update(sessions_by_account, pending, usage, focus_status)` replaces the inputs and recomputes. `render_plan() -> Dict[context, KeySpec]` describes what every visible key should show; `revision` increments only when the plan actually changes.
-- `press(context) -> Action` returns one of `Focus(session)`, `OpenDecision(session, request)`, `Decide(request, behavior)`, `Interrupt(session)`, `NewSession(preset)`, `CancelOverlay`, `Noop(reason)`.
-- **Decision overlay.** Pressing a slot whose session has a live pending request enters overlay mode for that request: the other Tokitty keys on the page become Allow, Deny, Always (only when Task 10 has marked the request as having a narrow rule), Cancel, and preview keys, in that priority order by (row, column). Non-Tokitty keys are never in the plan at all. The overlay exits when the request disappears from `pending`, when Cancel is pressed, or when the same slot is pressed again.
-- **Arming rule.** Allow and Always are shown as live only when `focus_status` for that session is `focused` (its tab was confirmed and selected) or the request is also on screen in tokitty's own window (Task 11). Otherwise those keys render greyed and pressing them is `Noop("command not visible")`. Deny is always live; denying something you can't see is safe.
+- `press(context) -> Action` returns one of `Focus(session)`, `FocusAndOpen(session, request)`, `Decide(request, behavior)`, `Interrupt(session)`, `NewSession(preset)`, `CancelOverlay`, `Noop(reason)`.
+- **Decision overlay.** Pressing a slot whose session has a live pending request returns `FocusAndOpen(session, request)`: the runtime focuses the tab and the model enters overlay mode for that request. Only keys with the `slot` or `interrupt` role take part; usage and new-session keys are never repainted, and non-Tokitty keys are never in the plan at all. The pressed slot becomes Cancel. The other participating keys, in (row, column) order, become Allow, Deny, Always (only when Task 10 has marked the request as having a narrow rule), then preview keys. The overlay needs at least two participating keys besides the pressed one; with fewer, there is no overlay and the press opens the in-window view instead (Task 11), where the decision is made. The overlay exits when the request disappears from `pending`, when Cancel is pressed, or on a second press of the pressed key.
+- **Arming rule.** Allow and Always are live only when the complete request is visible somewhere authoritative: either `focus_status` for that session is `focused` (its tab was confirmed, selected, and frontmost, where Claude Code's own prompt shows the full input) or the request is open in tokitty's in-window view (Task 11). Otherwise those keys render greyed and pressing them is `Noop("request not visible")`. Deny is always live; denying something you can't see is safe.
+- **Re-check at press time.** A press on a live Allow or Always returns `VerifyThenDecide(request, behavior)`, not `Decide`. When the arming came from tab focus, the runtime re-checks `is_selected` on the focus worker before the decision file is written, and turns a failed check into `Noop` plus a `focus_status` downgrade, so switching tabs by hand after the overlay opened disarms Allow. When the arming came from the in-window view, the decision is written directly.
 - After `Decide`, the decision keys show `sent` until the request leaves `pending`.
 - `Interrupt` is only returned for the session most recently focused through the deck, and only if `focus_status` for it is still `focused`; otherwise `Noop`.
-- Tests cover: slot stability as sessions come and go; overflow and cycling; duplicate and out-of-order appear/disappear; overlay entry and every exit path; arming rule both ways; `sent` state; interrupt gating; that a usage key and a new-session key never become decision keys; revision only bumps on change.
+- Tests cover: a manual tab switch between arming and pressing (Allow becomes a no-op); slot stability as sessions come and go; overflow and cycling; duplicate and out-of-order appear/disappear; overlay entry and every exit path; a layout with too few participating keys falls back to the in-window view; arming rule both ways; `sent` state; interrupt gating; that a usage key and a new-session key never become decision keys; revision only bumps on change.
 
 ## Task 7: Tab focus and interrupt
 
@@ -148,7 +150,8 @@ A pure, thread-safe state machine. No I/O, no Tk, no Windows calls. This is wher
 **Files:** new `tokitty/streamdock/server.py`, new `streamdock/com.tokitty.deck.sdPlugin/` (`manifest.json`, `index.html`, `pi.html`, `icon.png`), new `tokitty/streamdock/install.py`, `tokitty/__main__.py` (CLI flags only), tests for server and install.
 
 **Server:**
-- `ThreadingHTTPServer` on `127.0.0.1:<port>`. Every request must carry `X-Tokitty-Token`; anything else gets 403 and nothing is logged about the request body.
+- `ThreadingHTTPServer` on `127.0.0.1:<port>`. Only CORS "simple" requests are used, so Chromium never sends a preflight: no custom headers, the token travels as a `t` query parameter, and POST bodies are sent as `text/plain`. Every request must have a valid token and a `Host` header of exactly `127.0.0.1:<port>` (which blocks DNS-rebinding pages); anything else gets 403 and nothing about the request is logged. Responses carry `Access-Control-Allow-Origin: *` so the plugin page can read them; that grants nothing without the token. `OPTIONS` gets 405.
+- **Trust boundary.** The token keeps out web pages and anything that doesn't have it. It does not keep out other programs running as the same Windows user, which can read `config.js`. That is accepted: such a program can already type into the terminal, so the deck adds no new power.
 - `GET /v1/plan?rev=N` long-polls up to 25 s and returns `{"rev", "keys": {context: {"image", "title"}}}` as soon as the model's revision differs from `N`.
 - `POST /v1/event` takes the VSD event as the plugin received it (`willAppear`, `willDisappear`, `keyDown`, `keyUp`, `didReceiveSettings`) and returns 204. `keyUp` drives `press`; `keyDown` is ignored, so a held key never fires twice.
 - `GET /v1/meta` returns account names and preset names for the property inspector.
@@ -158,7 +161,7 @@ A pure, thread-safe state machine. No I/O, no Tk, no Windows calls. This is wher
 
 **Install:** `python -m tokitty --install-streamdock` picks a free port once and a random token, stores both as new `Settings` fields (`streamdock_port: int = 0`, `streamdock_token: str = ""`, validated in `load_settings`), copies the plugin to `%APPDATA%\HotSpot\StreamDock\plugins\com.tokitty.deck.sdPlugin`, writes `config.js` there, and prints that VSD Craft must be fully exited and restarted to load it. `--uninstall-streamdock` removes the folder, the settings keys, and every account's `streamdock.enabled`. The token is never printed.
 
-**Tests:** 403 without or with a wrong token; long-poll returns immediately on a stale rev and after a change; event routing calls the model; install into a fake `%APPDATA%` writes `config.js` with the stored port and token and is idempotent; uninstall cleans up.
+**Early gate:** before the rest of this task, load a stub plugin into VSD Craft that makes the authenticated GET and POST exactly as specified, and confirm both succeed from the real plugin page. **Tests:** 403 without or with a wrong token, and with a wrong `Host`; long-poll returns immediately on a stale rev and after a change; event routing calls the model; install into a fake `%APPDATA%` writes `config.js` with the stored port and token and is idempotent; uninstall cleans up.
 
 ## Task 10: Always
 
@@ -180,10 +183,10 @@ Then:
 
 - `StreamdockRuntime` owns the server, the model, one `PendingWatcher` per account, the focus worker, and the 30 s `streamdock.enabled` heartbeat. Started only when `Settings` has a non-zero port and a token (that is, after `--install-streamdock`). `run_gui` creates it after the units and stops it in the `finally` block.
 - `tick()` (Tk thread, every 500 ms) gathers `watcher.get_sessions()`, `get_pending()`, and the usage numbers it already has per unit, plus the current pose per session, and calls `model.update`. This is the only place model inputs change, apart from key presses.
-- Press handling: the server thread calls `model.press`; `Decide` writes the decision immediately on that thread (it is one small file write); `Focus`, `Interrupt`, and `NewSession` are queued to the focus worker; the worker's result updates `focus_status` through the model.
-- In-window fallback: when an `OpenDecision` happens and focus is not `focused`, tokitty opens a small always-on-top Tk `Toplevel` near its card showing the account, tool, and the full preview, and registers the request as visible so the model arms Allow. The window closes itself when the request leaves `pending`.
+- **Threading contract.** Three threads touch Stream Dock state, and only the Tk thread owns any of it. The HTTP server thread puts each incoming event on an inbound `queue.Queue` and serves long-polls from the latest published snapshot; it never calls the model. The focus worker takes jobs from its own queue and puts results (focus status, verify outcomes) on the same inbound queue. `tick()` drains the inbound queue, applies events and results to the model, executes the returned actions (decision file writes happen here, on the Tk thread; focus, verify, interrupt, and launch jobs are queued to the worker; the in-window view is created here), and finally publishes a new snapshot. `PendingWatcher` threads only publish their own lists, read through `get_pending()` like the other watchers. Tick runs every 500 ms, so a press takes at most half a second to act on; if that feels slow in Task 12, the server thread may call `root.event_generate` to wake Tk early, but never the model.
+- In-window view: when a `FocusAndOpen` comes back from the worker as anything but `focused`, or the overlay had too few keys, tokitty opens a small always-on-top Tk `Toplevel` near its card showing the account, the tool, and the complete `tool_input` in a scrollable read-only text widget, with Allow and Deny buttons of its own. Only then does it mark the request visible, which arms Allow on the deck. The window closes itself when the request leaves `pending`.
 - Right-click menu: a "Stream Dock" submenu showing connected or not, and the install command if not installed.
-- Tests for `StreamdockRuntime` with fakes: heartbeat touches and clears the marker on connect and disconnect; decisions route to the right account's watcher; focus results feed back into the model.
+- Tests for `StreamdockRuntime` with fakes: events arriving on the server thread are only applied inside `tick()`; a focus result and a key press arriving in the same tick are applied in arrival order; heartbeat touches and clears the marker on connect and disconnect; decisions route to the right account's watcher; focus results feed back into the model.
 
 ## Task 12: End-to-end check on the hardware
 
@@ -192,6 +195,7 @@ Not code. Run through with the real M18, VSD Craft, two Claude Code sessions in 
 1. Session keys appear in order, keep their slots as a third session starts and the first ends, and survive a page switch with the plain buttons.
 2. A Bash prompt in a background tab: the key raises its flag, a press brings the tab forward and opens the overlay, Allow runs the command, the keys return to normal.
 3. Same, answered in the terminal instead: the deck clears within 2 s and no hook process is left running (`pgrep -f hook_writer`).
+3a. Press a waiting slot, then switch tabs by hand before pressing Allow: Allow does nothing and the overlay greys it.
 4. Deny from the deck shows "Denied from Stream Dock" in the session.
 5. Two sessions with the same title: the key reports ambiguous, the in-window fallback appears, Allow works from there.
 6. Close tokitty while a prompt is pending: within 2 minutes the hook has exited and the terminal prompt still works.
