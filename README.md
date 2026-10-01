@@ -91,6 +91,12 @@ To price a model before the next release, put a `prices.json` of the same shape 
 
 `python -m tokitty --debug-print` prints the same breakdown per account as text, which is the first thing to look at if a number looks wrong.
 
+## Checking usage from an agent
+
+`--debug-print` needs no display and exits when it's done, so a coding agent can run it in the middle of a task and read its own limits. For each account it prints a `session:` and a `weekly:` line, each with the percentage used and the reset time in UTC, followed by the per-model breakdown above.
+
+I have Claude Code run `python3 -m tokitty --debug-print` at natural checkpoints in long sessions, before dispatching a subagent or starting a long build. When the weekly figure gets close to 100% it stops starting new work, commits what's finished, and writes down where it got to. Before this, sessions and their subagents would hit the limit mid-change and leave uncommitted edits behind. Each run makes one usage request per account, the same one the widget makes on every poll.
+
 ## Codex
 
 A pane can track an OpenAI Codex account instead of a Claude Code one. It gets the same limit bars (whichever windows your plan has) and the same Per-model view, both read from the rollout files Codex writes under `<codex-home>/sessions/` and `archived_sessions/`. Nothing is fetched and no credentials are read, so a Codex pane works offline.
