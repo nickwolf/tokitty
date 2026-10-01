@@ -14,11 +14,13 @@ Tokitty stays the brain. It already knows per-session state from its hooks, per-
       hooks -> session state files, pending permission files
     tokitty (Windows, Python)
       reads state, renders key images, answers permissions, focuses tabs
-      WebSocket server on 127.0.0.1
+      HTTP server on 127.0.0.1 (plugin long-polls for images, POSTs events)
     VSD Craft -> tokitty plugin (HTML/JS page in VSD Craft's embedded Chromium)
-      setImage / keyDown / keyUp over the vendor's plugin WebSocket
+      setImage / keyDown / keyUp over the vendor's plugin WebSocket, relayed to tokitty over HTTP
 
 The plugin finds tokitty through a small discovery file in tokitty's state directory (`streamdock.json`: port and a random token written at startup). Bound to loopback only; the plugin and tokitty are both Windows processes, so the WSL-to-Windows localhost problem does not apply to this link.
+
+The link is HTTP long-poll rather than a WebSocket. Tokitty serves `127.0.0.1` with the standard library's `ThreadingHTTPServer`; the plugin long-polls for key images and POSTs events. Python's standard library has no WebSocket server, and adding the `websockets` package for a single connection is not worth a dependency. The hardware probe already showed that a VSD plugin can `fetch` a loopback server.
 
 Rejected alternatives: porting an existing Stream Deck plugin such as agentsd (it would duplicate tokitty's session tracking, and all of them assume macOS), and driving the M18 over raw USB HID (that takes the device away from the vendor software, which rules out the OBS use).
 
@@ -47,9 +49,13 @@ Verified with throwaway sessions and a `PermissionRequest` command hook that sle
 6. **The real payload has no `tool_use_id`**, although the hooks reference lists one. On 2.1.286 it was exactly `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `hook_event_name`, `tool_name`, `tool_input`.
 7. The transcript fills the gap. The assistant `tool_use` entry, with its real id, was written at 01:46:04.491Z, about 150 ms before the hook started, and the matching `tool_result` was written at 01:46:07.797Z, as soon as the terminal answer landed.
 
+Re-checked on Claude Code 2.1.287 on 2026-10-01: the `PermissionRequest` payload still had exactly the same eight keys and no `tool_use_id`, and the transcript `tool_use` input was identical to the payload `tool_input`, including the `description` field, so matching on name and input is sound.
+
 Design that follows:
 
-- A new command hook for `PermissionRequest`, installed by `--install-hooks` alongside the existing activity hook. It runs where Claude Code runs (WSL on the primary setup). On start it generates a nonce, reads the tail of `transcript_path` to find the newest `tool_use` without a `tool_result` whose name and input match the payload, and takes its id. It then writes `pending/<nonce>.json`: nonce, session id, tool use id (or null if the lookup failed), tool name, a digest of the exact tool input, a short preview, and its own start time.
+- The permission wait is one more event inside `hook_writer.py`, the script the activity hooks already use, rather than a second hook script. That keeps the install path, the frozen-build runner, and the ownership matching unchanged, and `PermissionRequest` becomes one more entry in the registered event list. It runs where Claude Code runs (WSL on the primary setup).
+- It is opt-in at runtime, not at install. `PermissionRequest` is registered for everyone with activity hooks, but the hook returns at once (no output, no pending file) unless `<config>/tokitty/streamdock.enabled` exists with an mtime under 120 s old. Tokitty touches that file every 30 s while the plugin is connected. Someone without a deck pays one extra short-lived hook process per prompt, and a deck that goes away stops holding hooks within two minutes.
+- On start the hook generates a nonce, reads the tail of `transcript_path` to find the newest `tool_use` without a `tool_result` whose name and input match the payload, and takes its id. It then writes `pending/<nonce>.json`: nonce, session id, tool use id (or null if the lookup failed), tool name, a digest of the exact tool input, a short preview, and its own start time.
 - While pending, the hook refreshes the file's mtime every few seconds as a heartbeat, and polls two things: `decisions/<nonce>.json`, and the transcript for a `tool_result` carrying its tool use id. A decision is applied only if its nonce, session id, and input digest all match. A `tool_result` means the prompt was answered elsewhere (allowed or denied), and the hook exits silently. Either way it deletes its pending file on exit, including on its own timeout.
 - The transcript is local to the hook, so that polling never crosses the VM boundary. Tokitty reads only the small `pending/` directory over the `\wsl.localhost` path, with one dedicated poller at sub-second intervals that runs only while the plugin is connected and a pending file exists. The existing activity watcher (one thread, slowing to 20 s when idle) is the wrong loop for this.
 - A pending file whose heartbeat is older than 30 s is treated as dead and ignored, then removed. Age since creation alone never counts as dead, since a prompt can legitimately wait for hours.
