@@ -208,6 +208,49 @@ def test_parse_keychain_list_empty_input():
 
 
 # ---------------------------------------------------------------------------
+# check_real_home_is_safe (round-3 fix: probes run under the real HOME now,
+# so this is the whole safety margin before anything touches it)
+# ---------------------------------------------------------------------------
+
+
+def test_check_real_home_is_safe_passes_when_both_absent(tmp_path):
+    assert kc.check_real_home_is_safe(tmp_path) is None
+
+
+def test_check_real_home_is_safe_fails_on_claude_credentials(tmp_path):
+    creds = tmp_path / ".claude" / ".credentials.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text("{}")
+    reason = kc.check_real_home_is_safe(tmp_path)
+    assert reason is not None
+    assert str(creds) in reason
+    assert "not a fresh runner HOME" in reason
+
+
+def test_check_real_home_is_safe_fails_on_tokitty_accounts(tmp_path):
+    accounts = tmp_path / "Library" / "Application Support" / "Tokitty" / "accounts.json"
+    accounts.parent.mkdir(parents=True)
+    accounts.write_text("{}")
+    reason = kc.check_real_home_is_safe(tmp_path)
+    assert reason is not None
+    assert str(accounts) in reason
+
+
+def test_check_real_home_is_safe_checks_credentials_before_accounts(tmp_path):
+    # Both present: the reason should name the credentials file, since that
+    # check runs first.
+    creds = tmp_path / ".claude" / ".credentials.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text("{}")
+    accounts = tmp_path / "Library" / "Application Support" / "Tokitty" / "accounts.json"
+    accounts.parent.mkdir(parents=True)
+    accounts.write_text("{}")
+    reason = kc.check_real_home_is_safe(tmp_path)
+    assert str(creds) in reason
+    assert str(accounts) not in reason
+
+
+# ---------------------------------------------------------------------------
 # compute_overall
 # ---------------------------------------------------------------------------
 
