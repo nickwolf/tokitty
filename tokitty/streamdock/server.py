@@ -39,6 +39,9 @@ HOST = "127.0.0.1"
 POLL_TIMEOUT = 25.0
 CONNECTED_WINDOW = 40.0
 MAX_BODY = 64 * 1024
+# Most of an unread body read off before closing on an error. Windows resets a
+# socket closed with unread input, so the client would see the reset, not the status.
+DRAIN_MAX = 1024 * 1024
 # Events that reach the model. keyDown is dropped so a held key fires only on release.
 FORWARDED_EVENTS = frozenset({"willAppear", "willDisappear", "keyUp", "didReceiveSettings"})
 
@@ -204,6 +207,21 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if body:
             self.wfile.write(body)
+        if close:
+            self.wfile.flush()
+            self._drain()
+
+    def _drain(self) -> None:
+        try:
+            left = min(int(self.headers.get("Content-Length") or 0), DRAIN_MAX)
+            self.connection.settimeout(1.0)
+            while left > 0:
+                chunk = self.rfile.read1(min(left, 65536))
+                if not chunk:
+                    return
+                left -= len(chunk)
+        except (OSError, ValueError):
+            pass
 
     def _gate(self) -> Optional[Dict[str, Any]]:
         """The parsed query when the request passes the Host and token checks, else a 403."""
