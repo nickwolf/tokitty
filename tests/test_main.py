@@ -1649,7 +1649,7 @@ class _UpdateEnv:
             return type("C", (), {"poll": lambda s: None, "kill": lambda s: self.events.append("kill"),
                                   "wait": lambda s, timeout=None: 0})()
 
-        def wait_for_ack(path, timeout):
+        def wait_for_ack(path, timeout, abort=None):
             self.events.append("wait")
             return self.acked
 

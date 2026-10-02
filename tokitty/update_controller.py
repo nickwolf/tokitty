@@ -451,7 +451,13 @@ class UpdateController:
 
     def _ack_worker(self, token: str, child) -> None:
         try:
-            acked = bool(self._wait_for_ack(ack_path(self._state_dir, token), ACK_TIMEOUT))
+            # A new copy that exits without acking has failed: no point
+            # waiting out the timeout.
+            acked = bool(
+                self._wait_for_ack(
+                    ack_path(self._state_dir, token), ACK_TIMEOUT, abort=lambda: child.poll() is not None
+                )
+            )
         except Exception:
             acked = False
         if not acked:

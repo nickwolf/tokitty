@@ -287,17 +287,20 @@ def wait_for_ack(
     poll: float = 0.25,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    abort: Callable[[], bool] = lambda: False,
 ) -> bool:
-    """True once the ack file exists (and is removed), False after `timeout`."""
+    """True once the ack file exists (and is removed). False after `timeout`,
+    or as soon as `abort()` is true and there is still no ack."""
     deadline = clock() + timeout
     while True:
+        stop = abort()
         if os.path.exists(path):
             try:
                 os.unlink(path)
             except OSError:
                 pass
             return True
-        if clock() >= deadline:
+        if stop or clock() >= deadline:
             return False
         sleep(poll)
 

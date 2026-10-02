@@ -140,8 +140,9 @@ class Rig:
             raise self.launch_error
         return self.child
 
-    def wait_for_ack(self, path, timeout):
+    def wait_for_ack(self, path, timeout, abort=None):
         self.log("wait", str(path), timeout)
+        self.abort = abort
         return self.acked
 
     def start(self, **kw):
@@ -304,6 +305,14 @@ def test_no_ack_leaves_an_already_exited_child_alone(rig):
     rig.run()
 
     assert not rig.child.killed
+
+
+def test_the_ack_wait_aborts_once_the_child_has_exited(rig):
+    rig.run()
+
+    assert rig.abort() is False
+    rig.child.alive = False
+    assert rig.abort() is True
 
 
 def test_a_failed_launch_rolls_back_without_waiting(mac_rig):

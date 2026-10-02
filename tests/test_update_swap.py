@@ -410,6 +410,23 @@ def test_wait_for_ack_times_out(state):
     assert now[0] == 2.0
 
 
+def test_wait_for_ack_stops_early_when_aborted(state):
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    path = ack_path(state, "tok")
+    assert wait_for_ack(path, 120, poll=0.5, clock=lambda: now[0], sleep=sleep, abort=lambda: now[0] >= 1.0) is False
+    assert now[0] == 1.0
+
+
+def test_wait_for_ack_prefers_an_ack_written_just_before_the_child_exited(state):
+    path = write_ack(state, "tok")
+    assert wait_for_ack(path, 120, abort=lambda: True) is True
+    assert not path.exists()
+
+
 def test_write_ack_leaves_no_temp_file(state):
     write_ack(state, "tok")
     assert [p.name for p in state.iterdir()] == ["update-ack-tok"]
