@@ -53,6 +53,7 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
+from tokitty.streamdock.wiring import gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
@@ -745,7 +746,9 @@ def run_gui() -> int:
                       "provider": provider, "tag_kind": tag_kind,
                       "last_good": None, "key": key, "account": account,
                       "cred_loader": cred_loader, "burn": BurnTracker(),
-                      "usage": usage_watcher})
+                      "usage": usage_watcher,
+                      # Kept for the Stream Dock, which derives the hook's tokitty dir from it.
+                      "sessions_dir": sessions_dir, "distro_name": distro_name})
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -986,6 +989,10 @@ def run_gui() -> int:
         )
         tray.refresh()
 
+    streamdock = start_streamdock(
+        settings, units, distro_probe.get_running, palette_fn=lambda i: units[i]["pane"].palette,
+    )
+
     def tick():
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
@@ -1021,6 +1028,7 @@ def run_gui() -> int:
             display = _display_state_for(latest, unit["last_good"])
             if latest.status == "ok" and latest.snapshot is not None:
                 unit["burn"].add(latest.snapshot)
+            unit["deck_usage"] = usage_from_display(display)
             display["projection_text"] = _projection_text_for(
                 unit["burn"], display, datetime.now(timezone.utc)
             )
@@ -1037,6 +1045,11 @@ def run_gui() -> int:
                 display["accent"] = pose["accent"]
                 unit["pane"].render(**display)
             unit["last_good"] = _next_last_good(latest, unit["last_good"])
+        if streamdock is not None:
+            try:
+                streamdock.tick(*gather_inputs(units))
+            except Exception as exc:
+                print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
         root.after(UI_REFRESH_MS, tick)
 
     for unit in units:
@@ -1051,6 +1064,8 @@ def run_gui() -> int:
         root.mainloop()
     finally:
         tray.stop()
+        if streamdock is not None:
+            streamdock.stop()
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()

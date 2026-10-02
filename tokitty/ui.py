@@ -9,7 +9,7 @@ import math
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.usage_display import ROW_SLOTS
@@ -189,6 +189,10 @@ class Pane:
 
     def _paint(self, color: str) -> str:
         return avoid_key(color) if self._keyed else color
+
+    @property
+    def palette(self) -> Dict[str, str]:
+        return self._palette
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, colorway=None, pattern=None) -> None:
         """Live re-style without rebuilding widgets. Each parameter left as

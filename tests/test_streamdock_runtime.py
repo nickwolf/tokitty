@@ -479,3 +479,18 @@ def test_ended_session_is_forgotten(h):
     h.sessions = {0: [view("s0")], 1: []}
     h.tick()
     assert h.worker.of("forget") == [("forget", A1)]
+
+
+def test_callable_config_dir_is_resolved_at_use(tmp_path):
+    h = Harness(tmp_path)
+    h.rt._accounts[0] = AccountInput(0, "acct0", None, lambda: "/late", h.dirs[0])
+    assert h.rt._config_dir(0) == "/late"
+    h.rt._accounts[0] = AccountInput(0, "acct0", None, lambda: None, h.dirs[0])
+    assert h.rt._config_dir(0) == ""
+
+
+def test_pending_nonces(h):
+    assert h.rt.pending_nonces() == set()
+    h.watchers[0].pending = [req("n1", A0)]
+    h.tick()
+    assert h.rt.pending_nonces() == {"n1"}

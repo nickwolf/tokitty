@@ -59,11 +59,13 @@ class AccountInput:
 
     `tokitty_dir` is where that account's hook writes pending/ and reads
     decisions/ (a callable is resolved on every use, like PendingWatcher's).
+    `config_dir` is the Claude config dir as Windows tokitty can read it, and may
+    be a callable for the same reason.
     """
     index: int
     name: str
     account: Optional[Account]
-    config_dir: str
+    config_dir: Union[str, Callable[[], Optional[str]]]
     tokitty_dir: TokittyDir
 
 
@@ -197,6 +199,10 @@ class StreamdockRuntime:
             self._published_rev = self._model.revision
             self._box.publish(self._published_rev, self._model.render_plan())
 
+    def pending_nonces(self) -> set:
+        """Nonces of the requests seen live at the last tick, for the in-window views."""
+        return {req.nonce for req in self._pending}
+
     def in_window_opened(self, nonce: str) -> None:
         self._in_window.add(nonce)
         self._model.set_in_window(nonce, True)
@@ -283,7 +289,10 @@ class StreamdockRuntime:
 
     def _config_dir(self, index: int) -> str:
         acct = self._accounts.get(index)
-        return acct.config_dir if acct is not None else ""
+        if acct is None:
+            return ""
+        value = acct.config_dir() if callable(acct.config_dir) else acct.config_dir
+        return value or ""
 
     def _open(self, request: PendingRequest) -> None:
         if request.nonce in self._in_window:
