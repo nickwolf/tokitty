@@ -195,6 +195,16 @@ def test_valid_presets_load(tmp_path):
     assert _load_presets(tmp_path, [_preset(), native]) == [_preset(), native]
 
 
+def test_preset_keeps_account_slug(tmp_path):
+    p = _preset(account="work")
+    assert _load_presets(tmp_path, [p]) == [p]
+
+
+@pytest.mark.parametrize("bad", [None, "", "  ", 5])
+def test_preset_drops_unusable_account_slug(tmp_path, bad):
+    assert _load_presets(tmp_path, [_preset(account=bad)]) == [_preset()]
+
+
 def _missing_name():
     p = _preset()
     del p["name"]

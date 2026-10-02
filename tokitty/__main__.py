@@ -1013,6 +1013,23 @@ def run_gui() -> int:
 
     window.streamdock_state = streamdock_state
 
+    def edit_streamdock_presets() -> None:
+        from tokitty.streamdock.presets_ui import PresetsDialog
+
+        def on_saved(presets) -> None:
+            if streamdock is not None:
+                streamdock.set_presets(presets)
+
+        PresetsDialog.open(
+            root,
+            state_dir,
+            lambda: [u.get("account") for u in units],
+            lambda i: window.panes[i]._label if i < len(window.panes) else None,
+            on_saved,
+        )
+
+    window.on_edit_streamdock_presets = edit_streamdock_presets
+
     def tick():
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't

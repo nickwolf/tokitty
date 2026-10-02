@@ -28,9 +28,13 @@ class MenuItem:
 INSTALL_STREAMDOCK_COMMAND = "python -m tokitty --install-streamdock"
 
 
-def streamdock_menu_item(state: str, on_copy_install: Callable[[], None]) -> MenuItem:
+def streamdock_menu_item(
+    state: str,
+    on_copy_install: Callable[[], None],
+    on_edit_presets: Optional[Callable[[], None]] = None,
+) -> MenuItem:
     """The "Stream Dock" submenu. `state` is "connected", "not_connected" or "not_installed",
-    read by the caller when the menu opens."""
+    read by the caller when the menu opens. The presets editor is offered once installed."""
     if state == "not_installed":
         sub = [
             MenuItem(label="Not installed", enabled=False),
@@ -38,6 +42,8 @@ def streamdock_menu_item(state: str, on_copy_install: Callable[[], None]) -> Men
         ]
     else:
         sub = [MenuItem(label="Connected" if state == "connected" else "Not connected", enabled=False)]
+        if on_edit_presets is not None:
+            sub.append(MenuItem(label="New-session presets…", action=on_edit_presets))
     return MenuItem(label="Stream Dock", submenu=sub)
 
 
