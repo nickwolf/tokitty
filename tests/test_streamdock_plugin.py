@@ -27,7 +27,17 @@ def test_pages_load_config_and_use_no_external_resources():
             assert url[1] == "127.0.0.1", url
 
 
-def test_property_inspector_offers_decision_roles():
+def test_property_inspector_offers_blank_role_and_prompt_choices():
     text = (PLUGIN / "pi.html").read_text(encoding="utf-8")
-    for role, label in (("allow", "Allow"), ("deny", "Deny"), ("always", "Always")):
-        assert f'["{role}", "{label} (permission prompts)"]' in text
+    assert '["blank", "Blank"]' in text
+    assert "During a permission prompt" in text
+    for value, label in (("", "Default"), ("allow", "Allow"), ("deny", "Deny"), ("always", "Always")):
+        assert f'["{value}", "{label}"]' in text
+    # The dedicated roles are gone from the role list.
+    assert "(permission prompts)" not in text
+
+
+def test_property_inspector_saves_role_and_prompt_together():
+    text = (PLUGIN / "pi.html").read_text(encoding="utf-8")
+    assert "payload: { role: current, prompt: currentPrompt }" in text
+    assert text.count("select.onchange = save;") == 2

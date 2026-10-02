@@ -8,6 +8,7 @@
 <style>
   body { background: #2d2d2d; color: #d8d8d8; font: 13px sans-serif; margin: 12px; }
   label { display: block; margin-bottom: 6px; }
+  label.second { margin-top: 12px; }
   select { width: 100%; background: #3a3a3a; color: #eee; border: 1px solid #555; padding: 4px; }
   #note { margin-top: 8px; color: #999; }
 </style>
@@ -15,12 +16,15 @@
 <body>
 <label for="role">Key role</label>
 <select id="role"></select>
+<label class="second" for="prompt">During a permission prompt</label>
+<select id="prompt"></select>
 <div id="note"></div>
 <script>
 "use strict";
 let ws = null;
 let uuid = "";
 let current = "";
+let currentPrompt = "";
 
 function option(select, value, text) {
   const o = document.createElement("option");
@@ -46,9 +50,7 @@ async function build() {
     (meta.accounts || []).forEach(function (a) { roles.push(["usage:" + a.index, "Usage: " + a.name]); });
   }
   roles.push(["interrupt", "Interrupt"]);
-  roles.push(["allow", "Allow (permission prompts)"]);
-  roles.push(["deny", "Deny (permission prompts)"]);
-  roles.push(["always", "Always (permission prompts)"]);
+  roles.push(["blank", "Blank"]);
   if (meta) {
     (meta.presets || []).forEach(function (name) { roles.push(["new:" + name, "New session: " + name]); });
   }
@@ -58,10 +60,26 @@ async function build() {
   // A role the list no longer offers is kept so it is not lost on the next save.
   if (current && !roles.some(function (r) { return r[0] === current; })) option(select, current, current);
   select.value = current;
-  select.onchange = function () {
-    current = select.value;
-    ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: { role: current } }));
-  };
+  select.onchange = save;
+  buildPrompt();
+}
+
+function buildPrompt() {
+  const select = document.getElementById("prompt");
+  const prompts = [["", "Default"], ["allow", "Allow"], ["deny", "Deny"], ["always", "Always"]];
+  select.textContent = "";
+  prompts.forEach(function (p) { option(select, p[0], p[1]); });
+  // A stored value the list does not offer is kept so it is not lost on the next save.
+  if (currentPrompt && !prompts.some(function (p) { return p[0] === currentPrompt; })) option(select, currentPrompt, currentPrompt);
+  select.value = currentPrompt;
+  select.onchange = save;
+}
+
+// Both settings are saved together, since setSettings replaces the whole payload.
+function save() {
+  current = document.getElementById("role").value;
+  currentPrompt = document.getElementById("prompt").value;
+  ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: { role: current, prompt: currentPrompt } }));
 }
 
 function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
@@ -70,6 +88,7 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, 
   if (typeof info === "string") { try { info = JSON.parse(info); } catch (e) { info = {}; } }
   const settings = (info && info.payload && info.payload.settings) || {};
   current = typeof settings.role === "string" ? settings.role : "";
+  currentPrompt = typeof settings.prompt === "string" ? settings.prompt : "";
   ws = new WebSocket("ws://127.0.0.1:" + inPort);
   ws.onopen = function () {
     ws.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
