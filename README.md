@@ -29,7 +29,7 @@ There is a burn-rate projection too. When your current pace would hit a cap befo
 
 Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS.
 
-With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unzipping an update or moving the folder to a new location, launch the new copy once before deleting the old one. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
+With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unpacking a release by hand or moving the folder to a new location, launch the new copy once before deleting the old one. The in-app update (see [Updating](#updating)) does that for you. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
 
 ### Windows
 
@@ -48,6 +48,35 @@ Move Tokitty to Applications before turning on **Start at login** or adding an a
 ### Linux
 
 Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
+
+## Updating
+
+Tokitty checks GitHub Releases for a newer version about a minute after startup and then once a day, and it never installs anything without a click. **Check for updates automatically** in the right-click menu turns the daily check off. **Check for updates** in the same menu runs one on demand, whatever that setting is.
+
+When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and the tray menu. On Windows the tray also shows one notification per version. The Linux and macOS tray backends have no notifications, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
+
+Install downloads the archive for your platform, checks it against the release's `SHA256SUMS`, unpacks it, and runs the new build's self-check before touching anything. On Windows and Linux the new copy goes into a new `v<version>` folder next to the current one, so `releases\v0.2.1\Tokitty` becomes `releases\v0.3.0\Tokitty`. On macOS the new bundle is swapped in at the same path, and that folder has to be writable. A standard user with Tokitty in `/Applications` gets the release page instead, and so does a bundle that isn't named `Tokitty.app`.
+
+The old copy keeps running until the new one has started and reported back. If the new copy hasn't come up after two minutes, the old one stays (on macOS the swap is undone) and says so. Hooks and Start at login follow the new copy once it starts.
+
+Tokitty keeps the copy it just replaced and deletes older copies it installed. On macOS the kept copy is a hidden `.Tokitty-<old tag>.app` beside the app. It only deletes what it installed itself, so folders you unpacked by hand are never touched, even when they sit in the same directory with a `v` name.
+
+A run from source only reports updates, and its menu item opens the release page. Releases from before the updater have no `SHA256SUMS`, so the first move onto a release that has the updater is a manual download.
+
+Each release has a `SHA256SUMS` file, and the updater refuses a download that doesn't match it. That catches a corrupted or tampered download. It does nothing about someone who can publish releases on the repo, and the builds are unsigned, so the trust is the same as downloading by hand.
+
+### Rolling back
+
+On Windows and Linux, launch the previous copy from its folder. It repoints `current` at itself, and its own check will offer the newer version again unless you turn the daily check off.
+
+On macOS, quit Tokitty and run these in a terminal, with your own tags in place of `v0.2.1` and `v0.3.0`:
+
+```bash
+mv /Applications/Tokitty.app /Applications/.Tokitty-v0.3.0.app
+mv /Applications/.Tokitty-v0.2.1.app /Applications/Tokitty.app
+```
+
+The first command parks the new version under a hidden name, the second puts the old one back. Swap the names again to go forward.
 
 ## Live activity (thinking / working / permission / done)
 
@@ -276,6 +305,8 @@ export TOKITTY_CREDENTIALS=/path/to/.claude/.credentials.json
 ```
 
 For a visual check without waiting for a state to happen for real, `TOKITTY_DEBUG_STATE=<state>` (`permission`, `flopped`, `done_hop`, any state name) pins the card to that sprite with placeholder numbers and skips polling.
+
+`TOKITTY_UPDATE_API_URL` points the update check at another server instead of the GitHub releases API. It is a test hook, and the CI verifier uses it to drive an update against a local server.
 
 ## How this was built
 
