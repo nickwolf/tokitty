@@ -178,3 +178,17 @@ def test_streamdock_menu_item_states():
     assert INSTALL_STREAMDOCK_COMMAND in missing.submenu[1].label
     missing.submenu[1].action()
     assert copied == [1]
+
+
+def test_streamdock_presets_item_only_when_installed():
+    from tokitty.menu import streamdock_menu_item
+
+    opened = []
+    for state in ("connected", "not_connected"):
+        item = streamdock_menu_item(state, lambda: None, lambda: opened.append(state))
+        assert [i.label for i in item.submenu][-1] == "New-session presets…"
+        item.submenu[-1].action()
+    assert opened == ["connected", "not_connected"]
+    missing = streamdock_menu_item("not_installed", lambda: None, lambda: None)
+    assert "New-session presets…" not in [i.label for i in missing.submenu]
+    assert "New-session presets…" not in [i.label for i in streamdock_menu_item("connected", lambda: None).submenu]

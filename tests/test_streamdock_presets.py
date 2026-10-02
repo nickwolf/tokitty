@@ -59,3 +59,10 @@ def test_check_env_mismatch():
 
 def test_check_codex_account():
     assert check_preset(preset_for("a", NATIVE, "C:\\s", ALL), CODEX) == "Account is not a Claude account"
+
+
+def test_account_label():
+    from tokitty.streamdock.presets import account_label
+
+    assert account_label(1, WSL) == f"Cat 2 ({WSL.config_dir})"
+    assert account_label(1, WSL, "Work") == f"Work ({WSL.config_dir})"

@@ -53,3 +53,8 @@ def check_preset(preset: dict, account: Account, others: Iterable[dict] = ()) ->
         text = str(exc)
         return text[:1].upper() + text[1:]
     return None
+
+
+def account_label(index: int, account: Account, pane_label: Optional[str] = None) -> str:
+    """What the account dropdown shows: the cat's name and where its config lives."""
+    return f"{pane_label or f'Cat {index + 1}'} ({account.config_dir})"

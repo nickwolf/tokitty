@@ -578,6 +578,7 @@ class TokittyWindow:
         self.on_set_budget: Optional[Callable[[int], None]] = None
         # "connected" | "not_connected" | "not_installed"; None leaves the submenu out.
         self.streamdock_state: Optional[Callable[[], str]] = None
+        self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # Fired after any right-click menu action, so __main__.py can
@@ -863,7 +864,9 @@ class TokittyWindow:
             model = self.build_menu_model(self._menu_pane_index)
         if self.streamdock_state is not None:
             # Read now, when the menu opens. Tk only: the tray menu is built once and would go stale.
-            item = streamdock_menu_item(self.streamdock_state(), self._copy_install_streamdock)
+            item = streamdock_menu_item(
+                self.streamdock_state(), self._copy_install_streamdock, self.on_edit_streamdock_presets
+            )
             model.insert(len(model) - 2, item)
         self._render_tk_menu(self.menu, model)
 
