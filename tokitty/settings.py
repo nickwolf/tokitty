@@ -48,7 +48,8 @@ class Settings:
     usage_budgets: Dict[str, Dict[str, float]] = field(default_factory=dict)
     onboarding_version: int = 0
     # New-session presets for the Stream Dock, edited by hand. Stored as
-    # normalised dicts: name, account_index, env, cwd, and distro for WSL.
+    # normalised dicts: name, account_index, env, cwd, and distro for WSL, plus
+    # `account` (the account's name slug) when the dialog wrote it.
     streamdock_presets: List[dict] = field(default_factory=list)
     # Loopback port and shared secret for the Stream Dock plugin, chosen once by
     # --install-streamdock. 0 and "" mean not installed.
@@ -174,6 +175,9 @@ def _preset(entry):
     if not isinstance(cwd, str) or not cwd.strip():
         return None
     preset = {"name": name, "account_index": index, "env": env, "cwd": cwd}
+    account = entry.get("account")
+    if isinstance(account, str) and account.strip():
+        preset["account"] = account
     if env == "wsl":
         distro = entry.get("distro")
         if not isinstance(distro, str) or not distro.strip():

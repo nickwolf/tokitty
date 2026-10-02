@@ -431,6 +431,40 @@ def test_new_session_with_unknown_preset_is_ignored(h, capsys):
     assert "nope" in capsys.readouterr().err
 
 
+def test_new_session_resolves_account_by_name_not_index(h):
+    h.rt.set_presets([{"name": "p", "account": "acct1", "account_index": 0, "env": "native", "cwd": "C:\\a"}])
+    h.key("n", "new:p", 0)
+    h.tick()
+    h.press("n")
+    assert h.launched == [("p", "acct1")]
+
+
+def test_new_session_refuses_unknown_account_name(h, capsys):
+    h.rt.set_presets([{"name": "p", "account": "gone", "account_index": 0, "env": "native", "cwd": "C:\\a"}])
+    h.key("n", "new:p", 0)
+    h.tick()
+    h.press("n")
+    assert h.launched == []
+    assert "unknown account" in capsys.readouterr().err
+
+
+def test_new_session_without_account_name_falls_back_to_index(h):
+    h.rt.set_presets([{"name": "p", "account_index": 1, "env": "native", "cwd": "C:\\a"}])
+    h.key("n", "new:p", 0)
+    h.tick()
+    h.press("n")
+    assert h.launched == [("p", "acct1")]
+
+
+def test_set_presets_changes_meta_and_launching(h):
+    h.rt.set_presets([{"name": "fresh", "account": "acct0", "account_index": 0, "env": "native", "cwd": "C:\\a"}])
+    assert h.meta_fn()["presets"] == ["fresh"]
+    h.key("n", "new:fresh", 0)
+    h.tick()
+    h.press("n")
+    assert h.launched == [("fresh", "acct0")]
+
+
 def marker(h, i):
     return h.dirs[i] / "streamdock.enabled"
 

@@ -375,11 +375,27 @@ class StreamdockRuntime:
         if preset is None:
             _log(f"no preset named {name!r}")
             return
-        acct = self._accounts.get(preset.get("account_index"))
+        acct = self._preset_account(preset)
         if acct is None or acct.account is None:
             _log(f"preset {name!r} names an unknown account")
             return
         self._launch(preset, acct.account)
+
+    def _preset_account(self, preset: dict) -> Optional[AccountInput]:
+        """The account a preset names. The slug wins when present, because
+        indices shift when accounts are removed or reordered; the index is
+        only for hand-written presets with no slug."""
+        slug = preset.get("account")
+        if slug is None:
+            return self._accounts.get(preset.get("account_index"))
+        for acct in self._accounts.values():
+            if acct.account is not None and acct.account.name == slug:
+                return acct
+        return None
+
+    def set_presets(self, presets: List[dict]) -> None:
+        """Swap the preset list. Tk thread, like every other method here."""
+        self._presets = list(presets)
 
     # heartbeat and titles
 
