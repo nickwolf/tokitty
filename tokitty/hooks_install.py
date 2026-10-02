@@ -345,8 +345,7 @@ def _codex_win_command(runner_path: str, home: str, sessions_dir: str) -> str:
             sessions = f"{short.replace(chr(92), '/').rstrip('/')}/tokitty/sessions"
     if _SHELL_SAFE.match(runner) and _SHELL_SAFE.match(sessions):
         return f"{runner} --sessions-dir {sessions}"
-    # A `'` in a path is doubled (PowerShell's literal rule). shlex reads `''` as two
-    # adjacent quotes and drops it, so a home path with `'` is not recognised as owned.
+    # A `'` in a path is doubled (PowerShell's literal rule); _POWERSHELL_FALLBACK reads it back.
     runner_q = runner_path.replace("'", "''")
     sessions_q = sessions_dir.replace("'", "''")
     return f"& '{runner_q}' --sessions-dir '{sessions_q}'"
@@ -498,6 +497,9 @@ def _is_owned_exec_hook(command: str, args, expected_sessions: str) -> bool:
     return _normalize_token_path(sessions_arg) == expected_sessions
 
 
+_POWERSHELL_FALLBACK = re.compile(r"^& '((?:[^']|'')*)' --sessions-dir '((?:[^']|'')*)'$")
+
+
 def _codex_command_candidates(command: str) -> List[Tuple[str, str, str]]:
     """The (kind, runner, sessions) readings of a Codex command string.
 
@@ -515,6 +517,12 @@ def _codex_command_candidates(command: str) -> List[Tuple[str, str, str]]:
         return []
     if '"' not in command and "'" not in command:
         split_lists.append(command.split())
+    powershell = _POWERSHELL_FALLBACK.match(command)
+    if powershell:
+        # The & fallback quotes PowerShell-style ('' is a literal '), which
+        # shlex does not read back for a path containing an apostrophe.
+        runner, sessions = (g.replace("''", "'") for g in powershell.groups())
+        split_lists.append(["&", runner, "--sessions-dir", sessions])
     candidates = []
     for parts in split_lists:
         if len(parts) == 4 and parts[0] in ("python", "python3") and parts[2] == "--sessions-dir":

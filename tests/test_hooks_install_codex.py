@@ -227,16 +227,16 @@ def test_codex_command_fallback_doubles_a_quote_in_the_runner_path_and_stays_own
     monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
     command = _fallback_command(r"C:\Program Files\O'Neil\tokitty-hook.exe")
     assert "O''Neil" in command
-    # shlex drops the doubled quote, but ownership keys on the basename, so it still matches
     assert hi._codex_owned_parts(command, r"C:\Users\nick\.codex") is not None
 
 
-def test_codex_command_fallback_with_a_quote_in_the_home_is_not_recognised(monkeypatch):
+def test_codex_command_fallback_with_a_quote_in_the_home_stays_owned(monkeypatch):
     monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
     config_dir = r"C:\Users\o'neil\.codex"
     command = _fallback_command(r"C:\Program Files\Tokitty\tokitty-hook.exe", config_dir)
     assert "o''neil" in command
-    assert hi._codex_owned_parts(command, config_dir) is None
+    assert hi._codex_owned_parts(command, config_dir) is not None
+    assert hi._codex_owned_parts(command, r"C:\Users\other\.codex") is None
 
 
 def test_codex_command_frozen_windows_wsl_home_keeps_python3():
