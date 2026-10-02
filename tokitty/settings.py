@@ -55,6 +55,9 @@ class Settings:
     # --install-streamdock. 0 and "" mean not installed.
     streamdock_port: int = 0
     streamdock_token: str = ""
+    # Account name slugs whose sessions get no key on the deck. The default
+    # no-Account unit has no slug and cannot be hidden.
+    streamdock_hidden_accounts: List[str] = field(default_factory=list)
 
 
 def load_settings(state_dir) -> Settings:
@@ -88,6 +91,7 @@ def load_settings(state_dir) -> Settings:
         streamdock_presets=_presets(data.get("streamdock_presets")),
         streamdock_port=_port(data.get("streamdock_port")),
         streamdock_token=_token(data.get("streamdock_token")),
+        streamdock_hidden_accounts=_names(data.get("streamdock_hidden_accounts")),
     )
 
 
@@ -113,6 +117,17 @@ def _token(value) -> str:
     if not isinstance(value, str) or not TOKEN_MIN <= len(value) <= TOKEN_MAX:
         return ""
     return value if _TOKEN_RE.fullmatch(value) else ""
+
+
+def _names(value) -> List[str]:
+    """Keep the non-empty strings, once each, in order."""
+    if not isinstance(value, list):
+        return []
+    cleaned: List[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item not in cleaned:
+            cleaned.append(item)
+    return cleaned
 
 
 def _budgets(value) -> Dict[str, Dict[str, float]]:

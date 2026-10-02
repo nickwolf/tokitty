@@ -78,3 +78,16 @@ def test_save_presets_keeps_other_settings(tmp_path):
     loaded = load_settings(tmp_path)
     assert loaded.streamdock_presets == [preset]
     assert (loaded.tray_enabled, loaded.streamdock_port, loaded.streamdock_token) == (False, 4000, "a" * 32)
+
+
+def test_save_hidden_accounts_keeps_other_settings(tmp_path):
+    from tokitty.settings import Settings, load_settings, save_settings
+    from tokitty.streamdock.presets import save_hidden_accounts
+
+    preset = {"name": "p", "account_index": 0, "env": "native", "cwd": "C:\\a"}
+    save_settings(tmp_path, Settings(tray_enabled=False, streamdock_presets=[preset]))
+    assert save_hidden_accounts(tmp_path, ["work", "", "work", "codex"]) == ["work", "codex"]
+    loaded = load_settings(tmp_path)
+    assert loaded.streamdock_hidden_accounts == ["work", "codex"]
+    assert (loaded.tray_enabled, loaded.streamdock_presets) == (False, [preset])
+    assert save_hidden_accounts(tmp_path, []) == []

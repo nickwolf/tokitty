@@ -267,3 +267,25 @@ def test_presets_roundtrip(tmp_path):
     presets = [_preset(), {"name": "win", "account_index": 1, "env": "native", "cwd": "C:\\src"}]
     save_settings(tmp_path, Settings(streamdock_presets=presets))
     assert load_settings(tmp_path).streamdock_presets == presets
+
+
+def test_hidden_accounts_default_empty(tmp_path):
+    assert load_settings(tmp_path).streamdock_hidden_accounts == []
+
+
+def test_hidden_accounts_roundtrip(tmp_path):
+    save_settings(tmp_path, Settings(streamdock_hidden_accounts=["a", "b"]))
+    assert load_settings(tmp_path).streamdock_hidden_accounts == ["a", "b"]
+
+
+@pytest.mark.parametrize("value", ["a", 3, {"a": 1}, None, True])
+def test_hidden_accounts_non_list_gives_empty(tmp_path, value):
+    (tmp_path / "settings.json").write_text(json.dumps({"streamdock_hidden_accounts": value}))
+    assert load_settings(tmp_path).streamdock_hidden_accounts == []
+
+
+def test_hidden_accounts_keeps_valid_strings_once(tmp_path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"streamdock_hidden_accounts": ["a", "", "  ", 3, None, "a", "b"]})
+    )
+    assert load_settings(tmp_path).streamdock_hidden_accounts == ["a", "b"]
