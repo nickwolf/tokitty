@@ -172,6 +172,7 @@ To edit by hand, presets live in `settings.json` in tokitty's state directory, o
 How answering from the deck works:
 
 - Allow is only lit once Tokitty has confirmed the session's tab is the one in front. If it can't tell which tab is the session's (no tab with that title, two sessions with the same title, or a tab it can't bring forward), it opens a small window of its own with the full command and Allow and Deny buttons instead.
+- You can assign Allow, Deny and Always keys in the key settings panel to pin where the decisions live. Any you don't assign are taken from the session and Interrupt keys in reading order, and the overlay opens as long as both Allow and Deny have a key.
 - Always is offered only when the call has an exact rule: one Bash command with no `*` in it, one file path for Edit or Write, or a WebFetch domain. The rule lasts for that session only and is never written to a settings file.
 - The terminal prompt keeps working the whole time, and whichever answer lands first wins.
 - A command approved in the terminal that keeps running for a long time leaves its deck key flagged until it finishes, because Claude Code records nothing until the command returns. Answering from the deck doesn't have this problem.
