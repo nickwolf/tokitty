@@ -146,6 +146,36 @@ A few things behave differently from a Claude Code pane:
 - `codex-auto-review`, the automatic review pass, isn't on OpenAI's pricing page. Its tokens are counted and shown, but its cost reads `--` and the total is marked `>=`.
 - Requests to models that OpenAI prices by context length (currently `gpt-5.6-sol`, `gpt-5.5`, and `gpt-5.4` over 272K input tokens) are costed separately, and show up as a `long` row where a long-context rate is published.
 
+## Stream Dock
+
+Windows only. A VSDinside Stream Dock M18 can show your Claude Code sessions as keys. Pressing a session's key brings its Windows Terminal tab to the front, and when a session is waiting on a permission prompt you can answer it from the deck with Allow, Deny or Always. Other keys show an account's usage, interrupt the session you last jumped to, or open a new Claude Code tab in a repo you choose. Tokitty does the work; a small plugin inside VSD Craft draws the keys and forwards presses to it over `127.0.0.1`.
+
+To set it up:
+
+1. Install the live activity hooks (above). The deck answers prompts through the same hook.
+2. Run `python -m tokitty --install-streamdock` (or `Tokitty.exe --install-streamdock`). It copies the plugin into VSD Craft's plugins folder and picks a local port and a random token for it. `--uninstall-streamdock` removes it again.
+3. Fully exit VSD Craft from its tray icon and start it again, so it loads the plugin. Drag the Tokitty key action onto the keys you want, and pick each key's role in its settings panel: session slot, usage for an account, Interrupt, or a new-session preset.
+4. Restart Tokitty, and restart any open Claude Code sessions so they pick up the hook.
+
+Running from source, `pip install comtypes` (or the `streamdock` extra) is needed for the tab switching and Interrupt keys. Everything else works without it.
+
+New-session presets go in `settings.json` in tokitty's state directory, one entry per key. `account_index` is the account's position in the Accounts list, starting at 0, and `env` is `wsl` (with `distro`) or `native`:
+
+```json
+"streamdock_presets": [
+  {"name": "Tools", "account_index": 0, "env": "wsl", "distro": "Ubuntu", "cwd": "/mnt/c/Tools"}
+]
+```
+
+How answering from the deck works:
+
+- Allow is only lit once Tokitty has confirmed the session's tab is the one in front. If it can't tell which tab is the session's (no tab with that title, two sessions with the same title, or a tab it can't bring forward), it opens a small window of its own with the full command and Allow and Deny buttons instead.
+- Always is offered only when the call has an exact rule: one Bash command with no `*` in it, one file path for Edit or Write, or a WebFetch domain. The rule lasts for that session only and is never written to a settings file.
+- The terminal prompt keeps working the whole time, and whichever answer lands first wins.
+- A command approved in the terminal that keeps running for a long time leaves its deck key flagged until it finishes, because Claude Code records nothing until the command returns. Answering from the deck doesn't have this problem.
+- Tokitty can't see tabs in a Windows Terminal running as Administrator, so those sessions always get the popup window.
+- The M18's ring isn't supported.
+
 ## Customization
 
 A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane to change either. **Colorway ▸** is a radio submenu of six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern ▸** is a radio submenu of nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
