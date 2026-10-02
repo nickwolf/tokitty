@@ -406,7 +406,14 @@ class StreamdockRuntime:
 
     def set_hidden_accounts(self, names: List[str]) -> None:
         """Swap the hidden-account list (name slugs). Tk thread; applies on the next tick."""
+        newly = {a for a in self._accounts.values() if a.account is not None
+                 and a.account.name in set(names) - self._hidden}
         self._hidden = frozenset(names)
+        # A hidden account's hooks should stop waiting on the deck at once.
+        for acct in newly:
+            self._run_io(lambda a=acct: self._clear(a))
+        if self._was_connected:
+            self._touch_all()
 
     def _hidden_indices(self) -> set:
         """Unit indices of the hidden accounts. The default unit has no Account, so it is never hidden."""
@@ -437,6 +444,9 @@ class StreamdockRuntime:
     def _touch(self, acct: AccountInput) -> None:
         # Only Claude Code hooks answer through the deck; a Codex hook must never wait on it.
         if acct.account is not None and acct.account.provider != DEFAULT_PROVIDER:
+            return
+        # Nor a hidden account's: the deck ignores its requests, so the hook should not hold them.
+        if acct.account is not None and acct.account.name in self._hidden:
             return
         directory = self._dir(acct)
         if directory and self._reachable(acct):

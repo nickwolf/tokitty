@@ -656,3 +656,17 @@ def test_default_unit_cannot_be_hidden(tmp_path):
     h.rt._accounts[0] = AccountInput(0, "Claude", None, "/cfg0", h.dirs[0])
     slots(h, 3)
     assert [h.spec("k0").ref, h.spec("k1").ref] == [A0, A1]
+
+
+def test_hidden_account_loses_the_enabled_marker(tmp_path):
+    h = Harness(tmp_path)
+    h.server.is_connected = True
+    h.tick()
+    assert marker(h, 0).exists() and marker(h, 1).exists()
+    h.rt.set_hidden_accounts(["acct1"])
+    assert marker(h, 0).exists() and not marker(h, 1).exists()
+    h.now += 30
+    h.tick()
+    assert not marker(h, 1).exists()
+    h.rt.set_hidden_accounts([])
+    assert marker(h, 1).exists()
