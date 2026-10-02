@@ -1158,7 +1158,8 @@ def test_refresh_removes_tokittys_permission_request_once_guardian(home):
     result = _refresh(home)
 
     assert result.ok
-    assert result.refreshed_events == ["PermissionRequest"]
+    assert result.removed_events == ["PermissionRequest"]
+    assert result.refreshed_events == []
     assert result.warning is None
     after = _hooks(home)["hooks"]
     assert "PermissionRequest" not in after
@@ -1242,3 +1243,15 @@ def test_hook_status_for_a_seven_handler_guardian_home(home):
             lines.append(f'trusted_hash = "sha256:{event}"')
     (home / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert ct.codex_hook_status(str(home), state) == ct.APPROVED
+
+
+def test_install_hooks_cli_says_removed_for_the_guardian_permission_hook(home, monkeypatch, capsys):
+    _install(home)
+    _guardian(home)
+    monkeypatch.setattr(hi, "get_config_dirs", lambda: [(str(home), "codex")])
+
+    assert hi.install_hooks() == 0
+
+    out = capsys.readouterr().out
+    assert "removed hooks for PermissionRequest (Codex's automatic reviewer answers approvals)" in out
+    assert "refreshed hooks for PermissionRequest" not in out

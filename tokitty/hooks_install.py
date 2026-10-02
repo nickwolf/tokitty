@@ -640,11 +640,13 @@ class ConfigDirResult:
         warning: Optional[str] = None,
         refreshed_events: Optional[List[str]] = None,
         note: Optional[str] = None,
+        removed_events: Optional[List[str]] = None,
     ):
         self.config_dir = config_dir
         self.ok = ok
         self.message = message
         self.installed_events = installed_events or []
+        self.removed_events = removed_events or []
         self.warning = warning
         self.refreshed_events = refreshed_events or []
         # A soft, informational note distinct from `warning` (reserved for
@@ -1232,7 +1234,6 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
                     codex_trust.trust_key(config_dir, _CODEX_NO_PERMISSION_EVENT, g, h)
                     for g, h in old_positions
                 ]
-                refreshed_events.append(_CODEX_NO_PERMISSION_EVENT)
                 removed_event = True
                 changed = True
 
@@ -1329,12 +1330,15 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         _backup(settings_path)
         _write_settings(settings_path, data)
 
-    if installed_events or refreshed_events:
+    removed_events = [_CODEX_NO_PERMISSION_EVENT] if removed_event else []
+    if installed_events or refreshed_events or removed_events:
         parts = []
         if installed_events:
             parts.append("installed")
         if refreshed_events:
             parts.append("refreshed")
+        if removed_events:
+            parts.append("removed")
         msg = " and ".join(parts)
     else:
         msg = "already installed, nothing to do"
@@ -1364,6 +1368,7 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         refreshed_events=refreshed_events,
         warning=warning,
         note=note,
+        removed_events=removed_events,
     )
 
 
@@ -1709,7 +1714,12 @@ def install_hooks() -> int:
             print(f"{config_dir}: installed hooks for {', '.join(result.installed_events)}")
         if result.refreshed_events:
             print(f"{config_dir}: refreshed hooks for {', '.join(result.refreshed_events)}")
-        if not result.installed_events and not result.refreshed_events:
+        if result.removed_events:
+            print(
+                f"{config_dir}: removed hooks for {', '.join(result.removed_events)} "
+                "(Codex's automatic reviewer answers approvals)"
+            )
+        if not result.installed_events and not result.refreshed_events and not result.removed_events:
             print(f"{config_dir}: {result.message}")
         if result.note:
             print(f"{config_dir}: {result.note}")
