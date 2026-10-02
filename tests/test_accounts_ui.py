@@ -1030,7 +1030,7 @@ def test_only_a_codex_wsl_path_is_validated_off_thread():
 
 
 @pytest.mark.gui
-def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monkeypatch):
+def test_adding_and_removing_a_codex_account_runs_the_hook_ops(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
@@ -1059,7 +1059,7 @@ def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monke
         accounts = load_accounts(tmp_path)
         codex = [a for a in accounts if a.provider == "codex"]
         assert [a.config_dir for a in codex] == [str(home)]
-        assert hook_calls == []
+        assert hook_calls == [str(home)]
         assert load_pending_hook_op(tmp_path) is None
         _assert_codex_home_untouched(home)
 
@@ -1068,7 +1068,7 @@ def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monke
             root, monkeypatch, manager=mgr,
         )
         assert [a.name for a in load_accounts(tmp_path)] == ["acct-claude"]
-        assert hook_calls == []
+        assert hook_calls == [str(home), str(home)]
         assert load_pending_hook_op(tmp_path) is None
         _assert_codex_home_untouched(home)
     finally:
@@ -1139,7 +1139,7 @@ def test_discovered_codex_home_adds_as_codex(tmp_path, monkeypatch):
 
         codex = [a for a in load_accounts(tmp_path) if a.provider == "codex"]
         assert [a.config_dir for a in codex] == [str(home)]
-        assert hook_calls == []
+        assert hook_calls == [str(home)]
         _assert_codex_home_untouched(home)
         # Once added it is an account row, not a discovery row.
         assert not any(
@@ -1286,5 +1286,130 @@ def test_add_rechecks_duplicates_after_slow_validation(tmp_path, monkeypatch):
         _pump_until(root, lambda: not mgr._validation_in_flight)
         assert errors and "already added" in errors[-1][1]
         assert [a.name for a in load_accounts(tmp_path)] == ["a", "other"]
+    finally:
+        root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Codex hook approval: note box and row text
+# ---------------------------------------------------------------------------
+
+def test_finish_mutation_shows_a_note_in_an_info_box_when_there_is_no_warning(monkeypatch):
+    from tokitty import accounts_ui
+
+    infos, warnings = [], []
+    monkeypatch.setattr(accounts_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
+    monkeypatch.setattr(accounts_ui.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    manager = _bare_manager(accounts_ui)
+
+    class Ok:
+        ok = True
+        message = "installed"
+        warning = None
+        note = "Hooks installed, waiting for approval in Codex."
+
+    manager._finish_mutation(Ok())
+
+    assert infos == [("Accounts", "Hooks installed, waiting for approval in Codex.")]
+    assert warnings == []
+
+
+def test_finish_mutation_appends_the_note_to_the_warning_box(monkeypatch):
+    from tokitty import accounts_ui
+
+    infos, warnings = [], []
+    monkeypatch.setattr(accounts_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
+    monkeypatch.setattr(accounts_ui.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    manager = _bare_manager(accounts_ui)
+
+    class Ok:
+        ok = True
+        message = "installed"
+        warning = "a warning"
+        note = "a note"
+
+    manager._finish_mutation(Ok())
+
+    assert infos == []
+    assert len(warnings) == 1
+    assert "a warning" in warnings[0][1] and "a note" in warnings[0][1]
+
+
+def _codex_hook_text(tmp_path, home, monkeypatch=None):
+    from tokitty import accounts_ui, hooks_install
+
+    manager = accounts_ui.AccountsManager.__new__(accounts_ui.AccountsManager)
+    # The dialog reads the record from its own state dir; installs write it
+    # to hooks_install's (a temp dir under conftest), which is the same
+    # directory in a real run.
+    manager.state_dir = hooks_install.state_dir_path()
+    return manager._codex_hook_text(str(home))
+
+
+def test_codex_hook_text_for_each_status(tmp_path):
+    from tokitty import codex_trust as ct
+    from tokitty import hooks_install as hi
+
+    home = _codex_home(tmp_path)
+    assert _codex_hook_text(tmp_path, home) is None
+
+    hi.install_hooks_for_dir(str(home), "codex")
+    assert _codex_hook_text(tmp_path, home) == "hooks: waiting for approval in Codex"
+
+    lines = []
+    for event, _m in hi.CODEX_EVENTS:
+        key = f"{hi.codex_paths(str(home))[1]}:{ct.EVENT_SNAKE[event]}:0:0"
+        lines += [f"[hooks.state.'{key}']", 'trusted_hash = "sha256:x"', ""]
+    (home / "config.toml").write_text("\n".join(lines), encoding="utf-8")
+    assert _codex_hook_text(tmp_path, home) == "hooks: approved, no activity from Codex hooks yet"
+
+    sessions = home / "tokitty" / "sessions"
+    sessions.mkdir()
+    future = time.time() + 3600
+    import os
+    os.utime(sessions, (future, future))
+    assert _codex_hook_text(tmp_path, home) == "hooks: approved"
+
+    (home / "config.toml").unlink()
+    (home / "config.toml").mkdir()
+    assert _codex_hook_text(tmp_path, home) == "hooks: can't read Codex hook state"
+
+
+@pytest.mark.gui
+def test_codex_add_shows_the_approval_note_and_the_row_text(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import accounts_ui, hooks_install
+    from tokitty.accounts_ui import AccountsManager
+    from tokitty.accounts import save_accounts
+
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    save_accounts(tmp_path, [Account(name="acct-claude", config_dir=str(claude_dir))])
+    home = _codex_home(tmp_path)
+    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    # Codex has no activity capability until a later task.
+    monkeypatch.setattr(hooks_install, "provider_has_hooks", lambda kind: True)
+    infos, warnings = [], []
+    monkeypatch.setattr(accounts_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
+    monkeypatch.setattr(accounts_ui.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: str(home / "sessions"))
+
+    root = tk.Tk()
+    try:
+        mgr = AccountsManager(root, tmp_path)
+        mgr._add_provider_var.set("codex")
+        _run_and_wait_for_mutation(mgr._on_add, root, monkeypatch, manager=mgr)
+
+        assert infos == [("Accounts", hooks_install.CODEX_APPROVAL_NOTE)]
+        assert warnings == []
+        labels = [
+            child.cget("text")
+            for frame in mgr.toplevel.winfo_children()
+            for child in frame.winfo_children()
+            if isinstance(child, tk.Label)
+        ]
+        assert any(label.endswith("hooks: waiting for approval in Codex") for label in labels)
+        claude_labels = [label for label in labels if "hooks:" in label and not label.startswith("Codex")]
+        assert claude_labels == []
     finally:
         root.destroy()

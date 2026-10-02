@@ -697,6 +697,27 @@ class AccountsManager:
         except OSError:
             return None
 
+    def _codex_hook_text(self, config_dir: str) -> Optional[str]:
+        """The approval line for a Codex row, or None when no hooks are
+        installed or the home is not read from here. Called only after
+        _local_codex_facts accepted the home, so a WSL UNC path on Windows
+        never gets here."""
+        from tokitty import codex_trust
+
+        try:
+            status = codex_trust.codex_hook_status(config_dir, self.state_dir)
+            if status == codex_trust.APPROVED:
+                if codex_trust.codex_activity_hint(config_dir, self.state_dir):
+                    return "hooks: approved, no activity from Codex hooks yet"
+                return "hooks: approved"
+        except OSError:
+            return None
+        if status == codex_trust.NEEDS_APPROVAL:
+            return "hooks: waiting for approval in Codex"
+        if status == codex_trust.UNREADABLE:
+            return "hooks: can't read Codex hook state"
+        return None
+
     def _local_capabilities(self, config_dir: str):
         """(has_credentials, has_transcripts) for a config dir, or None
         when answering would need a subprocess.
@@ -732,6 +753,10 @@ class AccountsManager:
             return
         first, local = describe(*facts)
         text = f"{first} · {local}"
+        if provider == CODEX_KIND:
+            hooks = self._codex_hook_text(config_dir)
+            if hooks:
+                text = f"{text} · {hooks}"
         if provider != DEFAULT_PROVIDER:
             text = f"{get_provider(provider).display_name} · {text}"
         tk.Label(frame, text=text, fg="#666666").pack(side="left", padx=4)
@@ -800,7 +825,14 @@ class AccountsManager:
                 parent=self.toplevel,
             )
         elif getattr(outcome, "warning", None):
-            messagebox.showwarning("Accounts", outcome.warning, parent=self.toplevel)
+            # One box, not two: the note (such as "waiting for approval in
+            # Codex") rides along with the warning.
+            text = outcome.warning
+            if getattr(outcome, "note", None):
+                text = f"{text}\n\n{outcome.note}"
+            messagebox.showwarning("Accounts", text, parent=self.toplevel)
+        elif getattr(outcome, "note", None):
+            messagebox.showinfo("Accounts", outcome.note, parent=self.toplevel)
 
     def _poll_mutation_done(self) -> None:
         self._mutation_after_id = None

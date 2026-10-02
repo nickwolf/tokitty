@@ -127,7 +127,7 @@ I have Claude Code run `python3 -m tokitty --debug-print` at natural checkpoints
 
 A pane can track an OpenAI Codex account instead of a Claude Code one. It gets the same limit bars (whichever windows your plan has) and the same Per-model view, both read from the rollout files Codex writes under `<codex-home>/sessions/` and `archived_sessions/`. Nothing is fetched and no credentials are read, so a Codex pane works offline.
 
-Add one from the Accounts dialog: pick **Codex** as the harness, click **Add by path…**, and enter the Codex home (`C:\Users\<you>\.codex` on Windows, `~/.codex` elsewhere). Pointing it at the `sessions` folder inside works too. If your own Codex home has rollouts and isn't an account yet, the dialog lists it as a one-click row. Tokitty installs no hooks for a Codex account, and `--install-hooks` skips it, so nothing is ever written inside the Codex home.
+Add one from the Accounts dialog: pick **Codex** as the harness, click **Add by path…**, and enter the Codex home (`C:\Users\<you>\.codex` on Windows, `~/.codex` elsewhere). Pointing it at the `sessions` folder inside works too. If your own Codex home has rollouts and isn't an account yet, the dialog lists it as a one-click row. Tokitty installs its hooks into the Codex home's `hooks.json` (and `--install-hooks` covers it), but never touches `config.toml`.
 
 You can still add one by hand. The entry in `accounts.json` needs `"provider": "codex"` and `config_dir` pointing at the Codex home:
 
@@ -140,7 +140,8 @@ Entries without a `provider` key are Claude Code accounts, so existing files kee
 A few things behave differently from a Claude Code pane:
 
 - Codex only records its rate limits when it takes a turn, so between sessions the bars are a snapshot. Past 10 minutes old, the status line says when it was taken ("as of 4:12 PM"), and the countdowns keep running on tokitty's own clock as usual.
-- There are no thinking or working poses, because Codex has no hook for tokitty to listen to.
+- A Codex account gets live thinking and working poses once you approve Tokitty's hooks in the Codex CLI's hook review. Approval happens in the CLI, and the desktop app and IDE extension are untested.
+- A Codex account that uses the automatic approval reviewer (`approvals_reviewer = "auto_review"`, or the legacy `guardian_subagent`, set at top level or in any profile) gets no permission pose, because Codex runs the hook before the reviewer decides and can't tell it whether a person will see the prompt.
 - Costs use OpenAI's standard-tier API rates. Fast mode bills double and Batch and Flex half, but the rollouts don't say which tier a turn ran on.
 - `codex-auto-review`, the automatic review pass, isn't on OpenAI's pricing page. Its tokens are counted and shown, but its cost reads `--` and the total is marked `>=`.
 - Requests to models that OpenAI prices by context length (currently `gpt-5.6-sol`, `gpt-5.5`, and `gpt-5.4` over 272K input tokens) are costed separately, and show up as a `long` row where a long-context rate is published.

@@ -299,7 +299,7 @@ def test_hook_target_for_claude_and_default():
 
 def test_hook_target_raises_for_unknown_provider():
     with pytest.raises(ValueError):
-        hi._hook_target("codex")
+        hi._hook_target("nonesuch")
 
 
 # ---------------------------------------------------------------------------
@@ -1056,7 +1056,7 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _reconcile_claude / refresh_hooks_for_dir / ensure_current
+# _reconcile_hooks / refresh_hooks_for_dir / ensure_current
 # ---------------------------------------------------------------------------
 
 def test_refresh_never_adds_missing_events(tmp_path):
@@ -1843,7 +1843,7 @@ def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_p
 def test_fallback_real_directory_at_current_registers_bundled_path_with_warning(tmp_path, monkeypatch):
     """No other reconcile-level test exercises the real-directory-at-
     current outcome (runner_link's own note path, not an exception)
-    through _reconcile_claude."""
+    through _reconcile_hooks."""
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
@@ -2142,7 +2142,7 @@ def test_retry_resolves_provider_from_matching_account_for_legacy_record(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Providers without hooks (Codex)
+# Codex accounts and the hook-bearing provider check
 # ---------------------------------------------------------------------------
 
 def _write_accounts(state_dir, entries):
@@ -2162,11 +2162,11 @@ def _assert_untouched(home):
 def test_provider_has_hooks_follows_the_activity_capability():
     assert hi.provider_has_hooks("claude")
     assert hi.provider_has_hooks(None)
-    assert not hi.provider_has_hooks("codex")
+    assert hi.provider_has_hooks("codex")
     assert not hi.provider_has_hooks("gemini")
 
 
-def test_get_config_dirs_skips_a_codex_account(monkeypatch, tmp_path):
+def test_get_config_dirs_includes_a_codex_account(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     _write_accounts(state_dir, [
@@ -2174,66 +2174,115 @@ def test_get_config_dirs_skips_a_codex_account(monkeypatch, tmp_path):
         {"config_dir": "/b/.codex", "provider": "codex"},
     ])
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
-    assert hi.get_config_dirs() == [("/a/.claude", "claude")]
+    assert hi.get_config_dirs() == [("/a/.claude", "claude"), ("/b/.codex", "codex")]
 
 
-def test_get_config_dirs_with_only_codex_accounts_is_empty(monkeypatch, tmp_path):
+def test_get_config_dirs_with_only_codex_accounts_returns_the_codex_pair(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     _write_accounts(state_dir, [{"config_dir": "/b/.codex", "provider": "codex"}])
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
+    assert hi.get_config_dirs() == [("/b/.codex", "codex")]
+
+
+def test_get_config_dirs_still_skips_an_unknown_provider(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _write_accounts(state_dir, [{"config_dir": "/b/.gemini", "provider": "gemini"}])
+    monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
     assert hi.get_config_dirs() == []
 
 
-def test_install_hooks_leaves_a_codex_home_untouched(monkeypatch, tmp_path, capsys):
+def test_install_hooks_writes_hooks_json_into_a_codex_home_only(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     home = _codex_home(tmp_path)
     _write_accounts(state_dir, [{"config_dir": str(home), "provider": "codex"}])
     monkeypatch.setattr(hi, "get_state_dir", lambda: state_dir)
     assert hi.install_hooks() == 0
+    assert sorted(p.name for p in home.iterdir()) == ["hooks.json", "sessions", "tokitty"]
     assert hi.uninstall_hooks() == 0
-    _assert_untouched(home)
-    assert "nothing to install" in capsys.readouterr().out
+    assert not (home / "settings.json").exists()
+    assert not (home / "config.toml").exists()
 
 
 def _forbidden(config_dir, provider):
     raise AssertionError(f"hook function called for {config_dir}")
 
 
-def test_adding_a_codex_account_never_calls_install_fn(tmp_path):
+def test_adding_a_codex_account_calls_install_fn_with_codex(tmp_path):
     from tokitty.accounts import load_accounts
 
     home = _codex_home(tmp_path)
     accounts = [Account(name="c", config_dir=str(home), provider="codex")]
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
     result = apply_account_mutation(
         tmp_path, accounts, "install", str(home),
-        install_fn=_forbidden, uninstall_fn=_forbidden, provider="codex",
+        install_fn=fake_install, uninstall_fn=_forbidden, provider="codex",
     )
     assert result.ok
+    assert calls == [(str(home), "codex")]
     assert [a.provider for a in load_accounts(tmp_path)] == ["codex"]
     assert load_pending_hook_op(tmp_path) is None
     _assert_untouched(home)
 
 
-def test_removing_a_codex_account_never_calls_uninstall_fn(tmp_path):
+def test_adding_a_codex_account_writes_hooks_json_never_settings_json(tmp_path):
+    home = _codex_home(tmp_path)
+    accounts = [Account(name="c", config_dir=str(home), provider="codex")]
+    result = apply_account_mutation(tmp_path, accounts, "install", str(home), provider="codex")
+    assert result.ok
+    assert (home / "hooks.json").exists()
+    assert not (home / "settings.json").exists()
+    assert not (home / "config.toml").exists()
+
+
+def test_removing_a_codex_account_calls_uninstall_fn_with_codex(tmp_path):
     from tokitty.accounts import load_accounts
 
     home = _codex_home(tmp_path)
     remaining = [Account(name="a", config_dir="/home/u/.claude")]
+    calls = []
+
+    def fake_uninstall(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "uninstalled")
+
     result = apply_account_mutation(
         tmp_path, remaining, "remove", str(home),
-        install_fn=_forbidden, uninstall_fn=_forbidden, provider="codex",
+        install_fn=_forbidden, uninstall_fn=fake_uninstall, provider="codex",
     )
     assert result.ok
+    assert calls == [(str(home), "codex")]
     assert [a.name for a in load_accounts(tmp_path)] == ["a"]
     assert load_pending_hook_op(tmp_path) is None
-    _assert_untouched(home)
 
 
-def test_retry_clears_a_pending_op_for_a_codex_account(tmp_path):
+def test_retry_replays_a_legacy_pending_install_for_a_listed_codex_account_as_codex(tmp_path):
     home = _codex_home(tmp_path)
     _write_accounts(tmp_path, [{"name": "c", "config_dir": str(home), "provider": "codex"}])
+    save_pending_hook_op(tmp_path, "install", str(home))  # legacy: no provider recorded
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [(str(home), "codex")]
+
+
+def test_retry_never_replays_a_legacy_install_into_an_unlisted_codex_home(tmp_path):
+    # A former Codex home: no account lists it, and it has no Claude
+    # markers. A legacy record has no provider, so the old default would
+    # have written a Claude settings.json here. It must fail closed.
+    home = _codex_home(tmp_path)
+    _write_accounts(tmp_path, [{"name": "a", "config_dir": "/home/u/.claude"}])
     save_pending_hook_op(tmp_path, "install", str(home))
     assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
     assert load_pending_hook_op(tmp_path) is None
@@ -2317,10 +2366,17 @@ def test_retry_trusts_a_recorded_claude_provider_over_the_dir_shape(tmp_path):
     assert calls == [str(claude)]
 
 
-def test_retry_clears_a_recorded_codex_provider(tmp_path):
+def test_retry_replays_a_recorded_codex_provider(tmp_path):
     home = _codex_home(tmp_path)
     save_pending_hook_op(tmp_path, "install", str(home), "codex")
-    assert retry_pending_hook_op(tmp_path, install_fn=_forbidden, uninstall_fn=_forbidden) is None
+    calls = []
+
+    def fake_install(config_dir, provider):
+        calls.append((config_dir, provider))
+        return ConfigDirResult(config_dir, True, "installed")
+
+    retry_pending_hook_op(tmp_path, install_fn=fake_install, uninstall_fn=_forbidden)
+    assert calls == [(str(home), "codex")]
     assert load_pending_hook_op(tmp_path) is None
 
 

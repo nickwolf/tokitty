@@ -25,6 +25,7 @@ from tokitty.accounts import (
     Account,
     canonicalize_locator,
     load_accounts_result,
+    parse_wsl_unc,
     save_accounts,
 )
 from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
@@ -58,17 +59,68 @@ HOOK_EVENTS = [
     ("PermissionRequest", ""),
 ]
 
+# Codex has no matcher on any of these: its MatcherGroup.matcher is optional
+# and is part of the hashed config, so the group carries no "matcher" key.
+CODEX_EVENTS: Tuple[Tuple[str, Optional[str]], ...] = (
+    ("UserPromptSubmit", None),
+    ("PreToolUse", None),
+    ("PostToolUse", None),
+    ("PermissionRequest", None),
+    ("Stop", None),
+    ("SubagentStop", None),
+    ("Interrupt", None),
+    ("SessionEnd", None),
+)
+
+CODEX_PROVIDER = "codex"
+
+# Shown when a Codex handler was rewritten or moved: Codex hashes a handler's
+# config and looks the hash up by position, so either change is a new review.
+CODEX_REAPPROVE_WARNING = "Codex will ask you to approve Tokitty's hooks again."
+
+# Shown when removing or collapsing Tokitty's handlers moved a user handler:
+# its trust key is its position, so it is a new review too.
+CODEX_SHIFT_WARNING = "Codex will ask you to approve these hooks again: {events}."
+
+# The install result's note for a Codex home, from the approval status.
+CODEX_APPROVAL_NOTE = (
+    "Hooks installed, waiting for approval in Codex. Start codex and approve the Tokitty hooks."
+)
+CODEX_UNREADABLE_NOTE = (
+    "Hooks installed, but Tokitty can't read Codex hook state to check approval."
+)
+
 
 @dataclass(frozen=True)
 class HookTarget:
-    """Where a provider's hooks live and which events tokitty owns there."""
+    """Where a provider's hooks live and which events tokitty owns there.
+
+    A matcher of None means the group is written with no "matcher" key.
+    timeouts is (event, seconds) pairs: those handlers carry a "timeout"
+    field and no other does. exec_form is whether the provider can run a
+    command plus args; one that cannot always gets a single command string.
+    top_level_keys, when set, is every top-level key the harness accepts in
+    settings_file; it rejects the whole file over any other.
+    """
     settings_file: str
     local_settings_file: Optional[str]  # read-only; None if the harness has none
-    events: Tuple[Tuple[str, str], ...]
+    events: Tuple[Tuple[str, Optional[str]], ...]
+    timeouts: Tuple[Tuple[str, int], ...] = ()
+    exec_form: bool = True
+    top_level_keys: Optional[Tuple[str, ...]] = None
 
 
 _HOOK_TARGETS: Dict[str, HookTarget] = {
     "claude": HookTarget("settings.json", "settings.local.json", tuple(HOOK_EVENTS)),
+    CODEX_PROVIDER: HookTarget(
+        "hooks.json",
+        None,
+        CODEX_EVENTS,
+        timeouts=(("Interrupt", 3), ("SessionEnd", 3)),
+        exec_form=False,
+        # Codex's HooksFile is deny_unknown_fields over these two.
+        top_level_keys=("description", "hooks"),
+    ),
 }
 
 
@@ -122,6 +174,17 @@ def _local_config_path(config_dir: str) -> str:
     if sys.platform == "win32":
         return config_dir
     return _wsl_native_path(config_dir)
+
+
+def codex_paths(config_dir: str) -> Tuple[str, str]:
+    """(hooks.json as this process opens it, hooks.json as Codex sees it).
+
+    The second is what appears in Codex's trust keys: /home/u/.codex/hooks.json
+    for a WSL home, a drive-letter path for a native Windows one.
+    """
+    filesystem = str(Path(_local_config_path(config_dir)) / "hooks.json")
+    native = _wsl_native_path(config_dir).rstrip("/\\") or _wsl_native_path(config_dir)
+    return filesystem, f"{native}/hooks.json"
 
 
 def _is_windows_local_path(config_dir: str) -> bool:
@@ -241,21 +304,84 @@ def stable_runner_path(state_dir, platform: str) -> str:
     return str(Path(state_dir) / "current" / HOOK_RUNNER_NAME)
 
 
-def _build_command(config_dir: str, *, frozen=None, platform=None, runner=None) -> dict:
+_SHELL_SAFE = re.compile(r"^[A-Za-z0-9._/:~\-]+$")
+
+
+def _win_short_path(path: str) -> Optional[str]:
+    """The Windows 8.3 short form of an existing directory, or None (not
+    Windows, no such directory, or short names are disabled on the volume)."""
+    if sys.platform != "win32" or not os.path.isdir(path):
+        return None
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+    if length == 0 or length >= len(buf):
+        return None
+    return buf.value
+
+
+def _codex_win_command(runner_path: str, home: str, sessions_dir: str) -> str:
+    """Codex's frozen command on Windows, written for any shell it may pick.
+
+    Codex runs hooks through the session shell, PowerShell by default
+    (powershell -NoProfile -Command <command>), where a line that starts with
+    a quoted string followed by more tokens is a parse error. So the runner
+    and sessions dir go unquoted with forward slashes when both are
+    shell-safe, shortening the directory (not the basename, ownership
+    matches on it) to its 8.3 form when they are not. If a token is still
+    unsafe the command falls back to PowerShell's call operator with
+    single-quoted literals, so `$name` in a path is not expanded.
+    """
+    runner = runner_path.replace("\\", "/")
+    sessions = sessions_dir.replace("\\", "/")
+    if not _SHELL_SAFE.match(runner):
+        directory, _, basename = runner.rpartition("/")
+        short = _win_short_path(directory) if directory else None
+        if short:
+            runner = f"{short.replace(chr(92), '/').rstrip('/')}/{basename}"
+    if not _SHELL_SAFE.match(sessions):
+        short = _win_short_path(home)
+        if short:
+            sessions = f"{short.replace(chr(92), '/').rstrip('/')}/tokitty/sessions"
+    if _SHELL_SAFE.match(runner) and _SHELL_SAFE.match(sessions):
+        return f"{runner} --sessions-dir {sessions}"
+    # A `'` in a path is doubled (PowerShell's literal rule); _POWERSHELL_FALLBACK reads it back.
+    runner_q = runner_path.replace("'", "''")
+    sessions_q = sessions_dir.replace("'", "''")
+    return f"& '{runner_q}' --sessions-dir '{sessions_q}'"
+
+
+def _build_command(
+    config_dir: str, *, frozen=None, platform=None, runner=None, provider: str = DEFAULT_PROVIDER
+) -> dict:
     """The hook to register, chosen by where Claude Code runs (spec Q2).
 
     A frozen build registers tokitty-hook in exec form (Claude Code
     2.1.139+), except for a WSL home seen from Windows, which keeps python3:
     WSL ships it and it is twice as fast as the exe through interop.
+
+    Codex has no exec form, so its frozen entry is one command string, the
+    runner quoted as a single token followed by --sessions-dir (on Windows
+    see _codex_win_command, since PowerShell cannot run that quoted form).
+    Every other Codex case gets the same Python string Claude does.
     """
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     platform = sys.platform if platform is None else platform
     native = _wsl_native_path(config_dir).rstrip("/\\") or _wsl_native_path(config_dir)
     sessions_dir = f"{native}/tokitty/sessions"
     if frozen and not (platform == "win32" and _is_wsl_unc(config_dir)):
+        runner_path = runner if runner is not None else stable_runner_path(state_dir_path(), platform)
+        if provider == CODEX_PROVIDER:
+            if platform == "win32":
+                return {
+                    "type": "command",
+                    "command": _codex_win_command(runner_path, native, sessions_dir),
+                }
+            return {"type": "command", "command": f'"{runner_path}" --sessions-dir "{sessions_dir}"'}
         return {
             "type": "command",
-            "command": runner if runner is not None else stable_runner_path(state_dir_path(), platform),
+            "command": runner_path,
             "args": ["--sessions-dir", sessions_dir],
         }
     interpreter = "python" if _is_windows_local_path(config_dir) else "python3"
@@ -372,6 +498,64 @@ def _is_owned_exec_hook(command: str, args, expected_sessions: str) -> bool:
     return _normalize_token_path(sessions_arg) == expected_sessions
 
 
+_POWERSHELL_FALLBACK = re.compile(r"^& '((?:[^']|'')*)' --sessions-dir '((?:[^']|'')*)'$")
+
+
+def _codex_command_candidates(command: str) -> List[Tuple[str, str, str]]:
+    """The (kind, runner, sessions) readings of a Codex command string.
+
+    kind is "python" (interpreter, hook_writer.py, flag, sessions; runner is
+    the script) or "runner" (a runner path, flag, sessions, optionally led by
+    PowerShell's & call operator). Paths come back
+    under _normalize_token_path. shlex's reading comes first, then a plain
+    whitespace split when the command has no quote characters, for the
+    historical unquoted shape on a drive-letter home that shlex mangles. A
+    command that does not parse (an unbalanced quote) has no reading.
+    """
+    try:
+        split_lists = [shlex.split(command, posix=True)]
+    except ValueError:
+        return []
+    if '"' not in command and "'" not in command:
+        split_lists.append(command.split())
+    powershell = _POWERSHELL_FALLBACK.match(command)
+    if powershell:
+        # The & fallback quotes PowerShell-style ('' is a literal '), which
+        # shlex does not read back for a path containing an apostrophe.
+        runner, sessions = (g.replace("''", "'") for g in powershell.groups())
+        split_lists.append(["&", runner, "--sessions-dir", sessions])
+    candidates = []
+    for parts in split_lists:
+        if len(parts) == 4 and parts[0] in ("python", "python3") and parts[2] == "--sessions-dir":
+            candidates.append(("python", _normalize_token_path(parts[1]), _normalize_token_path(parts[3])))
+        elif len(parts) == 3 and parts[1] == "--sessions-dir":
+            candidates.append(("runner", _normalize_token_path(parts[0]), _normalize_token_path(parts[2])))
+        elif len(parts) == 4 and parts[0] == "&" and parts[2] == "--sessions-dir":
+            candidates.append(("runner", _normalize_token_path(parts[1]), _normalize_token_path(parts[3])))
+    return candidates
+
+
+def _codex_owned_parts(command: str, config_dir: str) -> Optional[Tuple[str, str, str]]:
+    """The (kind, runner, sessions) reading of command that is tokitty's
+    own Codex registration for config_dir, or None if it is not ours."""
+    home = _normalize_home_path(_wsl_native_path(config_dir))
+    expected_script = f"{home}/tokitty/hook_writer.py"
+    expected_sessions = f"{home}/tokitty/sessions"
+    owned_names = (HOOK_RUNNER_NAME.casefold(), f"{HOOK_RUNNER_NAME}.exe".casefold())
+    # A Windows install may have written the sessions dir under the home's 8.3 short name.
+    short_home = _win_short_path(_wsl_native_path(config_dir))
+    short_sessions = f"{_normalize_home_path(short_home)}/tokitty/sessions" if short_home else None
+    for kind, runner, sessions in _codex_command_candidates(command):
+        if sessions != expected_sessions and sessions != short_sessions:
+            continue
+        if kind == "python":
+            if runner == expected_script:
+                return kind, runner, sessions
+        elif PurePosixPath(runner).name.casefold() in owned_names:
+            return kind, runner, sessions
+    return None
+
+
 def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> bool:
     """Whether hook is the exact command tokitty writes for config_dir.
 
@@ -404,14 +588,19 @@ def _is_owned_hook(hook, config_dir: str, provider: str = DEFAULT_PROVIDER) -> b
     never had quotes, so any quote in the command means that shape is
     not what this is.
 
-    provider is accepted for forward compatibility with non-Claude
-    shapes; only Claude's shape is recognised today.
+    Codex never gets the exec form, so for provider "codex" a hook with an
+    "args" key is not owned, and the owned shapes are two single strings:
+    the Python string above, and a tokitty-hook[.exe] path (only its
+    basename is checked, as for the exec form) followed by "--sessions-dir"
+    and this home's sessions path. See _codex_owned_parts.
     """
     if not isinstance(hook, dict) or hook.get("type") != "command":
         return False
     command = hook.get("command")
     if not isinstance(command, str):
         return False
+    if provider == CODEX_PROVIDER:
+        return "args" not in hook and _codex_owned_parts(command, config_dir) is not None
     home = _normalize_home_path(_wsl_native_path(config_dir))
     expected_script = f"{home}/tokitty/hook_writer.py"
     expected_sessions = f"{home}/tokitty/sessions"
@@ -465,11 +654,13 @@ class ConfigDirResult:
         warning: Optional[str] = None,
         refreshed_events: Optional[List[str]] = None,
         note: Optional[str] = None,
+        removed_events: Optional[List[str]] = None,
     ):
         self.config_dir = config_dir
         self.ok = ok
         self.message = message
         self.installed_events = installed_events or []
+        self.removed_events = removed_events or []
         self.warning = warning
         self.refreshed_events = refreshed_events or []
         # A soft, informational note distinct from `warning` (reserved for
@@ -495,6 +686,43 @@ def _collect_owned_positions(entries, config_dir: str, provider: str) -> List[Tu
             if _is_owned_hook(hook, config_dir, provider):
                 positions.append((entry_index, hook_index))
     return positions
+
+
+def _shifted_events(before_hooks, after_hooks, config_dir: str, provider: str) -> List[str]:
+    """Events, in the provider's target order, where some handler that is not
+    Tokitty's sits at a different (group, handler) position in after_hooks
+    than in before_hooks. Both are {event: entries} maps. Handlers are matched
+    by object identity, not value, so two identical user handlers are still
+    told apart; the rebuild and uninstall paths keep untouched handler
+    objects, and a handler absent from after_hooks was removed, not shifted."""
+    shifted: List[str] = []
+    for event, _matcher in _hook_target(provider).events:
+        before = before_hooks.get(event)
+        if not isinstance(before, list):
+            continue
+        after_positions = {}
+        after = after_hooks.get(event)
+        for group_index, group in enumerate(after if isinstance(after, list) else []):
+            group_hooks = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(group_hooks, list):
+                continue
+            for handler_index, handler in enumerate(group_hooks):
+                after_positions[id(handler)] = (group_index, handler_index)
+        for group_index, group in enumerate(before):
+            group_hooks = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(group_hooks, list):
+                continue
+            for handler_index, handler in enumerate(group_hooks):
+                if _is_owned_hook(handler, config_dir, provider):
+                    continue
+                new_pos = after_positions.get(id(handler))
+                if new_pos is not None and new_pos != (group_index, handler_index):
+                    shifted.append(event)
+                    break
+            else:
+                continue
+            break
+    return shifted
 
 
 def _rebuild_entries(entries, replace_pos=None, replacement=None, remove_positions=()):
@@ -540,8 +768,79 @@ def _normalized_args(args):
     return [_normalize_token_path(v) if isinstance(v, str) else v for v in args]
 
 
-def _handler_needs_rewrite(old_handler: dict, desired_handler: dict, *, refresh: bool = False) -> bool:
+def _codex_effective_desired(
+    old_handler: dict, desired_handler: dict, *, refresh: bool, config_dir: Optional[str] = None
+) -> dict:
+    """What a Codex refresh should actually aim old_handler at.
+
+    A refresh never demotes the runner string to the Python string (a
+    source launch must not flip a frozen install's command), but it still
+    repairs a wrong or missing timeout. So when old is runner kind and
+    desired is Python kind, the target is the old command with desired's
+    timeout. Anything else aims at desired as given.
+    """
+    if not refresh:
+        return desired_handler
+    old = _codex_parts_for_compare(old_handler, config_dir)
+    new = _codex_parts_for_compare(desired_handler, config_dir)
+    if old is None or new is None or old[0] != "runner" or new[0] != "python":
+        return desired_handler
+    effective = {k: v for k, v in desired_handler.items() if k != "timeout"}
+    effective["command"] = old_handler["command"]
+    if "timeout" in desired_handler:
+        effective["timeout"] = desired_handler["timeout"]
+    return effective
+
+
+def _codex_parts_for_compare(handler: dict, config_dir: Optional[str]) -> Optional[Tuple[str, str, str]]:
+    command = handler.get("command")
+    if not isinstance(command, str) or "args" in handler:
+        return None
+    if config_dir is not None:
+        return _codex_owned_parts(command, config_dir)
+    candidates = _codex_command_candidates(command)
+    return candidates[0] if candidates else None
+
+
+def _starts_quoted(handler: dict) -> bool:
+    return handler["command"].lstrip().startswith('"')
+
+
+def _codex_handler_needs_rewrite(
+    old_handler: dict, desired_handler: dict, *, refresh: bool = False, config_dir: Optional[str] = None
+) -> bool:
+    """Codex's rewrite rule. Both shapes are strings, so each command is
+    parsed into (kind, runner, sessions) with the interpreter name ignored
+    and paths normalised; a difference in any of the three, or in
+    "timeout", is a rewrite, because Codex hashes both. So is exactly one of
+    the two commands starting with a double quote. A handler that does not
+    parse is rewritten.
+    """
+    desired_handler = _codex_effective_desired(
+        old_handler, desired_handler, refresh=refresh, config_dir=config_dir
+    )
+    old = _codex_parts_for_compare(old_handler, config_dir)
+    new = _codex_parts_for_compare(desired_handler, config_dir)
+    if old is None or new is None:
+        return True
+    if _starts_quoted(old_handler) != _starts_quoted(desired_handler):
+        # PowerShell cannot run a command that starts with a quote.
+        return True
+    return old != new or old_handler.get("timeout") != desired_handler.get("timeout")
+
+
+def _handler_needs_rewrite(
+    old_handler: dict,
+    desired_handler: dict,
+    *,
+    refresh: bool = False,
+    provider: str = DEFAULT_PROVIDER,
+    config_dir: Optional[str] = None,
+) -> bool:
     """Whether an already-owned handler must be rewritten to match desired.
+
+    Codex is dispatched to _codex_handler_needs_rewrite: the rules below are
+    Claude's.
 
     refresh (the startup path, add_missing=False) never demotes an owned
     exec-form handler back to the interpreter-string shape: a source
@@ -562,6 +861,10 @@ def _handler_needs_rewrite(old_handler: dict, desired_handler: dict, *, refresh:
     drive letter -- is not a rewrite either) and, for "args", each
     element equal after the same normalisation.
     """
+    if provider == CODEX_PROVIDER:
+        return _codex_handler_needs_rewrite(
+            old_handler, desired_handler, refresh=refresh, config_dir=config_dir
+        )
     if refresh and "args" in old_handler and "args" not in desired_handler:
         return False
     if "args" not in old_handler and "args" not in desired_handler:
@@ -595,6 +898,86 @@ def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
     merged.pop("args", None)
     merged.update(desired_handler)
     return merged
+
+
+CODEX_AUTOMATIC_REVIEWERS = frozenset({"auto_review", "guardian_subagent"})
+_CODEX_NO_PERMISSION_EVENT = "PermissionRequest"
+
+
+def _codex_automatic_reviewer(config_dir: str) -> bool:
+    """Whether this Codex home hands approvals to an automatic reviewer, set
+    at the top level of config.toml, in any of its [profiles.*] tables, or at
+    the top level of any <name>.config.toml profile file. The hook set is
+    home-wide, so any of them counts. Codex runs PermissionRequest before that
+    reviewer decides and does not say who will answer, so the hook would raise
+    the overlay for prompts no person sees."""
+    from tokitty import codex_trust
+
+    return any(r in CODEX_AUTOMATIC_REVIEWERS for r in codex_trust.read_approvals_reviewers(config_dir))
+
+
+def _codex_events_for(config_dir: str) -> Tuple[Tuple[str, Optional[str]], ...]:
+    """CODEX_EVENTS for this home: without PermissionRequest when an
+    automatic reviewer answers approvals."""
+    if _codex_automatic_reviewer(config_dir):
+        return tuple(e for e in CODEX_EVENTS if e[0] != _CODEX_NO_PERMISSION_EVENT)
+    return CODEX_EVENTS
+
+
+def _forget_codex_keys(config_dir: str, keys: List[str]) -> None:
+    """Drop removed handlers' keys from the trust record. Raises OSError, so
+    the caller can abort before hooks.json is written."""
+    from tokitty import codex_trust
+
+    codex_trust.forget_keys(state_dir_path(), config_dir, keys)
+
+
+def _record_codex_trust(config_dir: str, changes: List[Tuple[str, int, int]]) -> None:
+    """Write the Codex trust record for a reconcile that is about to add,
+    rewrite or move owned handlers. changes lists (event, group_index,
+    handler_index) at each handler's final position. Called before
+    hooks.json is written, and raises OSError if the record can't be
+    written, so the caller can abort: an unrecorded rewrite would later
+    read as approved while Codex skips it."""
+    from tokitty import codex_trust
+
+    codex_trust.record_changes(state_dir_path(), config_dir, changes)
+
+
+def _forget_codex_trust(config_dir: str) -> None:
+    """Drop a home's trust record after an uninstall. A failure here is not
+    an uninstall failure: the leftover is stale data that a later install
+    overwrites, since it records every handler it adds."""
+    from tokitty import codex_trust
+
+    try:
+        codex_trust.forget_home(state_dir_path(), config_dir)
+    except OSError:
+        pass
+
+
+def distro_is_running(config_dir: str, list_running_distros_fn=None) -> bool:
+    """Whether the WSL distro behind a \\wsl.localhost config_dir is running.
+    Touching its UNC path when it is not starts it. A probe failure comes
+    back as an empty list, which reads as not running."""
+    parsed = parse_wsl_unc(config_dir)
+    if parsed is None:
+        return True
+    if list_running_distros_fn is None:
+        from tokitty.wsl_probe import list_running_distros as list_running_distros_fn
+    running = {name.casefold() for name in list_running_distros_fn()}
+    return parsed[0].casefold() in running
+
+
+def _codex_home_asleep(config_dir: str, provider: Optional[str], list_running_distros_fn=None) -> bool:
+    """True for a Codex home that is a WSL UNC path on Windows whose distro
+    is not running: startup must not touch it. Claude is unaffected."""
+    return (
+        (provider or DEFAULT_PROVIDER) == CODEX_PROVIDER
+        and sys.platform == "win32"
+        and _is_wsl_unc(config_dir)
+        and not distro_is_running(config_dir, list_running_distros_fn)
+    )
 
 
 def _load_reconcile_state(base: Path, target: HookTarget):
@@ -652,11 +1035,35 @@ def _reconcile_problem_result(config_dir: str, problem, add_missing: bool) -> Co
     return ConfigDirResult(config_dir, False, f"aborted, {detail}")
 
 
-def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
-    """Bring config_dir's Claude Code hooks in line with what tokitty would
-    write today, adding a missing handler only when add_missing is true.
-    Shared by install_hooks_for_dir (add_missing=True) and
-    refresh_hooks_for_dir (add_missing=False, the startup refresh)."""
+def _runner_token(handler: dict, provider: str, config_dir: str) -> Optional[str]:
+    """The runner path a handler launches, or None if it launches the
+    Python interpreter. Claude's exec form keeps it in "command"; Codex's
+    runner string is parsed (so the token comes back normalised)."""
+    command = handler.get("command")
+    if provider == CODEX_PROVIDER:
+        parts = _codex_owned_parts(command, config_dir) if isinstance(command, str) else None
+        return parts[1] if parts is not None and parts[0] == "runner" else None
+    return command
+
+
+def _find_handler(entries, handler) -> Tuple[int, int]:
+    """(entry_index, hook_index) of the handler object itself in entries."""
+    for entry_index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            continue
+        for hook_index, candidate in enumerate(entry["hooks"]):
+            if candidate is handler:
+                return entry_index, hook_index
+    raise LookupError("handler not found")
+
+
+def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
+    """Bring config_dir's hooks in line with what tokitty would write
+    today, adding a missing handler only when add_missing is true. Driven
+    by the provider's HookTarget, so it serves Claude (settings.json) and
+    Codex (hooks.json) alike. Shared by install_hooks_for_dir
+    (add_missing=True) and refresh_hooks_for_dir (add_missing=False, the
+    startup refresh)."""
     target = _hook_target(provider)
     base = Path(_local_config_path(config_dir))
     settings_path = base / target.settings_file
@@ -675,8 +1082,13 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         # mkdir, no link -- there is nothing here to bring current.
         return ConfigDirResult(config_dir, True, "nothing to refresh", installed_events=[], refreshed_events=[])
 
-    skeleton = _build_command(config_dir)
-    is_exec = "args" in skeleton
+    skeleton = _build_command(config_dir, provider=provider)
+    # The link work below applies wherever the skeleton launches the
+    # runner: Claude's exec form or Codex's frozen runner string.
+    if provider == CODEX_PROVIDER:
+        is_exec = _runner_token(skeleton, provider, config_dir) is not None
+    else:
+        is_exec = "args" in skeleton
     warning = None
     healthy_runner = None
     stable = None
@@ -731,11 +1143,32 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         if problem is not None:
             return _reconcile_problem_result(config_dir, problem, add_missing)
 
+    if target.top_level_keys is not None:
+        stray = [key for key in data if key not in target.top_level_keys]
+        if stray:
+            # Adding Tokitty's events beside these would still leave a file
+            # Codex refuses to load. Moving the user's keys is theirs to do.
+            return ConfigDirResult(
+                config_dir,
+                False,
+                f"aborted, {target.settings_file} has top-level keys Codex does not accept "
+                f"({', '.join(map(str, stray))}), so Codex ignores the whole file. Move those "
+                f'events under "hooks" and install again.',
+            )
+
     refresh = not add_missing
 
-    def desired_for(existing_command):
+    timeouts = dict(target.timeouts)
+
+    def with_timeout(handler, event):
+        handler = dict(handler)
+        if event in timeouts:
+            handler["timeout"] = timeouts[event]
+        return handler
+
+    def desired_for(event, existing_command):
         if not is_exec:
-            return skeleton
+            return with_timeout(skeleton, event)
         if healthy_runner is not None:
             runner = healthy_runner
         elif (
@@ -745,9 +1178,14 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             runner = stable
         else:
             runner = fallback_bundled
-        return _build_command(config_dir, runner=runner)
+        return with_timeout(_build_command(config_dir, runner=runner, provider=provider), event)
 
-    def choose_primary(main_entries, main_positions):
+    def needs_rewrite(handler, desired):
+        return _handler_needs_rewrite(
+            handler, desired, refresh=refresh, provider=provider, config_dir=config_dir
+        )
+
+    def choose_primary(event, main_entries, main_positions):
         # When an event has more than one owned handler, a stable-path
         # handler is checked FIRST -- it must never be dropped in favour
         # of a release-path handler just because that release-path
@@ -759,7 +1197,7 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             return main_positions[0]
         for pos in main_positions:
             handler = main_entries[pos[0]]["hooks"][pos[1]]
-            command = handler.get("command")
+            command = _runner_token(handler, provider, config_dir)
             if (
                 stable is not None
                 and isinstance(command, str)
@@ -768,7 +1206,7 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
                 return pos
         for pos in main_positions:
             handler = main_entries[pos[0]]["hooks"][pos[1]]
-            if not _handler_needs_rewrite(handler, desired_for(handler.get("command")), refresh=refresh):
+            if not needs_rewrite(handler, desired_for(event, _runner_token(handler, provider, config_dir))):
                 return pos
         return main_positions[0]
 
@@ -782,8 +1220,39 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
     refreshed_events: List[str] = []
     stale_local_events: List[str] = []
     changed = False
+    # Codex only: (event, group, handler) at the final position of every
+    # owned handler added, rewritten or moved, and whether any was
+    # rewritten or moved rather than just added.
+    trust_changes: List[Tuple[str, int, int]] = []
+    reapproval = False
+    collapsed = False
+    before_hooks = dict(hooks_dict)
+    events = target.events
+    forgotten_keys: List[str] = []
+    removed_event = False
+    if provider == CODEX_PROVIDER:
+        events = _codex_events_for(config_dir)
+        if len(events) < len(target.events):
+            # An automatic reviewer answers this home's approvals: take out
+            # only Tokitty's own PermissionRequest handler, as uninstall does.
+            from tokitty import codex_trust
 
-    for event, matcher in target.events:
+            old_entries = hooks_dict.get(_CODEX_NO_PERMISSION_EVENT)
+            old_positions = _collect_owned_positions(old_entries, config_dir, provider)
+            if old_positions:
+                new_entries = _rebuild_entries(old_entries, remove_positions=old_positions)
+                if new_entries:
+                    hooks_dict[_CODEX_NO_PERMISSION_EVENT] = new_entries
+                else:
+                    hooks_dict.pop(_CODEX_NO_PERMISSION_EVENT, None)
+                forgotten_keys = [
+                    codex_trust.trust_key(config_dir, _CODEX_NO_PERMISSION_EVENT, g, h)
+                    for g, h in old_positions
+                ]
+                removed_event = True
+                changed = True
+
+    for event, matcher in events:
         local_entries = local_hooks.get(event)
         local_positions = _collect_owned_positions(local_entries, config_dir, provider)
 
@@ -798,7 +1267,7 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             # copy left in settings.json is removed so the event can't
             # fire twice.
             local_handler = local_entries[local_positions[0][0]]["hooks"][local_positions[0][1]]
-            if _handler_needs_rewrite(local_handler, desired_for(local_handler.get("command")), refresh=refresh):
+            if needs_rewrite(local_handler, desired_for(event, _runner_token(local_handler, provider, config_dir))):
                 stale_local_events.append(event)
             if main_positions:
                 new_entries = _rebuild_entries(main_entries, remove_positions=main_positions)
@@ -812,43 +1281,79 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
 
         if not main_positions:
             if add_missing:
-                desired = desired_for(None)
-                hooks_dict[event] = main_entries + [{"matcher": matcher, "hooks": [dict(desired)]}]
+                desired = desired_for(event, None)
+                group = {"hooks": [dict(desired)]}
+                if matcher is not None:
+                    group = {"matcher": matcher, **group}
+                trust_changes.append((event, len(main_entries), 0))
+                hooks_dict[event] = main_entries + [group]
                 installed_events.append(event)
                 changed = True
             # else: a refresh never adds a handler for an event nothing owns.
             continue
 
-        primary_pos = choose_primary(main_entries, main_positions)
+        primary_pos = choose_primary(event, main_entries, main_positions)
         extra_positions = [pos for pos in main_positions if pos != primary_pos]
         primary_handler = main_entries[primary_pos[0]]["hooks"][primary_pos[1]]
-        desired = desired_for(primary_handler.get("command"))
+        desired = desired_for(event, _runner_token(primary_handler, provider, config_dir))
+        rewrite = needs_rewrite(primary_handler, desired)
 
-        if _handler_needs_rewrite(primary_handler, desired, refresh=refresh):
+        if rewrite:
+            if provider == CODEX_PROVIDER:
+                desired = _codex_effective_desired(
+                    primary_handler, desired, refresh=refresh, config_dir=config_dir
+                )
             replacement = _merge_handler(primary_handler, desired)
-            new_entries = _rebuild_entries(
-                main_entries, replace_pos=primary_pos, replacement=replacement, remove_positions=extra_positions
-            )
-            hooks_dict[event] = new_entries
-            changed = True
-            refreshed_events.append(event)
+            if provider == CODEX_PROVIDER and "timeout" not in desired:
+                replacement.pop("timeout", None)
+            kept = replacement
         elif extra_positions:
             # Already matches; only duplicate owned handlers to collapse.
-            new_entries = _rebuild_entries(main_entries, remove_positions=extra_positions)
-            hooks_dict[event] = new_entries
-            changed = True
-            refreshed_events.append(event)
+            replacement = None
+            kept = primary_handler
+        else:
+            continue
+
+        new_entries = _rebuild_entries(
+            main_entries,
+            replace_pos=primary_pos if rewrite else None,
+            replacement=replacement,
+            remove_positions=extra_positions,
+        )
+        hooks_dict[event] = new_entries
+        changed = True
+        refreshed_events.append(event)
+        if extra_positions:
+            collapsed = True
+        if provider == CODEX_PROVIDER:
+            final_pos = _find_handler(new_entries, kept)
+            if rewrite or final_pos != primary_pos:
+                # A handler that only moved is reviewed again too: Codex
+                # looks its old hash up at the new position.
+                trust_changes.append((event, final_pos[0], final_pos[1]))
+                reapproval = True
 
     if changed:
+        if provider == CODEX_PROVIDER:
+            try:
+                _record_codex_trust(config_dir, trust_changes)
+                _forget_codex_keys(config_dir, forgotten_keys)
+            except OSError as exc:
+                return ConfigDirResult(
+                    config_dir, False, f"aborted, could not write the Codex trust record: {exc}"
+                )
         _backup(settings_path)
         _write_settings(settings_path, data)
 
-    if installed_events or refreshed_events:
+    removed_events = [_CODEX_NO_PERMISSION_EVENT] if removed_event else []
+    if installed_events or refreshed_events or removed_events:
         parts = []
         if installed_events:
             parts.append("installed")
         if refreshed_events:
             parts.append("refreshed")
+        if removed_events:
+            parts.append("removed")
         msg = " and ".join(parts)
     else:
         msg = "already installed, nothing to do"
@@ -859,6 +1364,16 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
             "a locally-owned hook differs from what Tokitty would write for: "
             + ", ".join(stale_local_events)
         )
+    if provider == CODEX_PROVIDER and add_missing:
+        note = _codex_install_note(config_dir)
+
+    if reapproval:
+        warning = f"{warning} {CODEX_REAPPROVE_WARNING}" if warning else CODEX_REAPPROVE_WARNING
+    if provider == CODEX_PROVIDER and (collapsed or removed_event):
+        shifted = _shifted_events(before_hooks, hooks_dict, config_dir, provider)
+        if shifted:
+            shift_warning = CODEX_SHIFT_WARNING.format(events=", ".join(shifted))
+            warning = f"{warning} {shift_warning}" if warning else shift_warning
 
     return ConfigDirResult(
         config_dir,
@@ -868,10 +1383,29 @@ def _reconcile_claude(config_dir: str, provider: str, add_missing: bool) -> Conf
         refreshed_events=refreshed_events,
         warning=warning,
         note=note,
+        removed_events=removed_events,
     )
 
 
-_RECONCILE_TABLE = {"claude": _reconcile_claude}
+def _codex_install_note(config_dir: str) -> Optional[str]:
+    """What to tell the user after a Codex install, from the approval
+    status as it stands once hooks.json is written."""
+    from tokitty import codex_trust
+
+    # The install just wrote into this home, so its distro is running; no
+    # need to probe wsl.exe again.
+    parsed = parse_wsl_unc(config_dir)
+    status = codex_trust.codex_hook_status(
+        config_dir, state_dir_path(), lambda: [parsed[0]] if parsed else []
+    )
+    if status == codex_trust.NEEDS_APPROVAL:
+        return CODEX_APPROVAL_NOTE
+    if status == codex_trust.UNREADABLE:
+        return CODEX_UNREADABLE_NOTE
+    return None
+
+
+_RECONCILE_TABLE = {"claude": _reconcile_hooks, CODEX_PROVIDER: _reconcile_hooks}
 
 
 def _reconcile(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
@@ -893,7 +1427,9 @@ def refresh_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> 
     return _reconcile(config_dir, provider, add_missing=False)
 
 
-def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[ConfigDirResult]:
+def ensure_current(
+    state_dir: Optional[Path] = None, refresh_fn=None, list_running_distros_fn=None
+) -> List[ConfigDirResult]:
     """Refresh every explicitly-configured hook-enabled account's
     registration in place, called from run_discovery on every launch so a
     stale owned handler (an old release path, a spelling a past version
@@ -920,6 +1456,10 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     pair. Any exception a reconcile call raises (not just OSError)
     becomes a failed result for that account instead of aborting every
     account after it.
+
+    A Codex home that is a WSL UNC path on Windows is skipped unless its
+    distro is running (list_running_distros_fn, for tests): opening the
+    path would start the distro.
     """
     resolved_state_dir = state_dir if state_dir is not None else get_state_dir()
     pairs = _config_dirs_from_accounts_file(resolved_state_dir)
@@ -928,6 +1468,8 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     results = []
     for config_dir, provider in pairs:
         if (provider or DEFAULT_PROVIDER) not in _RECONCILE_TABLE:
+            continue
+        if _codex_home_asleep(config_dir, provider, list_running_distros_fn):
             continue
         fn = refresh_fn if refresh_fn is not None else refresh_hooks_for_dir
         try:
@@ -961,6 +1503,7 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
         return ConfigDirResult(config_dir, True, msg, installed_events=[])
 
     removed = []
+    before_hooks = dict(hooks)
     for event in list(hooks.keys()):
         entries = hooks[event]
         if not isinstance(entries, list):
@@ -1001,10 +1544,18 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
     _backup(settings_path)
     _write_settings(settings_path, data)
 
+    if provider == CODEX_PROVIDER:
+        _forget_codex_trust(config_dir)
+
     msg = "uninstalled"
     if warn_local:
         msg += f" (note: tokitty-marked entries found in {target.local_settings_file}, left untouched)"
-    return ConfigDirResult(config_dir, True, msg, installed_events=removed)
+    warning = None
+    if provider == CODEX_PROVIDER:
+        shifted = _shifted_events(before_hooks, hooks, config_dir, provider)
+        if shifted:
+            warning = CODEX_SHIFT_WARNING.format(events=", ".join(shifted))
+    return ConfigDirResult(config_dir, True, msg, installed_events=removed, warning=warning)
 
 
 PENDING_HOOK_OP_FILENAME = "pending_hook_op.json"
@@ -1126,10 +1677,15 @@ def _pending_dir_has_hooks(state_dir: Path, config_dir: str, op: str) -> bool:
 
 
 def retry_pending_hook_op(
-    state_dir: Path, install_fn=install_hooks_for_dir, uninstall_fn=uninstall_hooks_for_dir
+    state_dir: Path,
+    install_fn=install_hooks_for_dir,
+    uninstall_fn=uninstall_hooks_for_dir,
+    list_running_distros_fn=None,
 ) -> Optional[ConfigDirResult]:
     """Called at next startup, or the next time the manager is opened.
-    Returns None if there was nothing pending."""
+    Returns None if there was nothing pending, or if the pending op is for
+    a Codex WSL home whose distro is not running: that op stays recorded
+    for the next launch, since opening the path would start the distro."""
     pending = load_pending_hook_op(state_dir)
     if pending is None:
         return None
@@ -1145,6 +1701,8 @@ def retry_pending_hook_op(
         # it would write Claude Code settings into another harness's home.
         clear_pending_hook_op(state_dir)
         return None
+    if _codex_home_asleep(pending["config_dir"], provider, list_running_distros_fn):
+        return None
     fn = install_fn if pending["op"] == "install" else uninstall_fn
     result = fn(pending["config_dir"], provider)
     if result.ok:
@@ -1158,8 +1716,11 @@ def install_hooks() -> int:
         print("No accounts use a harness with hooks; nothing to install.")
         return 0
     any_failed = False
+    any_codex = False
     for config_dir, provider in config_dirs:
         result = install_hooks_for_dir(config_dir, provider)
+        if provider == CODEX_PROVIDER:
+            any_codex = True
         if not result.ok:
             any_failed = True
             print(f"{config_dir}: {result.message}", file=sys.stderr)
@@ -1168,14 +1729,23 @@ def install_hooks() -> int:
             print(f"{config_dir}: installed hooks for {', '.join(result.installed_events)}")
         if result.refreshed_events:
             print(f"{config_dir}: refreshed hooks for {', '.join(result.refreshed_events)}")
-        if not result.installed_events and not result.refreshed_events:
+        if result.removed_events:
+            print(
+                f"{config_dir}: removed hooks for {', '.join(result.removed_events)} "
+                "(Codex's automatic reviewer answers approvals)"
+            )
+        if not result.installed_events and not result.refreshed_events and not result.removed_events:
             print(f"{config_dir}: {result.message}")
         if result.note:
             print(f"{config_dir}: {result.note}")
         if result.warning:
             print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
-    print("If the cat doesn't react, restart running Claude Code sessions "
-          "(hook edits are not hot-reloaded).")
+    if any_codex:
+        print("For Codex accounts, start codex and approve the Tokitty hooks in its hook "
+              "review, then restart running Codex sessions (hook edits are not hot-reloaded).")
+    if any(provider != CODEX_PROVIDER for _dir, provider in config_dirs):
+        print("If the cat doesn't react, restart running Claude Code sessions "
+              "(hook edits are not hot-reloaded).")
     return 1 if any_failed else 0
 
 
