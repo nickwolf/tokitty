@@ -299,7 +299,7 @@ def test_hook_target_for_claude_and_default():
 
 def test_hook_target_raises_for_unknown_provider():
     with pytest.raises(ValueError):
-        hi._hook_target("codex")
+        hi._hook_target("nonesuch")
 
 
 # ---------------------------------------------------------------------------
@@ -1015,7 +1015,7 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _reconcile_claude / refresh_hooks_for_dir / ensure_current
+# _reconcile_hooks / refresh_hooks_for_dir / ensure_current
 # ---------------------------------------------------------------------------
 
 def test_refresh_never_adds_missing_events(tmp_path):
@@ -1802,7 +1802,7 @@ def test_install_still_aborts_loudly_on_the_same_unparseable_settings_json(tmp_p
 def test_fallback_real_directory_at_current_registers_bundled_path_with_warning(tmp_path, monkeypatch):
     """No other reconcile-level test exercises the real-directory-at-
     current outcome (runner_link's own note path, not an exception)
-    through _reconcile_claude."""
+    through _reconcile_hooks."""
     state_dir = tmp_path / "state"
     exe = _fake_release(tmp_path / "release")
     monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
