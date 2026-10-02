@@ -20,7 +20,9 @@ lives inside main(), which is wrapped in a bare try/except at module level
 so no exception can ever propagate out.
 
 It also never writes to stdout, with ONE exception: on a PermissionRequest
-event, _emit_decision() prints a single allow/deny JSON line, and only after
+event, _emit_decision() prints a single allow/deny JSON line (an "always"
+answer is an allow that also carries one session-scoped addRules entry, built
+here from the stdin payload and never from the decision file), and only after
 _wait() has found a decision file whose nonce, session id and
 input digest all match this exact request. Claude Code applies that line as
 the user's answer, so every other path (error, ambiguity, timeout, disabled
@@ -33,11 +35,13 @@ PermissionRequest never touches the per-session state file in sessions/.
 import hashlib
 import json
 import os
+import re
 import secrets
 import signal
 import sys
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime
 
 
@@ -313,8 +317,55 @@ def _remove(path):
         pass
 
 
-def _read_decision(path, nonce, session_id, digest):
-    """Consume a decision file. Returns the behavior only if it provably matches."""
+_HOST = re.compile(r"[a-z0-9.-]+")
+_PATH_BAD = set("*?[]{}!\\")
+
+
+def _narrow_rule(tool_name, tool_input):
+    """The one permission rule an "always" answer may add, or None.
+
+    Returns (rule tool name, rule content). Only shapes that cannot widen into
+    a glob or another target qualify; everything else gets no Always key.
+    """
+    try:
+        if not isinstance(tool_name, str) or not isinstance(tool_input, dict):
+            return None
+        if tool_name == "Bash":
+            command = tool_input.get("command")
+            if not isinstance(command, str) or not command:
+                return None
+            if "*" in command or "\n" in command or "\r" in command:
+                return None
+            return ("Bash", command)
+        if tool_name in ("Edit", "Write"):
+            path = tool_input.get("file_path")
+            if not isinstance(path, str) or not path.startswith("/"):
+                return None
+            if path != path.strip() or any(c in _PATH_BAD for c in path):
+                return None
+            if any(seg in ("", ".", "..") for seg in path.split("/")[1:]):
+                return None
+            # Edit rules cover Write too; a leading // marks an absolute path.
+            return ("Edit", "/" + path)
+        if tool_name == "WebFetch":
+            url = tool_input.get("url")
+            if not isinstance(url, str):
+                return None
+            parts = urllib.parse.urlsplit(url)
+            host = parts.hostname
+            if parts.scheme not in ("http", "https") or not host or not _HOST.fullmatch(host):
+                return None
+            return ("WebFetch", "domain:" + host)
+    except Exception:
+        return None
+    return None
+
+
+def _read_decision(path, nonce, session_id, digest, rule=None):
+    """Consume a decision file. Returns the behavior only if it provably matches.
+
+    "always" is accepted only when the hook computed a rule for this request.
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -329,7 +380,7 @@ def _read_decision(path, nonce, session_id, digest):
         data.get("nonce") == nonce
         and data.get("session_id") == session_id
         and data.get("digest") == digest
-        and data.get("behavior") in ("allow", "deny")
+        and (data.get("behavior") in ("allow", "deny") or (data.get("behavior") == "always" and rule is not None))
     ):
         return data["behavior"]
     return None
@@ -338,7 +389,7 @@ def _read_decision(path, nonce, session_id, digest):
 def wait_for_decision(payload, tokitty_dir, **kwargs):
     """Hold a PermissionRequest for a Stream Dock answer.
 
-    Returns {"behavior": "allow" | "deny"} only for a decision file that
+    Returns {"behavior": "allow" | "deny" | "always"} only for a decision file that
     matches this request's nonce, session id and input digest; None for every
     other outcome. Never prints. The claim is released before returning; a
     caller that prints should use _wait() and release the claim after printing.
@@ -389,6 +440,7 @@ def _wait(
     started = now_fn()
     started_mono = mono_fn()
     digest = _digest(tool_input)
+    rule = _narrow_rule(tool_name, tool_input)
     looked_up = _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn, started)
     if looked_up is None:
         return None
@@ -430,6 +482,7 @@ def _wait(
                 "tool_input": tool_input,
                 "digest": digest,
                 "preview": _preview(tool_name, tool_input),
+                "always_rule": f"{rule[0]}({rule[1]})" if rule else None,
                 "cwd": payload.get("cwd"),
                 "started": started,
                 "pid": os.getpid(),
@@ -445,7 +498,7 @@ def _wait(
             if expired():
                 return None
             if held is None and caught_up:
-                held = _read_decision(decision_file, nonce, session_id, digest)
+                held = _read_decision(decision_file, nonce, session_id, digest, rule)
                 if held is not None:
                     # Narrow the race with a terminal answer: look once more.
                     answered, caught_up = _scan(scan, transcript, read_from_fn)
@@ -511,6 +564,23 @@ def _run_permission(payload, sessions_dir, **kwargs):
         behavior = result.get("behavior")
         if behavior == "allow":
             _emit_decision({"behavior": "allow"})
+        elif behavior == "always":
+            # Recomputed from stdin: the decision file never supplies the rule.
+            rule = _narrow_rule(payload.get("tool_name"), payload.get("tool_input"))
+            if rule is not None:
+                _emit_decision(
+                    {
+                        "behavior": "allow",
+                        "updatedPermissions": [
+                            {
+                                "type": "addRules",
+                                "rules": [{"toolName": rule[0], "ruleContent": rule[1]}],
+                                "behavior": "allow",
+                                "destination": "session",
+                            }
+                        ],
+                    }
+                )
         elif behavior == "deny":
             _emit_decision({"behavior": "deny", "message": _DENY_MESSAGE})
     finally:

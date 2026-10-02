@@ -454,9 +454,60 @@ class TestPermissionDecisions:
         assert seen["tool_input"] == TOOL_INPUT
         assert seen["digest"] == digest_of(TOOL_INPUT)
         assert seen["preview"] == "ls -la"
+        assert seen["always_rule"] == "Bash(ls -la)"
         assert seen["cwd"] == "/work"
         assert seen["started"] == T0
         assert seen["pid"] == os.getpid()
+
+    def test_pending_always_rule_is_null_without_a_narrow_rule(self, env):
+        star = {"command": "rm *.log"}
+        env.write_transcript(tool_use("toolu_A", inp=star))
+        env.payload["tool_input"] = star
+        seen = {}
+
+        def peek(clock):
+            seen.update(json.loads(env.pending.read_text()))
+            env.decide(digest=digest_of(star))
+
+        env.clock.on_sleep = peek
+        env.wait()
+        assert "always_rule" in seen and seen["always_rule"] is None
+
+    def test_always_decision_emits_session_scoped_rule(self, env, capsys):
+        env.decide(behavior="always", rule={"toolName": "Bash", "ruleContent": "evil"})
+        env.run()
+        out = json.loads(capsys.readouterr().out)
+        assert out == {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "allow",
+                    "updatedPermissions": [
+                        {
+                            "type": "addRules",
+                            "rules": [{"toolName": "Bash", "ruleContent": "ls -la"}],
+                            "behavior": "allow",
+                            "destination": "session",
+                        }
+                    ],
+                },
+            }
+        }
+
+    def test_always_decision_without_rule_prints_nothing_then_allow_works(self, env, capsys):
+        star = {"command": "rm *.log"}
+        env.write_transcript(tool_use("toolu_A", inp=star))
+        env.payload["tool_input"] = star
+        digest = digest_of(star)
+        env.decide(behavior="always", digest=digest)
+
+        def second(clock):
+            if len(clock.sleeps) == 2:
+                env.decide(digest=digest)
+
+        env.clock.on_sleep = second
+        assert env.wait() == {"behavior": "allow"}
+        assert capsys.readouterr().out == ""
 
     @pytest.mark.parametrize(
         "over",
@@ -464,7 +515,7 @@ class TestPermissionDecisions:
             {"digest": "0" * 64},
             {"session_id": "other"},
             {"nonce": "ffff"},
-            {"behavior": "always"},
+            {"behavior": "sometimes"},
             {"behavior": "ALLOW"},
             {"behavior": None},
             {"digest": None},
@@ -503,7 +554,7 @@ class TestPermissionDecisions:
         assert not env.decision.exists()
 
     def test_bad_decision_then_good_decision(self, env):
-        env.decide(behavior="always")
+        env.decide(behavior="sometimes")
 
         def second(clock):
             if len(clock.sleeps) == 2:
@@ -1310,3 +1361,66 @@ class TestCaughtUpAndClaim:
         )
         assert capsys.readouterr().out == ""
         assert env.claim_files == []
+
+
+class TestNarrowRule:
+    @pytest.mark.parametrize(
+        "tool, tool_input, expected",
+        [
+            ("Bash", {"command": "ls -la"}, ("Bash", "ls -la")),
+            ("Bash", {"command": " git  status "}, ("Bash", " git  status ")),
+            ("Edit", {"file_path": "/home/n/a.py"}, ("Edit", "//home/n/a.py")),
+            ("Write", {"file_path": "/home/n/my file.txt"}, ("Edit", "//home/n/my file.txt")),
+            ("WebFetch", {"url": "https://Example.COM/x?q=1"}, ("WebFetch", "domain:example.com")),
+            ("WebFetch", {"url": "http://a-b.example.org:8080/"}, ("WebFetch", "domain:a-b.example.org")),
+        ],
+    )
+    def test_accepted(self, tool, tool_input, expected):
+        assert hw._narrow_rule(tool, tool_input) == expected
+
+    @pytest.mark.parametrize(
+        "tool, tool_input",
+        [
+            ("Bash", {"command": "rm *"}),
+            ("Bash", {"command": "a\nb"}),
+            ("Bash", {"command": "a\rb"}),
+            ("Bash", {"command": ""}),
+            ("Bash", {"command": 5}),
+            ("Bash", {}),
+            ("Edit", {"file_path": "rel/a.py"}),
+            ("Edit", {"file_path": "C:\\x\\a.py"}),
+            ("Edit", {"file_path": "C:/x/a.py"}),
+            ("Edit", {"file_path": "/a/*.py"}),
+            ("Edit", {"file_path": "/a/b?.py"}),
+            ("Edit", {"file_path": "/a/[b].py"}),
+            ("Edit", {"file_path": "/a/{b,c}"}),
+            ("Edit", {"file_path": "/a/!b"}),
+            ("Edit", {"file_path": "/a/b\\c"}),
+            ("Edit", {"file_path": "/a/../b"}),
+            ("Edit", {"file_path": "/a/./b"}),
+            ("Edit", {"file_path": "/a//b"}),
+            ("Edit", {"file_path": "/a/b/"}),
+            ("Edit", {"file_path": "/"}),
+            ("Edit", {"file_path": "/a/b "}),
+            ("Write", {"file_path": " /a/b"}),
+            ("Write", {"file_path": None}),
+            ("WebFetch", {"url": "ftp://example.com/x"}),
+            ("WebFetch", {"url": "https:///path"}),
+            ("WebFetch", {"url": "example.com"}),
+            ("WebFetch", {"url": "https://exa_mple.com"}),
+            ("WebFetch", {"url": "https://[::1]/"}),
+            ("WebFetch", {"url": 5}),
+            ("mcp__srv__tool", {"command": "ls"}),
+            ("Read", {"file_path": "/a/b"}),
+        ],
+    )
+    def test_rejected(self, tool, tool_input):
+        assert hw._narrow_rule(tool, tool_input) is None
+
+    @pytest.mark.parametrize("tool_input", [None, [], "ls", 5])
+    def test_non_dict_input(self, tool_input):
+        assert hw._narrow_rule("Bash", tool_input) is None
+
+    @pytest.mark.parametrize("tool", [None, 5, ["Bash"]])
+    def test_non_str_tool(self, tool):
+        assert hw._narrow_rule(tool, {"command": "ls"}) is None
