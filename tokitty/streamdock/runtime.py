@@ -39,6 +39,7 @@ from tokitty.streamdock.model import (
 from tokitty.streamdock.pending import PendingRequest, PendingWatcher
 from tokitty.streamdock.server import DeckEvent, DeckServer, apply_event
 from tokitty.streamdock.wt_focus import (
+    AMBIGUOUS,
     FOCUSED,
     FocusDone,
     FocusWorker,
@@ -272,6 +273,12 @@ class StreamdockRuntime:
 
     def _apply_result(self, item: Any) -> None:
         if isinstance(item, FocusDone):
+            status = item.status
+            if status == FOCUSED and self._title_shared(item.session):
+                # The tab was found by title alone, so another session with the same
+                # title may own it. Never arm Allow on that; use the in-window view.
+                status = AMBIGUOUS
+            item = FocusDone(item.session, item.seq, status)
             self._model.focus_result(item.session, item.status, item.seq)
             wanted = self._opens.get(item.session)
             if wanted is not None and wanted[0] == item.seq:
@@ -434,6 +441,10 @@ class StreamdockRuntime:
                     ref, self._config_dir(ref.account_index), lambda: self._reachable(acct)
                 )
             )
+
+    def _title_shared(self, ref: SessionRef) -> bool:
+        title = self._titles.get(ref)
+        return title is not None and any(t == title for r, t in self._titles.items() if r != ref)
 
     def _submit(self, job: Callable[[], None]) -> None:
         if self._worker is None:

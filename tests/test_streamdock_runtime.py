@@ -278,6 +278,15 @@ def test_focus_and_open_falls_back_on_unconfirmed_tab(h, status, opens):
     assert h.opened == ([r] if opens else [])
 
 
+def test_focus_on_a_title_another_session_shares_is_ambiguous(h):
+    h.put(TitleDone(A0, "Same"), TitleDone(A1, "Same"))
+    r = pending_slot_press(h)
+    h.put(FocusDone(A0, 1, "focused"))
+    h.tick()
+    assert h.opened == [r]
+    assert h.spec("k1").armed is False
+
+
 def test_focus_and_open_without_overlay_opens_at_once(h):
     h.sessions = {0: [view("s0")], 1: []}
     r = pending_slot_press(h, n_slots=1)
