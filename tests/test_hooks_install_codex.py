@@ -1111,3 +1111,134 @@ def test_refresh_aborts_when_a_stray_key_appears_beside_tokittys_hooks(home):
 
     assert not result.ok
     assert (home / "hooks.json").read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# Automatic approvals reviewer: no PermissionRequest hook
+# ---------------------------------------------------------------------------
+
+GUARDIAN = 'approvals_reviewer = "guardian_subagent"\n'
+
+
+def _guardian(home):
+    (home / "config.toml").write_text(GUARDIAN, encoding="utf-8")
+
+
+def _trust_record(home):
+    from tokitty import codex_trust
+
+    data = json.loads((codex_trust.record_path(hi.state_dir_path())).read_text(encoding="utf-8"))
+    return data[codex_trust.home_key(str(home))]["keys"]
+
+
+def test_install_into_a_guardian_home_skips_permission_request(home):
+    _guardian(home)
+
+    result = _install(home)
+
+    assert result.ok
+    assert sorted(_hooks(home)["hooks"]) == sorted(n for n in EVENT_NAMES if n != "PermissionRequest")
+    assert len(result.installed_events) == 7
+
+
+def test_install_into_a_normal_home_still_writes_eight(home):
+    (home / "config.toml").write_text('approvals_reviewer = "user"\n', encoding="utf-8")
+    _install(home)
+    assert sorted(_hooks(home)["hooks"]) == sorted(EVENT_NAMES)
+
+
+def test_refresh_removes_tokittys_permission_request_once_guardian(home):
+    from tokitty import codex_trust
+
+    _install(home)
+    before = _hooks(home)["hooks"]
+    _guardian(home)
+    config_before = (home / "config.toml").read_bytes()
+
+    result = _refresh(home)
+
+    assert result.ok
+    assert result.refreshed_events == ["PermissionRequest"]
+    assert result.warning is None
+    after = _hooks(home)["hooks"]
+    assert "PermissionRequest" not in after
+    assert {k: v for k, v in before.items() if k != "PermissionRequest"} == after
+    keys = _trust_record(home)
+    assert codex_trust.trust_key(str(home), "PermissionRequest", 0, 0) not in keys
+    assert len(keys) == 7
+    assert (home / "config.toml").read_bytes() == config_before
+
+
+def test_install_also_removes_it_once_guardian(home):
+    _install(home)
+    _guardian(home)
+    result = _install(home)
+    assert result.ok and result.warning is None
+    assert "PermissionRequest" not in _hooks(home)["hooks"]
+
+
+def test_refresh_never_adds_permission_request_in_a_normal_home(home):
+    _install(home)
+    data = _hooks(home)
+    del data["hooks"]["PermissionRequest"]
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+    _refresh(home)
+    assert "PermissionRequest" not in _hooks(home)["hooks"]
+
+
+def test_removal_warns_when_a_user_group_after_tokittys_shifts(home):
+    _install(home)
+    data = _hooks(home)
+    data["hooks"]["PermissionRequest"].append({"hooks": [_user("mine.sh")]})
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+    _guardian(home)
+
+    result = _refresh(home)
+
+    assert result.warning == SHIFT.format("PermissionRequest")
+    assert _hooks(home)["hooks"]["PermissionRequest"] == [{"hooks": [_user("mine.sh")]}]
+
+
+def test_a_users_own_permission_request_hook_is_left_alone(home):
+    _write_hooks(home, {"PermissionRequest": [{"hooks": [_user("mine.sh")]}]})
+    _guardian(home)
+
+    result = _install(home)
+
+    assert result.ok
+    assert _hooks(home)["hooks"]["PermissionRequest"] == [{"hooks": [_user("mine.sh")]}]
+    assert result.warning is None
+
+
+def test_a_forget_keys_failure_aborts_before_hooks_json_is_written(home, monkeypatch):
+    from tokitty import codex_trust
+
+    _install(home)
+    _guardian(home)
+    raw = (home / "hooks.json").read_bytes()
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(codex_trust, "forget_keys", boom)
+    result = _refresh(home)
+
+    assert not result.ok
+    assert (home / "hooks.json").read_bytes() == raw
+
+
+def test_hook_status_for_a_seven_handler_guardian_home(home):
+    from tokitty import codex_trust as ct
+
+    _guardian(home)
+    _install(home)
+    state = hi.state_dir_path()
+    assert ct.codex_hook_status(str(home), state) == ct.NEEDS_APPROVAL
+
+    lines = [GUARDIAN]
+    for event, _m in hi.CODEX_EVENTS:
+        if event != "PermissionRequest":
+            lines.append(f"[hooks.state.'{ct.trust_key(str(home), event, 0, 0)}']")
+            lines.append(f'trusted_hash = "sha256:{event}"')
+    (home / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert ct.codex_hook_status(str(home), state) == ct.APPROVED

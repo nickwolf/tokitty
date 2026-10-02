@@ -614,3 +614,37 @@ def test_concurrent_records_for_two_homes_keep_both(tmp_path, monkeypatch):
 
     data = json.loads((state / ct.RECORD_FILENAME).read_text(encoding="utf-8"))
     assert sorted(data) == sorted(ct.home_key(str(home)) for home in homes)
+
+
+# ---------------------------------------------------------------------------
+# read_approvals_reviewer
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("with_tomllib", [True, False])
+def test_read_approvals_reviewer_top_level_key(tmp_path, monkeypatch, with_tomllib):
+    _use_tomllib(monkeypatch, with_tomllib)
+    path = tmp_path / "config.toml"
+    path.write_text('model = "gpt-5"\napprovals_reviewer = "guardian_subagent"  # auto\n', encoding="utf-8")
+    assert ct.read_approvals_reviewer(path) == "guardian_subagent"
+    path.write_text("approvals_reviewer = 'user'\n", encoding="utf-8")
+    assert ct.read_approvals_reviewer(path) == "user"
+
+
+@pytest.mark.parametrize("with_tomllib", [True, False])
+def test_read_approvals_reviewer_ignores_a_key_under_a_table(tmp_path, monkeypatch, with_tomllib):
+    _use_tomllib(monkeypatch, with_tomllib)
+    path = tmp_path / "config.toml"
+    path.write_text('[profiles.p]\napprovals_reviewer = "guardian_subagent"\n', encoding="utf-8")
+    assert ct.read_approvals_reviewer(path) is None
+
+
+@pytest.mark.parametrize("with_tomllib", [True, False])
+def test_read_approvals_reviewer_missing_unreadable_and_commented(tmp_path, monkeypatch, with_tomllib):
+    _use_tomllib(monkeypatch, with_tomllib)
+    assert ct.read_approvals_reviewer(tmp_path / "config.toml") is None
+    folder = tmp_path / "dir.toml"
+    folder.mkdir()
+    assert ct.read_approvals_reviewer(folder) is None
+    commented = tmp_path / "c.toml"
+    commented.write_text('# approvals_reviewer = "guardian_subagent"\n', encoding="utf-8")
+    assert ct.read_approvals_reviewer(commented) is None

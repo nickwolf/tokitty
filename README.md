@@ -139,6 +139,7 @@ A few things behave differently from a Claude Code pane:
 
 - Codex only records its rate limits when it takes a turn, so between sessions the bars are a snapshot. Past 10 minutes old, the status line says when it was taken ("as of 4:12 PM"), and the countdowns keep running on tokitty's own clock as usual.
 - A Codex account gets live thinking and working poses once you approve Tokitty's hooks in the Codex CLI's hook review. Approval happens in the CLI, and the desktop app and IDE extension are untested.
+- A Codex account that uses the automatic approval reviewer (`approvals_reviewer = "guardian_subagent"`) gets no permission pose, because Codex runs the hook before the reviewer decides and can't tell it whether a person will see the prompt.
 - Costs use OpenAI's standard-tier API rates. Fast mode bills double and Batch and Flex half, but the rollouts don't say which tier a turn ran on.
 - `codex-auto-review`, the automatic review pass, isn't on OpenAI's pricing page. Its tokens are counted and shown, but its cost reads `--` and the total is marked `>=`.
 - Requests to models that OpenAI prices by context length (currently `gpt-5.6-sol`, `gpt-5.5`, and `gpt-5.4` over 272K input tokens) are costed separately, and show up as a `long` row where a long-context rate is published.

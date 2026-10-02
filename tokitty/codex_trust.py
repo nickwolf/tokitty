@@ -124,6 +124,45 @@ def read_trusted_hashes(config_toml_path) -> Optional[Dict[str, str]]:
     return found
 
 
+_REVIEWER_LINE = re.compile(
+    r"""^approvals_reviewer\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:#.*)?$"""
+)
+
+
+def _reviewer_from_lines(text: str) -> Optional[str]:
+    """Narrow fallback for Python 3.10: the top-level approvals_reviewer
+    line, which has to come before the first [table] header."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            return None
+        match = _REVIEWER_LINE.match(line)
+        if match:
+            value = match.group(1)
+            return _unescape(value) if value is not None else match.group(2)
+    return None
+
+
+def read_approvals_reviewer(config_toml_path) -> Optional[str]:
+    """The top-level approvals_reviewer string in config.toml (not one
+    under a table such as [profiles.x]), or None when the file is missing,
+    unreadable or unparseable, or the key is absent. Never raises."""
+    try:
+        text = Path(config_toml_path).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    module = _tomllib()
+    if module is None:
+        return _reviewer_from_lines(text)
+    try:
+        value = module.loads(text).get("approvals_reviewer")
+    except Exception:
+        return None
+    return value if isinstance(value, str) else None
+
+
 def home_key(config_dir: str) -> str:
     """The normalised Codex-visible hooks.json path: the record's key for a
     home, and the path part of every trust key Tokitty looks up."""
@@ -213,6 +252,22 @@ def record_changes(
             key = trust_key(config_dir, event, group_index, handler_index)
             keys[key] = UNKNOWN_HASH if hashes is None else hashes.get(key)
         data[home_key(config_dir)] = {"written_at": time.time(), "keys": keys}
+        _write_record(state_dir, data)
+
+
+def forget_keys(state_dir, config_dir: str, keys: List[str]) -> None:
+    """Drop the given trust keys from the home's record, leaving the rest.
+    Raises OSError if the record can't be written."""
+    if not keys:
+        return
+    with _record_lock:
+        data = load_record(state_dir)
+        entry = data.get(home_key(config_dir))
+        recorded = entry.get("keys") if isinstance(entry, dict) else None
+        if not isinstance(recorded, dict) or not any(key in recorded for key in keys):
+            return
+        kept = {key: value for key, value in recorded.items() if key not in keys}
+        data[home_key(config_dir)] = {**entry, "keys": kept}
         _write_record(state_dir, data)
 
 

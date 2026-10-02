@@ -884,6 +884,37 @@ def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
     return merged
 
 
+CODEX_AUTOMATIC_REVIEWER = "guardian_subagent"
+_CODEX_NO_PERMISSION_EVENT = "PermissionRequest"
+
+
+def _codex_automatic_reviewer(config_dir: str) -> bool:
+    """Whether this Codex home's config.toml hands approvals to an automatic
+    reviewer. Codex runs PermissionRequest before that reviewer decides and
+    does not say who will answer, so the hook would raise the overlay for
+    prompts no person sees."""
+    from tokitty import codex_trust
+
+    reviewer = codex_trust.read_approvals_reviewer(codex_trust.config_toml_path(config_dir))
+    return reviewer == CODEX_AUTOMATIC_REVIEWER
+
+
+def _codex_events_for(config_dir: str) -> Tuple[Tuple[str, Optional[str]], ...]:
+    """CODEX_EVENTS for this home: without PermissionRequest when an
+    automatic reviewer answers approvals."""
+    if _codex_automatic_reviewer(config_dir):
+        return tuple(e for e in CODEX_EVENTS if e[0] != _CODEX_NO_PERMISSION_EVENT)
+    return CODEX_EVENTS
+
+
+def _forget_codex_keys(config_dir: str, keys: List[str]) -> None:
+    """Drop removed handlers' keys from the trust record. Raises OSError, so
+    the caller can abort before hooks.json is written."""
+    from tokitty import codex_trust
+
+    codex_trust.forget_keys(state_dir_path(), config_dir, keys)
+
+
 def _record_codex_trust(config_dir: str, changes: List[Tuple[str, int, int]]) -> None:
     """Write the Codex trust record for a reconcile that is about to add,
     rewrite or move owned handlers. changes lists (event, group_index,
@@ -1179,8 +1210,33 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
     reapproval = False
     collapsed = False
     before_hooks = dict(hooks_dict)
+    events = target.events
+    forgotten_keys: List[str] = []
+    removed_event = False
+    if provider == CODEX_PROVIDER:
+        events = _codex_events_for(config_dir)
+        if len(events) < len(target.events):
+            # An automatic reviewer answers this home's approvals: take out
+            # only Tokitty's own PermissionRequest handler, as uninstall does.
+            from tokitty import codex_trust
 
-    for event, matcher in target.events:
+            old_entries = hooks_dict.get(_CODEX_NO_PERMISSION_EVENT)
+            old_positions = _collect_owned_positions(old_entries, config_dir, provider)
+            if old_positions:
+                new_entries = _rebuild_entries(old_entries, remove_positions=old_positions)
+                if new_entries:
+                    hooks_dict[_CODEX_NO_PERMISSION_EVENT] = new_entries
+                else:
+                    hooks_dict.pop(_CODEX_NO_PERMISSION_EVENT, None)
+                forgotten_keys = [
+                    codex_trust.trust_key(config_dir, _CODEX_NO_PERMISSION_EVENT, g, h)
+                    for g, h in old_positions
+                ]
+                refreshed_events.append(_CODEX_NO_PERMISSION_EVENT)
+                removed_event = True
+                changed = True
+
+    for event, matcher in events:
         local_entries = local_hooks.get(event)
         local_positions = _collect_owned_positions(local_entries, config_dir, provider)
 
@@ -1265,6 +1321,7 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         if provider == CODEX_PROVIDER:
             try:
                 _record_codex_trust(config_dir, trust_changes)
+                _forget_codex_keys(config_dir, forgotten_keys)
             except OSError as exc:
                 return ConfigDirResult(
                     config_dir, False, f"aborted, could not write the Codex trust record: {exc}"
@@ -1293,7 +1350,7 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
 
     if reapproval:
         warning = f"{warning} {CODEX_REAPPROVE_WARNING}" if warning else CODEX_REAPPROVE_WARNING
-    if provider == CODEX_PROVIDER and collapsed:
+    if provider == CODEX_PROVIDER and (collapsed or removed_event):
         shifted = _shifted_events(before_hooks, hooks_dict, config_dir, provider)
         if shifted:
             shift_warning = CODEX_SHIFT_WARNING.format(events=", ".join(shifted))
