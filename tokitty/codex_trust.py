@@ -127,40 +127,63 @@ def read_trusted_hashes(config_toml_path) -> Optional[Dict[str, str]]:
 _REVIEWER_LINE = re.compile(
     r"""^approvals_reviewer\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:#.*)?$"""
 )
+_PROFILE_HEADER = re.compile(r"""^\[\s*profiles\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')\s*\]\s*(?:#.*)?$""")
 
 
-def _reviewer_from_lines(text: str) -> Optional[str]:
-    """Narrow fallback for Python 3.10: the top-level approvals_reviewer
-    line, which has to come before the first [table] header."""
+def _reviewers_from_lines(text: str, profiles: bool) -> List[str]:
+    """Narrow fallback for Python 3.10: approvals_reviewer lines before the
+    first [table] header and, when profiles is set, inside [profiles.<name>]
+    sections (until the next header of any kind)."""
+    found: List[str] = []
+    in_scope = True
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("["):
-            return None
+            in_scope = profiles and bool(_PROFILE_HEADER.match(line))
+            continue
+        if not in_scope:
+            continue
         match = _REVIEWER_LINE.match(line)
         if match:
             value = match.group(1)
-            return _unescape(value) if value is not None else match.group(2)
-    return None
+            found.append(_unescape(value) if value is not None else match.group(2))
+    return found
 
 
-def read_approvals_reviewer(config_toml_path) -> Optional[str]:
-    """The top-level approvals_reviewer string in config.toml (not one
-    under a table such as [profiles.x]), or None when the file is missing,
-    unreadable or unparseable, or the key is absent. Never raises."""
+def _reviewers_in_file(path, profiles: bool) -> List[str]:
     try:
-        text = Path(config_toml_path).read_bytes().decode("utf-8")
+        text = Path(path).read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
+        return []
     module = _tomllib()
     if module is None:
-        return _reviewer_from_lines(text)
+        return _reviewers_from_lines(text, profiles)
     try:
-        value = module.loads(text).get("approvals_reviewer")
+        data = module.loads(text)
     except Exception:
-        return None
-    return value if isinstance(value, str) else None
+        return []
+    values = [data.get("approvals_reviewer")]
+    if profiles and isinstance(data.get("profiles"), dict):
+        values += [p.get("approvals_reviewer") for p in data["profiles"].values() if isinstance(p, dict)]
+    return [v for v in values if isinstance(v, str)]
+
+
+def read_approvals_reviewers(config_dir: str) -> List[str]:
+    """Every approvals_reviewer value configured for a Codex home: the top
+    level and each [profiles.<name>] table of config.toml, plus the top level
+    of each <home>/<name>.config.toml profile file (this directory only).
+    Unreadable or unparseable files contribute nothing. Never raises."""
+    home = Path(hi._local_config_path(config_dir))
+    found = _reviewers_in_file(home / "config.toml", True)
+    try:
+        extras = sorted(p for p in home.glob("*.config.toml") if p.name != "config.toml")
+    except OSError:
+        extras = []
+    for extra in extras:
+        found += _reviewers_in_file(extra, False)
+    return found
 
 
 def home_key(config_dir: str) -> str:

@@ -207,7 +207,36 @@ def test_codex_command_frozen_windows_without_short_names_falls_back_to_the_call
     hook = hi._build_command(
         r"C:\Users\nick\.codex", frozen=True, runner=runner, platform="win32", provider="codex"
     )
-    assert hook["command"] == f'& "{runner}" --sessions-dir "C:\\Users\\nick\\.codex/tokitty/sessions"'
+    assert hook["command"] == f"& '{runner}' --sessions-dir 'C:\\Users\\nick\\.codex/tokitty/sessions'"
+
+
+def _fallback_command(runner, config_dir=r"C:\Users\nick\.codex"):
+    return hi._build_command(config_dir, frozen=True, runner=runner, platform="win32", provider="codex")["command"]
+
+
+def test_codex_command_fallback_single_quotes_a_dollar_runner_and_stays_owned(monkeypatch, tmp_path):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
+    runner = r"C:\Program Files\$tok\tokitty-hook.exe"
+    command = _fallback_command(runner)
+    assert command.startswith("& 'C:\\Program Files\\$tok\\tokitty-hook.exe' --sessions-dir '")
+    assert '"' not in command
+    assert hi._codex_owned_parts(command, r"C:\Users\nick\.codex") is not None
+
+
+def test_codex_command_fallback_doubles_a_quote_in_the_runner_path_and_stays_owned(monkeypatch):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
+    command = _fallback_command(r"C:\Program Files\O'Neil\tokitty-hook.exe")
+    assert "O''Neil" in command
+    # shlex drops the doubled quote, but ownership keys on the basename, so it still matches
+    assert hi._codex_owned_parts(command, r"C:\Users\nick\.codex") is not None
+
+
+def test_codex_command_fallback_with_a_quote_in_the_home_is_not_recognised(monkeypatch):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
+    config_dir = r"C:\Users\o'neil\.codex"
+    command = _fallback_command(r"C:\Program Files\Tokitty\tokitty-hook.exe", config_dir)
+    assert "o''neil" in command
+    assert hi._codex_owned_parts(command, config_dir) is None
 
 
 def test_codex_command_frozen_windows_wsl_home_keeps_python3():
@@ -1141,6 +1170,24 @@ def test_install_into_a_guardian_home_skips_permission_request(home):
     assert len(result.installed_events) == 7
 
 
+def test_install_into_an_auto_review_home_skips_permission_request(home):
+    (home / "config.toml").write_text('approvals_reviewer = "auto_review"\n', encoding="utf-8")
+    result = _install(home)
+    assert result.ok
+    assert len(result.installed_events) == 7
+    assert "PermissionRequest" not in _hooks(home)["hooks"]
+
+
+def test_install_into_a_profile_only_automatic_home_writes_seven(home):
+    (home / "config.toml").write_text('[profiles.work]\napprovals_reviewer = "auto_review"\n', encoding="utf-8")
+    assert len(_install(home).installed_events) == 7
+
+
+def test_install_into_a_profile_file_automatic_home_writes_seven(home):
+    (home / "work.config.toml").write_text('approvals_reviewer = "auto_review"\n', encoding="utf-8")
+    assert len(_install(home).installed_events) == 7
+
+
 def test_install_into_a_normal_home_still_writes_eight(home):
     (home / "config.toml").write_text('approvals_reviewer = "user"\n', encoding="utf-8")
     _install(home)
@@ -1255,3 +1302,26 @@ def test_install_hooks_cli_says_removed_for_the_guardian_permission_hook(home, m
     out = capsys.readouterr().out
     assert "removed hooks for PermissionRequest (Codex's automatic reviewer answers approvals)" in out
     assert "refreshed hooks for PermissionRequest" not in out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell is the Windows Codex launcher")
+def test_codex_call_operator_fallback_runs_under_powershell_with_a_dollar_in_the_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
+    runner_dir = tmp_path / "$run ner"
+    runner_dir.mkdir()
+    seen = tmp_path / "seen.txt"
+    runner = runner_dir / "tokitty-hook.cmd"
+    runner.write_text(
+        f'@echo off\r\necho %~1> "{seen}"\r\necho %~2>> "{seen}"\r\n', encoding="utf-8"
+    )
+    config_dir = str(tmp_path / ".codex")
+    command = hi._build_command(
+        config_dir, frozen=True, runner=str(runner), platform="win32", provider="codex"
+    )["command"]
+    assert command.startswith("& '")
+    for ps in _powershells():
+        seen.unlink(missing_ok=True)
+        subprocess.run([ps, "-NoProfile", "-Command", command], check=True)
+        lines = seen.read_text(encoding="utf-8").splitlines()
+        assert lines[0].strip() == "--sessions-dir"
+        assert lines[1].strip().endswith("tokitty/sessions")

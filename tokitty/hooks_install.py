@@ -329,7 +329,8 @@ def _codex_win_command(runner_path: str, home: str, sessions_dir: str) -> str:
     and sessions dir go unquoted with forward slashes when both are
     shell-safe, shortening the directory (not the basename, ownership
     matches on it) to its 8.3 form when they are not. If a token is still
-    unsafe the command falls back to PowerShell's call operator.
+    unsafe the command falls back to PowerShell's call operator with
+    single-quoted literals, so `$name` in a path is not expanded.
     """
     runner = runner_path.replace("\\", "/")
     sessions = sessions_dir.replace("\\", "/")
@@ -344,7 +345,11 @@ def _codex_win_command(runner_path: str, home: str, sessions_dir: str) -> str:
             sessions = f"{short.replace(chr(92), '/').rstrip('/')}/tokitty/sessions"
     if _SHELL_SAFE.match(runner) and _SHELL_SAFE.match(sessions):
         return f"{runner} --sessions-dir {sessions}"
-    return f'& "{runner_path}" --sessions-dir "{sessions_dir}"'
+    # A `'` in a path is doubled (PowerShell's literal rule). shlex reads `''` as two
+    # adjacent quotes and drops it, so a home path with `'` is not recognised as owned.
+    runner_q = runner_path.replace("'", "''")
+    sessions_q = sessions_dir.replace("'", "''")
+    return f"& '{runner_q}' --sessions-dir '{sessions_q}'"
 
 
 def _build_command(
@@ -886,19 +891,20 @@ def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
     return merged
 
 
-CODEX_AUTOMATIC_REVIEWER = "guardian_subagent"
+CODEX_AUTOMATIC_REVIEWERS = frozenset({"auto_review", "guardian_subagent"})
 _CODEX_NO_PERMISSION_EVENT = "PermissionRequest"
 
 
 def _codex_automatic_reviewer(config_dir: str) -> bool:
-    """Whether this Codex home's config.toml hands approvals to an automatic
-    reviewer. Codex runs PermissionRequest before that reviewer decides and
-    does not say who will answer, so the hook would raise the overlay for
-    prompts no person sees."""
+    """Whether this Codex home hands approvals to an automatic reviewer, set
+    at the top level of config.toml, in any of its [profiles.*] tables, or at
+    the top level of any <name>.config.toml profile file. The hook set is
+    home-wide, so any of them counts. Codex runs PermissionRequest before that
+    reviewer decides and does not say who will answer, so the hook would raise
+    the overlay for prompts no person sees."""
     from tokitty import codex_trust
 
-    reviewer = codex_trust.read_approvals_reviewer(codex_trust.config_toml_path(config_dir))
-    return reviewer == CODEX_AUTOMATIC_REVIEWER
+    return any(r in CODEX_AUTOMATIC_REVIEWERS for r in codex_trust.read_approvals_reviewers(config_dir))
 
 
 def _codex_events_for(config_dir: str) -> Tuple[Tuple[str, Optional[str]], ...]:
