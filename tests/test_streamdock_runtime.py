@@ -458,6 +458,16 @@ def test_stopped_distro_marker_is_never_touched_or_cleared(tmp_path):
     assert not marker(h, 0).exists() and marker(h, 1).exists()
 
 
+def test_codex_account_never_gets_the_enabled_marker(tmp_path):
+    h = Harness(tmp_path)
+    a = h.rt._accounts[1]
+    codex = Account("codex", "C:\\codex", provider="codex")
+    h.rt._accounts[1] = AccountInput(a.index, a.name, codex, a.config_dir, a.tokitty_dir)
+    h.server.is_connected = True
+    h.tick()
+    assert marker(h, 0).exists() and not marker(h, 1).exists()
+
+
 def test_title_job_checks_the_distro_on_the_worker(tmp_path):
     h = wsl_harness(tmp_path)
     h.tick()

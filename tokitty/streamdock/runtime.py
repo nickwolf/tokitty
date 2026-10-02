@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from tokitty.accounts import Account
+from tokitty.accounts import DEFAULT_PROVIDER, Account
 from tokitty.activity import SessionView
 from tokitty.streamdock import launch as launch_mod
 from tokitty.streamdock import pending as pending_mod
@@ -402,6 +402,9 @@ class StreamdockRuntime:
             self._clear_enabled(directory)
 
     def _touch(self, acct: AccountInput) -> None:
+        # Only Claude Code hooks answer through the deck; a Codex hook must never wait on it.
+        if acct.account is not None and acct.account.provider != DEFAULT_PROVIDER:
+            return
         directory = self._dir(acct)
         if directory and self._reachable(acct):
             self._touch_enabled(directory)
