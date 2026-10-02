@@ -83,8 +83,12 @@ class UpdateDialog:
             tk.Button(self._row, text=text, command=command).pack(side="left", padx=4)
 
     def _show_choices(self, note: str) -> None:
-        first = ("Open release page", self._release_page) if self._reason else ("Install", self._install)
-        self._set(note, [first, ("Release notes", self._release_page), ("Later", self._close_requested)])
+        if self._reason:
+            # Release notes would open the same page, so it isn't offered twice.
+            choices = [("Open release page", self._release_page)]
+        else:
+            choices = [("Install", self._install), ("Release notes", self._release_page)]
+        self._set(note, choices + [("Later", self._close_requested)])
 
     def _release_page(self) -> None:
         self._open_url(self._release.html_url or RELEASES_URL)

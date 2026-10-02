@@ -76,7 +76,7 @@ def test_a_refused_release_swaps_install_for_the_release_page_and_the_reason(roo
     controller = FakeController(reason=reason)
     urls = []
     dialog = open_dialog(root, controller, urls=urls)
-    assert dialog.button_labels() == ["Open release page", "Release notes", "Later"]
+    assert dialog.button_labels() == ["Open release page", "Later"]
     assert dialog.note == reason
     dialog.invoke("Open release page")
     assert urls == [RELEASE.html_url]
