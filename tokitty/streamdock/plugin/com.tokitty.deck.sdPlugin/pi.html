@@ -46,6 +46,9 @@ async function build() {
     (meta.accounts || []).forEach(function (a) { roles.push(["usage:" + a.index, "Usage: " + a.name]); });
   }
   roles.push(["interrupt", "Interrupt"]);
+  roles.push(["allow", "Allow (permission prompts)"]);
+  roles.push(["deny", "Deny (permission prompts)"]);
+  roles.push(["always", "Always (permission prompts)"]);
   if (meta) {
     (meta.presets || []).forEach(function (name) { roles.push(["new:" + name, "New session: " + name]); });
   }

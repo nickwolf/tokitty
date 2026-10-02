@@ -25,3 +25,9 @@ def test_pages_load_config_and_use_no_external_resources():
         # The only URLs are the loopback server and the VSD websocket.
         for url in re.findall(r"""["'](https?|wss?)://([^"'/:]+)""", text):
             assert url[1] == "127.0.0.1", url
+
+
+def test_property_inspector_offers_decision_roles():
+    text = (PLUGIN / "pi.html").read_text(encoding="utf-8")
+    for role, label in (("allow", "Allow"), ("deny", "Deny"), ("always", "Always")):
+        assert f'["{role}", "{label} (permission prompts)"]' in text
