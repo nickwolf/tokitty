@@ -14,6 +14,7 @@ ACTIVITY_STATES = ("permission", "working", "thinking", "done_hop", "idle")
 
 IDLE_DECAY_S = 180.0
 GONE_S = 1800.0
+PERMISSION_STALE_S = 600.0
 DONE_HOP_S = 1.5
 WORK_STRETCH_MIN_S = 20.0
 
@@ -25,8 +26,12 @@ _KNOWN_EVENTS = frozenset(
         "Notification",
         "Stop",
         "SubagentStop",
+        "PermissionRequest",
+        "Interrupt",
     }
 )
+
+_PERMISSION_EVENTS = frozenset({"Notification", "PermissionRequest"})
 
 _WORKING_THINKING_EVENTS = frozenset(
     {"UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStop"}
@@ -125,7 +130,7 @@ class ActivityTracker:
                     state.base_state = "thinking"
                     state.tool_label = ""
                 state.done_hop_at = None
-            elif event == "Notification":
+            elif event in _PERMISSION_EVENTS:
                 # Overlay only: doesn't touch the working/thinking stretch or
                 # base_state.
                 pass
@@ -142,10 +147,16 @@ class ActivityTracker:
                     state.done_hop_at = None
                 state.stretch_start = None
                 state.tool_label = ""
+            elif event == "Interrupt":
+                # Turn aborted: straight to idle, never a done hop.
+                state.base_state = "idle"
+                state.stretch_start = None
+                state.tool_label = ""
+                state.done_hop_at = None
 
-            # Permission flag: raised on Notification, lowered by the next
-            # (higher-seq) event of any other kind.
-            state.permission = event == "Notification"
+            # Permission flag: raised on Notification or PermissionRequest,
+            # lowered by the next (higher-seq) event of any other kind.
+            state.permission = event in _PERMISSION_EVENTS
 
             state.last_seq = seq
             state.last_ts = ts
@@ -153,13 +164,13 @@ class ActivityTracker:
 
     def _effective_view(self, session_id: str, state: _SessionState, now: float) -> Optional[ActivityView]:
         if state.permission:
-            # Permission does not decay on the idle timer. Accepted limitation:
-            # if a permission prompt is abandoned (Esc, killed terminal, closed
-            # window) with no further hook event and no SessionEnd, this flag
-            # has nothing to lower it and stays up until stale_session_ids()
-            # sweeps the session out entirely at GONE_S (30 min). By design --
-            # not worth a separate decay timer for an edge case that self-heals
-            # on session cleanup.
+            # Permission does not decay on the idle timer. If a prompt is
+            # abandoned (Esc, killed terminal, closed window) with no further
+            # hook event and no SessionEnd, nothing lowers this flag, so it
+            # holds for PERMISSION_STALE_S and then reads as idle. The session
+            # itself is swept at GONE_S (30 min).
+            if (now - state.last_ts) >= PERMISSION_STALE_S:
+                return None
             return ActivityView(state="permission", session_id=session_id)
 
         if state.base_state == "done_hop":

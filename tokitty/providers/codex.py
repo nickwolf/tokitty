@@ -37,7 +37,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.poller import PollResult
-from tokitty.providers.base import LedgerSource, ProviderCapabilities, _config_root_from, _join, no_directory
+from tokitty.providers.base import LedgerSource, ProviderCapabilities, _config_root_from, _join
 
 CODEX_DIRNAME = ".codex"
 SESSIONS_SUBDIR = "sessions"
@@ -279,13 +279,14 @@ def read_latest_snapshot(config_dir: Optional[str] = None, now: Optional[datetim
 
 
 class CodexProvider:
-    """Rate limits and a token ledger, both off disk. No activity: Codex
-    has command hooks now (codex-cli 0.156.1), but tokitty installs none
-    into a Codex home, so the thinking and working poses stay Claude-only."""
+    """Rate limits and a token ledger off disk, plus live activity from the
+    hooks tokitty installs into the Codex home's hooks.json (codex-cli
+    0.156.1). The hooks write state files under <home>/tokitty/sessions,
+    which the ActivityWatcher tails like Claude's."""
 
     kind = "codex"
     display_name = "Codex"
-    capabilities = ProviderCapabilities(rate_limits=True, token_ledger=True, activity=False)
+    capabilities = ProviderCapabilities(rate_limits=True, token_ledger=True, activity=True)
 
     def build_fetch_fn(self, config_dir: Optional[str] = None, loader=None):
         def fetch() -> PollResult:
@@ -311,7 +312,8 @@ class CodexProvider:
         return fetch
 
     def resolve_activity_sessions(self, config_dir: Optional[str] = None, credentials=None):
-        return no_directory(config_dir, credentials)
+        home, distro = codex_home_for(config_dir)
+        return _join(home, "tokitty", "sessions"), distro
 
     def resolve_ledger(self, config_dir: Optional[str] = None, credentials=None):
         # The ledger is the same rollouts the rate limits come from, read

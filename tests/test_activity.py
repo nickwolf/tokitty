@@ -6,6 +6,7 @@ from tokitty.activity import (
     ActivityView,
     IDLE_DECAY_S,
     GONE_S,
+    PERMISSION_STALE_S,
     DONE_HOP_S,
     WORK_STRETCH_MIN_S,
 )
@@ -363,3 +364,57 @@ def test_no_records_observed_ever_no_crash():
     t = ActivityTracker()
     view = t.aggregate(0.0)
     assert view.state == "idle"
+
+
+def test_permission_request_then_interrupt_is_idle_without_hop():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, seq=1, tool_name="Bash")}, now=100.0)
+    t.observe({"s1": rec("s1", "PermissionRequest", 101.0, seq=2)}, now=101.0)
+    assert t.aggregate(101.0).state == "permission"
+    t.observe({"s1": rec("s1", "Interrupt", 102.0, seq=3)}, now=102.0)
+    assert t.aggregate(102.0).state == "idle"
+
+
+def test_permission_request_then_post_tool_use_is_thinking():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, seq=1, tool_name="Bash")}, now=100.0)
+    t.observe({"s1": rec("s1", "PermissionRequest", 101.0, seq=2)}, now=101.0)
+    t.observe({"s1": rec("s1", "PostToolUse", 102.0, seq=3, tool_name="Bash")}, now=102.0)
+    assert t.aggregate(102.0).state == "thinking"
+
+
+def test_permission_request_keeps_working_state_underneath():
+    # Overlay only, like Notification: the stretch and label survive it.
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, seq=1, tool_name="Bash")}, now=100.0)
+    t.observe({"s1": rec("s1", "PermissionRequest", 101.0, seq=2)}, now=101.0)
+    s = t._sessions["s1"]
+    assert s.base_state == "working"
+    assert s.tool_label == "Running"
+    assert s.stretch_start == 100.0
+
+
+def test_permission_goes_stale_at_permission_stale_s():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1)}, now=100.0)
+    assert t.aggregate(100.0 + PERMISSION_STALE_S - 1).state == "permission"
+    assert t.aggregate(100.0 + PERMISSION_STALE_S).state == "idle"
+
+
+def test_notification_permission_also_goes_stale():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "Notification", 100.0, seq=1)}, now=100.0)
+    assert t.aggregate(100.0 + PERMISSION_STALE_S - 1).state == "permission"
+    assert t.aggregate(100.0 + PERMISSION_STALE_S).state == "idle"
+
+
+def test_interrupt_after_long_stretch_never_hops():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "UserPromptSubmit", 100.0, seq=1)}, now=100.0)
+    t.observe({"s1": rec("s1", "Interrupt", 100.0 + WORK_STRETCH_MIN_S + 5, seq=2)}, now=100.0 + WORK_STRETCH_MIN_S + 5)
+    s = t._sessions["s1"]
+    assert s.base_state == "idle"
+    assert s.stretch_start is None
+    assert s.tool_label == ""
+    assert s.done_hop_at is None
+    assert t.aggregate(100.0 + WORK_STRETCH_MIN_S + 5).state == "idle"

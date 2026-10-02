@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -110,10 +111,46 @@ def test_null_provider_reports_unsupported_without_raising():
 def test_capabilities_declare_what_each_harness_can_do():
     assert ClaudeProvider.capabilities.rate_limits
     assert ClaudeProvider.capabilities.activity
-    # Codex has no hook mechanism, so no live poses -- a declared gap, not
-    # a runtime failure.
     assert CodexProvider.capabilities.rate_limits
-    assert not CodexProvider.capabilities.activity
+    assert CodexProvider.capabilities.token_ledger
+    # Codex live poses come from the hooks tokitty installs in hooks.json.
+    assert CodexProvider.capabilities.activity
+
+
+def test_codex_resolve_activity_sessions_posix_home(monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    assert CodexProvider().resolve_activity_sessions("/home/u/.codex") == (
+        "/home/u/.codex/tokitty/sessions", None,
+    )
+
+
+def test_codex_resolve_activity_sessions_default_home(monkeypatch, tmp_path):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    sessions, distro = CodexProvider().resolve_activity_sessions(None)
+    assert Path(sessions) == tmp_path / ".codex" / "tokitty" / "sessions"
+    assert distro is None
+
+
+def test_codex_resolve_activity_sessions_drive_letter_home():
+    sessions, distro = CodexProvider().resolve_activity_sessions("C:\\Users\\u\\.codex")
+    assert sessions == "C:\\Users\\u\\.codex\\tokitty\\sessions"
+    assert distro is None
+
+
+def test_codex_resolve_activity_sessions_unc_home_on_win32(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    home = "\\\\wsl.localhost\\Ubuntu\\home\\u\\.codex"
+    sessions, distro = CodexProvider().resolve_activity_sessions(home)
+    assert sessions == home + "\\tokitty\\sessions"
+    assert distro == "Ubuntu"
+
+
+def test_codex_resolve_activity_sessions_unc_home_on_linux(monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    home = "\\\\wsl.localhost\\Ubuntu\\home\\u\\.codex"
+    sessions, distro = CodexProvider().resolve_activity_sessions(home)
+    assert sessions == "/home/u/.codex/tokitty/sessions"
+    assert distro is None
 
 
 # --- accounts.json migration ---------------------------------------------

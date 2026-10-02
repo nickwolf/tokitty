@@ -71,6 +71,8 @@ _KNOWN_EVENTS = frozenset(
         "Stop",
         "SubagentStop",
         "SessionEnd",
+        "PermissionRequest",
+        "Interrupt",
     }
 )
 
