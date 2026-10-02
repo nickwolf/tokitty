@@ -9,6 +9,7 @@ from tokitty.streamdock.model import (
     Focus,
     FocusAndOpen,
     Interrupt,
+    KeySpec,
     NewSession,
     Noop,
     PlanBox,
@@ -40,7 +41,9 @@ def setup(roles, sessions=(), pending=(), usage=None):
     """roles: list of role strings placed on row 0, columns 0..n-1; contexts k0..kn."""
     m = DeckModel()
     for i, role in enumerate(roles):
-        m.appear(f"k{i}", coords(0, i), "dev", {"role": role})
+        # A (role, prompt) pair sets the key's "During a permission prompt" choice too.
+        role, prompt = role if isinstance(role, tuple) else (role, "")
+        m.appear(f"k{i}", coords(0, i), "dev", {"role": role, "prompt": prompt})
     m.update({0: list(sessions)}, list(pending), usage or {})
     return m
 
@@ -536,3 +539,141 @@ def test_one_pending_still_armed_by_focus():
     assert act.overlay is True
     focus(m, "a")
     assert m.press("k1") == VerifyThenDecide(req("a", "n1", 1), "allow")
+
+
+# prompt settings
+
+def test_blank_role_shows_empty_look_and_does_nothing():
+    m = setup(["blank", "slot"], [sv("a", 1)])
+    assert m.render_plan()["k0"] == KeySpec("status")
+    assert m.press("k0") == Noop("blank key")
+
+
+def test_prompt_setting_ignored_outside_the_overlay():
+    m = setup([("slot", "allow"), ("usage:0", "deny"), ("blank", "always")], [sv("a", 1)], usage={0: (1, 2, False)})
+    plan = m.render_plan()
+    assert [plan[f"k{i}"].kind for i in range(3)] == ["slot", "usage", "status"]
+    assert isinstance(m.press("k0"), Focus)
+    assert m.press("k1") == Noop("usage key")
+    assert m.press("k2") == Noop("blank key")
+
+
+def test_unknown_prompt_value_means_none():
+    m = DeckModel()
+    m.appear("k0", coords(0, 0), "dev", {"role": "slot", "prompt": "bogus"})
+    m.appear("k1", coords(0, 1), "dev", {"role": "slot", "prompt": 7})
+    m.update({0: [sv("a", 1)]}, [req("a")], {})
+    # Neither value counts, so only one participant is left and no overlay opens.
+    assert m.press("k0").overlay is False
+
+
+def test_usage_key_with_deny_prompt_acts_as_deny_then_as_usage_again():
+    r = req("a")
+    m = setup(["slot", "slot", ("usage:0", "deny")], [sv("a", 1)], [r], usage={0: (1, 2, False)})
+    assert m.press("k0") == FocusAndOpen(ref("a"), r, True, 1)
+    plan = m.render_plan()
+    assert plan["k2"].kind == "decision" and plan["k2"].decision == "deny"
+    assert plan["k1"].decision == "allow"
+    assert m.press("k2") == Decide(r, "deny")
+    m.press("k0")
+    assert m.render_plan()["k2"].kind == "usage"
+    assert m.press("k2") == Noop("usage key")
+
+
+def test_slot_key_with_allow_prompt_takes_allow():
+    r = req("a")
+    m = setup(["slot", "slot", ("slot", "allow"), "slot"], [sv("a", 1)], [r])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k2"].decision == "allow"
+    assert plan["k1"].decision == "deny"
+    assert plan["k3"].kind == "preview"
+    focus(m, "a")
+    assert m.press("k2") == VerifyThenDecide(r, "allow")
+
+
+def test_blank_key_with_prompt_opens_overlay_without_slot_participants():
+    r = req("a")
+    m = setup(["slot", ("blank", "allow"), ("blank", "deny")], [sv("a", 1)], [r])
+    assert m.press("k0") == FocusAndOpen(ref("a"), r, True, 1)
+    plan = m.render_plan()
+    assert plan["k0"].decision == "cancel"
+    assert plan["k1"].decision == "allow" and plan["k2"].decision == "deny"
+    assert m.press("k2") == Decide(r, "deny")
+    assert m.render_plan()["k1"].decision == "sent"
+
+
+def test_pressed_key_with_prompt_stays_cancel_and_decision_falls_back():
+    m = setup([("slot", "allow"), "slot", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k0"].decision == "cancel"
+    assert plan["k1"].decision == "allow" and plan["k2"].decision == "deny"
+    assert m.press("k0") == CancelOverlay()
+
+
+def test_always_prompt_acts_only_with_a_rule():
+    r = req("a", always_rule="Bash(x)")
+    m = setup(["slot", "slot", "slot", ("blank", "always")], [sv("a", 1)], [r])
+    m.press("k0")
+    focus(m, "a")
+    assert m.render_plan()["k3"].decision == "always"
+    assert m.press("k3") == VerifyThenDecide(r, "always")
+    m = setup(["slot", "slot", "slot", ("blank", "always")], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    assert m.render_plan()["k3"] == KeySpec("status")
+    assert m.press("k3") == Noop("blank key")
+    # Without a rule a slot key set to Always behaves as if it had no prompt setting.
+    m = setup(["slot", "slot", "slot", ("slot", "always")], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    assert [m.render_plan()[f"k{i}"].decision for i in (1, 2)] == ["allow", "deny"]
+    assert m.render_plan()["k3"].kind == "preview"
+
+
+def test_several_keys_with_the_same_prompt_all_act():
+    r = req("a")
+    m = setup(["slot", ("blank", "allow"), ("usage:0", "allow"), ("blank", "deny")], [sv("a", 1)], [r])
+    m.press("k0")
+    focus(m, "a")
+    plan = m.render_plan()
+    assert plan["k1"].decision == "allow" and plan["k2"].decision == "allow"
+    assert m.press("k2") == VerifyThenDecide(r, "allow")
+    assert m.press("k1") == VerifyThenDecide(r, "allow")
+
+
+def test_fallback_fills_only_missing_decisions_and_previews_fill_the_rest():
+    m = setup(["slot", "slot", ("blank", "deny"), "interrupt", "slot"], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    plan = m.render_plan()
+    assert plan["k2"].decision == "deny"
+    assert plan["k1"].decision == "allow"
+    assert plan["k3"].kind == "preview" and plan["k4"].kind == "preview"
+    assert [plan["k3"].index, plan["k4"].index, plan["k3"].total] == [0, 1, 2]
+
+
+def test_prompt_keys_are_not_taken_as_participants_for_other_decisions():
+    # The deny key is a slot too, but it is already spoken for, so allow comes from k2.
+    m = setup(["slot", ("slot", "deny"), "slot"], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    plan = m.render_plan()
+    assert plan["k1"].decision == "deny" and plan["k2"].decision == "allow"
+
+
+def test_overlay_needs_both_allow_and_deny_placed():
+    # One participant and no prompt keys: Deny cannot be placed.
+    assert setup(["slot", "slot"], [sv("a", 1)], [req("a")]).press("k0").overlay is False
+    # A prompt Allow plus one participant for Deny: placed.
+    assert setup(["slot", ("blank", "allow"), "slot"], [sv("a", 1)], [req("a")]).press("k0").overlay is True
+    # A prompt Allow and no participants: Deny cannot be placed.
+    assert setup(["slot", ("blank", "allow")], [sv("a", 1)], [req("a")]).press("k0").overlay is False
+    # Prompt Allow and Deny alone: placed.
+    assert setup(["slot", ("blank", "allow"), ("blank", "deny")], [sv("a", 1)], [req("a")]).press("k0").overlay is True
+    # Only the pressed key claims Allow: it is Cancel, so nothing is placed.
+    assert setup([("slot", "allow"), ("blank", "deny")], [sv("a", 1)], [req("a")]).press("k0").overlay is False
+
+
+def test_overlay_exits_when_a_prompt_key_disappears_and_deny_cannot_be_placed():
+    m = setup(["slot", ("blank", "allow"), ("blank", "deny")], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    m.disappear("k2")
+    assert m.render_plan()["k1"] == KeySpec("status")

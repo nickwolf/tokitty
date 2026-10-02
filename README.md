@@ -154,7 +154,7 @@ To set it up:
 
 1. Install the live activity hooks (above). The deck answers prompts through the same hook.
 2. Run `python -m tokitty --install-streamdock` (or `Tokitty.exe --install-streamdock`). It copies the plugin into VSD Craft's plugins folder and picks a local port and a random token for it. `--uninstall-streamdock` removes it again.
-3. Fully exit VSD Craft from its tray icon and start it again, so it loads the plugin. Drag the Tokitty key action onto the keys you want, and pick each key's role in its settings panel: session slot, usage for an account, Interrupt, or a new-session preset.
+3. Fully exit VSD Craft from its tray icon and start it again, so it loads the plugin. Drag the Tokitty key action onto the keys you want, and pick each key's role in its settings panel: session slot, usage for an account, Interrupt, a new-session preset, or Blank for a key that stays empty.
 4. Restart Tokitty, and restart any open Claude Code sessions so they pick up the hook.
 
 Running from source, `pip install comtypes` (or the `streamdock` extra) is needed for the tab switching and Interrupt keys. Everything else works without it.
@@ -172,6 +172,7 @@ To edit by hand, presets live in `settings.json` in tokitty's state directory, o
 How answering from the deck works:
 
 - Allow is only lit once Tokitty has confirmed the session's tab is the one in front. If it can't tell which tab is the session's (no tab with that title, two sessions with the same title, or a tab it can't bring forward), it opens a small window of its own with the full command and Allow and Deny buttons instead.
+- Each key also has a "During a permission prompt" setting (Allow, Deny or Always), so any key, including a Blank one, can take a decision while a prompt is open. Decisions you don't assign come from the session and Interrupt keys in reading order, and the overlay opens as long as both Allow and Deny have a key.
 - Always is offered only when the call has an exact rule: one Bash command with no `*` in it, one file path for Edit or Write, or a WebFetch domain. The rule lasts for that session only and is never written to a settings file.
 - The terminal prompt keeps working the whole time, and whichever answer lands first wins.
 - A command approved in the terminal that keeps running for a long time leaves its deck key flagged until it finishes, because Claude Code records nothing until the command returns. Answering from the deck doesn't have this problem.

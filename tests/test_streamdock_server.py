@@ -8,6 +8,7 @@ import pytest
 
 from tokitty.activity import SessionView
 from tokitty.streamdock.model import DeckModel, KeySpec, Noop, PlanBox, SessionRef
+from tokitty.streamdock.pending import PendingRequest
 from tokitty.streamdock.server import DeckEvent, DeckServer, apply_event, parse_event
 
 TOKEN = "t" * 40
@@ -279,3 +280,20 @@ def test_apply_event_press_on_a_session_slot():
     apply_event(model, DeckEvent("willAppear", "k1", "dev", 0, 0, {"role": "slot"}))
     action = apply_event(model, DeckEvent("keyUp", "k1"))
     assert action.session == SessionRef(0, "s1")
+
+
+def test_settings_event_delivers_the_prompt_setting_to_the_model():
+    model = DeckModel()
+    model.update({0: [_view()]}, [], {})
+    apply_event(model, DeckEvent("willAppear", "k0", "dev", 0, 0, {"role": "slot"}))
+    apply_event(model, DeckEvent("willAppear", "k1", "dev", 0, 1, {"role": "blank"}))
+    apply_event(model, DeckEvent("willAppear", "k2", "dev", 0, 2, {"role": "blank"}))
+    pending = PendingRequest("n1", "s1", "tu", "Bash", {}, "d", "ls", 1.0, account_index=0)
+    model.update({0: [_view()]}, [pending], {})
+    # The prompt choice arrives with the role in one didReceiveSettings payload.
+    apply_event(model, DeckEvent("didReceiveSettings", "k1", "dev", 0, 1, {"role": "blank", "prompt": "allow"}))
+    apply_event(model, DeckEvent("didReceiveSettings", "k2", "dev", 0, 2, {"role": "blank", "prompt": "deny"}))
+    action = apply_event(model, DeckEvent("keyUp", "k0"))
+    assert action.overlay is True
+    plan = model.render_plan()
+    assert plan["k1"].decision == "allow" and plan["k2"].decision == "deny"

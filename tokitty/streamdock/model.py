@@ -18,7 +18,7 @@ from tokitty.streamdock.pending import PendingRequest
 
 FOCUSED = "focused"
 UNVERIFIED = "unverified"
-MIN_OVERLAY_KEYS = 2
+PROMPT_DECISIONS = ("allow", "deny", "always")
 
 
 @dataclass(frozen=True)
@@ -139,6 +139,7 @@ class _Key:
     coords: Tuple[int, int]
     device: str
     role: Optional[Tuple[str, str]]
+    prompt: str = ""
 
 
 @dataclass
@@ -159,7 +160,7 @@ def _parse_role(settings: Any) -> Optional[Tuple[str, str]]:
     role = settings.get("role") if isinstance(settings, Mapping) else None
     if not isinstance(role, str):
         return None
-    if role in ("slot", "interrupt"):
+    if role in ("slot", "interrupt", "blank"):
         return role, ""
     kind, _, arg = role.partition(":")
     if kind == "usage":
@@ -170,6 +171,12 @@ def _parse_role(settings: Any) -> Optional[Tuple[str, str]]:
     if kind == "new" and arg:
         return kind, arg
     return None
+
+
+def _parse_prompt(settings: Any) -> str:
+    """The decision this key takes while a permission prompt is open, or "" for none."""
+    prompt = settings.get("prompt") if isinstance(settings, Mapping) else None
+    return prompt if prompt in PROMPT_DECISIONS else ""
 
 
 class DeckModel:
@@ -195,7 +202,7 @@ class DeckModel:
     # inputs
 
     def appear(self, context: str, coords: Any, device: str, settings: Any) -> None:
-        self._keys[context] = _Key(_parse_coords(coords), device, _parse_role(settings))
+        self._keys[context] = _Key(_parse_coords(coords), device, _parse_role(settings), _parse_prompt(settings))
         self._refresh()
 
     def disappear(self, context: str) -> None:
@@ -293,6 +300,8 @@ class DeckModel:
             return Noop("session tab not confirmed")
         if kind == "new":
             return NewSession(arg)
+        if kind == "blank":
+            return Noop("blank key")
         return Noop("usage key")
 
     # slots
@@ -363,7 +372,7 @@ class DeckModel:
             return Focus(ref, seq)
         # With several live requests in one session the terminal may be showing a
         # different prompt, so only tokitty's own window can show this one in full.
-        opened = len(self._participants(context)) >= MIN_OVERLAY_KEYS and not self._multi(ref)
+        opened = self._place_decisions(context, req) is not None and not self._multi(ref)
         if opened:
             self._overlay = _Overlay(context, req.nonce)
         self._refresh()
@@ -385,19 +394,35 @@ class DeckModel:
                 return req
         return None
 
-    def _overlay_layout(self) -> Dict[str, Tuple[str, int]]:
-        """Participating context to ("allow"|"deny"|"always"|"preview", preview index)."""
-        req = self._overlay_request()
-        if self._overlay is None or req is None:
-            return {}
+    def _place_decisions(self, pressed: str, req: PendingRequest) -> Optional[Dict[str, Tuple[str, int]]]:
+        """Context to ("allow"|"deny"|"always"|"preview", preview index), or None when
+        Allow and Deny cannot both be placed.
+
+        Keys whose prompt setting names an offered decision take it, whatever their
+        role. A decision no key claims is taken from the participants in reading
+        order, and the rest preview. The pressed key stays Cancel.
+        """
         kinds = ["allow", "deny"]
         if req.always_rule:
             kinds.append("always")
-        ctxs = self._participants(self._overlay.pressed)
         layout: Dict[str, Tuple[str, int]] = {}
+        for ctx in self._sorted_contexts(lambda k: k.prompt in kinds):
+            if ctx != pressed:
+                layout[ctx] = (self._keys[ctx].prompt, 0)
+        claimed = {kind for kind, _ in layout.values()}
+        missing = [k for k in kinds if k not in claimed]
+        ctxs = [c for c in self._participants(pressed) if c not in layout]
+        if len([k for k in missing if k != "always"]) > len(ctxs):
+            return None
         for i, ctx in enumerate(ctxs):
-            layout[ctx] = (kinds[i], 0) if i < len(kinds) else ("preview", i - len(kinds))
+            layout[ctx] = (missing[i], 0) if i < len(missing) else ("preview", i - len(missing))
         return layout
+
+    def _overlay_layout(self) -> Dict[str, Tuple[str, int]]:
+        req = self._overlay_request()
+        if self._overlay is None or req is None:
+            return {}
+        return self._place_decisions(self._overlay.pressed, req) or {}
 
     def _multi(self, ref: SessionRef) -> bool:
         return self._live_count.get(ref, 0) > 1
@@ -439,7 +464,7 @@ class DeckModel:
         if (
             o.pressed not in self._keys
             or self._overlay_request() is None
-            or len(self._participants(o.pressed)) < MIN_OVERLAY_KEYS
+            or not self._overlay_layout()
         ):
             self._overlay = None
 
@@ -500,6 +525,8 @@ class DeckModel:
                 return self._slot_spec(ref, "overflow", count=len(pool), alert=alert)
             if ctx in shown:
                 return self._slot_spec(shown[ctx], "slot")
+            return KeySpec("status")
+        if kind == "blank":
             return KeySpec("status")
         if kind == "interrupt":
             ref = self._last_focused
