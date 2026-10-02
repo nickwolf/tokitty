@@ -171,3 +171,89 @@ def test_budgets_survive_an_unrelated_settings_update(tmp_path):
     save_settings(tmp_path, Settings(usage_budgets={"a": {"7d": 5.0}}))
     update_settings(tmp_path, opacity=80)
     assert load_settings(tmp_path).usage_budgets == {"a": {"7d": 5.0}}
+
+
+def _preset(**overrides):
+    base = {"name": "tokitty", "account_index": 0, "env": "wsl",
+            "distro": "Ubuntu", "cwd": "/home/u/tokitty"}
+    base.update(overrides)
+    return base
+
+
+def _load_presets(tmp_path, value):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"streamdock_presets": value}), encoding="utf-8")
+    return load_settings(tmp_path).streamdock_presets
+
+
+def test_presets_default_empty(tmp_path):
+    assert load_settings(tmp_path).streamdock_presets == []
+
+
+def test_valid_presets_load(tmp_path):
+    native = {"name": "win", "account_index": 2, "env": "native", "cwd": "C:\\src"}
+    assert _load_presets(tmp_path, [_preset(), native]) == [_preset(), native]
+
+
+def _missing_name():
+    p = _preset()
+    del p["name"]
+    return p
+
+
+@pytest.mark.parametrize("bad", [
+    _missing_name(),
+    _preset(name=""),
+    _preset(name="   "),
+    _preset(name="x" * 41),
+    _preset(name=5),
+    _preset(account_index=True),
+    _preset(account_index=-1),
+    _preset(account_index="0"),
+    _preset(env="docker"),
+    _preset(cwd=""),
+    _preset(cwd=None),
+    _preset(distro=""),
+    _preset(distro=None),
+    "not a dict",
+    None,
+])
+def test_malformed_preset_dropped_alone(tmp_path, bad):
+    good = _preset(name="good")
+    assert _load_presets(tmp_path, [bad, good]) == [good]
+
+
+def test_wsl_without_distro_dropped(tmp_path):
+    p = _preset()
+    del p["distro"]
+    assert _load_presets(tmp_path, [p]) == []
+
+
+@pytest.mark.parametrize("value", ["x", {"name": "a"}, 3, None])
+def test_non_list_presets_field_gives_empty(tmp_path, value):
+    assert _load_presets(tmp_path, value) == []
+
+
+def test_preset_extras_and_native_distro_dropped(tmp_path):
+    native = _preset(env="native", extra=1)
+    wsl = _preset(name="w", junk="x")
+    assert _load_presets(tmp_path, [native, wsl]) == [
+        {"name": "tokitty", "account_index": 0, "env": "native", "cwd": "/home/u/tokitty"},
+        _preset(name="w"),
+    ]
+
+
+def test_preset_name_is_stripped_and_max_length_ok(tmp_path):
+    loaded = _load_presets(tmp_path, [_preset(name="  " + "x" * 40 + "  ")])
+    assert loaded[0]["name"] == "x" * 40
+
+
+def test_duplicate_preset_names_keep_first(tmp_path):
+    first = _preset(cwd="/a")
+    assert _load_presets(tmp_path, [first, _preset(cwd="/b")]) == [first]
+
+
+def test_presets_roundtrip(tmp_path):
+    presets = [_preset(), {"name": "win", "account_index": 1, "env": "native", "cwd": "C:\\src"}]
+    save_settings(tmp_path, Settings(streamdock_presets=presets))
+    assert load_settings(tmp_path).streamdock_presets == presets
