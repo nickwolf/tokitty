@@ -53,7 +53,8 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
-from tokitty.streamdock.wiring import gather_inputs, start_streamdock, usage_from_display
+from tokitty.streamdock.window import InWindowViews
+from tokitty.streamdock.wiring import DEFAULT_NAME, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
@@ -989,8 +990,19 @@ def run_gui() -> int:
         )
         tray.refresh()
 
+    def pane_anchor(index: int):
+        pane = units[index]["pane"].parent
+        return pane.winfo_rootx() + 16, pane.winfo_rooty() + 16
+
+    def account_name(index: int) -> str:
+        account = units[index]["account"]
+        return account.name if account else DEFAULT_NAME
+
+    streamdock = None
+    deck_views = InWindowViews(root, lambda: streamdock, account_name, pane_anchor)
     streamdock = start_streamdock(
         settings, units, distro_probe.get_running, palette_fn=lambda i: units[i]["pane"].palette,
+        open_in_window=deck_views.open,
     )
 
     def tick():
@@ -1048,6 +1060,7 @@ def run_gui() -> int:
         if streamdock is not None:
             try:
                 streamdock.tick(*gather_inputs(units))
+                deck_views.sync()
             except Exception as exc:
                 print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
         root.after(UI_REFRESH_MS, tick)
@@ -1064,6 +1077,7 @@ def run_gui() -> int:
         root.mainloop()
     finally:
         tray.stop()
+        deck_views.close_all()
         if streamdock is not None:
             streamdock.stop()
         for unit in units:
