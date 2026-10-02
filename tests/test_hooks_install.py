@@ -644,6 +644,47 @@ def test_install_registers_all_events_with_correct_matchers(tmp_path):
         assert "--sessions-dir" in cmd
 
 
+def test_install_registers_permission_request(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    data = json.loads((config_dir / "settings.json").read_text())
+    entries = data["hooks"]["PermissionRequest"]
+    assert len(entries) == 1
+    assert entries[0]["matcher"] == ""
+    assert "hook_writer.py" in entries[0]["hooks"][0]["command"]
+
+
+def test_install_adds_only_permission_request_to_existing_install(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    settings = config_dir / "settings.json"
+    full = json.loads(settings.read_text())
+    old = json.loads(settings.read_text())
+    del old["hooks"]["PermissionRequest"]
+    old["hooks"]["Stop"].insert(
+        0, {"matcher": "", "hooks": [{"type": "command", "command": "user-tool"}]}
+    )
+    full["hooks"]["Stop"].insert(
+        0, {"matcher": "", "hooks": [{"type": "command", "command": "user-tool"}]}
+    )
+    settings.write_text(json.dumps(old))
+    result = hi.install_hooks_for_dir(str(config_dir))
+    assert result.ok
+    assert json.loads(settings.read_text()) == full
+    assert len(full["hooks"]["PermissionRequest"]) == 1
+
+
+def test_uninstall_removes_permission_request(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "PermissionRequest" not in data.get("hooks", {})
+
+
 def test_install_is_additive_preserves_existing_hooks(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()

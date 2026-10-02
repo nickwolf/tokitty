@@ -55,6 +55,7 @@ HOOK_EVENTS = [
     ("Stop", ""),
     ("SubagentStop", ""),
     ("SessionEnd", ""),
+    ("PermissionRequest", ""),
 ]
 
 
