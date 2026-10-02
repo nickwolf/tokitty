@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List
@@ -23,6 +24,11 @@ READOUTS = ("cost", "tokens")
 DEFAULT_READOUT = "cost"
 PRESET_ENVS = ("wsl", "native")
 PRESET_NAME_MAX = 40
+MIN_PORT = 1024
+MAX_PORT = 65535
+TOKEN_MIN = 32
+TOKEN_MAX = 128
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,10 @@ class Settings:
     # New-session presets for the Stream Dock, edited by hand. Stored as
     # normalised dicts: name, account_index, env, cwd, and distro for WSL.
     streamdock_presets: List[dict] = field(default_factory=list)
+    # Loopback port and shared secret for the Stream Dock plugin, chosen once by
+    # --install-streamdock. 0 and "" mean not installed.
+    streamdock_port: int = 0
+    streamdock_token: str = ""
 
 
 def load_settings(state_dir) -> Settings:
@@ -75,6 +85,8 @@ def load_settings(state_dir) -> Settings:
         usage_budgets=_budgets(data.get("usage_budgets")),
         onboarding_version=_non_negative_int(data.get("onboarding_version")),
         streamdock_presets=_presets(data.get("streamdock_presets")),
+        streamdock_port=_port(data.get("streamdock_port")),
+        streamdock_token=_token(data.get("streamdock_token")),
     )
 
 
@@ -88,6 +100,18 @@ def _non_negative_int(value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _port(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not MIN_PORT <= value <= MAX_PORT:
+        return 0
+    return value
+
+
+def _token(value) -> str:
+    if not isinstance(value, str) or not TOKEN_MIN <= len(value) <= TOKEN_MAX:
+        return ""
+    return value if _TOKEN_RE.fullmatch(value) else ""
 
 
 def _budgets(value) -> Dict[str, Dict[str, float]]:

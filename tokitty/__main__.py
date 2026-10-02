@@ -1076,6 +1076,14 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.hooks_install import uninstall_hooks
 
         return uninstall_hooks()
+    if "--install-streamdock" in argv:
+        from tokitty.streamdock.install import run_install
+
+        return run_install()
+    if "--uninstall-streamdock" in argv:
+        from tokitty.streamdock.install import run_uninstall
+
+        return run_uninstall()
     if "--install-autostart" in argv:
         from tokitty.autostart import install_autostart
 
