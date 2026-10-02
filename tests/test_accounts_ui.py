@@ -1030,7 +1030,7 @@ def test_only_a_codex_wsl_path_is_validated_off_thread():
 
 
 @pytest.mark.gui
-def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monkeypatch):
+def test_adding_and_removing_a_codex_account_runs_the_hook_ops(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
     from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
@@ -1059,7 +1059,7 @@ def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monke
         accounts = load_accounts(tmp_path)
         codex = [a for a in accounts if a.provider == "codex"]
         assert [a.config_dir for a in codex] == [str(home)]
-        assert hook_calls == []
+        assert hook_calls == [str(home)]
         assert load_pending_hook_op(tmp_path) is None
         _assert_codex_home_untouched(home)
 
@@ -1068,7 +1068,7 @@ def test_adding_and_removing_a_codex_account_never_touches_hooks(tmp_path, monke
             root, monkeypatch, manager=mgr,
         )
         assert [a.name for a in load_accounts(tmp_path)] == ["acct-claude"]
-        assert hook_calls == []
+        assert hook_calls == [str(home), str(home)]
         assert load_pending_hook_op(tmp_path) is None
         _assert_codex_home_untouched(home)
     finally:
@@ -1139,7 +1139,7 @@ def test_discovered_codex_home_adds_as_codex(tmp_path, monkeypatch):
 
         codex = [a for a in load_accounts(tmp_path) if a.provider == "codex"]
         assert [a.config_dir for a in codex] == [str(home)]
-        assert hook_calls == []
+        assert hook_calls == [str(home)]
         _assert_codex_home_untouched(home)
         # Once added it is an account row, not a discovery row.
         assert not any(
