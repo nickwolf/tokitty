@@ -159,11 +159,13 @@ To set it up:
 
 Running from source, `pip install comtypes` (or the `streamdock` extra) is needed for the tab switching and Interrupt keys. Everything else works without it.
 
-New-session presets go in `settings.json` in tokitty's state directory, one entry per key. `account_index` is the account's position in the Accounts list, starting at 0, and `env` is `wsl` (with `distro`) or `native`:
+Right-click a pane and choose **Stream Dock ▸ New-session presets…** to manage new-session presets. The dialog lists them and has Add, Edit and Remove. A preset is a name, a Claude account, and a folder: for an account on Windows the folder has a Browse button, and for an account in WSL it is a path inside WSL such as `/mnt/c/Tools` or `~/repo`. Tokitty works out the rest (WSL or native, and which distro) from the account, tells you why a preset can't launch, and saves it without a restart. Codex accounts aren't offered, since a new tab can only start Claude Code.
+
+To edit by hand, presets live in `settings.json` in tokitty's state directory, one entry per key. `account` is the account's name from `accounts.json`, and a preset that names an account is never launched on a different one, even after you remove or reorder accounts. `account_index` is the account's position in the Accounts list, starting at 0, and is only used when `account` is absent. `env` is `wsl` (with `distro`) or `native`:
 
 ```json
 "streamdock_presets": [
-  {"name": "Tools", "account_index": 0, "env": "wsl", "distro": "Ubuntu", "cwd": "/mnt/c/Tools"}
+  {"name": "Tools", "account": "acct-v1-0a1b2c3d", "account_index": 0, "env": "wsl", "distro": "Ubuntu", "cwd": "/mnt/c/Tools"}
 ]
 ```
 
