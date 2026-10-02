@@ -77,25 +77,32 @@ def read_tail(path: str, nbytes: int = TAIL_BYTES) -> Optional[str]:
     return text
 
 
+_TITLE_FIELDS = {"custom-title": "customTitle", "ai-title": "aiTitle"}
+
+
 def title_from_tail(text: str, session_id: str) -> Optional[str]:
-    """The last ai-title in `text` whose sessionId matches or is absent."""
-    title: Optional[str] = None
+    """The session's tab title: the last custom-title (set by /rename), else the last ai-title.
+
+    Only entries whose sessionId matches or is absent count. Windows Terminal shows
+    the custom title once there is one, so it wins over any later ai-title.
+    """
+    found: Dict[str, str] = {}
     for line in text.splitlines():
-        if '"ai-title"' not in line:
+        if '"ai-title"' not in line and '"custom-title"' not in line:
             continue
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(entry, dict) or entry.get("type") != "ai-title":
+        if not isinstance(entry, dict) or entry.get("type") not in _TITLE_FIELDS:
             continue
         sid = entry.get("sessionId")
         if sid and sid != session_id:
             continue
-        value = entry.get("aiTitle")
+        value = entry.get(_TITLE_FIELDS[entry["type"]])
         if isinstance(value, str) and value.strip():
-            title = value.strip()
-    return title
+            found[entry["type"]] = value.strip()
+    return found.get("custom-title") or found.get("ai-title")
 
 
 def normalise_tab_name(name: str) -> str:

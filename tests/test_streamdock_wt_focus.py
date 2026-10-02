@@ -396,3 +396,13 @@ def test_worker_title_job_skips_a_stopped_distro():
     fake, results, _ = run_worker(submit)
     assert results == [TitleDone(S, None), TitleDone(S, "My title")]
     assert [c[0] for c in fake.calls] == ["title"]
+
+
+def test_custom_title_from_rename_wins_over_ai_title():
+    ai = '{"type":"ai-title","aiTitle":"%s","sessionId":"sess-1"}'
+    custom = '{"type":"custom-title","customTitle":"%s","sessionId":"sess-1"}'
+    lines = [ai % "Old", custom % "deck twin", ai % "Newer ai"]
+    assert title_from_tail("\n".join(lines), "sess-1") == "deck twin"
+    assert title_from_tail("\n".join([custom % "First", custom % "Second"]), "sess-1") == "Second"
+    other = '{"type":"custom-title","customTitle":"Theirs","sessionId":"zzz"}'
+    assert title_from_tail("\n".join([ai % "Mine", other]), "sess-1") == "Mine"
