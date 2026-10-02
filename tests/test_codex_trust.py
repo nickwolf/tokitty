@@ -238,16 +238,39 @@ def test_record_write_is_atomic_through_a_temp_file(home, state, monkeypatch):
     assert sorted(p.name for p in state.iterdir() if p.name.startswith(ct.RECORD_FILENAME)) == [ct.RECORD_FILENAME]
 
 
-def test_unreadable_config_toml_never_blocks_install_and_records_nothing(home, state):
+def test_unreadable_config_toml_never_blocks_install_and_records_unknown(home, state):
     (home / "config.toml").mkdir()
 
     result = _install(home)
 
     assert result.ok
     assert (home / "hooks.json").exists()
-    assert not (state / ct.RECORD_FILENAME).exists()
+    keys = json.loads((state / ct.RECORD_FILENAME).read_text(encoding="utf-8"))[ct.home_key(str(home))]["keys"]
+    assert len(keys) == 8 and set(keys.values()) == {ct.UNKNOWN_HASH}
     assert ct.codex_hook_status(str(home), state) == ct.UNREADABLE
     assert result.note == hi.CODEX_UNREADABLE_NOTE
+
+
+def test_rewrite_while_config_toml_unreadable_never_reads_as_approved_later(home, state):
+    """A stale approval left under a key that was rewritten while
+    config.toml could not be read must not read as approved once it can."""
+    _install(home)
+    stale = "\n".join(
+        f"[hooks.state.'{key}']\ntrusted_hash = \"sha256:old\"\n"
+        for key in json.loads((state / ct.RECORD_FILENAME).read_text(encoding="utf-8"))[
+            ct.home_key(str(home))
+        ]["keys"]
+    )
+    data = json.loads((home / "hooks.json").read_text(encoding="utf-8"))
+    data["hooks"]["SessionEnd"][0]["hooks"][0].pop("timeout")
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+    (home / "config.toml").mkdir()
+
+    assert hi.refresh_hooks_for_dir(str(home), "codex").ok
+
+    (home / "config.toml").rmdir()
+    (home / "config.toml").write_text(stale, encoding="utf-8")
+    assert ct.codex_hook_status(str(home), state) == ct.NEEDS_APPROVAL
 
 
 def test_uninstall_removes_the_homes_record_and_only_that_home(home, tmp_path, state):

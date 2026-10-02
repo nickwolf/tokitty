@@ -26,6 +26,12 @@ NEEDS_APPROVAL = "needs_approval"
 APPROVED = "approved"
 UNREADABLE = "unreadable"
 
+# Recorded for a handler written while config.toml could not be read. Real
+# hashes are "sha256:...", so this never equals one. It reads as needs
+# approval until the next write records a real value: recording nothing
+# instead would let a stale approval under that key read as approved.
+UNKNOWN_HASH = "unknown"
+
 # Codex's own snake case for each event Tokitty installs, as it appears in a
 # trust key.
 EVENT_SNAKE = {
@@ -178,19 +184,17 @@ def record_changes(
     currently under that final key (None if there is none), and stamp
     written_at. Keys for handlers not in changes keep their recorded value.
     Raises OSError if the record can't be written. An unreadable config.toml
-    is not an error: nothing new is recorded then, since there is no hash to
-    record, and the status reads "unreadable" until it can be read."""
+    is not an error: each changed key records UNKNOWN_HASH, and the status
+    reads "unreadable" until the file can be read, then needs approval."""
     if not changes:
         return
     hashes = hashes_for_home(config_dir)
-    if hashes is None:
-        return
     data = load_record(state_dir)
     entry = data.get(home_key(config_dir))
     keys = dict(entry.get("keys", {})) if isinstance(entry, dict) and isinstance(entry.get("keys"), dict) else {}
     for event, group_index, handler_index in changes:
         key = trust_key(config_dir, event, group_index, handler_index)
-        keys[key] = hashes.get(key)
+        keys[key] = UNKNOWN_HASH if hashes is None else hashes.get(key)
     data[home_key(config_dir)] = {"written_at": time.time(), "keys": keys}
     _write_record(state_dir, data)
 
@@ -251,7 +255,7 @@ def codex_hook_status(
         current = hashes.get(key)
         if current is None:
             return NEEDS_APPROVAL
-        if key in recorded and recorded[key] == current:
+        if key in recorded and recorded[key] in (current, UNKNOWN_HASH):
             return NEEDS_APPROVAL
     return APPROVED
 
