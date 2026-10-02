@@ -391,7 +391,7 @@ class DeckModel:
         if self._overlay is None or req is None:
             return {}
         kinds = ["allow", "deny"]
-        if getattr(req, "always_rule", None):
+        if req.always_rule:
             kinds.append("always")
         ctxs = self._participants(self._overlay.pressed)
         layout: Dict[str, Tuple[str, int]] = {}

@@ -371,10 +371,39 @@ def test_write_decision_contents_and_creates_dir(tmp_path):
 
 
 def test_write_decision_rejects_other_behaviors(tmp_path):
-    for bad in ("always", "", None, "ALLOW"):
+    for bad in ("", None, "ALLOW"):
         with pytest.raises(ValueError):
             write_decision(tmp_path, make_req(), bad)
     assert not (tmp_path / "decisions").exists() or list((tmp_path / "decisions").iterdir()) == []
+
+
+def test_write_decision_always_needs_a_rule(tmp_path):
+    req = make_req(always_rule="Bash(ls)")
+    write_decision(tmp_path, req, "always", now=7.0)
+    written = json.loads((tmp_path / "decisions" / f"{NONCE}.json").read_text())
+    assert written["behavior"] == "always"
+    for rule in (None, ""):
+        with pytest.raises(ValueError):
+            write_decision(tmp_path, make_req(always_rule=rule), "always")
+
+
+@pytest.mark.parametrize(
+    "value, expected", [("Bash(ls)", "Bash(ls)"), (None, None), ("", None), (5, None), ({"a": 1}, None)]
+)
+def test_always_rule_parsed_and_never_invalidates(value, expected):
+    fs = FakeFs()
+    fs.put("pending", f"{NONCE}.json", json.dumps(body(always_rule=value)))
+    w = watcher(fs)
+    w._tick_once()
+    assert [r.always_rule for r in w.get_pending()] == [expected]
+
+
+def test_always_rule_absent_is_none():
+    fs = FakeFs()
+    fs.put("pending", f"{NONCE}.json", json.dumps(body()))
+    w = watcher(fs)
+    w._tick_once()
+    assert [r.always_rule for r in w.get_pending()] == [None]
 
 
 def test_write_decision_is_atomic_same_dir_replace(tmp_path, monkeypatch):

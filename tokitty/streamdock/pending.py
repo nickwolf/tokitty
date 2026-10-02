@@ -44,6 +44,7 @@ class PendingRequest:
     started: float
     account_index: int = 0
     cwd: Optional[str] = None
+    always_rule: Optional[str] = None
 
 
 def _default_list_files(directory: Union[str, Path]) -> List[Path]:
@@ -82,6 +83,7 @@ def _parse(text: str, stem: str, account_index: int) -> Optional[PendingRequest]
     if not isinstance(data["tool_input"], dict):
         return None
     cwd = data.get("cwd")
+    always_rule = data.get("always_rule")
     return PendingRequest(
         nonce=data["nonce"],
         session_id=data["session_id"],
@@ -93,6 +95,7 @@ def _parse(text: str, stem: str, account_index: int) -> Optional[PendingRequest]
         started=float(started),
         account_index=account_index,
         cwd=cwd if isinstance(cwd, str) else None,
+        always_rule=always_rule if isinstance(always_rule, str) and always_rule else None,
     )
 
 
@@ -263,8 +266,10 @@ def write_decision(
     now: Optional[float] = None,
 ) -> None:
     """Write decisions/<nonce>.json atomically with the fields hook_writer checks."""
-    if behavior not in ("allow", "deny"):
-        raise ValueError(f"behavior must be 'allow' or 'deny', not {behavior!r}")
+    if behavior not in ("allow", "deny", "always"):
+        raise ValueError(f"behavior must be 'allow', 'deny' or 'always', not {behavior!r}")
+    if behavior == "always" and not req.always_rule:
+        raise ValueError("always needs a request with an always_rule")
     directory = Path(tokitty_dir) / "decisions"
     directory.mkdir(parents=True, exist_ok=True)
     data = {

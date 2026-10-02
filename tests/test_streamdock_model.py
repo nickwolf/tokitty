@@ -22,8 +22,10 @@ def sv(sid, first_seen, state="idle", tool=""):
     return SessionView(sid, state, tool, first_seen, first_seen)
 
 
-def req(sid, nonce="n1", started=1.0, acct=0):
-    return PendingRequest(nonce, sid, "tu", "Bash", {}, "d", "rm -rf x", started, account_index=acct)
+def req(sid, nonce="n1", started=1.0, acct=0, always_rule=None):
+    return PendingRequest(
+        nonce, sid, "tu", "Bash", {}, "d", "rm -rf x", started, account_index=acct, always_rule=always_rule
+    )
 
 
 def ref(sid, acct=0):
@@ -372,9 +374,8 @@ def test_always_appears_only_with_narrow_rule():
     m = overlay_model()
     m.press("k0")
     assert all(s.decision != "always" for s in m.render_plan().values())
-    # With an always_rule attribute the third participant becomes Always.
-    r = req("a")
-    object.__setattr__(r, "always_rule", {"x": 1})
+    # With an always_rule the third participant becomes Always.
+    r = req("a", always_rule="Bash(x)")
     m2 = setup(["slot"] * 5, [sv("a", 1)], [r])
     m2.press("k0")
     focus(m2, "a")
