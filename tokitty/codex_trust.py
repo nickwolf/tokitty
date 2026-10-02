@@ -14,6 +14,8 @@ import json
 import os
 import re
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -172,9 +174,23 @@ def _write_record(state_dir, data: Dict[str, dict]) -> None:
     """Atomic: a temp file in the same directory, then os.replace."""
     path = record_path(state_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+# The record holds every Codex home, so two reconciles in this process (the
+# startup refresh and an Accounts dialog change) must not interleave their
+# read-modify-write, or one drops the other's keys.
+_record_lock = threading.Lock()
 
 
 def record_changes(
@@ -189,22 +205,24 @@ def record_changes(
     if not changes:
         return
     hashes = hashes_for_home(config_dir)
-    data = load_record(state_dir)
-    entry = data.get(home_key(config_dir))
-    keys = dict(entry.get("keys", {})) if isinstance(entry, dict) and isinstance(entry.get("keys"), dict) else {}
-    for event, group_index, handler_index in changes:
-        key = trust_key(config_dir, event, group_index, handler_index)
-        keys[key] = UNKNOWN_HASH if hashes is None else hashes.get(key)
-    data[home_key(config_dir)] = {"written_at": time.time(), "keys": keys}
-    _write_record(state_dir, data)
+    with _record_lock:
+        data = load_record(state_dir)
+        entry = data.get(home_key(config_dir))
+        keys = dict(entry.get("keys", {})) if isinstance(entry, dict) and isinstance(entry.get("keys"), dict) else {}
+        for event, group_index, handler_index in changes:
+            key = trust_key(config_dir, event, group_index, handler_index)
+            keys[key] = UNKNOWN_HASH if hashes is None else hashes.get(key)
+        data[home_key(config_dir)] = {"written_at": time.time(), "keys": keys}
+        _write_record(state_dir, data)
 
 
 def forget_home(state_dir, config_dir: str) -> None:
     """Drop the home's record. Raises OSError if the record can't be written."""
-    data = load_record(state_dir)
-    if data.pop(home_key(config_dir), None) is None:
-        return
-    _write_record(state_dir, data)
+    with _record_lock:
+        data = load_record(state_dir)
+        if data.pop(home_key(config_dir), None) is None:
+            return
+        _write_record(state_dir, data)
 
 
 def _distro_gate_blocks(config_dir: str, list_running_distros_fn: Optional[Callable[[], List[str]]]) -> bool:

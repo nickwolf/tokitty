@@ -567,3 +567,50 @@ def test_install_hooks_closing_line_names_codex(home, capsys, monkeypatch):
     assert "codex" in out and "approve the Tokitty hooks" in out and "restart running Codex sessions" in out
     assert "Claude Code" not in out
     assert hi.CODEX_APPROVAL_NOTE in out
+
+
+def test_record_write_failure_leaves_no_temp_file(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ct.os, "replace", boom)
+
+    with pytest.raises(OSError):
+        ct._write_record(state, {"x": {}})
+
+    assert list(state.iterdir()) == []
+
+
+def test_concurrent_records_for_two_homes_keep_both(tmp_path, monkeypatch):
+    """The startup refresh and an Accounts dialog change can record at once;
+    neither may drop the other's home."""
+    import threading
+
+    state = tmp_path / "state"
+    homes = [tmp_path / "a" / ".codex", tmp_path / "b" / ".codex"]
+    for home in homes:
+        home.mkdir(parents=True)
+    real_load = ct.load_record
+    barrier = threading.Barrier(2, timeout=0.2)
+
+    def slow_load(state_dir):
+        data = real_load(state_dir)
+        try:
+            barrier.wait()  # without the lock both threads read the same empty record
+        except threading.BrokenBarrierError:
+            pass
+        return data
+
+    monkeypatch.setattr(ct, "load_record", slow_load)
+    threads = [
+        threading.Thread(target=ct.record_changes, args=(state, str(home), [("Stop", 0, 0)])) for home in homes
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    data = json.loads((state / ct.RECORD_FILENAME).read_text(encoding="utf-8"))
+    assert sorted(data) == sorted(ct.home_key(str(home)) for home in homes)
