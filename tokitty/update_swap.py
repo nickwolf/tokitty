@@ -434,3 +434,7 @@ def cleanup(
 
         mutate_update_state(state_dir, edit)
     return removed
+
+
+def valid_token(token) -> bool:
+    return isinstance(token, str) and _TOKEN_RE.fullmatch(token) is not None

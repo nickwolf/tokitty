@@ -1533,3 +1533,315 @@ def test_main_dispatches_streamdock_install_and_uninstall(monkeypatch):
     assert main_module.main(["--install-streamdock"]) == 0
     assert main_module.main(["--uninstall-streamdock"]) == 0
     assert calls == ["install", "uninstall"]
+
+
+def test_main_dispatches_apply_update_and_after_update(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr(main_module, "run_gui", lambda **kw: calls.append(kw) or 7)
+
+    assert main_module.main(["--apply-update"]) == 7
+    assert main_module.main(["--after-update", "tok-1_a"]) == 7
+    assert calls == [
+        {"after_update_token": None, "apply_update": True},
+        {"after_update_token": "tok-1_a", "apply_update": False},
+    ]
+
+
+def test_main_runs_the_plain_gui_without_update_flags(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr(main_module, "run_gui", lambda *a, **k: calls.append((a, k)) or 0)
+
+    assert main_module.main([]) == 0
+    assert calls == [((), {})]
+
+
+@pytest.mark.parametrize("argv", [["--after-update"], ["--after-update", ""], ["--after-update", "../x"]])
+def test_main_rejects_a_missing_or_bad_update_token(monkeypatch, capsys, argv):
+    from tokitty import __main__ as main_module
+
+    monkeypatch.setattr(main_module, "run_gui", lambda *a, **k: pytest.fail("must not start"))
+
+    assert main_module.main(argv) == 2
+    assert "--after-update needs a token" in capsys.readouterr().err
+
+
+# --- the update flow inside run_gui -------------------------------------------
+
+
+def _update_gui(tmp_path, monkeypatch, mainloop):
+    """A run_gui environment: state in tmp_path, tray off, Tk.mainloop replaced."""
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty.settings import Settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(tk.Tk, "mainloop", mainloop)
+    return tk, main_module
+
+
+def _pump_until_destroyed(tk, seconds=15.0):
+    def mainloop(self):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                self.update()
+                if not self.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            time.sleep(0.01)
+        raise AssertionError("the app never closed")
+
+    return mainloop
+
+
+def _release_listing(tag):
+    name = f"tokitty-{tag}-linux-x86_64.tar.gz"
+    return [
+        {
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {"name": name, "browser_download_url": f"https://example.test/{name}", "size": 10},
+                {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"},
+            ],
+        }
+    ]
+
+
+class _UpdateEnv:
+    """Fakes for every process-specific seam of the update controller."""
+
+    def __init__(self, tmp_path, monkeypatch, listing=None, acked=True):
+        from tokitty import update_controller
+        from tokitty.update_install import Staged
+        from tokitty.updater import RunningVersion
+
+        self.tmp_path, self.events, self.acked = tmp_path, [], acked
+        self.instances = []
+        (tmp_path / "releases").mkdir()
+        monkeypatch.setattr(update_controller, "platform_target", lambda *a, **k: "linux-x86_64")
+        monkeypatch.setattr("tokitty.runner_link.ensure_runner_link", lambda sd: self.events.append("link"))
+        real = update_controller.UpdateController
+
+        def stage(release, target, state_dir, **kw):
+            self.events.append("stage")
+            top = target.parent / ".stage" / target.top
+            return Staged(target.parent / ".stage", top, top / "gui")
+
+        def promote(staged, target, tag, state_dir, **kw):
+            self.events.append("promote")
+            return target.final_path(tag)
+
+        def launch(argv, env, sys_platform):
+            from tokitty.lock import SingleInstanceLock
+
+            probe = SingleInstanceLock(tmp_path)
+            probe.acquire()  # raises unless the old copy let go of the lock
+            probe.release()
+            self.events.append(("launch", argv[1:]))
+            return type("C", (), {"poll": lambda s: None, "kill": lambda s: self.events.append("kill"),
+                                  "wait": lambda s, timeout=None: 0})()
+
+        def wait_for_ack(path, timeout):
+            self.events.append("wait")
+            return self.acked
+
+        def factory(state_dir, host):
+            controller = real(
+                state_dir,
+                host,
+                running=RunningVersion("v0.1.0", True),
+                executable=str(tmp_path / "releases" / "v0.1.0" / "tokitty" / "tokitty"),
+                sys_platform="linux",
+                environ={},
+                stage=stage,
+                self_check=lambda gui, tag: None,
+                promote=promote,
+                launch=launch,
+                wait_for_ack=wait_for_ack,
+                fetch=lambda: _release_listing("v0.2.0") if listing is None else listing,
+                new_token=lambda: "tok9",
+            )
+            self.instances.append(controller)
+            return controller
+
+        monkeypatch.setattr(update_controller, "UpdateController", factory)
+
+
+@pytest.mark.gui
+def test_apply_update_hands_over_and_exits_zero(tmp_path, monkeypatch):
+    tk, main_module = _update_gui(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(tk.Tk, "mainloop", _pump_until_destroyed(tk))
+    env = _UpdateEnv(tmp_path, monkeypatch)
+
+    assert main_module.run_gui(apply_update=True) == 0
+
+    assert env.events == ["stage", "promote", ("launch", ["--after-update", "tok9"]), "wait"]
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.updater import load_update_state
+
+    assert load_update_state(tmp_path).pending is None
+    SingleInstanceLock(tmp_path).acquire()  # the old copy is gone and the lock is free
+
+
+@pytest.mark.gui
+def test_apply_update_exits_two_after_a_clean_no_ack_rollback(tmp_path, monkeypatch, capsys):
+    tk, main_module = _update_gui(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(tk.Tk, "mainloop", _pump_until_destroyed(tk))
+    env = _UpdateEnv(tmp_path, monkeypatch, acked=False)
+
+    assert main_module.run_gui(apply_update=True) == 2
+
+    assert env.events == ["stage", "promote", ("launch", ["--after-update", "tok9"]), "wait", "kill", "link"]
+    assert "didn't start. Still running v0.1.0." in capsys.readouterr().err
+
+
+@pytest.mark.gui
+def test_apply_update_exits_one_when_there_is_nothing_to_install(tmp_path, monkeypatch, capsys):
+    tk, main_module = _update_gui(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(tk.Tk, "mainloop", _pump_until_destroyed(tk))
+    env = _UpdateEnv(tmp_path, monkeypatch, listing=_release_listing("v0.1.0"))
+
+    assert main_module.run_gui(apply_update=True) == 1
+
+    assert env.events == []
+    assert "no release newer than v0.1.0" in capsys.readouterr().err
+
+
+@pytest.mark.gui
+def test_a_rollback_outside_apply_mode_shows_the_message_and_keeps_running(tmp_path, monkeypatch):
+    from tokitty.updater import Release
+
+    pytest.importorskip("tkinter")
+    shown = []
+
+    def mainloop(self):
+        controller = env.instances[0]
+        done = []
+        controller.start_install(Release("v0.2.0", None, "https://x/a", 10, "https://x/s"), None, done.append)
+        end = time.monotonic() + 15
+        while (not done or not shown) and time.monotonic() < end:
+            self.update()
+            time.sleep(0.01)
+        assert done and done[0].outcome == "rolled_back"
+        assert self.state() == "normal"  # withdrawn by the handover, shown again by the rollback
+
+    _, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+    env = _UpdateEnv(tmp_path, monkeypatch, acked=False)
+    monkeypatch.setattr("tkinter.messagebox.showwarning", lambda title, text, parent=None: shown.append((title, text)))
+
+    assert main_module.run_gui() == 0
+
+    assert shown == [("Tokitty", "Tokitty v0.2.0 didn't start. Still running v0.1.0.")]
+    assert env.events[-2:] == ["kill", "link"]
+
+
+@pytest.mark.gui
+def test_after_update_writes_the_ack_once_the_mainloop_is_running(tmp_path, monkeypatch):
+    seen = []
+
+    def mainloop(self):
+        seen.append((tmp_path / "update-ack-tok1").exists())  # not before the mainloop
+        for _ in range(3):
+            self.update()
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+
+    assert main_module.run_gui(after_update_token="tok1") == 0
+
+    assert seen == [False]
+    assert (tmp_path / "update-ack-tok1").read_text() == "tok1"
+
+
+@pytest.mark.gui
+def test_after_update_waits_for_the_old_copy_to_release_the_lock(tmp_path, monkeypatch):
+    from tokitty.lock import SingleInstanceLock
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: self.update())
+    old_copy = SingleInstanceLock(tmp_path)
+    old_copy.acquire()
+    timer = threading.Thread(target=lambda: (time.sleep(0.4), old_copy.release()))
+    timer.start()
+    try:
+        assert main_module.run_gui(after_update_token="tok1") == 0
+    finally:
+        timer.join()
+
+    assert (tmp_path / "update-ack-tok1").exists()
+
+
+@pytest.mark.gui
+def test_after_update_exits_quietly_without_an_ack_when_the_lock_stays_held(tmp_path, monkeypatch, capsys):
+    from tokitty.lock import SingleInstanceLock, acquire_with_retry
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: pytest.fail("no window expected"))
+    monkeypatch.setattr(main_module, "acquire_with_retry", lambda lock, timeout: acquire_with_retry(lock, 0.2))
+    holder = SingleInstanceLock(tmp_path)
+    holder.acquire()
+    try:
+        assert main_module.run_gui(after_update_token="tok1") == 1
+    finally:
+        holder.release()
+
+    assert not (tmp_path / "update-ack-tok1").exists()
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.gui
+def test_no_ack_switch_exits_before_acking_only_alongside_the_api_url(tmp_path, monkeypatch):
+    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: self.update())
+    monkeypatch.setenv("TOKITTY_UPDATE_TEST_NO_ACK", "1")
+
+    # Alone, the switch is ignored: a normal start that acks.
+    monkeypatch.delenv("TOKITTY_UPDATE_API_URL", raising=False)
+    assert main_module.run_gui(after_update_token="tok1") == 0
+    assert (tmp_path / "update-ack-tok1").exists()
+    (tmp_path / "update-ack-tok1").unlink()
+
+    # With the API URL set it exits 0 without starting up, and frees the lock.
+    monkeypatch.setenv("TOKITTY_UPDATE_API_URL", "https://localhost:1")
+    monkeypatch.setattr(tk, "Tk", lambda *a, **k: pytest.fail("must exit before building a window"))
+    assert main_module.run_gui(after_update_token="tok1") == 0
+    assert not (tmp_path / "update-ack-tok1").exists()
+    from tokitty.lock import SingleInstanceLock
+
+    SingleInstanceLock(tmp_path).acquire()
+
+
+@pytest.mark.gui
+def test_run_gui_clears_a_stale_pending_but_keeps_a_fresh_one(tmp_path, monkeypatch):
+    from tokitty.update_swap import write_pending
+    from tokitty.updater import load_update_state
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: None)
+    fields = dict(old_version="v0.1.0", new_version="v0.2.0", old_path="a", new_path="b", token="t", staging="s")
+    now = datetime.now(timezone.utc)
+
+    write_pending(tmp_path, now=now - timedelta(minutes=10), **fields)
+    assert main_module.run_gui() == 0
+    assert load_update_state(tmp_path).pending is None
+
+    write_pending(tmp_path, now=now - timedelta(minutes=1), **fields)
+    assert main_module.run_gui() == 0
+    assert load_update_state(tmp_path).pending is not None
+
+
+@pytest.mark.gui
+def test_run_gui_starts_no_cleanup_thread_in_a_source_run(tmp_path, monkeypatch):
+    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: None)
+    cleanups = []
+    monkeypatch.setattr("tokitty.update_controller.cleanup", lambda *a, **k: cleanups.append(1))
+    spawned = _capture_spawned_threads(monkeypatch)
+
+    assert main_module.run_gui() == 0
+    for thread in spawned:
+        thread.join(timeout=5.0)
+
+    assert cleanups == []
