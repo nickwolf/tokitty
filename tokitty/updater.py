@@ -253,6 +253,20 @@ def save_update_state(state_dir, state: UpdateState) -> None:
         raise
 
 
+def add_owned(state_dir, path, version: str, kind: str) -> None:
+    """Record a path the updater created, replacing any entry for that path."""
+    state = load_update_state(state_dir)
+    state.owned = [e for e in state.owned if e["path"] != str(path)]
+    state.owned.append({"path": str(path), "version": version, "kind": kind})
+    save_update_state(state_dir, state)
+
+
+def drop_owned(state_dir, path) -> None:
+    state = load_update_state(state_dir)
+    state.owned = [e for e in state.owned if e["path"] != str(path)]
+    save_update_state(state_dir, state)
+
+
 def check_for_update_cli() -> int:
     """Hidden --check-for-update: print one JSON object, 0 on a good fetch."""
     running = running_version()
