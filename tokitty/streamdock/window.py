@@ -21,7 +21,28 @@ def format_tool_input(tool_input: Any) -> str:
 
 
 def title_text(account_name: str, request: PendingRequest) -> str:
-    return f"{account_name}: {request.tool_name}"
+    return f"Tokitty: {account_name} permission request"
+
+
+_REASONS = {
+    "ambiguous": "Tokitty can't tell which Windows Terminal tab is this session's{title}, because another tab or session has the same title.",
+    "not_found": "Tokitty couldn't find this session's tab{title} in Windows Terminal.",
+    "no_title": "This session has no title yet, so Tokitty can't find its tab.",
+    "not_front": "Tokitty found this session's tab{title} but couldn't bring it to the front.",
+    "unavailable": "Tokitty can't switch Windows Terminal tabs on this machine.",
+    "few_keys": "The Stream Dock page has too few free keys to show this request.",
+}
+
+
+def explain_text(reason: str, session_title: Optional[str], request: PendingRequest) -> str:
+    """Why this window opened and what the reader is being asked to do."""
+    title = f' ("{session_title}")' if session_title else ""
+    why = _REASONS.get(reason, "Tokitty couldn't show this request on the Stream Dock.").format(title=title)
+    return (
+        f"{why} So it is asking here instead.\n\n"
+        f"Claude Code wants to use {request.tool_name} with the input below. "
+        "Allow or Deny it here, or answer in the terminal."
+    )
 
 
 def always_label(request: PendingRequest) -> Optional[str]:
@@ -50,7 +71,7 @@ class InWindowViews:
         self._anchor = anchor_fn
         self._open: dict = {}
 
-    def open(self, request: PendingRequest) -> None:
+    def open(self, request: PendingRequest, reason: str = "") -> None:
         """The runtime's open_in_window hook."""
         runtime = self._runtime_fn()
         if runtime is None or request.nonce in self._open:
@@ -67,7 +88,8 @@ class InWindowViews:
         win.protocol("WM_DELETE_WINDOW", lambda: self.close(request.nonce))
         self._open[request.nonce] = win
 
-        ttk.Label(win, text=title_text(self._name(request.account_index), request)).pack(anchor="w", padx=8, pady=(8, 2))
+        explain = explain_text(reason, runtime.session_title(request), request)
+        ttk.Label(win, text=explain, wraplength=440, justify="left").pack(anchor="w", padx=8, pady=(8, 6))
         body = ttk.Frame(win)
         body.pack(fill="both", expand=True, padx=8)
         text = tk.Text(body, width=64, height=14, wrap="word")

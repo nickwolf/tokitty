@@ -111,6 +111,7 @@ class Harness:
         self.watchers = {}
         self.server = None
         self.opened = []
+        self.reasons = []
         self.launched = []
         self.sessions = {0: [view("s0", 1.0)], 1: [view("s1", 2.0)]}
         self.usage = {}
@@ -132,7 +133,7 @@ class Harness:
 
         opts = dict(
             palette_fn=lambda i: {},
-            open_in_window=self.opened.append,
+            open_in_window=lambda r, reason: (self.opened.append(r), self.reasons.append(reason)),
             server_factory=server_factory,
             watcher_factory=watcher_factory,
             worker_factory=worker_factory,
@@ -283,14 +284,15 @@ def test_focus_on_a_title_another_session_shares_is_ambiguous(h):
     r = pending_slot_press(h)
     h.put(FocusDone(A0, 1, "focused"))
     h.tick()
-    assert h.opened == [r]
+    assert h.opened == [r] and h.reasons == ["ambiguous"]
+    assert h.rt.session_title(r) == "Same"
     assert h.spec("k1").armed is False
 
 
 def test_focus_and_open_without_overlay_opens_at_once(h):
     h.sessions = {0: [view("s0")], 1: []}
     r = pending_slot_press(h, n_slots=1)
-    assert h.opened == [r]
+    assert h.opened == [r] and h.reasons == ["few_keys"]
     assert h.worker.of("focus")
 
 

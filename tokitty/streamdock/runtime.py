@@ -52,6 +52,8 @@ from tokitty.wsl_probe import list_running_distros
 HEARTBEAT_S = 30.0
 TITLE_REFRESH_S = 10.0
 NEW_SESSION_REPEAT_S = 1.0
+# open_in_window reason when the deck had too few keys for the overlay.
+FEW_KEYS = "few_keys"
 
 TokittyDir = Union[str, Path, Callable[[], Optional[Union[str, Path]]], None]
 
@@ -100,7 +102,7 @@ class StreamdockRuntime:
         accounts: List[AccountInput],
         *,
         palette_fn: Callable[[int], Dict[str, str]],
-        open_in_window: Optional[Callable[[PendingRequest], None]] = None,
+        open_in_window: Optional[Callable[[PendingRequest, str], None]] = None,
         image_fn: Optional[Callable[[KeySpec], str]] = None,
         server_factory: Callable[..., Any] = _default_server,
         watcher_factory: Callable[[AccountInput], Any] = _default_watcher,
@@ -115,7 +117,7 @@ class StreamdockRuntime:
     ) -> None:
         self._presets = list(presets)
         self._accounts: Dict[int, AccountInput] = {a.index: a for a in accounts}
-        self._open_in_window = open_in_window or (lambda request: None)
+        self._open_in_window = open_in_window or (lambda request, reason: None)
         self._launch = launch_fn
         self._write_decision = write_decision_fn
         self._touch_enabled = touch_enabled_fn
@@ -284,7 +286,7 @@ class StreamdockRuntime:
             if wanted is not None and wanted[0] == item.seq:
                 del self._opens[item.session]
                 if item.status != FOCUSED:
-                    self._open(wanted[1])
+                    self._open(wanted[1], item.status)
         elif isinstance(item, VerifyDone):
             held = self._held.pop(item.nonce, None)
             if held is None:
@@ -312,7 +314,7 @@ class StreamdockRuntime:
                     self._opens[action.session] = (action.seq, action.request)
                 else:
                     self._opens.pop(action.session, None)
-                    self._open(action.request)
+                    self._open(action.request, FEW_KEYS)
                 self._worker.submit_focus(action.session, action.seq, self._config_dir(action.session.account_index))
             elif isinstance(action, Decide):
                 self._decide(action.request, action.behavior)
@@ -335,12 +337,17 @@ class StreamdockRuntime:
         value = acct.config_dir() if callable(acct.config_dir) else acct.config_dir
         return value or ""
 
-    def _open(self, request: PendingRequest) -> None:
+    def _open(self, request: PendingRequest, reason: str) -> None:
+        """Ask for the in-window view. `reason` is the focus status, or FEW_KEYS."""
         if request.nonce in self._in_window:
             return
         if request.nonce not in {r.nonce for r in self._pending}:
             return
-        self._open_in_window(request)
+        self._open_in_window(request, reason)
+
+    def session_title(self, request: PendingRequest) -> Optional[str]:
+        """The last known tab title of the request's session, for the in-window view."""
+        return self._titles.get(SessionRef(request.account_index, request.session_id))
 
     def _decide(self, req: PendingRequest, behavior: str) -> bool:
         self._held.pop(req.nonce, None)
