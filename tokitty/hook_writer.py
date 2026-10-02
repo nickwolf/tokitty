@@ -21,7 +21,7 @@ so no exception can ever propagate out.
 
 It also never writes to stdout, with ONE exception: on a PermissionRequest
 event, _emit_decision() prints a single allow/deny JSON line, and only after
-wait_for_decision() has found a decision file whose nonce, session id and
+_wait() has found a decision file whose nonce, session id and
 input digest all match this exact request. Claude Code applies that line as
 the user's answer, so every other path (error, ambiguity, timeout, disabled
 feature) prints nothing and exits 0, leaving Claude Code's own terminal
@@ -159,24 +159,29 @@ def _new_scan(tool_use_id, size, tail_text):
     }
 
 
-def _scan_stop(scan, path, read_from_fn):
-    """True if the wait must end: a tool_result for our id appeared in the bytes
-    appended since the last scan, or the transcript can no longer be trusted
-    (read error, truncated or replaced). Scans every appended byte, carrying the
-    last len(needle) bytes across chunks so a split needle is still found."""
+def _scan(scan, path, read_from_fn):
+    """Scan the bytes appended since the last scan for a tool_result for our id.
+
+    Returns (answered, caught_up). answered is True if the needle appeared or the
+    transcript can no longer be trusted (read error, truncated or replaced).
+    caught_up is True only if a read came back empty, so the scan reached the end
+    of the file; at most _MAX_CHUNKS reads happen per call, and a bigger backlog
+    leaves caught_up False. Carries the last len(needle) bytes across chunks so a
+    split needle is still found. A decision may only be acted on when the latest
+    scan was (False, True)."""
     try:
         for _ in range(_MAX_CHUNKS):
             chunk = read_from_fn(path, scan["offset"])
             if not chunk:
-                return False
+                return False, True
             data = scan["carry"] + chunk
             if any(n in data for n in scan["needles"]):
-                return True
+                return True, False
             scan["carry"] = data[-scan["keep"] :]
             scan["offset"] += len(chunk)
-        return False
+        return False, False
     except Exception:
-        return True
+        return True, False
 
 
 def _content_blocks(obj):
@@ -330,9 +335,26 @@ def _read_decision(path, nonce, session_id, digest):
     return None
 
 
-def wait_for_decision(
+def wait_for_decision(payload, tokitty_dir, **kwargs):
+    """Hold a PermissionRequest for a Stream Dock answer.
+
+    Returns {"behavior": "allow" | "deny"} only for a decision file that
+    matches this request's nonce, session id and input digest; None for every
+    other outcome. Never prints. The claim is released before returning; a
+    caller that prints should use _wait() and release the claim after printing.
+    """
+    claims = []
+    try:
+        return _wait(payload, tokitty_dir, claims, **kwargs)
+    finally:
+        for c in claims:
+            _remove(c)
+
+
+def _wait(
     payload,
     tokitty_dir,
+    claims,
     *,
     now_fn=time.time,
     mono_fn=time.monotonic,
@@ -343,11 +365,9 @@ def wait_for_decision(
     mtime_fn=os.path.getmtime,
     utime_fn=os.utime,
 ):
-    """Hold a PermissionRequest for a Stream Dock answer.
-
-    Returns {"behavior": "allow" | "deny"} only for a decision file that
-    matches this request's nonce, session id and input digest; None for every
-    other outcome. Never prints. The caller decides what to do with the result.
+    """The wait itself. The claim file's path is appended to claims as soon as
+    it exists and is never removed here: the caller removes it, after any
+    output. The pending and decision files are removed on every exit.
 
     now_fn (wall clock) is used only for the marker age and the `started`
     field; the 590 s cap and the heartbeat use mono_fn.
@@ -392,6 +412,11 @@ def wait_for_decision(
         os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     except OSError:
         return None
+    claims.append(claim)
+
+    def expired():
+        return mono_fn() - started_mono >= _PERM_CAP_S or not _marker_fresh(marker, now_fn, mtime_fn)
+
     try:
         _atomic_write(
             pending_dir,
@@ -412,20 +437,26 @@ def wait_for_decision(
             tmp_suffix=".tmp",
         )
         last_beat = started_mono
+        held = None  # a consumed decision, waiting for a caught-up scan
         while True:
-            if _scan_stop(scan, transcript, read_from_fn):
+            answered, caught_up = _scan(scan, transcript, read_from_fn)
+            if answered:
                 return None
-            if not _marker_fresh(marker, now_fn, mtime_fn):
+            if expired():
                 return None
-            mono = mono_fn()
-            if mono - started_mono >= _PERM_CAP_S:
-                return None
-            behavior = _read_decision(decision_file, nonce, session_id, digest)
-            if behavior is not None:
-                # Narrow the race with a terminal answer: look once more.
-                if _scan_stop(scan, transcript, read_from_fn):
+            if held is None and caught_up:
+                held = _read_decision(decision_file, nonce, session_id, digest)
+                if held is not None:
+                    # Narrow the race with a terminal answer: look once more.
+                    answered, caught_up = _scan(scan, transcript, read_from_fn)
+                    if answered:
+                        return None
+            if held is not None and caught_up:
+                # Only a scan that found no answer and reached the end gets here.
+                if expired():
                     return None
-                return {"behavior": behavior}
+                return {"behavior": held}
+            mono = mono_fn()
             if mono - last_beat >= _HEARTBEAT_S:
                 try:
                     utime_fn(pending, None)
@@ -436,7 +467,6 @@ def wait_for_decision(
     finally:
         _remove(pending)
         _remove(decision_file)
-        _remove(claim)
 
 
 def _emit_decision(decision):
@@ -473,14 +503,21 @@ def _install_exit_handlers():
 def _run_permission(payload, sessions_dir, **kwargs):
     tokitty_dir = os.path.dirname(os.path.abspath(sessions_dir))
     _install_exit_handlers()
-    result = wait_for_decision(payload, tokitty_dir, **kwargs)
-    if result is None:
-        return
-    behavior = result.get("behavior")
-    if behavior == "allow":
-        _emit_decision({"behavior": "allow"})
-    elif behavior == "deny":
-        _emit_decision({"behavior": "deny", "message": _DENY_MESSAGE})
+    claims = []
+    try:
+        result = _wait(payload, tokitty_dir, claims, **kwargs)
+        if result is None:
+            return
+        behavior = result.get("behavior")
+        if behavior == "allow":
+            _emit_decision({"behavior": "allow"})
+        elif behavior == "deny":
+            _emit_decision({"behavior": "deny", "message": _DENY_MESSAGE})
+    finally:
+        # Held through output so a second process cannot answer the same prompt
+        # while this one is still printing.
+        for c in claims:
+            _remove(c)
 
 
 def main():

@@ -1183,3 +1183,130 @@ class TestSigint:
     def test_main_guard_catches_base_exception(self):
         text = Path(SCRIPT).read_text()
         assert "except BaseException:" in text
+
+
+class TestCaughtUpAndClaim:
+    def reads(self, seq):
+        """A read_from_fn that serves seq in order, then empty reads."""
+        it = iter(seq)
+        n = {"calls": 0}
+
+        def reader(path, offset):
+            n["calls"] += 1
+            return next(it, b"")
+
+        reader.n = n
+        return reader
+
+    def test_backlog_beyond_one_scan_with_answer_beyond_gives_no_output(self, env, capsys, monkeypatch):
+        monkeypatch.setattr(hw, "_MAX_CHUNKS", 2)
+        env.decide()
+        seen = []
+        env.clock.on_sleep = lambda c: seen.append(env.decision.exists())
+        reader = self.reads([b"fill"] * 4 + [b'"tool_use_id":"toolu_A"'])
+        env.run(read_from_fn=reader)
+        assert capsys.readouterr().out == ""
+        # the decision was not consumed while the scan was behind
+        assert seen == [True, True]
+        assert env.claim_files == [] and pending_files(env) == []
+
+    def test_backlog_then_caught_up_returns_decision(self, env, monkeypatch):
+        monkeypatch.setattr(hw, "_MAX_CHUNKS", 2)
+        env.decide()
+        reader = self.reads([b"fill"] * 3)
+        assert env.wait(read_from_fn=reader) == {"behavior": "allow"}
+        assert len(env.clock.sleeps) == 1
+
+    def test_final_rescan_not_caught_up_holds_decision_until_caught_up(self, env, monkeypatch):
+        monkeypatch.setattr(hw, "_MAX_CHUNKS", 1)
+        env.decide()
+        seen = []
+        env.clock.on_sleep = lambda c: seen.append(env.decision.exists())
+        # poll 1: empty (caught up) -> decision consumed; rescan: data (behind);
+        # poll 2: empty (caught up) -> return the held decision
+        reader = self.reads([b"", b"fill", b""])
+        assert env.wait(read_from_fn=reader) == {"behavior": "allow"}
+        assert seen == [False]
+
+    def test_final_rescan_not_caught_up_then_answer_gives_none(self, env, monkeypatch):
+        monkeypatch.setattr(hw, "_MAX_CHUNKS", 1)
+        env.decide()
+        reader = self.reads([b"", b"fill", b'"tool_use_id":"toolu_A"'])
+        assert env.wait(read_from_fn=reader) is None
+        assert not env.decision.exists()
+
+    def test_final_rescan_not_caught_up_until_cap_gives_none(self, env, monkeypatch):
+        monkeypatch.setattr(hw, "_MAX_CHUNKS", 1)
+        env.decide()
+        reader = self.reads([b""] + [b"fill"] * 100000)
+        assert env.wait(read_from_fn=reader) is None
+
+    def test_claim_held_through_emit_and_removed_after(self, env, monkeypatch, capsys):
+        env.decide()
+        seen = {}
+
+        def fake_emit(decision):
+            seen["claims"] = list(env.claim_files)
+            seen["decision"] = decision
+
+        monkeypatch.setattr(hw, "_emit_decision", fake_emit)
+        env.run()
+        assert len(seen["claims"]) == 1
+        assert seen["decision"] == {"behavior": "allow"}
+        assert env.claim_files == []
+        assert pending_files(env) == []
+
+    def test_claim_removed_when_emit_raises(self, env, monkeypatch):
+        env.decide()
+
+        def boom(decision):
+            raise RuntimeError("x")
+
+        monkeypatch.setattr(hw, "_emit_decision", boom)
+        with pytest.raises(RuntimeError):
+            env.run()
+        assert env.claim_files == []
+
+    @pytest.mark.parametrize("exc", [RuntimeError("x"), SystemExit(0)])
+    @pytest.mark.parametrize("entry", ["wait", "run"])
+    def test_claim_removed_when_wait_raises(self, env, exc, entry):
+        def boom(clock):
+            assert len(env.claim_files) == 1
+            raise exc
+
+        env.clock.on_sleep = boom
+        with pytest.raises(type(exc)):
+            getattr(env, entry)()
+        assert env.claim_files == [] and pending_files(env) == []
+
+    def test_cap_passing_between_decision_read_and_return_gives_none(self, env, capsys):
+        env.decide()
+        calls = {"n": 0}
+
+        def reader(path, offset):
+            calls["n"] += 1
+            if calls["n"] == 2:  # the final re-scan
+                env.clock.t += hw._PERM_CAP_S + 1
+                env.enable()
+            return b""
+
+        env.run(read_from_fn=reader)
+        assert capsys.readouterr().out == ""
+        assert calls["n"] == 2
+        assert env.claim_files == []
+
+    def test_marker_going_stale_between_decision_read_and_return_gives_none(self, env, capsys):
+        env.decide()
+        flag = {"stale": False}
+
+        def reader(path, offset):
+            if not env.decision.exists():  # decision consumed: this is the re-scan
+                flag["stale"] = True
+            return b""
+
+        env.run(
+            read_from_fn=reader,
+            mtime_fn=lambda p: env.clock.t - (500 if flag["stale"] else 0),
+        )
+        assert capsys.readouterr().out == ""
+        assert env.claim_files == []
