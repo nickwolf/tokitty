@@ -536,3 +536,111 @@ def test_one_pending_still_armed_by_focus():
     assert act.overlay is True
     focus(m, "a")
     assert m.press("k1") == VerifyThenDecide(req("a", "n1", 1), "allow")
+
+
+# dedicated decision keys
+
+def test_decision_roles_parse_and_show_idle_look():
+    m = setup(["allow", "deny", "always", "slot"], [sv("a", 1)])
+    plan = m.render_plan()
+    assert [(plan[f"k{i}"].kind, plan[f"k{i}"].text) for i in range(3)] == [
+        ("status", "Allow"), ("status", "Deny"), ("status", "Always"),
+    ]
+    assert plan["k3"].kind == "slot"
+    for i in range(3):
+        assert isinstance(m.press(f"k{i}"), Noop)
+
+
+def test_dedicated_allow_deny_open_overlay_without_slot_participants():
+    r = req("a")
+    m = setup(["slot", "allow", "deny"], [sv("a", 1)], [r])
+    assert m.press("k0") == FocusAndOpen(ref("a"), r, True, 1)
+    plan = m.render_plan()
+    assert plan["k0"].decision == "cancel"
+    assert plan["k1"].decision == "allow" and plan["k2"].decision == "deny"
+    focus(m, "a")
+    assert m.press("k1") == VerifyThenDecide(r, "allow")
+    assert m.press("k2") == Decide(r, "deny")
+    assert m.render_plan()["k1"].decision == "sent"
+
+
+def test_dedicated_allow_only_takes_deny_from_first_participant():
+    m = setup(["slot", "slot", "allow", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k2"].decision == "allow"
+    assert plan["k1"].decision == "deny"
+    assert plan["k3"].kind == "preview"
+
+
+def test_dedicated_deny_only_takes_allow_from_first_participant():
+    m = setup(["slot", "deny", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k1"].decision == "deny" and plan["k2"].decision == "allow"
+
+
+def test_dedicated_always_with_rule_acts_and_keeps_participants_for_previews():
+    r = req("a", always_rule="Bash(x)")
+    m = setup(["slot", "allow", "deny", "always", "slot"], [sv("a", 1)], [r])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k3"].decision == "always"
+    assert plan["k4"].kind == "preview"
+    focus(m, "a")
+    assert m.press("k3") == VerifyThenDecide(r, "always")
+
+
+def test_dedicated_always_without_rule_stays_idle_and_noop():
+    m = setup(["slot", "allow", "deny", "always", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+    plan = m.render_plan()
+    assert plan["k3"].kind == "status" and plan["k3"].text == "Always"
+    assert plan["k4"].kind == "preview"
+    assert isinstance(m.press("k3"), Noop)
+
+
+def test_always_without_dedicated_key_still_falls_back_to_participants():
+    m = setup(["slot", "allow", "deny", "slot"], [sv("a", 1)], [req("a", always_rule="Bash(x)")])
+    m.press("k0")
+    assert m.render_plan()["k3"].decision == "always"
+
+
+def test_several_keys_with_one_decision_role_all_act():
+    r = req("a")
+    m = setup(["slot", "allow", "allow", "deny"], [sv("a", 1)], [r])
+    m.press("k0")
+    focus(m, "a")
+    assert m.render_plan()["k1"].decision == "allow" and m.render_plan()["k2"].decision == "allow"
+    assert m.press("k2") == VerifyThenDecide(r, "allow")
+    assert m.press("k1") == VerifyThenDecide(r, "allow")
+
+
+def test_dedicated_keys_never_become_previews_or_slots():
+    m = setup(["slot", "allow", "deny", "always"], [sv("a", 1), sv("b", 2)], [req("a")])
+    m.press("k0")
+    assert m.render_plan()["k3"].kind == "status"
+    m.press("k0")
+    assert all(s.kind != "slot" for c, s in m.render_plan().items() if c != "k0")
+
+
+def test_overlay_needs_both_allow_and_deny_placed():
+    # One participant and no dedicated keys: Deny cannot be placed.
+    m = setup(["slot", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is False
+    # Dedicated allow plus one participant for deny: placed.
+    m = setup(["slot", "allow", "slot"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+    # Dedicated allow and no participants: deny cannot be placed.
+    m = setup(["slot", "allow"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is False
+    # Dedicated allow and deny alone: placed.
+    m = setup(["slot", "allow", "deny"], [sv("a", 1)], [req("a")])
+    assert m.press("k0").overlay is True
+
+
+def test_overlay_exits_when_dedicated_key_disappears_and_deny_cannot_be_placed():
+    m = setup(["slot", "allow", "deny"], [sv("a", 1)], [req("a")])
+    m.press("k0")
+    m.disappear("k2")
+    assert m.render_plan()["k1"].kind == "status"

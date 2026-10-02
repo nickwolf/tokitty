@@ -18,7 +18,7 @@ from tokitty.streamdock.pending import PendingRequest
 
 FOCUSED = "focused"
 UNVERIFIED = "unverified"
-MIN_OVERLAY_KEYS = 2
+DECISION_ROLES = ("allow", "deny", "always")
 
 
 @dataclass(frozen=True)
@@ -159,7 +159,7 @@ def _parse_role(settings: Any) -> Optional[Tuple[str, str]]:
     role = settings.get("role") if isinstance(settings, Mapping) else None
     if not isinstance(role, str):
         return None
-    if role in ("slot", "interrupt"):
+    if role in ("slot", "interrupt") or role in DECISION_ROLES:
         return role, ""
     kind, _, arg = role.partition(":")
     if kind == "usage":
@@ -293,6 +293,8 @@ class DeckModel:
             return Noop("session tab not confirmed")
         if kind == "new":
             return NewSession(arg)
+        if kind in DECISION_ROLES:
+            return Noop("no permission prompt open")
         return Noop("usage key")
 
     # slots
@@ -363,7 +365,7 @@ class DeckModel:
             return Focus(ref, seq)
         # With several live requests in one session the terminal may be showing a
         # different prompt, so only tokitty's own window can show this one in full.
-        opened = len(self._participants(context)) >= MIN_OVERLAY_KEYS and not self._multi(ref)
+        opened = self._place_decisions(context, req) is not None and not self._multi(ref)
         if opened:
             self._overlay = _Overlay(context, req.nonce)
         self._refresh()
@@ -385,19 +387,36 @@ class DeckModel:
                 return req
         return None
 
-    def _overlay_layout(self) -> Dict[str, Tuple[str, int]]:
-        """Participating context to ("allow"|"deny"|"always"|"preview", preview index)."""
-        req = self._overlay_request()
-        if self._overlay is None or req is None:
-            return {}
+    def _place_decisions(self, pressed: str, req: PendingRequest) -> Optional[Dict[str, Tuple[str, int]]]:
+        """Context to ("allow"|"deny"|"always"|"preview", preview index), or None when
+        Allow and Deny cannot both be placed.
+
+        Keys with a decision role always show that decision. A decision with no such
+        key is taken from the participants in reading order, and the rest preview.
+        """
         kinds = ["allow", "deny"]
         if req.always_rule:
             kinds.append("always")
-        ctxs = self._participants(self._overlay.pressed)
         layout: Dict[str, Tuple[str, int]] = {}
+        missing = []
+        for kind in kinds:
+            ctxs = self._sorted_contexts(lambda k, kind=kind: k.role is not None and k.role[0] == kind)
+            if ctxs:
+                layout.update({c: (kind, 0) for c in ctxs})
+            else:
+                missing.append(kind)
+        ctxs = self._participants(pressed)
+        if len([k for k in missing if k != "always"]) > len(ctxs):
+            return None
         for i, ctx in enumerate(ctxs):
-            layout[ctx] = (kinds[i], 0) if i < len(kinds) else ("preview", i - len(kinds))
+            layout[ctx] = (missing[i], 0) if i < len(missing) else ("preview", i - len(missing))
         return layout
+
+    def _overlay_layout(self) -> Dict[str, Tuple[str, int]]:
+        req = self._overlay_request()
+        if self._overlay is None or req is None:
+            return {}
+        return self._place_decisions(self._overlay.pressed, req) or {}
 
     def _multi(self, ref: SessionRef) -> bool:
         return self._live_count.get(ref, 0) > 1
@@ -439,7 +458,7 @@ class DeckModel:
         if (
             o.pressed not in self._keys
             or self._overlay_request() is None
-            or len(self._participants(o.pressed)) < MIN_OVERLAY_KEYS
+            or not self._overlay_layout()
         ):
             self._overlay = None
 
@@ -501,6 +520,8 @@ class DeckModel:
             if ctx in shown:
                 return self._slot_spec(shown[ctx], "slot")
             return KeySpec("status")
+        if kind in DECISION_ROLES:
+            return KeySpec("status", text=kind.capitalize())
         if kind == "interrupt":
             ref = self._last_focused
             ok = ref is not None and self._focus.get(ref) == FOCUSED
