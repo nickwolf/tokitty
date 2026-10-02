@@ -148,7 +148,7 @@ A few things behave differently from a Claude Code pane:
 
 ## Stream Dock
 
-Windows only. A VSDinside Stream Dock M18 can show your Claude Code sessions as keys. Pressing a session's key brings its Windows Terminal tab to the front, and when a session is waiting on a permission prompt you can answer it from the deck with Allow, Deny or Always. Other keys show an account's usage, interrupt the session you last jumped to, or open a new Claude Code tab in a repo you choose. Tokitty does the work; a small plugin inside VSD Craft draws the keys and forwards presses to it over `127.0.0.1`.
+Windows only. A VSDinside Stream Dock can show your Claude Code sessions as keys (tested on the M18). Pressing a session's key brings its Windows Terminal tab to the front, and when a session is waiting on a permission prompt you can answer it from the deck with Allow, Deny or Always. Other keys show an account's usage, interrupt the session you last jumped to, or open a new Claude Code tab in a repo you choose. Tokitty does the work; a small plugin inside VSD Craft draws the keys and forwards presses to it over `127.0.0.1`.
 
 To set it up:
 
