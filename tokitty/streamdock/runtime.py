@@ -130,6 +130,9 @@ class StreamdockRuntime:
         self._last_touch = 0.0
         self._pending: List[PendingRequest] = []
         self._held: Dict[str, Tuple[PendingRequest, str]] = {}
+        # Nonces already answered. The first decision written wins, so a verify
+        # still in flight for Allow or Always can never replace a later Deny.
+        self._decided: set = set()
         self._opens: Dict[SessionRef, Tuple[int, PendingRequest]] = {}
         self._in_window: set = set()
         self._launched_at: Dict[str, float] = {}
@@ -189,6 +192,7 @@ class StreamdockRuntime:
         self._drain(actions)
         self._heartbeat(now)
         self._pending = [req for w in self._watchers.values() for req in w.get_pending()]
+        self._decided &= {r.nonce for r in self._pending}
         self._request_titles(sessions_by_account, now)
         self._model.update(
             sessions_by_account, self._pending, usage_by_account, titles=dict(self._titles)
@@ -302,6 +306,9 @@ class StreamdockRuntime:
         self._open_in_window(request)
 
     def _decide(self, req: PendingRequest, behavior: str) -> bool:
+        self._held.pop(req.nonce, None)
+        if req.nonce in self._decided:
+            return False
         acct = self._accounts.get(req.account_index)
         directory = self._dir(acct) if acct is not None else None
         if not directory:
@@ -312,6 +319,7 @@ class StreamdockRuntime:
         except Exception as exc:
             _log(f"decision write: {exc}")
             return False
+        self._decided.add(req.nonce)
         return True
 
     def _new_session(self, name: str, now: float) -> None:

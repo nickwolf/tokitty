@@ -361,6 +361,30 @@ def test_always_passes_through(h):
     assert d["behavior"] == "always"
 
 
+def test_deny_while_always_verifies_is_not_overwritten(h):
+    r, others = pressed_overlay(h, A0, always_rule="ls")
+    h.put(FocusDone(A0, 1, "focused"))
+    h.tick()
+    h.press(others[2])  # Always: waits for the verify
+    h.press(others[1])  # Deny: written at once
+    h.put(VerifyDone(r.nonce, True))
+    h.tick()
+    [d] = decisions(h, 0)
+    assert d["behavior"] == "deny"
+
+
+def test_window_decision_wins_over_a_later_verify(h):
+    r, others = pressed_overlay(h, A0)
+    h.put(FocusDone(A0, 1, "focused"))
+    h.tick()
+    h.press(others[0])
+    assert h.rt.decide_from_window(r.nonce, "deny")
+    h.put(VerifyDone(r.nonce, True))
+    h.tick()
+    [d] = decisions(h, 0)
+    assert d["behavior"] == "deny"
+
+
 def test_interrupt_and_unverified_verify_for_unknown_nonce(h):
     h.put(VerifyDone("z" * 16, True), InterruptDone(A0, True))
     h.tick()
