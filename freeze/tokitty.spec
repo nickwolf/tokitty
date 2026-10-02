@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "freeze"))
 from bundle_data import DATA_FILES  # noqa: E402
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
-datas = [(str(ROOT / "tokitty" / name), "tokitty") for name in DATA_FILES]
+datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
 
 rthook = Path(workpath) / "rthook_build_id.py"
 rthook.parent.mkdir(parents=True, exist_ok=True)

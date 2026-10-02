@@ -1511,3 +1511,15 @@ def test_resolvers_still_work_without_a_cache(monkeypatch):
     sessions_dir, distro = resolve_activity_sessions(None)
     assert distro == "Ubuntu"
     assert sessions_dir.endswith("\\tokitty\\sessions")
+
+
+def test_main_dispatches_streamdock_install_and_uninstall(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.streamdock.install.run_install", lambda: calls.append("install") or 0)
+    monkeypatch.setattr("tokitty.streamdock.install.run_uninstall", lambda: calls.append("uninstall") or 0)
+
+    assert main_module.main(["--install-streamdock"]) == 0
+    assert main_module.main(["--uninstall-streamdock"]) == 0
+    assert calls == ["install", "uninstall"]

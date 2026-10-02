@@ -9,13 +9,13 @@ import math
 import tkinter as tk
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.usage_display import ROW_SLOTS
 from tokitty import monitors
 from tokitty.geometry import clamp_to_area, default_position
-from tokitty.menu import MenuItem, build_menu
+from tokitty.menu import INSTALL_STREAMDOCK_COMMAND, MenuItem, build_menu, streamdock_menu_item
 from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
 from tokitty.transparency import (
     KEY_COLOR, LEVELS, alpha_for, avoid_key, clamp_level, effective_level,
@@ -189,6 +189,10 @@ class Pane:
 
     def _paint(self, color: str) -> str:
         return avoid_key(color) if self._keyed else color
+
+    @property
+    def palette(self) -> Dict[str, str]:
+        return self._palette
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None, colorway=None, pattern=None) -> None:
         """Live re-style without rebuilding widgets. Each parameter left as
@@ -572,6 +576,8 @@ class TokittyWindow:
         self.usage_readout: Optional[Callable[[], str]] = None
         self.on_usage_readout: Optional[Callable[[str], None]] = None
         self.on_set_budget: Optional[Callable[[int], None]] = None
+        # "connected" | "not_connected" | "not_installed"; None leaves the submenu out.
+        self.streamdock_state: Optional[Callable[[], str]] = None
         self._menu_vars: List = []
         self.on_refresh_requested = None  # set externally by __main__.py
         # Fired after any right-click menu action, so __main__.py can
@@ -824,6 +830,8 @@ class TokittyWindow:
         for item in items:
             if item.separator:
                 menu.add_separator()
+            elif not item.enabled:
+                menu.add_command(label=item.label, state="disabled")
             elif item.submenu is not None:
                 child = tk.Menu(menu, tearoff=0)
                 self._render_tk_menu(child, item.submenu)
@@ -853,7 +861,15 @@ class TokittyWindow:
             model = [item for item in self.build_menu_model(0) if item.label not in _PANE_SPECIFIC_LABELS]
         else:
             model = self.build_menu_model(self._menu_pane_index)
+        if self.streamdock_state is not None:
+            # Read now, when the menu opens. Tk only: the tray menu is built once and would go stale.
+            item = streamdock_menu_item(self.streamdock_state(), self._copy_install_streamdock)
+            model.insert(len(model) - 2, item)
         self._render_tk_menu(self.menu, model)
+
+    def _copy_install_streamdock(self) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(INSTALL_STREAMDOCK_COMMAND)
 
     def _show_context_menu(self, event: tk.Event) -> None:
         x_relative = event.x_root - self.root.winfo_rootx()

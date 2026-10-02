@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tokitty key</title>
+<!-- config.js sits beside this page and defines window.TOKITTY = {port, token}. -->
+<script src="config.js"></script>
+<style>
+  body { background: #2d2d2d; color: #d8d8d8; font: 13px sans-serif; margin: 12px; }
+  label { display: block; margin-bottom: 6px; }
+  select { width: 100%; background: #3a3a3a; color: #eee; border: 1px solid #555; padding: 4px; }
+  #note { margin-top: 8px; color: #999; }
+</style>
+</head>
+<body>
+<label for="role">Key role</label>
+<select id="role"></select>
+<div id="note"></div>
+<script>
+"use strict";
+let ws = null;
+let uuid = "";
+let current = "";
+
+function option(select, value, text) {
+  const o = document.createElement("option");
+  o.value = value;
+  o.textContent = text;
+  select.appendChild(o);
+}
+
+async function loadMeta() {
+  const base = "http://127.0.0.1:" + window.TOKITTY.port;
+  const r = await fetch(base + "/v1/meta?t=" + encodeURIComponent(window.TOKITTY.token));
+  if (!r.ok) throw new Error("status " + r.status);
+  return r.json();
+}
+
+async function build() {
+  const select = document.getElementById("role");
+  const note = document.getElementById("note");
+  let meta = null;
+  try { meta = await loadMeta(); } catch (e) { note.textContent = "tokitty is not running, so only some roles are listed."; }
+  const roles = [["slot", "Session slot"]];
+  if (meta) {
+    (meta.accounts || []).forEach(function (a) { roles.push(["usage:" + a.index, "Usage: " + a.name]); });
+  }
+  roles.push(["interrupt", "Interrupt"]);
+  if (meta) {
+    (meta.presets || []).forEach(function (name) { roles.push(["new:" + name, "New session: " + name]); });
+  }
+  select.textContent = "";
+  if (!current) option(select, "", "Choose a role");
+  roles.forEach(function (r) { option(select, r[0], r[1]); });
+  // A role the list no longer offers is kept so it is not lost on the next save.
+  if (current && !roles.some(function (r) { return r[0] === current; })) option(select, current, current);
+  select.value = current;
+  select.onchange = function () {
+    current = select.value;
+    ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: { role: current } }));
+  };
+}
+
+function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+  uuid = inUUID;
+  let info = inActionInfo;
+  if (typeof info === "string") { try { info = JSON.parse(info); } catch (e) { info = {}; } }
+  const settings = (info && info.payload && info.payload.settings) || {};
+  current = typeof settings.role === "string" ? settings.role : "";
+  ws = new WebSocket("ws://127.0.0.1:" + inPort);
+  ws.onopen = function () {
+    ws.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+    build();
+  };
+}
+</script>
+</body>
+</html>

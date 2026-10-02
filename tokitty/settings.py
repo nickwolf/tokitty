@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from tokitty.transparency import DEFAULT_LEVEL, LEVELS
 from tokitty.usage_scan import DEFAULT_WINDOW, WINDOWS
@@ -21,6 +22,13 @@ VIEW_MODES = ("limits", "models")
 DEFAULT_VIEW_MODE = "limits"
 READOUTS = ("cost", "tokens")
 DEFAULT_READOUT = "cost"
+PRESET_ENVS = ("wsl", "native")
+PRESET_NAME_MAX = 40
+MIN_PORT = 1024
+MAX_PORT = 65535
+TOKEN_MIN = 32
+TOKEN_MAX = 128
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,13 @@ class Settings:
     # state from zero.
     usage_budgets: Dict[str, Dict[str, float]] = field(default_factory=dict)
     onboarding_version: int = 0
+    # New-session presets for the Stream Dock, edited by hand. Stored as
+    # normalised dicts: name, account_index, env, cwd, and distro for WSL.
+    streamdock_presets: List[dict] = field(default_factory=list)
+    # Loopback port and shared secret for the Stream Dock plugin, chosen once by
+    # --install-streamdock. 0 and "" mean not installed.
+    streamdock_port: int = 0
+    streamdock_token: str = ""
 
 
 def load_settings(state_dir) -> Settings:
@@ -69,6 +84,9 @@ def load_settings(state_dir) -> Settings:
         usage_readout=_one_of(data.get("usage_readout"), READOUTS, DEFAULT_READOUT),
         usage_budgets=_budgets(data.get("usage_budgets")),
         onboarding_version=_non_negative_int(data.get("onboarding_version")),
+        streamdock_presets=_presets(data.get("streamdock_presets")),
+        streamdock_port=_port(data.get("streamdock_port")),
+        streamdock_token=_token(data.get("streamdock_token")),
     )
 
 
@@ -82,6 +100,18 @@ def _non_negative_int(value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _port(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not MIN_PORT <= value <= MAX_PORT:
+        return 0
+    return value
+
+
+def _token(value) -> str:
+    if not isinstance(value, str) or not TOKEN_MIN <= len(value) <= TOKEN_MAX:
+        return ""
+    return value if _TOKEN_RE.fullmatch(value) else ""
 
 
 def _budgets(value) -> Dict[str, Dict[str, float]]:
@@ -106,6 +136,50 @@ def _budgets(value) -> Dict[str, Dict[str, float]]:
         if kept:
             cleaned[slug] = kept
     return cleaned
+
+
+def _presets(value) -> List[dict]:
+    """Keep the valid presets and drop the rest one by one. Unknown keys
+    are dropped, `distro` is dropped for native presets, and a repeated
+    name keeps its first entry."""
+    if not isinstance(value, list):
+        return []
+    cleaned: List[dict] = []
+    seen = set()
+    for entry in value:
+        preset = _preset(entry)
+        if preset is None or preset["name"] in seen:
+            continue
+        seen.add(preset["name"])
+        cleaned.append(preset)
+    return cleaned
+
+
+def _preset(entry):
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name or len(name) > PRESET_NAME_MAX:
+        return None
+    index = entry.get("account_index")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        return None
+    env = entry.get("env")
+    if env not in PRESET_ENVS:
+        return None
+    cwd = entry.get("cwd")
+    if not isinstance(cwd, str) or not cwd.strip():
+        return None
+    preset = {"name": name, "account_index": index, "env": env, "cwd": cwd}
+    if env == "wsl":
+        distro = entry.get("distro")
+        if not isinstance(distro, str) or not distro.strip():
+            return None
+        preset["distro"] = distro
+    return preset
 
 
 def budget_for(settings: Settings, slug: str, window: str):

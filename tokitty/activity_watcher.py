@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
-from tokitty.activity import ActivityTracker, ActivityView
+from tokitty.activity import ActivityTracker, ActivityView, SessionView
 from tokitty.wsl_probe import list_running_distros
 
 FAST_INTERVAL_S = 1.0
@@ -79,6 +79,7 @@ class ActivityWatcher:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._latest: Optional[ActivityView] = None
+        self._sessions: List[SessionView] = []
         self._thread: Optional[threading.Thread] = None
         self._sleep_fn = sleep_fn or self._stop_event.wait
 
@@ -95,6 +96,10 @@ class ActivityWatcher:
         with self._lock:
             return self._latest
 
+    def get_sessions(self) -> List[SessionView]:
+        with self._lock:
+            return list(self._sessions)
+
     def _run(self) -> None:
         while not self._stop_event.is_set():
             self._tick_once()
@@ -105,9 +110,10 @@ class ActivityWatcher:
     def _resolve(self, value):
         return value() if callable(value) else value
 
-    def _publish(self, view: ActivityView) -> None:
+    def _publish(self, view: ActivityView, sessions: Optional[List[SessionView]] = None) -> None:
         with self._lock:
             self._latest = view
+            self._sessions = sessions or []
 
     def _tick_once(self) -> None:
         now = self._time_fn()
@@ -147,4 +153,4 @@ class ActivityWatcher:
             except Exception:
                 pass
 
-        self._publish(self._tracker.aggregate(now))
+        self._publish(self._tracker.aggregate(now), self._tracker.sessions(now))

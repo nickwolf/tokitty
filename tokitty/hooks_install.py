@@ -56,6 +56,7 @@ HOOK_EVENTS = [
     ("Stop", ""),
     ("SubagentStop", ""),
     ("SessionEnd", ""),
+    ("PermissionRequest", ""),
 ]
 
 # Codex has no matcher on any of these: its MatcherGroup.matcher is optional

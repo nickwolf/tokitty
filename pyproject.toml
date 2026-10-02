@@ -5,10 +5,11 @@ description = "A cat-themed desktop widget for tracking Claude Code and Codex us
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = ["pystray", "Pillow"]
+dependencies = ["pystray", "Pillow>=10.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff==0.15.22"]
+streamdock = ["comtypes; sys_platform == 'win32'"]
 packaging = ["pyinstaller==6.22.3", "pyinstaller-hooks-contrib==2026.7"]
 
 [project.scripts]
@@ -22,7 +23,13 @@ build-backend = "setuptools.build_meta"
 include = ["tokitty*"]
 
 [tool.setuptools.package-data]
-tokitty = ["prices.json"]
+tokitty = [
+    "prices.json",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/manifest.json",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/index.html",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/pi.html",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/icon.png",
+]
 
 [tool.pytest.ini_options]
 # The `gui` marker guards tests that need a real Tk display (run under xvfb in

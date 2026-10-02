@@ -53,6 +53,9 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
+from tokitty.streamdock.runtime import StreamdockRuntime
+from tokitty.streamdock.window import InWindowViews
+from tokitty.streamdock.wiring import DEFAULT_NAME, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
@@ -745,7 +748,9 @@ def run_gui() -> int:
                       "provider": provider, "tag_kind": tag_kind,
                       "last_good": None, "key": key, "account": account,
                       "cred_loader": cred_loader, "burn": BurnTracker(),
-                      "usage": usage_watcher})
+                      "usage": usage_watcher,
+                      # Kept for the Stream Dock, which derives the hook's tokitty dir from it.
+                      "sessions_dir": sessions_dir, "distro_name": distro_name})
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -986,6 +991,28 @@ def run_gui() -> int:
         )
         tray.refresh()
 
+    def pane_anchor(index: int):
+        pane = units[index]["pane"].parent
+        return pane.winfo_rootx() + 16, pane.winfo_rooty() + 16
+
+    def account_name(index: int) -> str:
+        account = units[index]["account"]
+        return account.name if account else DEFAULT_NAME
+
+    streamdock = None
+    deck_views = InWindowViews(root, lambda: streamdock, account_name, pane_anchor)
+    streamdock = start_streamdock(
+        settings, units, distro_probe.get_running, palette_fn=lambda i: units[i]["pane"].palette,
+        open_in_window=deck_views.open,
+    )
+
+    def streamdock_state() -> str:
+        if not StreamdockRuntime.configured(settings):
+            return "not_installed"
+        return "connected" if streamdock is not None and streamdock.connected else "not_connected"
+
+    window.streamdock_state = streamdock_state
+
     def tick():
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
@@ -1021,6 +1048,7 @@ def run_gui() -> int:
             display = _display_state_for(latest, unit["last_good"])
             if latest.status == "ok" and latest.snapshot is not None:
                 unit["burn"].add(latest.snapshot)
+            unit["deck_usage"] = usage_from_display(display)
             display["projection_text"] = _projection_text_for(
                 unit["burn"], display, datetime.now(timezone.utc)
             )
@@ -1037,6 +1065,12 @@ def run_gui() -> int:
                 display["accent"] = pose["accent"]
                 unit["pane"].render(**display)
             unit["last_good"] = _next_last_good(latest, unit["last_good"])
+        if streamdock is not None:
+            try:
+                streamdock.tick(*gather_inputs(units))
+                deck_views.sync()
+            except Exception as exc:
+                print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
         root.after(UI_REFRESH_MS, tick)
 
     for unit in units:
@@ -1051,6 +1085,9 @@ def run_gui() -> int:
         root.mainloop()
     finally:
         tray.stop()
+        deck_views.close_all()
+        if streamdock is not None:
+            streamdock.stop()
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()
@@ -1076,6 +1113,14 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.hooks_install import uninstall_hooks
 
         return uninstall_hooks()
+    if "--install-streamdock" in argv:
+        from tokitty.streamdock.install import run_install
+
+        return run_install()
+    if "--uninstall-streamdock" in argv:
+        from tokitty.streamdock.install import run_uninstall
+
+        return run_uninstall()
     if "--install-autostart" in argv:
         from tokitty.autostart import install_autostart
 
