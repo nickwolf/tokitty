@@ -386,3 +386,13 @@ def test_worker_title_job_reports_title_and_reports_none_on_failure():
     fake, results, _ = run_worker(submit)
     assert results == [TitleDone(S, "My title"), TitleDone(S2, None), VerifyDone("n", True)]
     assert [c[0] for c in fake.calls] == ["title", "title", "verify"]
+
+
+def test_worker_title_job_skips_a_stopped_distro():
+    def submit(w):
+        w.submit_title(S, "cfg", lambda: False)
+        w.submit_title(S, "cfg", lambda: True)
+
+    fake, results, _ = run_worker(submit)
+    assert results == [TitleDone(S, None), TitleDone(S, "My title")]
+    assert [c[0] for c in fake.calls] == ["title"]

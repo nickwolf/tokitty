@@ -27,7 +27,7 @@ def test_parent_dir_handles_both_separators():
 def test_account_inputs_derive_dirs_from_sessions_dir():
     unc = "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude\\tokitty\\sessions"
     units = [
-        {"account": Account("work", "x"), "sessions_dir": unc},
+        {"account": Account("work", "x"), "sessions_dir": unc, "distro_name": "Ubuntu"},
         {"account": None, "sessions_dir": lambda: "/c/tokitty/sessions"},
         {"account": None, "sessions_dir": None},
     ]
@@ -37,6 +37,7 @@ def test_account_inputs_derive_dirs_from_sessions_dir():
     assert a.config_dir() == "\\\\wsl.localhost\\Ubuntu\\home\\u\\.claude"
     assert (b.name, b.tokitty_dir(), b.config_dir()) == (wiring.DEFAULT_NAME, "/c/tokitty", "/c")
     assert c.tokitty_dir() is None and c.config_dir() is None
+    assert (a.distro_name, b.distro_name) == ("Ubuntu", None)
 
 
 def test_gather_inputs_skips_units_without_usage():
@@ -92,6 +93,7 @@ def test_start_streamdock_starts_runtime():
     port, token, presets, accounts, kw = FakeRuntime.kwargs
     assert (port, token, presets, len(accounts)) == (4000, "t", [{"name": "p"}], 1)
     assert "watcher_factory" in kw
+    assert kw["list_running_distros_fn"] is list
 
 
 def test_start_streamdock_bind_error_is_logged_not_raised(capsys):

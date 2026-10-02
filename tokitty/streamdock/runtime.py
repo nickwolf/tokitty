@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,7 @@ from tokitty.streamdock.wt_focus import (
     VerifyDone,
     default_focus,
 )
+from tokitty.wsl_probe import list_running_distros
 
 HEARTBEAT_S = 30.0
 TITLE_REFRESH_S = 10.0
@@ -60,13 +62,16 @@ class AccountInput:
     `tokitty_dir` is where that account's hook writes pending/ and reads
     decisions/ (a callable is resolved on every use, like PendingWatcher's).
     `config_dir` is the Claude config dir as Windows tokitty can read it, and may
-    be a callable for the same reason.
+    be a callable for the same reason. `distro_name` names the WSL distro both
+    live in (None for a native account); nothing reads them while it is stopped,
+    since touching a \\\\wsl.localhost path boots the distro.
     """
     index: int
     name: str
     account: Optional[Account]
     config_dir: Union[str, Callable[[], Optional[str]]]
     tokitty_dir: TokittyDir
+    distro_name: Union[None, str, Callable[[], Optional[str]]] = None
 
 
 def _log(message: str) -> None:
@@ -104,6 +109,8 @@ class StreamdockRuntime:
         touch_enabled_fn: Callable[[Any], None] = pending_mod.touch_enabled,
         clear_enabled_fn: Callable[[Any], None] = pending_mod.clear_enabled,
         monotonic_fn: Callable[[], float] = time.monotonic,
+        list_running_distros_fn: Callable[[], List[str]] = list_running_distros,
+        run_io: Optional[Callable[[Callable[[], None]], None]] = None,
     ) -> None:
         self._presets = list(presets)
         self._accounts: Dict[int, AccountInput] = {a.index: a for a in accounts}
@@ -114,6 +121,12 @@ class StreamdockRuntime:
         self._clear_enabled = clear_enabled_fn
         self._monotonic = monotonic_fn
         self._worker_factory = worker_factory
+        self._list_running = list_running_distros_fn
+        # Marker touches and clears go over \\wsl.localhost and can stall, so by
+        # default they run in order on their own thread, never on Tk's.
+        self._io_jobs: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
+        self._io_thread: Optional[threading.Thread] = None
+        self._run_io = run_io or self._io_jobs.put
 
         self._model = DeckModel()
         self._box = PlanBox()
@@ -158,6 +171,9 @@ class StreamdockRuntime:
     def start(self) -> None:
         """Start the focus worker, the watchers and the server. A bind error propagates."""
         try:
+            if self._run_io == self._io_jobs.put:
+                self._io_thread = threading.Thread(target=self._io_loop, name="streamdock-io", daemon=True)
+                self._io_thread.start()
             self._worker = self._worker_factory(self._inbound.put)
             for watcher in self._watchers.values():
                 watcher.start()
@@ -172,13 +188,27 @@ class StreamdockRuntime:
         steps += [w.stop for w in self._watchers.values()]
         if self._worker is not None:
             steps.append(self._worker.stop)
-        steps += [lambda a=a: self._clear(a) for a in self._accounts.values()]
+        steps += [lambda a=a: self._run_io(lambda: self._clear(a)) for a in self._accounts.values()]
         for step in steps:
             try:
                 step()
             except Exception as exc:
                 _log(f"stop: {exc}")
         self._was_connected = False
+        thread, self._io_thread = self._io_thread, None
+        if thread is not None:
+            self._io_jobs.put(None)
+            thread.join(timeout=5)
+
+    def _io_loop(self) -> None:
+        while True:
+            job = self._io_jobs.get()
+            if job is None:
+                return
+            try:
+                job()
+            except Exception as exc:
+                _log(f"marker: {exc}")
 
     # Tk thread
 
@@ -344,10 +374,23 @@ class StreamdockRuntime:
         directory = acct.tokitty_dir() if callable(acct.tokitty_dir) else acct.tokitty_dir
         return directory or None
 
+    def _reachable(self, acct: AccountInput) -> bool:
+        """False while the account's WSL distro is stopped, so nothing boots it."""
+        try:
+            name = acct.distro_name() if callable(acct.distro_name) else acct.distro_name
+            return name is None or name in self._list_running()
+        except Exception:
+            return False
+
     def _clear(self, acct: AccountInput) -> None:
         directory = self._dir(acct)
-        if directory:
+        if directory and self._reachable(acct):
             self._clear_enabled(directory)
+
+    def _touch(self, acct: AccountInput) -> None:
+        directory = self._dir(acct)
+        if directory and self._reachable(acct):
+            self._touch_enabled(directory)
 
     def _heartbeat(self, now: float) -> None:
         connected = self.connected
@@ -361,16 +404,14 @@ class StreamdockRuntime:
             self._last_touch = now
         elif not connected and self._was_connected:
             for acct in self._accounts.values():
-                self._clear(acct)
+                self._run_io(lambda a=acct: self._clear(a))
             for watcher in self._watchers.values():
                 watcher.set_active(False)
         self._was_connected = connected
 
     def _touch_all(self) -> None:
         for acct in self._accounts.values():
-            directory = self._dir(acct)
-            if directory:
-                self._touch_enabled(directory)
+            self._run_io(lambda a=acct: self._touch(a))
 
     def _request_titles(self, sessions_by_account: Dict[int, List[SessionView]], now: float) -> None:
         live = {SessionRef(i, v.session_id) for i, views in sessions_by_account.items() for v in views}
@@ -385,7 +426,14 @@ class StreamdockRuntime:
                 continue
             self._title_asked[ref] = now
             self._title_inflight.add(ref)
-            self._submit(lambda ref=ref: self._worker.submit_title(ref, self._config_dir(ref.account_index)))
+            acct = self._accounts.get(ref.account_index)
+            if acct is None:
+                continue
+            self._submit(
+                lambda ref=ref, acct=acct: self._worker.submit_title(
+                    ref, self._config_dir(ref.account_index), lambda: self._reachable(acct)
+                )
+            )
 
     def _submit(self, job: Callable[[], None]) -> None:
         if self._worker is None:

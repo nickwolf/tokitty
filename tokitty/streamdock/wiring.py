@@ -42,7 +42,8 @@ def account_inputs(units: List[dict]) -> List[AccountInput]:
             return parent_dir(tokitty_dir())
 
         account = unit.get("account")
-        out.append(AccountInput(index, account.name if account else DEFAULT_NAME, account, config_dir, tokitty_dir))
+        name = account.name if account else DEFAULT_NAME
+        out.append(AccountInput(index, name, account, config_dir, tokitty_dir, unit.get("distro_name")))
     return out
 
 
@@ -107,6 +108,7 @@ def start_streamdock(
             palette_fn=palette_fn,
             open_in_window=open_in_window,
             watcher_factory=make_watcher_factory(units, list_running_distros_fn),
+            list_running_distros_fn=list_running_distros_fn,
         )
         runtime.start()
         return runtime

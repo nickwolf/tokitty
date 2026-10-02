@@ -1,5 +1,7 @@
 import json
 
+import threading
+
 import pytest
 
 from tokitty.accounts import Account
@@ -65,8 +67,9 @@ class FakeWorker:
     def submit_interrupt(self, session):
         self.calls.append(("interrupt", session))
 
-    def submit_title(self, session, config_dir):
+    def submit_title(self, session, config_dir, reachable=lambda: True):
         self.calls.append(("title", session, config_dir))
+        self.reachable = reachable
 
     def forget(self, session):
         self.calls.append(("forget", session))
@@ -135,7 +138,10 @@ class Harness:
             worker_factory=worker_factory,
             launch_fn=lambda preset, account: self.launched.append((preset["name"], account.name)),
             monotonic_fn=lambda: self.now,
+            list_running_distros_fn=lambda: self.running,
+            run_io=lambda job: job(),
         )
+        self.running = []
         opts.update(kw)
         presets = [
             {"name": "p0", "account_index": 0, "env": "native", "cwd": "C:\\a"},
@@ -416,6 +422,52 @@ def test_new_session_with_unknown_preset_is_ignored(h, capsys):
 
 def marker(h, i):
     return h.dirs[i] / "streamdock.enabled"
+
+
+def wsl_harness(tmp_path, **kw):
+    h = Harness(tmp_path, **kw)
+    a = h.rt._accounts[1]
+    h.rt._accounts[1] = AccountInput(a.index, a.name, a.account, a.config_dir, a.tokitty_dir, "Ubuntu")
+    return h
+
+
+def test_stopped_distro_marker_is_never_touched_or_cleared(tmp_path):
+    h = wsl_harness(tmp_path)
+    h.server.is_connected = True
+    h.tick()
+    assert marker(h, 0).exists() and not marker(h, 1).exists()
+    h.running = ["Ubuntu"]
+    h.now += 30
+    h.tick()
+    assert marker(h, 1).exists()
+    h.running = []
+    h.server.is_connected = False
+    h.tick()
+    h.rt.stop()
+    assert not marker(h, 0).exists() and marker(h, 1).exists()
+
+
+def test_title_job_checks_the_distro_on_the_worker(tmp_path):
+    h = wsl_harness(tmp_path)
+    h.tick()
+    assert h.worker.reachable() is False
+    h.running = ["Ubuntu"]
+    assert h.worker.reachable() is True
+
+
+def test_markers_go_through_the_io_thread_by_default(tmp_path):
+    calls = []
+    h = Harness(
+        tmp_path,
+        run_io=None,
+        touch_enabled_fn=lambda d: calls.append(("touch", threading.current_thread().name)),
+        clear_enabled_fn=lambda d: calls.append(("clear", threading.current_thread().name)),
+    )
+    h.server.is_connected = True
+    h.tick()
+    h.rt.stop()
+    assert h.rt._io_thread is None
+    assert calls == [("touch", "streamdock-io")] * 2 + [("clear", "streamdock-io")] * 2
 
 
 def test_heartbeat_connect_refresh_and_disconnect(h):
