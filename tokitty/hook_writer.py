@@ -38,6 +38,7 @@ import signal
 import sys
 import tempfile
 import time
+from datetime import datetime
 
 
 def _read_stdin_payload():
@@ -94,6 +95,9 @@ _POLL_S = 0.25
 _HEARTBEAT_S = 5.0
 _MARKER_MAX_AGE_S = 120.0
 _TAIL_BYTES = 256 * 1024
+_READ_CAP = 8 * 1024 * 1024  # most bytes read from the transcript in one call
+_MAX_CHUNKS = 16  # read calls per poll; the rest is picked up on the next poll
+_STALE_CALL_S = 60.0  # a matching tool_use older than this before the hook started is not ours
 _LOOKUP_TRIES = 5
 _LOOKUP_GAP_S = 0.1
 _PREVIEW_MAX = 200
@@ -107,16 +111,72 @@ def _digest(tool_input):
 
 
 def _read_tail(path):
-    """Return the last _TAIL_BYTES of a file as text, without a partial first line."""
+    """Return (text, size): the last _TAIL_BYTES of a file as text, without a
+    partial first line, and the byte size the read ended at."""
     with open(path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         start = max(0, size - _TAIL_BYTES)
         f.seek(start)
-        raw = f.read()
+        raw = f.read(size - start)
     if start > 0:
         nl = raw.find(b"\n")
         raw = b"" if nl < 0 else raw[nl + 1 :]
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace"), size
+
+
+def _read_from(path, offset):
+    """Bytes appended at or after offset, at most _READ_CAP of them.
+
+    Raises if the file is now shorter than offset (truncated or replaced).
+    """
+    with open(path, "rb") as f:
+        size = f.seek(0, os.SEEK_END)
+        if size < offset:
+            raise OSError("transcript is shorter than the recorded offset")
+        f.seek(offset)
+        return f.read(min(_READ_CAP, size - offset))
+
+
+def _tool_use_id_ok(tid):
+    return isinstance(tid, str) and tid.isascii() and all(c.isalnum() or c in "_-" for c in tid) and bool(tid)
+
+
+def _needles(tool_use_id):
+    return [
+        f'"tool_use_id":"{tool_use_id}"'.encode(),
+        f'"tool_use_id": "{tool_use_id}"'.encode(),
+    ]
+
+
+def _new_scan(tool_use_id, size, tail_text):
+    needles = _needles(tool_use_id)
+    keep = max(len(n) for n in needles)
+    return {
+        "offset": size,
+        "needles": needles,
+        "keep": keep,
+        "carry": tail_text.encode("utf-8", errors="replace")[-keep:],
+    }
+
+
+def _scan_stop(scan, path, read_from_fn):
+    """True if the wait must end: a tool_result for our id appeared in the bytes
+    appended since the last scan, or the transcript can no longer be trusted
+    (read error, truncated or replaced). Scans every appended byte, carrying the
+    last len(needle) bytes across chunks so a split needle is still found."""
+    try:
+        for _ in range(_MAX_CHUNKS):
+            chunk = read_from_fn(path, scan["offset"])
+            if not chunk:
+                return False
+            data = scan["carry"] + chunk
+            if any(n in data for n in scan["needles"]):
+                return True
+            scan["carry"] = data[-scan["keep"] :]
+            scan["offset"] += len(chunk)
+        return False
+    except Exception:
+        return True
 
 
 def _content_blocks(obj):
@@ -136,10 +196,9 @@ def _answered(tail, tool_use_id):
     a result line too large to fit the tail (and therefore unparseable) is
     still noticed. A false positive only makes the hook stay silent.
     """
-    if f'"tool_use_id":"{tool_use_id}"' in tail:
-        return True
-    if f'"tool_use_id": "{tool_use_id}"' in tail:
-        return True
+    for needle in _needles(tool_use_id):
+        if needle.decode() in tail:
+            return True
     for line in tail.splitlines():
         if "tool_result" not in line:
             continue
@@ -155,7 +214,20 @@ def _answered(tail, tool_use_id):
     return False
 
 
-def _unresolved_matches(tail, tool_name, digest):
+def _too_old(obj, started):
+    """True if the line carries a parseable timestamp over _STALE_CALL_S before started."""
+    ts = obj.get("timestamp")
+    if not isinstance(ts, str):
+        return False
+    try:
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        return datetime.fromisoformat(ts).timestamp() < started - _STALE_CALL_S
+    except Exception:
+        return False
+
+
+def _unresolved_matches(tail, tool_name, digest, started):
     """Ids of tool_use blocks matching name and input digest with no result yet."""
     ids = []
     for line in tail.splitlines():
@@ -167,11 +239,13 @@ def _unresolved_matches(tail, tool_name, digest):
             continue  # the first line of a tail is usually truncated
         if not isinstance(obj, dict) or obj.get("type") != "assistant":
             continue
+        if _too_old(obj, started):
+            continue
         for b in _content_blocks(obj):
             if b.get("type") != "tool_use" or b.get("name") != tool_name:
                 continue
             tid = b.get("id")
-            if not isinstance(tid, str) or not tid or tid in ids:
+            if not _tool_use_id_ok(tid) or tid in ids:
                 continue
             try:
                 if _digest(b.get("input")) != digest:
@@ -182,19 +256,23 @@ def _unresolved_matches(tail, tool_name, digest):
     return [t for t in ids if not _answered(tail, t)]
 
 
-def _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn):
-    """The one unresolved matching tool_use id, or None (zero, several, unreadable)."""
+def _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn, started):
+    """(tool_use_id, scan state) for the one unresolved matching call, or None
+    (zero, several, unreadable). The scan state starts at the byte size the
+    lookup read ended at, so later polls cover everything appended after it."""
     path = payload.get("transcript_path")
     if not isinstance(path, str) or not path:
         return None
     for attempt in range(_LOOKUP_TRIES):
         try:
-            tail = read_tail_fn(path)
+            tail, size = read_tail_fn(path)
         except Exception:
-            tail = ""
-        found = _unresolved_matches(tail, payload["tool_name"], digest)
+            tail, size = "", None
+        found = _unresolved_matches(tail, payload["tool_name"], digest, started)
         if len(found) == 1:
-            return found[0]
+            if size is None:
+                return None
+            return found[0], _new_scan(found[0], size, tail)
         if len(found) > 1:
             return None
         if attempt < _LOOKUP_TRIES - 1:
@@ -257,8 +335,10 @@ def wait_for_decision(
     tokitty_dir,
     *,
     now_fn=time.time,
+    mono_fn=time.monotonic,
     sleep_fn=time.sleep,
     read_tail_fn=_read_tail,
+    read_from_fn=_read_from,
     rand_fn=lambda: secrets.token_hex(8),
     mtime_fn=os.path.getmtime,
     utime_fn=os.utime,
@@ -268,6 +348,9 @@ def wait_for_decision(
     Returns {"behavior": "allow" | "deny"} only for a decision file that
     matches this request's nonce, session id and input digest; None for every
     other outcome. Never prints. The caller decides what to do with the result.
+
+    now_fn (wall clock) is used only for the marker age and the `started`
+    field; the 590 s cap and the heartbeat use mono_fn.
     """
     session_id = payload.get("session_id")
     tool_name = payload.get("tool_name")
@@ -284,10 +367,13 @@ def wait_for_decision(
         return None
 
     started = now_fn()
+    started_mono = mono_fn()
     digest = _digest(tool_input)
-    tool_use_id = _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn)
-    if tool_use_id is None:
+    looked_up = _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn, started)
+    if looked_up is None:
         return None
+    tool_use_id, scan = looked_up
+    transcript = payload["transcript_path"]
 
     nonce = rand_fn()
     if not isinstance(nonce, str) or not nonce or not set(nonce) <= _HEX:
@@ -297,6 +383,15 @@ def wait_for_decision(
     pending = os.path.join(pending_dir, nonce + ".json")
     decision_file = os.path.join(tokitty_dir, "decisions", nonce + ".json")
     os.makedirs(pending_dir, exist_ok=True)
+
+    # One hook process per prompt: claim the tool use id atomically. A second
+    # process for the same id (or a stale claim) fails closed and prints nothing.
+    claim_key = hashlib.sha256((session_id + "\0" + tool_use_id).encode("utf-8")).hexdigest()[:32]
+    claim = os.path.join(pending_dir, claim_key + ".claim")
+    try:
+        os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError:
+        return None
     try:
         _atomic_write(
             pending_dir,
@@ -316,32 +411,32 @@ def wait_for_decision(
             },
             tmp_suffix=".tmp",
         )
-        last_beat = started
+        last_beat = started_mono
         while True:
-            try:
-                tail = read_tail_fn(payload["transcript_path"])
-            except Exception:
-                tail = ""
-            if _answered(tail, tool_use_id):
+            if _scan_stop(scan, transcript, read_from_fn):
+                return None
+            if not _marker_fresh(marker, now_fn, mtime_fn):
+                return None
+            mono = mono_fn()
+            if mono - started_mono >= _PERM_CAP_S:
                 return None
             behavior = _read_decision(decision_file, nonce, session_id, digest)
             if behavior is not None:
+                # Narrow the race with a terminal answer: look once more.
+                if _scan_stop(scan, transcript, read_from_fn):
+                    return None
                 return {"behavior": behavior}
-            if not _marker_fresh(marker, now_fn, mtime_fn):
-                return None
-            now = now_fn()
-            if now - started >= _PERM_CAP_S:
-                return None
-            if now - last_beat >= _HEARTBEAT_S:
+            if mono - last_beat >= _HEARTBEAT_S:
                 try:
                     utime_fn(pending, None)
                 except OSError:
                     pass
-                last_beat = now
+                last_beat = mono
             sleep_fn(_POLL_S)
     finally:
         _remove(pending)
         _remove(decision_file)
+        _remove(claim)
 
 
 def _emit_decision(decision):
@@ -442,5 +537,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
+    except BaseException:
+        # KeyboardInterrupt and SystemExit included: never a non-zero exit.
         pass

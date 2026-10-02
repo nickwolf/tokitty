@@ -328,6 +328,7 @@ class Env:
             self.payload,
             str(self.tokitty),
             now_fn=self.clock.now,
+            mono_fn=self.clock.now,
             sleep_fn=self.clock.sleep,
             rand_fn=lambda: NONCE,
             **kw,
@@ -338,14 +339,21 @@ class Env:
             self.payload,
             str(self.sessions),
             now_fn=self.clock.now,
+            mono_fn=self.clock.now,
             sleep_fn=self.clock.sleep,
             rand_fn=lambda: NONCE,
             **kw,
         )
 
+    @property
+    def claim_files(self):
+        d = self.tokitty / "pending"
+        return list(d.glob("*.claim")) if d.exists() else []
 
-def tool_use(tid, name="Bash", inp=None):
+
+def tool_use(tid, name="Bash", inp=None, ts=None):
     return {
+        **({} if ts is None else {"timestamp": ts}),
         "type": "assistant",
         "message": {
             "content": [
@@ -687,7 +695,8 @@ class TestToolUseLookup:
         lines.append(tool_use("toolu_B"))
         env.write_transcript(*lines)
         assert env.transcript.stat().st_size > hw._TAIL_BYTES
-        tail = hw._read_tail(str(env.transcript))
+        tail, size = hw._read_tail(str(env.transcript))
+        assert size == env.transcript.stat().st_size
         assert len(tail.encode()) <= hw._TAIL_BYTES
         assert all(json.loads(ln) for ln in tail.splitlines())
         assert "toolu_A" not in tail and "toolu_B" in tail
@@ -921,3 +930,256 @@ class TestPermissionEndToEnd:
         assert proc.returncode == 0
         assert json.loads(out)["hookSpecificOutput"]["decision"] == {"behavior": "allow"}
         assert list(pend.iterdir()) == []
+
+
+def iso(epoch):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class TestReviewGaps:
+    def test_read_failure_after_lookup_is_silent(self, env, capsys):
+        env.decide()
+
+        def boom(path, offset):
+            raise OSError("gone")
+
+        assert env.wait(read_from_fn=boom) is None
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == []
+
+    def test_read_failure_via_run_prints_nothing(self, env, capsys):
+        env.decide()
+        env.transcript.unlink()
+        env.run()
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == [] and env.claim_files == []
+
+    def test_huge_result_line_after_lookup(self, env, capsys):
+        env.decide()
+
+        # decision present from the start: the answer must be found on the first poll
+        with open(env.transcript, "a") as f:
+            f.write('{"x":"' + "a" * (hw._TAIL_BYTES * 2) + '","tool_use_id":"toolu_A"}\n')
+        env.run()
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == []
+
+    def test_huge_result_scanned_in_chunks(self, env, monkeypatch):
+        monkeypatch.setattr(hw, "_READ_CAP", 1000)
+        env.decide()
+        with open(env.transcript, "a") as f:
+            f.write("a" * 5000 + '"tool_use_id":"toolu_A"\n')
+        assert env.wait() is None
+
+    def test_needle_split_across_reads(self, env):
+        needle = '"tool_use_id":"toolu_A"'
+        halves = [needle[:9], needle[9:]]
+        env.decide()
+        calls = []
+
+        def reader(path, offset):
+            calls.append(offset)
+            if len(calls) == 1:
+                return halves[0].encode()
+            if len(calls) == 2:
+                return halves[1].encode()
+            return b""
+
+        # the decision only arrives after the second poll, which read the second half
+        env.decision.unlink()
+
+        def later(clock):
+            if len(clock.sleeps) == 2:
+                env.decide()
+
+        env.clock.on_sleep = later
+        assert env.wait(read_from_fn=reader) is None
+
+    def test_truncated_transcript_is_silent(self, env):
+        env.decide()
+        env.transcript.write_text("")
+        assert env.wait() is None
+        assert pending_files(env) == []
+
+    def test_read_from_rejects_shrunk_file(self, tmp_path):
+        f = tmp_path / "x"
+        f.write_bytes(b"abc")
+        with pytest.raises(OSError):
+            hw._read_from(str(f), 10)
+        assert hw._read_from(str(f), 1) == b"bc"
+
+    def test_second_waiter_for_same_call_fails_closed(self, env):
+        seen = {}
+
+        def second(clock):
+            if "r" in seen:
+                return
+            seen["claims"] = [p.name for p in env.claim_files]
+            seen["r"] = env.wait()
+            seen["pending_after"] = [p.name for p in pending_files(env)]
+            env.decide()
+
+        env.clock.on_sleep = second
+        assert env.wait() == {"behavior": "allow"}
+        assert seen["r"] is None
+        assert len(seen["claims"]) == 1
+        assert sorted(seen["pending_after"]) == sorted(seen["claims"] + [f"{NONCE}.json"])
+        assert env.claim_files == []
+        assert pending_files(env) == []
+
+    def test_claim_name_is_hash_of_session_and_id(self, env):
+        got = {}
+
+        def peek(clock):
+            got["c"] = [p.name for p in env.claim_files]
+            env.decide()
+
+        env.clock.on_sleep = peek
+        env.wait()
+        key = hashlib.sha256(b"sess-1\0toolu_A").hexdigest()[:32]
+        assert got["c"] == [key + ".claim"]
+
+    def test_older_identical_call_with_old_timestamp_ignored(self, env):
+        env.write_transcript(tool_use("toolu_OLD", ts=iso(T0 - 61)))
+        got = {}
+
+        def step(clock):
+            if env.pending.exists():
+                got.update(json.loads(env.pending.read_text()))
+                env.decide()
+            elif len(clock.sleeps) == 2:
+                env.append_transcript(tool_use("toolu_A", ts=iso(T0 + 0.2)))
+
+        env.clock.on_sleep = step
+        assert env.wait() == {"behavior": "allow"}
+        assert got["tool_use_id"] == "toolu_A"
+        assert env.clock.sleeps[:2] == [0.1, 0.1]
+
+    def test_old_timestamp_alone_gives_no_pending(self, env, capsys):
+        env.write_transcript(tool_use("toolu_OLD", ts=iso(T0 - 600)))
+        env.decide()
+        env.run()
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == []
+
+    @pytest.mark.parametrize("ts", [None, "garbage", 12, iso(T0 - 59)])
+    def test_missing_unparseable_or_recent_timestamp_still_counts(self, env, ts):
+        line = tool_use("toolu_A")
+        if ts is not None:
+            line["timestamp"] = ts
+        env.write_transcript(line)
+        env.decide()
+        assert env.wait() == {"behavior": "allow"}
+
+    def test_stale_marker_with_decision_prints_nothing(self, env, capsys):
+        env.decide()
+        ages = iter([0.0, 500.0])  # fresh on entry, stale at the first poll
+
+        env.run(mtime_fn=lambda p: env.clock.t - next(ages))
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == []
+
+    def test_cap_passed_with_decision_prints_nothing(self, env, capsys):
+        env.decide()
+
+        def jump(path, offset):
+            env.clock.t += hw._PERM_CAP_S + 1
+            env.enable()
+            return b""
+
+        env.run(read_from_fn=jump)
+        assert capsys.readouterr().out == ""
+
+    def test_monotonic_cap_survives_wall_clock_jump_back(self, env):
+        mono = {"t": 0.0}
+
+        def sleep(dt):
+            mono["t"] += dt
+            env.clock.t -= 1000  # wall clock runs backwards
+            env.enable(mtime=env.clock.t)
+
+        assert (
+            hw.wait_for_decision(
+                env.payload,
+                str(env.tokitty),
+                now_fn=env.clock.now,
+                mono_fn=lambda: mono["t"],
+                sleep_fn=sleep,
+                rand_fn=lambda: NONCE,
+                read_tail_fn=lambda p: (tool_use_text(), 0),
+                read_from_fn=lambda p, o: b"",
+            )
+            is None
+        )
+        assert 589.9 <= mono["t"] <= 590.5
+
+    def test_answer_between_decision_read_and_recheck(self, env, capsys):
+        env.decide()
+        n = {"reads": 0}
+
+        def reader(path, offset):
+            n["reads"] += 1
+            if not env.decision.exists():  # decision already consumed
+                return b'"tool_use_id":"toolu_A"'
+            return b""
+
+        env.run(read_from_fn=reader)
+        assert capsys.readouterr().out == ""
+        assert n["reads"] == 2
+
+    def test_normal_allow_still_works_with_recheck(self, env):
+        env.decide()
+        assert env.wait() == {"behavior": "allow"}
+        assert env.claim_files == []
+
+
+def tool_use_text():
+    return json.dumps(tool_use("toolu_A")) + "\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+class TestSigint:
+    def test_sigint_exits_zero_silently_and_cleans_up(self, tmp_path):
+        import time as _t
+
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(json.dumps(tool_use("toolu_A")) + "\n")
+        tdir = tmp_path / "tokitty"
+        tdir.mkdir()
+        (tdir / "streamdock.enabled").write_text("")
+        payload = {
+            "session_id": "sess-1",
+            "transcript_path": str(transcript),
+            "cwd": "/w",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": TOOL_INPUT,
+        }
+        proc = subprocess.Popen(
+            [sys.executable, SCRIPT, "--sessions-dir", str(tdir / "sessions")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        proc.stdin.write(json.dumps(payload).encode())
+        proc.stdin.close()
+        pend = tdir / "pending"
+        deadline = _t.time() + 8
+        while _t.time() < deadline and not list(pend.glob("*.json") if pend.exists() else []):
+            _t.sleep(0.05)
+        assert list(pend.glob("*.json")) and list(pend.glob("*.claim"))
+        proc.send_signal(signal.SIGINT)
+        out = proc.stdout.read()
+        proc.wait(timeout=10)
+        err = proc.stderr.read()
+        proc.stdout.close()
+        proc.stderr.close()
+        assert proc.returncode == 0
+        assert out == b"" and err == b""
+        assert list(pend.iterdir()) == []
+
+    def test_main_guard_catches_base_exception(self):
+        text = Path(SCRIPT).read_text()
+        assert "except BaseException:" in text
