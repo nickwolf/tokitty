@@ -54,6 +54,7 @@ class KeySpec:
 @dataclass(frozen=True)
 class Focus:
     session: SessionRef
+    seq: int = 0
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class FocusAndOpen:
     session: SessionRef
     request: PendingRequest
     overlay: bool
+    seq: int = 0
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,8 @@ class DeckModel:
         self._pending_nonces: Set[str] = set()
         self._usage: Dict[int, Tuple[float, float, bool]] = {}
         self._focus: Dict[SessionRef, str] = {}
+        self._focus_seq: Dict[SessionRef, int] = {}
+        self._live_count: Dict[SessionRef, int] = {}
         self._titles: Dict[SessionRef, str] = {}
         self._in_window: Set[str] = set()
         self._sent: Set[str] = set()
@@ -203,7 +207,6 @@ class DeckModel:
         sessions_by_account: Dict[int, List[SessionView]],
         pending: List[PendingRequest],
         usage: Dict[int, Tuple[float, float, bool]],
-        focus_status: Dict[SessionRef, str],
         *,
         titles: Optional[Dict[SessionRef, str]] = None,
     ) -> None:
@@ -217,10 +220,15 @@ class DeckModel:
             if ref in self._views:
                 self._pending.setdefault(ref, req)
         self._pending_nonces = {r.nonce for r in pending}
+        self._live_count = {}
+        for req in pending:
+            ref = SessionRef(req.account_index, req.session_id)
+            self._live_count[ref] = self._live_count.get(ref, 0) + 1
         self._sent &= self._pending_nonces
         self._in_window &= self._pending_nonces
         self._usage = dict(usage)
-        self._focus = dict(focus_status)
+        self._focus = {r: st for r, st in self._focus.items() if r in self._views}
+        self._focus_seq = {r: n for r, n in self._focus_seq.items() if r in self._views}
         self._titles = dict(titles or {})
         self._refresh()
 
@@ -230,6 +238,16 @@ class DeckModel:
             self._in_window.add(nonce)
         else:
             self._in_window.discard(nonce)
+        self._refresh()
+
+    def focus_result(self, session: SessionRef, status: str, seq: int) -> None:
+        """The focus worker's result for a Focus or FocusAndOpen action carrying `seq`.
+
+        Ignored when a newer slot press for the session has started another job.
+        """
+        if session not in self._views or seq != self._focus_seq.get(session, 0):
+            return
+        self._focus[session] = status
         self._refresh()
 
     def verify_result(self, nonce: str, ok: bool) -> None:
@@ -335,15 +353,21 @@ class DeckModel:
         else:
             return Noop("empty slot")
         self._last_focused = ref
+        seq = self._focus_seq.get(ref, 0) + 1
+        self._focus_seq[ref] = seq
+        # The runtime starts a new focus job, so any earlier result is stale.
+        self._focus.pop(ref, None)
         req = self._pending.get(ref)
         if req is None:
             self._refresh()
-            return Focus(ref)
-        opened = len(self._participants(context)) >= MIN_OVERLAY_KEYS
+            return Focus(ref, seq)
+        # With several live requests in one session the terminal may be showing a
+        # different prompt, so only tokitty's own window can show this one in full.
+        opened = len(self._participants(context)) >= MIN_OVERLAY_KEYS and not self._multi(ref)
         if opened:
             self._overlay = _Overlay(context, req.nonce)
         self._refresh()
-        return FocusAndOpen(ref, req, opened)
+        return FocusAndOpen(ref, req, opened, seq)
 
     # overlay
 
@@ -375,8 +399,13 @@ class DeckModel:
             layout[ctx] = (kinds[i], 0) if i < len(kinds) else ("preview", i - len(kinds))
         return layout
 
+    def _multi(self, ref: SessionRef) -> bool:
+        return self._live_count.get(ref, 0) > 1
+
     def _armed(self, ref: SessionRef, req: PendingRequest) -> bool:
-        return req.nonce in self._in_window or self._focus.get(ref) == FOCUSED
+        if req.nonce in self._in_window:
+            return True
+        return self._focus.get(ref) == FOCUSED and not self._multi(ref)
 
     def _overlay_ref(self, req: PendingRequest) -> SessionRef:
         return SessionRef(req.account_index, req.session_id)

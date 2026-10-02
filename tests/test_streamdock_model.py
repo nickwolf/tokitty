@@ -34,17 +34,23 @@ def coords(r, c):
     return {"row": r, "column": c}
 
 
-def setup(roles, sessions=(), pending=(), focus=None, usage=None):
+def setup(roles, sessions=(), pending=(), usage=None):
     """roles: list of role strings placed on row 0, columns 0..n-1; contexts k0..kn."""
     m = DeckModel()
     for i, role in enumerate(roles):
         m.appear(f"k{i}", coords(0, i), "dev", {"role": role})
-    m.update({0: list(sessions)}, list(pending), usage or {}, focus or {})
+    m.update({0: list(sessions)}, list(pending), usage or {})
     return m
 
 
-def feed(m, sessions, pending=(), focus=None, usage=None, titles=None):
-    m.update({0: list(sessions)}, list(pending), usage or {}, focus or {}, titles=titles)
+def feed(m, sessions, pending=(), usage=None, titles=None):
+    m.update({0: list(sessions)}, list(pending), usage or {}, titles=titles)
+
+
+def focus(m, name, status="focused"):
+    """Deliver a focus worker result for the session's latest press."""
+    r = ref(name)
+    m.focus_result(r, status, m._focus_seq.get(r, 0))
 
 
 def test_slots_follow_first_seen_and_stay_put():
@@ -72,7 +78,7 @@ def test_same_session_id_on_two_accounts_is_two_sessions():
     m = DeckModel()
     for i in range(2):
         m.appear(f"k{i}", coords(0, i), "dev", {"role": "slot"})
-    m.update({0: [sv("x", 1)], 1: [sv("x", 2)]}, [], {}, {})
+    m.update({0: [sv("x", 1)], 1: [sv("x", 2)]}, [], {})
     plan = m.render_plan()
     assert plan["k0"].ref == ref("x", 0) and plan["k1"].ref == ref("x", 1)
 
@@ -81,7 +87,7 @@ def test_slots_ordered_by_row_then_column():
     m = DeckModel()
     m.appear("low", coords(1, 0), "dev", {"role": "slot"})
     m.appear("high", coords(0, 4), "dev", {"role": "slot"})
-    m.update({0: [sv("a", 1), sv("b", 2)]}, [], {}, {})
+    m.update({0: [sv("a", 1), sv("b", 2)]}, [], {})
     plan = m.render_plan()
     assert plan["high"].ref == ref("a") and plan["low"].ref == ref("b")
 
@@ -91,9 +97,9 @@ def test_overflow_shows_count_and_cycles():
     plan = m.render_plan()
     assert plan["k0"].ref == ref("a") and plan["k1"].ref == ref("b")
     assert plan["k2"].kind == "overflow" and plan["k2"].count == 2 and plan["k2"].ref == ref("c")
-    assert m.press("k2") == Focus(ref("d"))
+    assert m.press("k2") == Focus(ref("d"), 1)
     assert m.render_plan()["k2"].ref == ref("d")
-    assert m.press("k2") == Focus(ref("c"))
+    assert m.press("k2") == Focus(ref("c"), 1)
 
 
 def test_overflow_alert_and_pending_first():
@@ -145,7 +151,7 @@ def test_bad_settings_make_status_key_that_never_takes_part():
     m.appear("s", coords(0, 2), "dev", {"role": "slot"})
     m.appear("t", coords(0, 3), "dev", {"role": "slot"})
     m.appear("u", coords(0, 4), "dev", {"role": "slot"})
-    m.update({0: [sv("a", 1)]}, [req("a")], {}, {})
+    m.update({0: [sv("a", 1)]}, [req("a")], {})
     assert m.render_plan()["bad"].kind == "status" and m.render_plan()["bad2"].kind == "status"
     assert isinstance(m.press("s"), FocusAndOpen)
     plan = m.render_plan()
@@ -172,7 +178,7 @@ def test_titles_flow_into_slot_spec():
 
 def test_slot_press_without_request_is_focus():
     m = setup(["slot"], [sv("a", 1)])
-    assert m.press("k0") == Focus(ref("a"))
+    assert m.press("k0") == Focus(ref("a"), 1)
     assert m.press("nope") == Noop("unknown key")
 
 
@@ -183,15 +189,14 @@ def test_empty_slot_press_is_noop():
 
 # overlay
 
-def overlay_model(extra=("slot", "slot", "usage:0", "new:x"), focus=None):
-    m = setup(["slot", *extra], [sv("a", 1), sv("b", 2)], [req("a")], focus=focus, usage={0: (1, 2, False)})
-    return m
+def overlay_model(extra=("slot", "slot", "usage:0", "new:x")):
+    return setup(["slot", *extra], [sv("a", 1), sv("b", 2)], [req("a")], usage={0: (1, 2, False)})
 
 
 def test_overlay_entry_layout_and_untouched_keys():
     m = overlay_model()
     r = req("a")
-    assert m.press("k0") == FocusAndOpen(ref("a"), r, True)
+    assert m.press("k0") == FocusAndOpen(ref("a"), r, True, 1)
     plan = m.render_plan()
     assert plan["k0"].kind == "decision" and plan["k0"].decision == "cancel"
     assert plan["k1"].decision == "allow" and plan["k2"].decision == "deny"
@@ -230,7 +235,7 @@ def test_overlay_exit_on_request_gone():
     m.press("k0")
     feed(m, [sv("a", 1), sv("b", 2)], [])
     assert m.render_plan()["k0"].kind == "slot"
-    assert m.press("k1") == Focus(ref("b"))
+    assert m.press("k1") == Focus(ref("b"), 1)
 
 
 def test_overlay_exit_on_cancel_and_second_press():
@@ -271,7 +276,7 @@ def test_oldest_request_wins_for_a_session():
 
 def test_pending_for_unknown_session_ignored():
     m = setup(["slot"], [sv("a", 1)], [req("zzz")])
-    assert m.press("k0") == Focus(ref("a"))
+    assert m.press("k0") == Focus(ref("a"), 1)
 
 
 # arming
@@ -286,8 +291,9 @@ def test_unarmed_allow_greyed_and_noop_deny_live():
 
 
 def test_armed_by_focus_requires_verify():
-    m = overlay_model(focus={ref("a"): "focused"})
+    m = overlay_model()
     m.press("k0")
+    focus(m, "a")
     assert m.render_plan()["k1"].armed is True
     act = m.press("k1")
     assert act == VerifyThenDecide(req("a"), "allow")
@@ -295,8 +301,9 @@ def test_armed_by_focus_requires_verify():
 
 
 def test_verify_ok_marks_sent():
-    m = overlay_model(focus={ref("a"): "focused"})
+    m = overlay_model()
     m.press("k0")
+    focus(m, "a")
     m.press("k1")
     m.verify_result("n1", True)
     plan = m.render_plan()
@@ -306,15 +313,18 @@ def test_verify_ok_marks_sent():
 
 
 def test_manual_tab_switch_disarms_allow():
-    m = overlay_model(focus={ref("a"): "focused"})
+    m = overlay_model()
     m.press("k0")
+    focus(m, "a")
     assert isinstance(m.press("k1"), VerifyThenDecide)
     m.verify_result("n1", False)
     assert m.render_plan()["k1"].armed is False
     assert m.press("k1") == Noop("request not visible")
-    assert m.press("k2") == Decide(req("a"), "deny")
-    # A fresh focused status from the next update rearms.
-    feed(m, [sv("a", 1), sv("b", 2)], [req("a")], focus={ref("a"): "focused"})
+    # An unchanged update keeps it disarmed; only a fresh focus result rearms.
+    feed(m, [sv("a", 1), sv("b", 2)], [req("a")])
+    assert m.render_plan()["k1"].armed is False
+    assert m.press("k1") == Noop("request not visible")
+    focus(m, "a")
     assert m.render_plan()["k1"].armed is True
 
 
@@ -327,8 +337,9 @@ def test_in_window_arms_and_decides_directly():
 
 
 def test_in_window_preferred_over_focus():
-    m = overlay_model(focus={ref("a"): "focused"})
+    m = overlay_model()
     m.press("k0")
+    focus(m, "a")
     m.set_in_window("n1", True)
     assert m.press("k1") == Decide(req("a"), "allow")
 
@@ -364,8 +375,9 @@ def test_always_appears_only_with_narrow_rule():
     # With an always_rule attribute the third participant becomes Always.
     r = req("a")
     object.__setattr__(r, "always_rule", {"x": 1})
-    m2 = setup(["slot"] * 5, [sv("a", 1)], [r], focus={ref("a"): "focused"})
+    m2 = setup(["slot"] * 5, [sv("a", 1)], [r])
     m2.press("k0")
+    focus(m2, "a")
     assert m2.render_plan()["k3"].decision == "always"
     assert m2.render_plan()["k4"].kind == "preview"
     assert m2.press("k3") == VerifyThenDecide(r, "always")
@@ -379,19 +391,21 @@ def test_interrupt_gating():
     assert m.render_plan()["k1"].armed is False
     m.press("k0")
     assert m.press("k1") == Noop("session tab not confirmed")
-    feed(m, [sv("a", 1)], focus={ref("a"): "focused"})
+    focus(m, "a")
     assert m.render_plan()["k1"].armed is True
     assert m.press("k1") == Interrupt(ref("a"))
-    feed(m, [sv("a", 1)], focus={ref("a"): "ambiguous"})
+    focus(m, "a", "ambiguous")
     assert m.press("k1") == Noop("session tab not confirmed")
 
 
 def test_interrupt_follows_last_pressed_slot_and_clears_on_end():
-    m = setup(["slot", "slot", "interrupt"], [sv("a", 1), sv("b", 2)], focus={ref("a"): "focused", ref("b"): "focused"})
+    m = setup(["slot", "slot", "interrupt"], [sv("a", 1), sv("b", 2)])
     m.press("k0")
+    focus(m, "a")
     m.press("k1")
+    focus(m, "b")
     assert m.press("k2") == Interrupt(ref("b"))
-    feed(m, [sv("a", 1)], focus={ref("a"): "focused"})
+    feed(m, [sv("a", 1)])
     assert m.press("k2") == Noop("session tab not confirmed")
 
 
@@ -455,3 +469,69 @@ def test_planbox_wakes_waiter_across_threads():
     box.publish(1, {})
     t.join(1)
     assert out and out[0].revision == 1
+
+
+# model-owned focus status
+
+def test_slot_press_clears_prior_focused():
+    m = setup(["slot", "interrupt"], [sv("a", 1)])
+    m.press("k0")
+    focus(m, "a")
+    assert m.render_plan()["k1"].armed is True
+    act = m.press("k0")
+    assert act == Focus(ref("a"), 2)
+    assert m.render_plan()["k1"].armed is False
+    assert m.press("k1") == Noop("session tab not confirmed")
+
+
+def test_stale_seq_focus_result_ignored():
+    m = setup(["slot", "interrupt"], [sv("a", 1)])
+    first = m.press("k0")
+    second = m.press("k0")
+    m.focus_result(ref("a"), "focused", first.seq)
+    assert m.render_plan()["k1"].armed is False
+    m.focus_result(ref("a"), "focused", second.seq)
+    assert m.render_plan()["k1"].armed is True
+
+
+def test_focus_entries_dropped_for_ended_sessions():
+    m = setup(["slot", "interrupt"], [sv("a", 1)])
+    m.press("k0")
+    focus(m, "a")
+    feed(m, [])
+    feed(m, [sv("a", 1)])
+    assert ref("a") not in m._focus
+    m.press("k0")
+    assert m.render_plan()["k1"].armed is False
+
+
+def test_two_pending_in_one_session_never_open_overlay():
+    m = setup(["slot", "slot", "slot"], [sv("a", 1)], [req("a", "n1", 1), req("a", "n2", 2)])
+    act = m.press("k0")
+    assert isinstance(act, FocusAndOpen) and act.overlay is False and act.request.nonce == "n1"
+    assert m.render_plan()["k1"].kind == "status"
+
+
+def test_two_pending_tab_focus_does_not_arm_allow():
+    m = setup(["slot", "slot", "slot"], [sv("a", 1)], [req("a", "n1", 1)])
+    m.press("k0")
+    focus(m, "a")
+    assert m.render_plan()["k1"].armed is True
+    feed(m, [sv("a", 1)], [req("a", "n1", 1), req("a", "n2", 2)])
+    plan = m.render_plan()
+    assert plan["k1"].armed is False and plan["k2"].armed is True
+    assert m.press("k1") == Noop("request not visible")
+    m.set_in_window("n2", True)
+    assert m.render_plan()["k1"].armed is False
+    assert m.press("k1") == Noop("request not visible")
+    m.set_in_window("n1", True)
+    assert m.render_plan()["k1"].armed is True
+    assert m.press("k1") == Decide(req("a", "n1", 1), "allow")
+
+
+def test_one_pending_still_armed_by_focus():
+    m = setup(["slot", "slot", "slot"], [sv("a", 1)], [req("a", "n1", 1)])
+    act = m.press("k0")
+    assert act.overlay is True
+    focus(m, "a")
+    assert m.press("k1") == VerifyThenDecide(req("a", "n1", 1), "allow")
