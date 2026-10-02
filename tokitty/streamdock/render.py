@@ -128,13 +128,17 @@ def usage_key(session_pct: float, weekly_pct: float, warn: bool = False) -> str:
 
 
 @lru_cache(maxsize=_CACHE)
-def decision_key(kind: str) -> str:
-    """allow (green), deny (red), always (amber), sent (grey), cancel (grey back arrow)."""
+def decision_key(kind: str, armed: bool = True) -> str:
+    """allow (green), deny (red), always (amber), sent (grey), cancel (grey back arrow).
+
+    An unarmed allow or always key is drawn grey with a dimmed mark, so it reads
+    as unavailable until the request is known to be on screen."""
     if kind not in ("allow", "deny", "always", "sent", "cancel"):
         raise ValueError(f"unknown decision kind: {kind!r}")
     bg = {"allow": GREEN, "deny": RED, "always": AMBER}.get(kind)
-    img, draw = _canvas(_rgb(bg) if bg else GREY)
-    ink = (255, 255, 255)
+    disabled = not armed and kind in ("allow", "always")
+    img, draw = _canvas(_rgb(bg) if bg and not disabled else GREY)
+    ink = DIM if disabled else (255, 255, 255)
     if kind == "allow":
         draw.line([(16, 34), (27, 45), (48, 20)], fill=ink, width=6, joint="curve")
     elif kind == "deny":
