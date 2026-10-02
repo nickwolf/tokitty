@@ -51,6 +51,15 @@ Verified with throwaway sessions and a `PermissionRequest` command hook that sle
 
 Re-checked on Claude Code 2.1.287 on 2026-10-01: the `PermissionRequest` payload still had exactly the same eight keys and no `tool_use_id`, and the transcript `tool_use` input was identical to the payload `tool_input`, including the `description` field, so matching on name and input is sound.
 
+Always, measured on Claude Code 2.1.287 on 2026-10-02 with a throwaway session started with `--setting-sources project,local --permission-mode default` and a logging `PermissionRequest` hook:
+
+8. The payload now also carries `scratchpad_dir` and `permission_suggestions`, still no `tool_use_id`. The suggestions use the array shape: for `python3 -c 'print(6*7)'` it was `[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"python3 -c 'print(6*7)'"}],"behavior":"allow","destination":"localSettings"}]`; for a WebFetch of `https://example.com/` it was `domain:example.com`; for `touch` and Write in the project it offered `addDirectories` and `setMode acceptEdits` with destination `session`.
+9. The terminal's "don't ask again" is broader than its suggestion. For that `python3` call the menu read "Yes, and don't ask again for: python3 *" and wrote `"Bash(python3 *)"` to `.claude/settings.local.json`. For WebFetch it offers "don't ask again for example.com". For Write it offers only the accept-edits mode switch.
+10. A hook that returns `allow` with `updatedPermissions` in the array form and `destination` `session` is accepted: the call ran ("Allowed by PermissionRequest hook"), an identical second call ran with no prompt and no hook invocation, and nothing was written to any settings file. An `Edit` rule with content `//tmp/sdalways/spike_w.txt` made a second Write to that exact file run without a prompt, while a Write to a sibling file still prompted.
+11. The single-object form (`"updatedPermissions": {"type":"addRules",...}`) is rejected as a whole: the `allow` was ignored too and the terminal prompt stayed.
+12. A late Always is ignored like a late deny. Terminal "Yes" at 07:05:55, hook printed allow plus a session rule at 07:06:05; the identical command afterwards prompted again.
+13. `*` inside rule content is a wildcard even when the rest is an exact command. A session rule for `perl -e 'print 8*8'` let `perl -e 'print 8+1+8'` run with no prompt. So a command or path containing glob characters has no exact rule, and Always is not offered for it.
+
 Design that follows:
 
 - The permission wait is one more event inside `hook_writer.py`, the script the activity hooks already use, rather than a second hook script. That keeps the install path, the frozen-build runner, and the ownership matching unchanged, and `PermissionRequest` becomes one more entry in the registered event list. It runs where Claude Code runs (WSL on the primary setup).
@@ -61,7 +70,7 @@ Design that follows:
 - A pending file whose heartbeat is older than 30 s is treated as dead and ignored, then removed. Age since creation alone never counts as dead, since a prompt can legitimately wait for hours.
 - After the deck writes a decision, its keys show "sent" until the pending file disappears. If the file vanished because the transcript showed a result first, the press was a no-op, which finding 4 shows is harmless.
 - If the tool use id lookup fails, or two pending calls in one session have identical name and input, the key still lights but the hook cannot detect an answer given elsewhere. It falls back to its timeout, and tokitty clears the key when that session's next activity event arrives.
-- **Always** returns a session-scoped `updatedPermissions` entry. The reference is inconsistent about the shape (one section shows an array of `{type, rules, behavior, destination}`, another an object), so the exact shape is pinned by experiment before implementation, along with what the terminal's own "don't ask again" writes. The rule is the narrowest that matches this call. Where no narrow rule exists, the Always key is not offered. A rule that would persist beyond the session is never sent.
+- **Always** returns `updatedPermissions` as a one-element array, `{"type":"addRules","rules":[{toolName, ruleContent}],"behavior":"allow","destination":"session"}` (findings 10 and 11). The hook computes the rule itself from its own payload; the decision file only says "always". The rule is the narrowest that matches this call: the exact Bash command, `Edit` with `/` plus the absolute file path for Edit and Write, and `domain:<host>` for WebFetch (the same rule the terminal writes). Commands and paths containing glob characters get no rule (finding 13). Where no narrow rule exists, the Always key is not offered. A rule that would persist beyond the session is never sent.
 - Files, not HTTP. Claude Code supports HTTP hooks. This machine runs WSL in NAT mode, where WSL's localhost does not reach Windows, so an HTTP hook would need a LAN-facing listener. Mirrored networking would fix that, but it is not the default and tokitty can't assume it. The file path is already proven by the activity hooks and needs no port.
 
 ## Focusing a tab
@@ -93,7 +102,7 @@ From a probe plugin that logged every event and accepted commands from outside:
 
 ## Remaining spikes
 
-1. "Always": the `updatedPermissions` shape that the current Claude Code actually accepts, what the terminal's own "don't ask again" writes for Bash, Edit/Write, WebFetch, and MCP tools, and whether a late Always (after a terminal answer) is ignored like a late deny.
+1. Done 2026-10-02, see findings 8 to 13.
 2. Parallel tool calls in one turn that each need permission: confirm the transcript lookup assigns each hook the right tool use id.
 3. Foreground from the real tokitty process, as noted above.
 
