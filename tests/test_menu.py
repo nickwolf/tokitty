@@ -162,3 +162,19 @@ def test_autostart_item_positioned_between_tray_and_surprise():
     )
     labels = [i.label for i in build_menu(**kwargs) if not i.separator]
     assert labels.index("Show tray icon") < labels.index("Start at login") < labels.index("Surprise me")
+
+
+def test_streamdock_menu_item_states():
+    from tokitty.menu import INSTALL_STREAMDOCK_COMMAND, streamdock_menu_item
+
+    copied = []
+    on = streamdock_menu_item("connected", lambda: copied.append(1))
+    assert on.label == "Stream Dock"
+    assert [(i.label, i.enabled) for i in on.submenu] == [("Connected", False)]
+    off = streamdock_menu_item("not_connected", lambda: None)
+    assert [i.label for i in off.submenu] == ["Not connected"]
+    missing = streamdock_menu_item("not_installed", lambda: copied.append(1))
+    assert [(i.label, i.enabled) for i in missing.submenu][0] == ("Not installed", False)
+    assert INSTALL_STREAMDOCK_COMMAND in missing.submenu[1].label
+    missing.submenu[1].action()
+    assert copied == [1]

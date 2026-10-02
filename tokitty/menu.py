@@ -21,6 +21,24 @@ class MenuItem:
     separator: bool = False
     checkbox: Optional[Callable[[], bool]] = None
     radio_selected: Optional[Callable[[], bool]] = None
+    # Only the Tk menu honours this; a status line, not a command.
+    enabled: bool = True
+
+
+INSTALL_STREAMDOCK_COMMAND = "python -m tokitty --install-streamdock"
+
+
+def streamdock_menu_item(state: str, on_copy_install: Callable[[], None]) -> MenuItem:
+    """The "Stream Dock" submenu. `state` is "connected", "not_connected" or "not_installed",
+    read by the caller when the menu opens."""
+    if state == "not_installed":
+        sub = [
+            MenuItem(label="Not installed", enabled=False),
+            MenuItem(label=f"Copy: {INSTALL_STREAMDOCK_COMMAND}", action=on_copy_install),
+        ]
+    else:
+        sub = [MenuItem(label="Connected" if state == "connected" else "Not connected", enabled=False)]
+    return MenuItem(label="Stream Dock", submenu=sub)
 
 
 def build_menu(

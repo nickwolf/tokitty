@@ -53,6 +53,7 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
+from tokitty.streamdock.runtime import StreamdockRuntime
 from tokitty.streamdock.window import InWindowViews
 from tokitty.streamdock.wiring import DEFAULT_NAME, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
@@ -1004,6 +1005,13 @@ def run_gui() -> int:
         settings, units, distro_probe.get_running, palette_fn=lambda i: units[i]["pane"].palette,
         open_in_window=deck_views.open,
     )
+
+    def streamdock_state() -> str:
+        if not StreamdockRuntime.configured(settings):
+            return "not_installed"
+        return "connected" if streamdock is not None and streamdock.connected else "not_connected"
+
+    window.streamdock_state = streamdock_state
 
     def tick():
         # Consume run_discovery's result here, on the Tk thread, exactly
