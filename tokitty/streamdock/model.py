@@ -18,7 +18,7 @@ from tokitty.streamdock.pending import PendingRequest
 
 FOCUSED = "focused"
 UNVERIFIED = "unverified"
-DECISION_ROLES = ("allow", "deny", "always")
+PROMPT_DECISIONS = ("allow", "deny", "always")
 
 
 @dataclass(frozen=True)
@@ -139,6 +139,7 @@ class _Key:
     coords: Tuple[int, int]
     device: str
     role: Optional[Tuple[str, str]]
+    prompt: str = ""
 
 
 @dataclass
@@ -159,7 +160,7 @@ def _parse_role(settings: Any) -> Optional[Tuple[str, str]]:
     role = settings.get("role") if isinstance(settings, Mapping) else None
     if not isinstance(role, str):
         return None
-    if role in ("slot", "interrupt") or role in DECISION_ROLES:
+    if role in ("slot", "interrupt", "blank"):
         return role, ""
     kind, _, arg = role.partition(":")
     if kind == "usage":
@@ -170,6 +171,12 @@ def _parse_role(settings: Any) -> Optional[Tuple[str, str]]:
     if kind == "new" and arg:
         return kind, arg
     return None
+
+
+def _parse_prompt(settings: Any) -> str:
+    """The decision this key takes while a permission prompt is open, or "" for none."""
+    prompt = settings.get("prompt") if isinstance(settings, Mapping) else None
+    return prompt if prompt in PROMPT_DECISIONS else ""
 
 
 class DeckModel:
@@ -195,7 +202,7 @@ class DeckModel:
     # inputs
 
     def appear(self, context: str, coords: Any, device: str, settings: Any) -> None:
-        self._keys[context] = _Key(_parse_coords(coords), device, _parse_role(settings))
+        self._keys[context] = _Key(_parse_coords(coords), device, _parse_role(settings), _parse_prompt(settings))
         self._refresh()
 
     def disappear(self, context: str) -> None:
@@ -293,8 +300,8 @@ class DeckModel:
             return Noop("session tab not confirmed")
         if kind == "new":
             return NewSession(arg)
-        if kind in DECISION_ROLES:
-            return Noop("no permission prompt open")
+        if kind == "blank":
+            return Noop("blank key")
         return Noop("usage key")
 
     # slots
@@ -391,21 +398,20 @@ class DeckModel:
         """Context to ("allow"|"deny"|"always"|"preview", preview index), or None when
         Allow and Deny cannot both be placed.
 
-        Keys with a decision role always show that decision. A decision with no such
-        key is taken from the participants in reading order, and the rest preview.
+        Keys whose prompt setting names an offered decision take it, whatever their
+        role. A decision no key claims is taken from the participants in reading
+        order, and the rest preview. The pressed key stays Cancel.
         """
         kinds = ["allow", "deny"]
         if req.always_rule:
             kinds.append("always")
         layout: Dict[str, Tuple[str, int]] = {}
-        missing = []
-        for kind in kinds:
-            ctxs = self._sorted_contexts(lambda k, kind=kind: k.role is not None and k.role[0] == kind)
-            if ctxs:
-                layout.update({c: (kind, 0) for c in ctxs})
-            else:
-                missing.append(kind)
-        ctxs = self._participants(pressed)
+        for ctx in self._sorted_contexts(lambda k: k.prompt in kinds):
+            if ctx != pressed:
+                layout[ctx] = (self._keys[ctx].prompt, 0)
+        claimed = {kind for kind, _ in layout.values()}
+        missing = [k for k in kinds if k not in claimed]
+        ctxs = [c for c in self._participants(pressed) if c not in layout]
         if len([k for k in missing if k != "always"]) > len(ctxs):
             return None
         for i, ctx in enumerate(ctxs):
@@ -520,8 +526,8 @@ class DeckModel:
             if ctx in shown:
                 return self._slot_spec(shown[ctx], "slot")
             return KeySpec("status")
-        if kind in DECISION_ROLES:
-            return KeySpec("status", text=kind.capitalize())
+        if kind == "blank":
+            return KeySpec("status")
         if kind == "interrupt":
             ref = self._last_focused
             ok = ref is not None and self._focus.get(ref) == FOCUSED
