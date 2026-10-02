@@ -173,6 +173,19 @@ class TestNormalBehavior:
         assert result.stdout == b""
         no_stray_temp_files(tmp_path)
 
+    def test_codex_events_are_recorded(self, tmp_path):
+        for event in ("PermissionRequest", "Interrupt"):
+            sessions = tmp_path / event
+            payload = json.dumps(
+                {"session_id": "sess-1", "hook_event_name": event}
+            ).encode()
+            result = run_hook(payload, ["--sessions-dir", str(sessions)])
+            assert result.returncode == 0
+            assert result.stdout == b""
+            data = json.loads(state_path(sessions, "sess-1").read_text())
+            assert data["event"] == event
+            assert data["seq"] == 1
+
     def test_unknown_event_does_nothing(self, tmp_path):
         payload = json.dumps(
             {"session_id": "sess-1", "hook_event_name": "SomeUnknownEvent"}
