@@ -23,7 +23,13 @@ build-backend = "setuptools.build_meta"
 include = ["tokitty*"]
 
 [tool.setuptools.package-data]
-tokitty = ["prices.json"]
+tokitty = [
+    "prices.json",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/manifest.json",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/index.html",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/pi.html",
+    "streamdock/plugin/com.tokitty.deck.sdPlugin/icon.png",
+]
 
 [tool.pytest.ini_options]
 # The `gui` marker guards tests that need a real Tk display (run under xvfb in

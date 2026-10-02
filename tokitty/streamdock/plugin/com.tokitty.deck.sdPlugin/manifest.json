@@ -1,0 +1,26 @@
+{
+  "Actions": [
+    {
+      "UUID": "com.tokitty.deck.key",
+      "Icon": "icon.png",
+      "Name": "Tokitty key",
+      "Tooltip": "A Tokitty key: session slot, usage, interrupt or new session",
+      "States": [{ "Image": "icon.png" }],
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi.html",
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false
+    }
+  ],
+  "Author": "tokitty",
+  "Category": "Tokitty",
+  "CategoryIcon": "icon.png",
+  "CodePath": "index.html",
+  "Description": "Shows Claude Code sessions and usage on the deck and answers permission prompts",
+  "Icon": "icon.png",
+  "Name": "Tokitty",
+  "SDKVersion": 1,
+  "UUID": "com.tokitty.deck",
+  "Version": "1.0.0",
+  "OS": [{ "Platform": "windows", "MinimumVersion": "7" }]
+}

@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tokitty</title>
+<!-- config.js is written by --install-streamdock and defines window.TOKITTY = {port, token}. -->
+<script src="config.js"></script>
+</head>
+<body>
+<script>
+"use strict";
+// The plugin draws what tokitty sends and forwards key events. It holds no logic.
+// Requests are CORS "simple" ones (no custom headers, text/plain bodies) so the
+// browser never sends a preflight.
+const BASE = "http://127.0.0.1:" + window.TOKITTY.port;
+const TOKEN = encodeURIComponent(window.TOKITTY.token);
+const FORWARD = new Set(["willAppear", "willDisappear", "keyUp", "didReceiveSettings"]);
+const RETRY_MS = 2000;
+
+let ws = null;
+// context -> {msg: the last willAppear message (with current settings), sent: last image sent}
+const visible = new Map();
+let notRunning = null;
+
+function notRunningImage() {
+  if (notRunning === null) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d");
+    g.fillStyle = "#18181c";
+    g.fillRect(0, 0, 64, 64);
+    g.fillStyle = "#ebebeb";
+    g.font = "12px sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText("tokitty", 32, 24);
+    g.fillText("not running", 32, 40);
+    notRunning = c.toDataURL("image/png");
+  }
+  return notRunning;
+}
+
+function setImage(context, image) {
+  const key = visible.get(context);
+  if (!key || key.sent === image || !ws || ws.readyState !== WebSocket.OPEN) return;
+  key.sent = image;
+  ws.send(JSON.stringify({ event: "setImage", context: context, payload: { image: image, target: 0 } }));
+}
+
+function post(msg) {
+  return fetch(BASE + "/v1/event?t=" + TOKEN, { method: "POST", body: JSON.stringify(msg) }).catch(function () {});
+}
+
+function onMessage(m) {
+  if (m.event === "willAppear") {
+    // A page switch sends willDisappear twice and then willAppear, so the
+    // image is forgotten here and sent again.
+    visible.set(m.context, { msg: m, sent: null });
+    if (!connected) setImage(m.context, notRunningImage());
+  } else if (m.event === "didReceiveSettings") {
+    const key = visible.get(m.context);
+    if (key && m.payload) {
+      key.msg = Object.assign({}, key.msg, { payload: Object.assign({}, key.msg.payload, { settings: m.payload.settings }) });
+    }
+  } else if (m.event === "willDisappear") {
+    visible.delete(m.context);
+  }
+  if (FORWARD.has(m.event)) post(m);
+}
+
+let connected = false;
+
+// Tokitty may start after the deck did and miss every willAppear, so on
+// reconnect the visible keys are announced again.
+function replay() {
+  visible.forEach(function (key) {
+    post(Object.assign({}, key.msg, { event: "willAppear" }));
+  });
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function pollLoop() {
+  let rev = -1;
+  for (;;) {
+    try {
+      const r = await fetch(BASE + "/v1/plan?rev=" + rev + "&t=" + TOKEN);
+      if (!r.ok) throw new Error("status " + r.status);
+      const plan = await r.json();
+      if (!connected) {
+        connected = true;
+        replay();
+      }
+      rev = plan.rev;
+      visible.forEach(function (key, context) {
+        const k = plan.keys[context];
+        if (k) setImage(context, k.image);
+      });
+    } catch (e) {
+      connected = false;
+      rev = -1;
+      visible.forEach(function (key, context) { setImage(context, notRunningImage()); });
+      await sleep(RETRY_MS);
+    }
+  }
+}
+
+function connectElgatoStreamDeckSocket(port, uuid, registerEvent) {
+  ws = new WebSocket("ws://127.0.0.1:" + port);
+  ws.onopen = function () {
+    ws.send(JSON.stringify({ event: registerEvent, uuid: uuid }));
+    pollLoop();
+  };
+  ws.onmessage = function (e) {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m && typeof m.event === "string") onMessage(m);
+  };
+}
+</script>
+</body>
+</html>
