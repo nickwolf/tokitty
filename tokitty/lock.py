@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
+from typing import Callable
 
 
 class LockAcquisitionError(Exception):
@@ -65,3 +67,24 @@ class SingleInstanceLock:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
+
+
+def acquire_with_retry(
+    lock: SingleInstanceLock,
+    timeout: float,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    interval: float = 0.05,
+) -> None:
+    """Acquire `lock`, retrying until `timeout` seconds have passed. Raises
+    the last LockAcquisitionError on timeout."""
+    deadline = clock() + timeout
+    while True:
+        try:
+            lock.acquire()
+            return
+        except LockAcquisitionError:
+            if clock() >= deadline:
+                raise
+            sleep(interval)

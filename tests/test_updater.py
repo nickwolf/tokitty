@@ -1,6 +1,11 @@
 import io
 import json
+import os
+import subprocess
+import sys
+import threading
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -9,10 +14,13 @@ from tokitty.updater import (
     Release,
     UpdateCheckError,
     UpdateState,
+    add_owned,
     asset_name,
+    drop_owned,
     fetch_releases,
     is_newer,
     load_update_state,
+    mutate_update_state,
     parse_version,
     platform_target,
     running_version,
@@ -328,3 +336,82 @@ def test_check_for_update_cli_failure_exits_1(monkeypatch, capsys):
     assert report["error"] == "HTTP 500 from the releases list"
     assert report["latest"] is None
     assert report["newer"] is False
+
+
+def test_mutate_update_state_loads_applies_and_saves(tmp_path):
+    save_update_state(tmp_path, UpdateState(latest_tag="v0.3.0"))
+
+    def edit(state):
+        state.notified_tag = state.latest_tag
+
+    result = mutate_update_state(tmp_path, edit)
+    assert result.notified_tag == "v0.3.0"
+    assert load_update_state(tmp_path) == UpdateState(latest_tag="v0.3.0", notified_tag="v0.3.0")
+
+
+def test_mutate_update_state_creates_the_state_dir(tmp_path):
+    mutate_update_state(tmp_path / "new", lambda state: setattr(state, "latest_tag", "v1.0.0"))
+    assert load_update_state(tmp_path / "new").latest_tag == "v1.0.0"
+
+
+def test_mutate_update_state_does_not_save_when_fn_raises(tmp_path):
+    def boom(state):
+        state.latest_tag = "v9.9.9"
+        raise RuntimeError("no")
+
+    with pytest.raises(RuntimeError):
+        mutate_update_state(tmp_path, boom)
+    assert load_update_state(tmp_path).latest_tag is None
+    mutate_update_state(tmp_path, lambda state: None)
+
+
+def test_mutate_update_state_times_out_while_another_holder_has_the_lock(tmp_path):
+    from tokitty.lock import SingleInstanceLock
+
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with SingleInstanceLock(tmp_path, name="update.lock"):
+        with pytest.raises(OSError, match="update.lock"):
+            mutate_update_state(tmp_path, lambda state: None, lock_timeout=1.0, clock=lambda: now[0], sleep=sleep)
+    assert not (tmp_path / "update.json").exists()
+
+
+def test_add_and_drop_owned(tmp_path):
+    add_owned(tmp_path, "/r/a", "v0.1.0", "copy")
+    add_owned(tmp_path, "/r/b", "v0.2.0", "staging")
+    add_owned(tmp_path, "/r/a", "v0.1.1", "backup")
+    assert [(e["path"], e["version"], e["kind"]) for e in load_update_state(tmp_path).owned] == [
+        ("/r/b", "v0.2.0", "staging"),
+        ("/r/a", "v0.1.1", "backup"),
+    ]
+    drop_owned(tmp_path, "/r/b")
+    assert [e["path"] for e in load_update_state(tmp_path).owned] == ["/r/a"]
+
+
+def test_mutate_update_state_loses_no_edits_across_threads(tmp_path):
+    def worker(n):
+        for i in range(10):
+            add_owned(tmp_path, f"/r/{n}-{i}", "v0.1.0", "copy")
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(load_update_state(tmp_path).owned) == 60
+
+
+def test_mutate_update_state_loses_no_edits_across_processes(tmp_path):
+    code = (
+        "import sys\n"
+        "from tokitty.updater import add_owned\n"
+        "for i in range(15):\n"
+        "    add_owned(sys.argv[1], f'/r/{sys.argv[2]}-{i}', 'v0.1.0', 'copy')\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(updater.__file__).resolve().parent.parent))
+    procs = [subprocess.Popen([sys.executable, "-c", code, str(tmp_path), str(n)], env=env) for n in range(3)]
+    assert [p.wait(timeout=60) for p in procs] == [0, 0, 0]
+    assert len(load_update_state(tmp_path).owned) == 45

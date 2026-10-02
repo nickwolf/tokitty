@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-from tokitty.lock import LockAcquisitionError, SingleInstanceLock
+from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
 
 
 def test_second_lock_acquisition_fails_while_first_holds_it(tmp_path):
@@ -70,3 +70,34 @@ def test_windows_branch_calls_msvcrt_locking(tmp_path, monkeypatch):
     lock.release()
 
     assert calls == [1, 2]
+
+
+def test_acquire_with_retry_succeeds_once_the_holder_releases(tmp_path):
+    first = SingleInstanceLock(tmp_path)
+    first.acquire()
+    second = SingleInstanceLock(tmp_path)
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        first.release()
+
+    acquire_with_retry(second, 5, sleep=sleep)
+    assert sleeps == [0.05]
+    second.release()
+
+
+def test_acquire_with_retry_gives_up_at_the_deadline(tmp_path):
+    first = SingleInstanceLock(tmp_path)
+    first.acquire()
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    try:
+        with pytest.raises(LockAcquisitionError):
+            acquire_with_retry(SingleInstanceLock(tmp_path), 1.0, clock=lambda: now[0], sleep=sleep)
+    finally:
+        first.release()
+    assert 1.0 <= now[0] < 1.1

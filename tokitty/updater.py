@@ -11,6 +11,7 @@ import platform
 import re
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -18,12 +19,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
+
 REPO = "nickwolf/tokitty"
 DEFAULT_API_URL = "https://api.github.com"
 API_URL_ENV = "TOKITTY_UPDATE_API_URL"
 CHECK_TIMEOUT = 10.0
 SUMS_NAME = "SHA256SUMS"
 UPDATE_FILENAME = "update.json"
+UPDATE_LOCK_NAME = "update.lock"
+UPDATE_LOCK_TIMEOUT = 5.0
 OWNED_KINDS = ("copy", "staging", "backup")
 
 # Leading zeros are rejected so two spellings of one version can't both exist.
@@ -253,18 +258,49 @@ def save_update_state(state_dir, state: UpdateState) -> None:
         raise
 
 
+def mutate_update_state(
+    state_dir,
+    fn: Callable[[UpdateState], None],
+    *,
+    lock_timeout: float = UPDATE_LOCK_TIMEOUT,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> UpdateState:
+    """Load update.json, apply `fn` to it in place and save it, all under a
+    cross-process lock so concurrent writers (threads, or the old and new copy
+    during a handover) can't lose each other's edits. `fn` must not call back
+    into this function. Raises OSError if the lock can't be had in time."""
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock = SingleInstanceLock(state_dir, name=UPDATE_LOCK_NAME)
+    try:
+        acquire_with_retry(lock, lock_timeout, clock=clock, sleep=sleep)
+    except LockAcquisitionError as exc:
+        raise OSError(f"timed out waiting for the lock on {state_dir / UPDATE_LOCK_NAME}") from exc
+    try:
+        state = load_update_state(state_dir)
+        fn(state)
+        save_update_state(state_dir, state)
+        return state
+    finally:
+        lock.release()
+
+
 def add_owned(state_dir, path, version: str, kind: str) -> None:
     """Record a path the updater created, replacing any entry for that path."""
-    state = load_update_state(state_dir)
-    state.owned = [e for e in state.owned if e["path"] != str(path)]
-    state.owned.append({"path": str(path), "version": version, "kind": kind})
-    save_update_state(state_dir, state)
+
+    def edit(state: UpdateState) -> None:
+        state.owned = [e for e in state.owned if e["path"] != str(path)]
+        state.owned.append({"path": str(path), "version": version, "kind": kind})
+
+    mutate_update_state(state_dir, edit)
 
 
 def drop_owned(state_dir, path) -> None:
-    state = load_update_state(state_dir)
-    state.owned = [e for e in state.owned if e["path"] != str(path)]
-    save_update_state(state_dir, state)
+    def edit(state: UpdateState) -> None:
+        state.owned = [e for e in state.owned if e["path"] != str(path)]
+
+    mutate_update_state(state_dir, edit)
 
 
 def check_for_update_cli() -> int:
