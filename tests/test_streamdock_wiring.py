@@ -110,3 +110,17 @@ def test_watcher_factory_passes_distro_and_probe():
     assert watcher._distro_name == "Ubuntu"
     assert watcher._list_running_distros_fn is probe
     assert watcher._account_index == 0
+
+
+def test_apply_idle_cap_follows_the_deck_connection():
+    class W:
+        cap = "unset"
+
+        def set_idle_cap(self, seconds):
+            self.cap = seconds
+
+    units = [{"watcher": W()}, {"watcher": W()}]
+    wiring.apply_idle_cap(units, True)
+    assert [u["watcher"].cap for u in units] == [wiring.DECK_IDLE_POLL_S] * 2
+    wiring.apply_idle_cap(units, False)
+    assert [u["watcher"].cap for u in units] == [None, None]

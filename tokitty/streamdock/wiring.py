@@ -8,6 +8,8 @@ from tokitty.activity import SessionView
 from tokitty.streamdock.runtime import AccountInput
 
 DEFAULT_NAME = "Claude"
+# How often an idle account is checked for new sessions while the deck is connected.
+DECK_IDLE_POLL_S = 3.0
 
 
 def parent_dir(path: Optional[str]) -> Optional[str]:
@@ -115,3 +117,10 @@ def start_streamdock(
     except Exception as exc:
         print(f"tokitty: streamdock: not started: {exc}", file=sys.stderr)
         return None
+
+
+def apply_idle_cap(units: List[dict], connected: bool) -> None:
+    """Poll idle accounts quickly while the deck is connected, so a new session gets a key."""
+    cap = DECK_IDLE_POLL_S if connected else None
+    for unit in units:
+        unit["watcher"].set_idle_cap(cap)

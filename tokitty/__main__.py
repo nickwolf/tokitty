@@ -55,7 +55,7 @@ from tokitty.providers.claude import (  # noqa: F401
 from tokitty.settings import Settings
 from tokitty.streamdock.runtime import StreamdockRuntime
 from tokitty.streamdock.window import InWindowViews
-from tokitty.streamdock.wiring import DEFAULT_NAME, gather_inputs, start_streamdock, usage_from_display
+from tokitty.streamdock.wiring import DEFAULT_NAME, apply_idle_cap, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
@@ -1085,6 +1085,7 @@ def run_gui() -> int:
         if streamdock is not None:
             try:
                 streamdock.tick(*gather_inputs(units))
+                apply_idle_cap(units, streamdock.connected)
                 deck_views.sync()
             except Exception as exc:
                 print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
