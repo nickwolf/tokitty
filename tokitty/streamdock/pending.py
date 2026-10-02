@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from tokitty.wsl_probe import list_running_distros
 
@@ -44,13 +44,6 @@ class PendingRequest:
     started: float
     account_index: int = 0
     cwd: Optional[str] = None
-
-
-def _age(now: float, mtime: float) -> float:
-    # The marker and the heartbeats are written on one side (Windows tokitty or
-    # the WSL hook) and judged on the other, so clock skew is not handled; every
-    # age comparison goes through here so it can be fixed in one place.
-    return now - mtime
 
 
 def _default_list_files(directory: Union[str, Path]) -> List[Path]:
@@ -123,6 +116,7 @@ class PendingWatcher:
         stat_fn: Callable[[Path], float] = _default_stat,
         remove_fn: Callable[[Path], None] = _default_remove,
         time_fn: Optional[Callable[[], float]] = None,
+        monotonic_fn: Optional[Callable[[], float]] = None,
         interval: float = POLL_INTERVAL_S,
         sleep_fn: Optional[Callable[[float], bool]] = None,
     ):
@@ -135,6 +129,12 @@ class PendingWatcher:
         self._stat_fn = stat_fn
         self._remove_fn = remove_fn
         self._time_fn = time_fn or time.time
+        self._monotonic_fn = monotonic_fn or time.monotonic
+        # path -> (last mtime seen, monotonic time it was first seen with that value).
+        # An mtime is never compared with the local wall clock: the hook writes it
+        # in WSL, whose clock can drift from Windows, so liveness is "has the mtime
+        # changed within the last N seconds of this watcher's own clock".
+        self._seen: Dict[str, Tuple[float, float]] = {}
         self._interval = interval
 
         self._stop_event = threading.Event()
@@ -158,6 +158,7 @@ class PendingWatcher:
             self._active.set()
             return
         self._active.clear()
+        self._seen = {}
         with self._lock:
             self._pending = []
 
@@ -192,26 +193,31 @@ class PendingWatcher:
             return
         tokitty_dir = self._resolve(self._tokitty_dir)
         if not tokitty_dir:
+            self._seen = {}
             self._publish([])
             return
         distro_name = self._resolve(self._distro_name)
         if distro_name is not None and distro_name not in self._list_running_distros_fn():
+            self._seen = {}
             self._publish([])
             return
 
-        now = self._time_fn()
+        # A file first seen at startup whose hook is already dead stays visible for
+        # up to LIVE_MAX_AGE_S; a decision written to a dead hook is harmless.
+        now = self._monotonic_fn()
+        present: Set[str] = set()
         base = Path(tokitty_dir)
         live: List[PendingRequest] = []
         for path in self._list_files_fn(base / "pending"):
             name = Path(path).name
             if name.endswith(".claim"):
-                self._sweep(path, now, STRAY_MAX_AGE_S)
+                self._sweep(path, now, STRAY_MAX_AGE_S, present)
             elif _PENDING_NAME.fullmatch(name):
                 try:
                     mtime = self._stat_fn(path)
                 except OSError:
                     continue
-                if _age(now, mtime) >= LIVE_MAX_AGE_S:
+                if self._unchanged_for(path, mtime, now, present) >= LIVE_MAX_AGE_S:
                     self._try_remove(path)
                     continue
                 try:
@@ -222,16 +228,27 @@ class PendingWatcher:
                     live.append(req)
         for path in self._list_files_fn(base / "decisions"):
             if _PENDING_NAME.fullmatch(Path(path).name):
-                self._sweep(path, now, STRAY_MAX_AGE_S)
+                self._sweep(path, now, STRAY_MAX_AGE_S, present)
+        self._seen = {k: v for k, v in self._seen.items() if k in present}
         live.sort(key=lambda r: (r.started, r.nonce))
         self._publish(live)
 
-    def _sweep(self, path: Path, now: float, max_age: float) -> None:
+    def _unchanged_for(self, path: Path, mtime: float, now: float, present: Set[str]) -> float:
+        """Monotonic seconds this file's mtime has held its current value; a new file counts as just changed."""
+        key = str(path)
+        present.add(key)
+        prev = self._seen.get(key)
+        if prev is None or prev[0] != mtime:
+            self._seen[key] = (mtime, now)
+            return 0.0
+        return now - prev[1]
+
+    def _sweep(self, path: Path, now: float, max_age: float, present: Set[str]) -> None:
         try:
             mtime = self._stat_fn(path)
         except OSError:
             return
-        if _age(now, mtime) > max_age:
+        if self._unchanged_for(path, mtime, now, present) > max_age:
             self._try_remove(path)
 
     def write_decision(self, req: PendingRequest, behavior: str) -> None:

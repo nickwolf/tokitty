@@ -76,7 +76,20 @@ class FakeFs:
         self.dirs[d].pop(n, None)
 
 
-def watcher(fs, active=True, **kw):
+class Clock:
+    """A monotonic clock the test advances by hand."""
+
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+
+def watcher(fs, active=True, clock=None, **kw):
     w = PendingWatcher(
         "/fake/tokitty",
         list_files_fn=fs.list_files_fn,
@@ -84,6 +97,7 @@ def watcher(fs, active=True, **kw):
         stat_fn=fs.stat_fn,
         remove_fn=fs.remove_fn,
         time_fn=lambda: NOW,
+        monotonic_fn=clock or Clock(),
         sleep_fn=lambda s: True,
         **kw,
     )
@@ -110,14 +124,66 @@ def test_old_creation_with_fresh_heartbeat_stays_live():
     assert len(w.get_pending()) == 1
 
 
-def test_stale_heartbeat_hides_and_removes():
+@pytest.mark.parametrize("offset", [-3600.0, 3600.0])
+def test_heartbeat_judged_by_change_not_wall_time(offset):
     fs = FakeFs()
-    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW - 30)
-    w = watcher(fs)
+    clock = Clock()
+    w = watcher(fs, clock=clock)
+    for i in range(10):
+        fs.put("pending", f"{NONCE}.json", body(), mtime=NOW + offset + i * 5)
+        w._tick_once()
+        assert len(w.get_pending()) == 1
+        clock.advance(5)
+    assert fs.removed == []
+
+
+def test_stalled_heartbeat_goes_dead_after_30_monotonic_seconds():
+    fs = FakeFs()
+    clock = Clock()
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW)
+    w = watcher(fs, clock=clock)
+    w._tick_once()
+    clock.advance(29.5)
+    w._tick_once()
+    assert len(w.get_pending()) == 1 and fs.removed == []
+    clock.advance(0.5)
     w._tick_once()
     assert w.get_pending() == []
     assert fs.removed == [("pending", f"{NONCE}.json")]
-    assert fs.read == []
+
+
+def test_changed_mtime_restarts_the_window():
+    fs = FakeFs()
+    clock = Clock()
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW)
+    w = watcher(fs, clock=clock)
+    w._tick_once()
+    clock.advance(25)
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW + 1)
+    w._tick_once()
+    clock.advance(25)
+    w._tick_once()
+    assert len(w.get_pending()) == 1 and fs.removed == []
+
+
+def test_state_for_deleted_files_is_forgotten():
+    fs = FakeFs()
+    clock = Clock()
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW)
+    fs.put("pending", "a" * 32 + ".claim", "", mtime=NOW)
+    fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW)
+    w = watcher(fs, clock=clock)
+    w._tick_once()
+    assert len(w._seen) == 3
+    for d, n in (("pending", f"{NONCE}.json"), ("pending", "a" * 32 + ".claim"), ("decisions", f"{NONCE2}.json")):
+        fs.dirs[d].pop(n)
+    w._tick_once()
+    assert w._seen == {}
+    # A file reappearing under the same name with the same mtime is new, not stale.
+    clock.advance(100)
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW)
+    w._tick_once()
+    assert len(w.get_pending()) == 1
 
 
 def test_ignores_tmp_claim_and_misnamed_files():
@@ -179,33 +245,47 @@ def test_vanished_file_is_skipped():
     assert w.get_pending() == []
 
 
-def test_old_claim_removed_fresh_claim_kept():
+def test_claim_swept_only_after_660_unchanged_seconds():
     fs = FakeFs()
-    fs.put("pending", "a" * 32 + ".claim", "", mtime=NOW - 661)
-    fs.put("pending", "b" * 32 + ".claim", "", mtime=NOW - 600)
-    w = watcher(fs)
+    clock = Clock()
+    fs.put("pending", "a" * 32 + ".claim", "", mtime=NOW - 99999)
+    fs.put("pending", "b" * 32 + ".claim", "", mtime=NOW + 99999)
+    w = watcher(fs, clock=clock)
+    w._tick_once()
+    clock.advance(660)
+    fs.put("pending", "b" * 32 + ".claim", "", mtime=NOW + 100000)
+    w._tick_once()
+    assert fs.removed == []
+    clock.advance(0.5)
     w._tick_once()
     assert fs.removed == [("pending", "a" * 32 + ".claim")]
 
 
-def test_stray_decision_removed_after_660s():
+def test_stray_decision_swept_only_after_660_unchanged_seconds():
     fs = FakeFs()
-    fs.put("decisions", f"{NONCE}.json", "{}", mtime=NOW - 661)
-    fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW - 10)
-    w = watcher(fs)
+    clock = Clock()
+    fs.put("decisions", f"{NONCE}.json", "{}", mtime=NOW - 99999)
+    fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW)
+    w = watcher(fs, clock=clock)
+    w._tick_once()
+    clock.advance(661)
+    fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW + 1)
     w._tick_once()
     assert fs.removed == [("decisions", f"{NONCE}.json")]
 
 
 def test_remove_oserror_is_swallowed():
     fs = FakeFs()
-    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW - 99)
+    clock = Clock()
+    fs.put("pending", f"{NONCE}.json", body(), mtime=NOW)
 
     def boom(path):
         raise PermissionError("no")
 
-    w = watcher(fs)
+    w = watcher(fs, clock=clock)
     w._remove_fn = boom
+    w._tick_once()
+    clock.advance(30)
     w._tick_once()
     assert w.get_pending() == []
 
