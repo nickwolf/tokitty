@@ -115,3 +115,17 @@ def _no_real_autostart_registration(monkeypatch):
     this fixture.
     """
     monkeypatch.setattr("tokitty.autostart.get_backend", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_state_dir_for_hooks(monkeypatch, tmp_path_factory):
+    """Keep hook installs off the developer's real Tokitty state dir.
+
+    A Codex install writes its trust record (codex_hook_trust.json) under
+    hooks_install.state_dir_path(), and a frozen install makes the stable
+    runner link there. Tests that care patch it again themselves, which wins.
+    """
+    from tokitty import hooks_install
+
+    state = tmp_path_factory.mktemp("hooks-state")
+    monkeypatch.setattr(hooks_install, "state_dir_path", lambda: state)

@@ -863,3 +863,33 @@ def test_shifted_events_tells_identical_user_handlers_apart():
 
     same = {"Stop": [{"hooks": [tokitty, first]}, {"hooks": [second]}]}
     assert hi._shifted_events(before, same, "/home/nick/.codex", "codex") == []
+
+
+def test_approved_owned_duplicates_collapsed_onto_index_zero_read_as_needing_approval(home, frozen):
+    from tokitty import codex_trust
+
+    stable = str(frozen / "current" / RUNNER_NAME)
+    old = _runner_command(home, "/old/release/" + RUNNER_NAME)
+    _write_hooks(home, {
+        "PreToolUse": [
+            {"hooks": [{"type": "command", "command": old}]},
+            {"hooks": [{"type": "command", "command": _runner_command(home, stable)}]},
+        ],
+    })
+    config_toml = codex_trust.config_toml_path(str(home))
+    prefix = hi.codex_paths(str(home))[1]
+    config_toml.write_text(
+        f"[hooks.state.'{prefix}:pre_tool_use:0:0']\ntrusted_hash = \"sha256:old-first\"\n"
+        f"[hooks.state.'{prefix}:pre_tool_use:1:0']\ntrusted_hash = \"sha256:stable\"\n",
+        encoding="utf-8",
+    )
+
+    result = _refresh(home)
+
+    assert result.warning == REWARN
+    assert _hooks(home)["hooks"]["PreToolUse"] == [
+        {"hooks": [{"type": "command", "command": _runner_command(home, stable)}]}
+    ]
+    # Codex still holds the first handler's hash at index 0, and the record
+    # captured that same hash, so the kept handler is not approved yet.
+    assert codex_trust.codex_hook_status(str(home), frozen) == codex_trust.NEEDS_APPROVAL

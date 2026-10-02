@@ -25,6 +25,7 @@ from tokitty.accounts import (
     Account,
     canonicalize_locator,
     load_accounts_result,
+    parse_wsl_unc,
     save_accounts,
 )
 from tokitty.frozen import MOVE_TO_APPLICATIONS, AppTranslocatedError
@@ -79,6 +80,14 @@ CODEX_REAPPROVE_WARNING = "Codex will ask you to approve Tokitty's hooks again."
 # Shown when removing or collapsing Tokitty's handlers moved a user handler:
 # its trust key is its position, so it is a new review too.
 CODEX_SHIFT_WARNING = "Codex will ask you to approve these hooks again: {events}."
+
+# The install result's note for a Codex home, from the approval status.
+CODEX_APPROVAL_NOTE = (
+    "Hooks installed, waiting for approval in Codex. Start codex and approve the Tokitty hooks."
+)
+CODEX_UNREADABLE_NOTE = (
+    "Hooks installed, but Tokitty can't read Codex hook state to check approval."
+)
 
 
 @dataclass(frozen=True)
@@ -807,10 +816,51 @@ def _merge_handler(old_handler: dict, desired_handler: dict) -> dict:
 
 
 def _record_codex_trust(config_dir: str, changes: List[Tuple[str, int, int]]) -> None:
-    """Hook point for the Codex trust record. changes lists (event,
-    group_index, handler_index) for each owned Codex handler a reconcile is
-    about to add, rewrite or move, at its final position. Called before
-    hooks.json is written. Does nothing yet."""
+    """Write the Codex trust record for a reconcile that is about to add,
+    rewrite or move owned handlers. changes lists (event, group_index,
+    handler_index) at each handler's final position. Called before
+    hooks.json is written, and raises OSError if the record can't be
+    written, so the caller can abort: an unrecorded rewrite would later
+    read as approved while Codex skips it."""
+    from tokitty import codex_trust
+
+    codex_trust.record_changes(state_dir_path(), config_dir, changes)
+
+
+def _forget_codex_trust(config_dir: str) -> None:
+    """Drop a home's trust record after an uninstall. A failure here is not
+    an uninstall failure: the leftover is stale data that a later install
+    overwrites, since it records every handler it adds."""
+    from tokitty import codex_trust
+
+    try:
+        codex_trust.forget_home(state_dir_path(), config_dir)
+    except OSError:
+        pass
+
+
+def distro_is_running(config_dir: str, list_running_distros_fn=None) -> bool:
+    """Whether the WSL distro behind a \\wsl.localhost config_dir is running.
+    Touching its UNC path when it is not starts it. A probe failure comes
+    back as an empty list, which reads as not running."""
+    parsed = parse_wsl_unc(config_dir)
+    if parsed is None:
+        return True
+    if list_running_distros_fn is None:
+        from tokitty.wsl_probe import list_running_distros as list_running_distros_fn
+    running = {name.casefold() for name in list_running_distros_fn()}
+    return parsed[0].casefold() in running
+
+
+def _codex_home_asleep(config_dir: str, provider: Optional[str], list_running_distros_fn=None) -> bool:
+    """True for a Codex home that is a WSL UNC path on Windows whose distro
+    is not running: startup must not touch it. Claude is unaffected."""
+    return (
+        (provider or DEFAULT_PROVIDER) == CODEX_PROVIDER
+        and sys.platform == "win32"
+        and _is_wsl_unc(config_dir)
+        and not distro_is_running(config_dir, list_running_distros_fn)
+    )
 
 
 def _load_reconcile_state(base: Path, target: HookTarget):
@@ -1131,7 +1181,12 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
 
     if changed:
         if provider == CODEX_PROVIDER:
-            _record_codex_trust(config_dir, trust_changes)
+            try:
+                _record_codex_trust(config_dir, trust_changes)
+            except OSError as exc:
+                return ConfigDirResult(
+                    config_dir, False, f"aborted, could not write the Codex trust record: {exc}"
+                )
         _backup(settings_path)
         _write_settings(settings_path, data)
 
@@ -1151,6 +1206,8 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
             "a locally-owned hook differs from what Tokitty would write for: "
             + ", ".join(stale_local_events)
         )
+    if provider == CODEX_PROVIDER and add_missing:
+        note = _codex_install_note(config_dir)
 
     if reapproval:
         warning = f"{warning} {CODEX_REAPPROVE_WARNING}" if warning else CODEX_REAPPROVE_WARNING
@@ -1169,6 +1226,24 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         warning=warning,
         note=note,
     )
+
+
+def _codex_install_note(config_dir: str) -> Optional[str]:
+    """What to tell the user after a Codex install, from the approval
+    status as it stands once hooks.json is written."""
+    from tokitty import codex_trust
+
+    # The install just wrote into this home, so its distro is running; no
+    # need to probe wsl.exe again.
+    parsed = parse_wsl_unc(config_dir)
+    status = codex_trust.codex_hook_status(
+        config_dir, state_dir_path(), lambda: [parsed[0]] if parsed else []
+    )
+    if status == codex_trust.NEEDS_APPROVAL:
+        return CODEX_APPROVAL_NOTE
+    if status == codex_trust.UNREADABLE:
+        return CODEX_UNREADABLE_NOTE
+    return None
 
 
 _RECONCILE_TABLE = {"claude": _reconcile_hooks, CODEX_PROVIDER: _reconcile_hooks}
@@ -1193,7 +1268,9 @@ def refresh_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -> 
     return _reconcile(config_dir, provider, add_missing=False)
 
 
-def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[ConfigDirResult]:
+def ensure_current(
+    state_dir: Optional[Path] = None, refresh_fn=None, list_running_distros_fn=None
+) -> List[ConfigDirResult]:
     """Refresh every explicitly-configured hook-enabled account's
     registration in place, called from run_discovery on every launch so a
     stale owned handler (an old release path, a spelling a past version
@@ -1220,6 +1297,10 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     pair. Any exception a reconcile call raises (not just OSError)
     becomes a failed result for that account instead of aborting every
     account after it.
+
+    A Codex home that is a WSL UNC path on Windows is skipped unless its
+    distro is running (list_running_distros_fn, for tests): opening the
+    path would start the distro.
     """
     resolved_state_dir = state_dir if state_dir is not None else get_state_dir()
     pairs = _config_dirs_from_accounts_file(resolved_state_dir)
@@ -1228,6 +1309,8 @@ def ensure_current(state_dir: Optional[Path] = None, refresh_fn=None) -> List[Co
     results = []
     for config_dir, provider in pairs:
         if (provider or DEFAULT_PROVIDER) not in _RECONCILE_TABLE:
+            continue
+        if _codex_home_asleep(config_dir, provider, list_running_distros_fn):
             continue
         fn = refresh_fn if refresh_fn is not None else refresh_hooks_for_dir
         try:
@@ -1301,6 +1384,9 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
 
     _backup(settings_path)
     _write_settings(settings_path, data)
+
+    if provider == CODEX_PROVIDER:
+        _forget_codex_trust(config_dir)
 
     msg = "uninstalled"
     if warn_local:
@@ -1432,10 +1518,15 @@ def _pending_dir_has_hooks(state_dir: Path, config_dir: str, op: str) -> bool:
 
 
 def retry_pending_hook_op(
-    state_dir: Path, install_fn=install_hooks_for_dir, uninstall_fn=uninstall_hooks_for_dir
+    state_dir: Path,
+    install_fn=install_hooks_for_dir,
+    uninstall_fn=uninstall_hooks_for_dir,
+    list_running_distros_fn=None,
 ) -> Optional[ConfigDirResult]:
     """Called at next startup, or the next time the manager is opened.
-    Returns None if there was nothing pending."""
+    Returns None if there was nothing pending, or if the pending op is for
+    a Codex WSL home whose distro is not running: that op stays recorded
+    for the next launch, since opening the path would start the distro."""
     pending = load_pending_hook_op(state_dir)
     if pending is None:
         return None
@@ -1451,6 +1542,8 @@ def retry_pending_hook_op(
         # it would write Claude Code settings into another harness's home.
         clear_pending_hook_op(state_dir)
         return None
+    if _codex_home_asleep(pending["config_dir"], provider, list_running_distros_fn):
+        return None
     fn = install_fn if pending["op"] == "install" else uninstall_fn
     result = fn(pending["config_dir"], provider)
     if result.ok:
@@ -1464,8 +1557,11 @@ def install_hooks() -> int:
         print("No accounts use a harness with hooks; nothing to install.")
         return 0
     any_failed = False
+    any_codex = False
     for config_dir, provider in config_dirs:
         result = install_hooks_for_dir(config_dir, provider)
+        if provider == CODEX_PROVIDER:
+            any_codex = True
         if not result.ok:
             any_failed = True
             print(f"{config_dir}: {result.message}", file=sys.stderr)
@@ -1480,8 +1576,12 @@ def install_hooks() -> int:
             print(f"{config_dir}: {result.note}")
         if result.warning:
             print(f"{config_dir}: warning: {result.warning}", file=sys.stderr)
-    print("If the cat doesn't react, restart running Claude Code sessions "
-          "(hook edits are not hot-reloaded).")
+    if any_codex:
+        print("For Codex accounts, start codex and approve the Tokitty hooks in its hook "
+              "review, then restart running Codex sessions (hook edits are not hot-reloaded).")
+    if any(provider != CODEX_PROVIDER for _dir, provider in config_dirs):
+        print("If the cat doesn't react, restart running Claude Code sessions "
+              "(hook edits are not hot-reloaded).")
     return 1 if any_failed else 0
 
 
