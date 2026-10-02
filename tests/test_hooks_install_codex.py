@@ -893,3 +893,51 @@ def test_approved_owned_duplicates_collapsed_onto_index_zero_read_as_needing_app
     # Codex still holds the first handler's hash at index 0, and the record
     # captured that same hash, so the kept handler is not approved yet.
     assert codex_trust.codex_hook_status(str(home), frozen) == codex_trust.NEEDS_APPROVAL
+
+
+def test_install_aborts_on_a_bare_event_map_and_leaves_it_alone(home):
+    """Codex only accepts "description" and "hooks" at the top level; a bare
+    event map (as some installers write) makes it ignore the whole file."""
+    bare = {"SessionStart": [{"hooks": [{"type": "command", "command": "node gsd.js"}]}]}
+    (home / "hooks.json").write_text(json.dumps(bare), encoding="utf-8")
+    before = (home / "hooks.json").read_bytes()
+
+    result = _install(home)
+
+    assert not result.ok
+    assert "SessionStart" in result.message and '"hooks"' in result.message
+    assert (home / "hooks.json").read_bytes() == before
+
+
+def test_install_accepts_a_description_key(home):
+    _write_hooks(home, {})
+    data = _hooks(home)
+    data["description"] = "mine"
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+
+    result = _install(home)
+
+    assert result.ok
+    assert _hooks(home)["description"] == "mine"
+
+
+def test_refresh_on_a_never_installed_bare_event_map_stays_quiet(home):
+    bare = {"SessionStart": [{"hooks": [{"type": "command", "command": "node gsd.js"}]}]}
+    (home / "hooks.json").write_text(json.dumps(bare), encoding="utf-8")
+
+    result = _refresh(home)
+
+    assert result.ok
+
+
+def test_refresh_aborts_when_a_stray_key_appears_beside_tokittys_hooks(home):
+    _install(home)
+    data = _hooks(home)
+    data["SessionStart"] = []
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+    before = (home / "hooks.json").read_bytes()
+
+    result = _refresh(home)
+
+    assert not result.ok
+    assert (home / "hooks.json").read_bytes() == before

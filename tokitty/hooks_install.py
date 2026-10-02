@@ -98,12 +98,15 @@ class HookTarget:
     timeouts is (event, seconds) pairs: those handlers carry a "timeout"
     field and no other does. exec_form is whether the provider can run a
     command plus args; one that cannot always gets a single command string.
+    top_level_keys, when set, is every top-level key the harness accepts in
+    settings_file; it rejects the whole file over any other.
     """
     settings_file: str
     local_settings_file: Optional[str]  # read-only; None if the harness has none
     events: Tuple[Tuple[str, Optional[str]], ...]
     timeouts: Tuple[Tuple[str, int], ...] = ()
     exec_form: bool = True
+    top_level_keys: Optional[Tuple[str, ...]] = None
 
 
 _HOOK_TARGETS: Dict[str, HookTarget] = {
@@ -114,6 +117,8 @@ _HOOK_TARGETS: Dict[str, HookTarget] = {
         CODEX_EVENTS,
         timeouts=(("Interrupt", 3), ("SessionEnd", 3)),
         exec_form=False,
+        # Codex's HooksFile is deny_unknown_fields over these two.
+        top_level_keys=("description", "hooks"),
     ),
 }
 
@@ -1025,6 +1030,19 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         data, local_hooks, problem = _load_reconcile_state(base, target)
         if problem is not None:
             return _reconcile_problem_result(config_dir, problem, add_missing)
+
+    if target.top_level_keys is not None:
+        stray = [key for key in data if key not in target.top_level_keys]
+        if stray:
+            # Adding Tokitty's events beside these would still leave a file
+            # Codex refuses to load. Moving the user's keys is theirs to do.
+            return ConfigDirResult(
+                config_dir,
+                False,
+                f"aborted, {target.settings_file} has top-level keys Codex does not accept "
+                f"({', '.join(map(str, stray))}), so Codex ignores the whole file. Move those "
+                f'events under "hooks" and install again.',
+            )
 
     refresh = not add_missing
 
