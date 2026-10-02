@@ -1051,10 +1051,31 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         tray_enabled=lambda: load_settings(state_dir).tray_enabled,
     )
     updates = update_controller.UpdateController(state_dir, update_host)
+    from tokitty.update_check import UpdateChecker, announcer
+    from tokitty.update_dialog import UpdateUi
+
+    # Plain-Python shadow state again: the tray menu reads it on pystray's thread.
+    update_check_state = {"on": settings.update_check}
+    checker = UpdateChecker(
+        state_dir, updates.running, enabled=lambda: update_check_state["on"],
+        on_available=announcer(state_dir, tray),
+    )
+    update_ui = UpdateUi(root, checker, updates)
+
+    def toggle_update_check() -> None:
+        update_check_state["on"] = not update_check_state["on"]
+        update_settings(state_dir, update_check=update_check_state["on"])
+
+    window.update_available_label = checker.menu_label
+    window.on_install_update = update_ui.install
+    window.on_check_updates = update_ui.check_now
+    window.update_check_enabled = lambda: update_check_state["on"]
+    window.on_toggle_update_check = toggle_update_check
     apply_exit = {"code": 1}
 
     def tick():
         updates.tick()
+        checker.tick()
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
         # be done from run_discovery itself via root.after().

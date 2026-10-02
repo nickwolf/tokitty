@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import colorchooser, simpledialog
 from typing import Callable, Dict, List, Optional, Tuple
@@ -576,6 +577,13 @@ class TokittyWindow:
         self.usage_readout: Optional[Callable[[], str]] = None
         self.on_usage_readout: Optional[Callable[[str], None]] = None
         self.on_set_budget: Optional[Callable[[int], None]] = None
+        # Updates. The label getter reads plain-Python state and returns
+        # None while no newer release is known.
+        self.update_available_label: Optional[Callable[[], Optional[str]]] = None
+        self.on_install_update: Optional[Callable[[], None]] = None
+        self.on_check_updates: Optional[Callable[[], None]] = None
+        self.update_check_enabled: Optional[Callable[[], bool]] = None
+        self.on_toggle_update_check: Optional[Callable[[], None]] = None
         # "connected" | "not_connected" | "not_installed"; None leaves the submenu out.
         self.streamdock_state: Optional[Callable[[], str]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
@@ -803,6 +811,11 @@ class TokittyWindow:
                 if self.on_set_budget is not None
                 else None
             ),
+            update_available_label=self.update_available_label,
+            on_install_update=self.on_install_update,
+            on_check_updates=self.on_check_updates,
+            update_check_enabled=self.update_check_enabled,
+            on_toggle_update_check=self.on_toggle_update_check,
         )
 
     def _after_menu_action(self, action):
@@ -829,6 +842,11 @@ class TokittyWindow:
     def _render_tk_menu(self, menu: tk.Menu, items: List[MenuItem]) -> None:
         radio_var: Optional[tk.StringVar] = None
         for item in items:
+            if item.dynamic_label is not None:
+                text = item.dynamic_label()
+                if not text:
+                    continue
+                item = replace(item, label=text)
             if item.separator:
                 menu.add_separator()
             elif not item.enabled:

@@ -245,6 +245,40 @@ def test_autostart_seam_adds_start_at_login_item():
 
 
 @pytest.mark.gui
+def test_update_seams_add_the_update_items_and_the_item_hides_without_a_release():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    def tk_labels(window):
+        window._rebuild_context_menu()
+        menu = window.menu
+        return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            found = {"label": None}
+            window.update_available_label = lambda: found["label"]
+            window.on_install_update = lambda: None
+            window.on_check_updates = lambda: None
+            window.update_check_enabled = lambda: True
+            window.on_toggle_update_check = lambda: None
+            # Hidden in the Tk menu until a newer release is known.
+            labels = tk_labels(window)
+            assert labels[0] == "Colorway"
+            assert labels[-3:] == ["Check for updates", "Check for updates automatically", "Exit"]
+            found["label"] = "Update to v0.3.0…"
+            assert tk_labels(window)[0] == "Update to v0.3.0…"
+            # The tray gets the same model, with the getter intact.
+            assert window.build_menu_model(0)[0].dynamic_label() == "Update to v0.3.0…"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
 def test_none_pane_index_rebuilds_menu_with_only_global_items():
     tk = pytest.importorskip("tkinter")
     from tokitty.ui import TokittyWindow, _PANE_SPECIFIC_LABELS

@@ -1845,3 +1845,103 @@ def test_run_gui_starts_no_cleanup_thread_in_a_source_run(tmp_path, monkeypatch)
         thread.join(timeout=5.0)
 
     assert cleanups == []
+
+
+# --- the update check inside run_gui ------------------------------------------
+
+
+def _capture_window(monkeypatch):
+    from tokitty import ui
+
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+    return holder
+
+
+@pytest.mark.gui
+def test_run_gui_shows_the_update_item_once_a_scheduled_check_finds_a_release(tmp_path, monkeypatch):
+    from datetime import timedelta
+
+    from tokitty import update_check
+
+    holder = _capture_window(monkeypatch)
+    seen = {}
+
+    def mainloop(self):
+        window = holder["window"]
+        seen["before"] = window.update_available_label()
+        end = time.monotonic() + 15
+        while window.update_available_label() is None and time.monotonic() < end:
+            self.update()
+            time.sleep(0.01)
+        seen["after"] = window.update_available_label()
+
+    _, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+    monkeypatch.setattr(update_check, "FIRST_CHECK_DELAY", timedelta(0))
+    monkeypatch.setattr(update_check, "fetch_releases", lambda: _release_listing("v99.0.0"))
+
+    assert main_module.run_gui() == 0
+
+    assert seen == {"before": None, "after": "Update to v99.0.0…"}
+    from tokitty.updater import load_update_state
+
+    assert load_update_state(tmp_path).latest_tag == "v99.0.0"
+
+
+@pytest.mark.gui
+def test_run_gui_runs_no_scheduled_check_when_the_setting_is_off(tmp_path, monkeypatch):
+    from datetime import timedelta
+
+    from tokitty import update_check
+    from tokitty.settings import update_settings
+
+    calls = []
+
+    def mainloop(self):
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end:
+            self.update()
+            time.sleep(0.01)
+
+    _, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+    update_settings(tmp_path, update_check=False)
+    monkeypatch.setattr(update_check, "FIRST_CHECK_DELAY", timedelta(0))
+    monkeypatch.setattr(update_check, "fetch_releases", lambda: calls.append(1) or [])
+
+    assert main_module.run_gui() == 0
+
+    assert calls == []
+
+
+@pytest.mark.gui
+def test_run_gui_wires_the_update_menu_seams_and_the_toggle_saves_the_setting(tmp_path, monkeypatch):
+    from tokitty.settings import load_settings
+
+    holder = _capture_window(monkeypatch)
+    seen = {}
+
+    def mainloop(self):
+        window = holder["window"]
+        labels = [i.label for i in window.build_menu_model(0) if not i.separator]
+        seen["labels"] = labels
+        seen["before"] = window.update_check_enabled()
+        window.on_toggle_update_check()
+        seen["after"] = window.update_check_enabled()
+        seen["saved"] = load_settings(tmp_path).update_check
+        window.on_toggle_update_check()
+        seen["restored"] = load_settings(tmp_path).update_check
+
+    _, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+
+    assert main_module.run_gui() == 0
+
+    assert seen["labels"][0] == ""  # the update item is present and hidden
+    assert "Check for updates" in seen["labels"] and "Check for updates automatically" in seen["labels"]
+    assert (seen["before"], seen["after"], seen["saved"], seen["restored"]) == (True, False, False, True)

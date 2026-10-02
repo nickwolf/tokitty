@@ -232,6 +232,10 @@ class UpdateController:
         self._handover_state = None
 
     @property
+    def running(self) -> RunningVersion:
+        return self._running
+
+    @property
     def status(self) -> UpdateStatus:
         with self._lock:
             return UpdateStatus(self._phase, *self._progress)

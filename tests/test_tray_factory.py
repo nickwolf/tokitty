@@ -20,13 +20,14 @@ from tokitty.tray import TRAY_ICON_SCALE, _default_icon_factory, _default_image_
 
 
 class FakeMenuItem:
-    """Mirrors pystray.MenuItem(text, action, checked=None, radio=False)."""
+    """Mirrors pystray.MenuItem(text, action, checked=None, radio=False, visible=True)."""
 
-    def __init__(self, text, action=None, checked=None, radio=False):
+    def __init__(self, text, action=None, checked=None, radio=False, visible=True):
         self.text = text
         self.action = action
         self.checked = checked
         self.radio = radio
+        self.visible = visible
 
 
 class FakeMenu:
@@ -247,3 +248,25 @@ def test_image_factory_produces_square_transparent_rgba_icon():
     # A real cat on a transparent background: both fully-transparent and
     # fully-opaque pixels must be present in the alpha channel.
     assert img.getchannel("A").getextrema() == (0, 255)
+
+
+def test_dynamic_label_item_becomes_a_callable_text_and_visibility(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pystray", _fake_pystray_module())
+    found = {"label": None}
+    model = build_menu(
+        colorways=["orange"], patterns=["solid"],
+        current_colorway=lambda: "orange", current_pattern=lambda: "solid",
+        on_colorway=lambda n: None, on_pattern=lambda n: None,
+        on_customize=_noop, on_rename=_noop, on_refresh=_noop,
+        always_on_top=lambda: True, on_toggle_always_on_top=_noop, on_quit=_noop,
+        update_available_label=lambda: found["label"], on_install_update=_noop,
+    )
+    wrap, _ = _make_wrap()
+    entry = _default_icon_factory(object(), model, wrap, "Tokitty").menu.entries[0]
+
+    assert entry.action == ("WRAPPED", _noop)
+    # Evaluated on every draw, so an update found after the icon was built shows up.
+    assert entry.visible(None) is False
+    found["label"] = "Update to v0.3.0…"
+    assert entry.visible(None) is True
+    assert entry.text(None) == "Update to v0.3.0…"

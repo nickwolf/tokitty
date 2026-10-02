@@ -167,3 +167,35 @@ def test_refresh_swallows_a_failing_update_menu():
     manager = TrayManager.__new__(TrayManager)
     manager._icon = _Icon()
     manager.refresh()
+
+
+def test_notify_hands_the_message_to_a_capable_icon(tmp_path):
+    mgr, _, icons = _managers(tmp_path)
+    mgr.start()
+    icons[-1].HAS_NOTIFICATION = True
+    assert mgr.notify("Tokitty v0.3.0 is available", "Right-click Tokitty to update") is True
+    icons[-1].notify.assert_called_once_with("Right-click Tokitty to update", "Tokitty v0.3.0 is available")
+
+
+def test_notify_is_a_noop_when_the_backend_cannot_notify(tmp_path):
+    mgr, _, icons = _managers(tmp_path)
+    mgr.start()
+    icons[-1].HAS_NOTIFICATION = False
+    assert mgr.notify("t", "m") is False
+    icons[-1].notify.assert_not_called()
+
+
+def test_notify_is_a_noop_without_an_icon(tmp_path):
+    mgr, _, _ = _managers(tmp_path)
+    assert mgr.notify("t", "m") is False
+    mgr.start()
+    mgr.stop()
+    assert mgr.notify("t", "m") is False
+
+
+def test_notify_swallows_a_failing_backend(tmp_path):
+    mgr, _, icons = _managers(tmp_path)
+    mgr.start()
+    icons[-1].HAS_NOTIFICATION = True
+    icons[-1].notify.side_effect = RuntimeError("backend went away")
+    assert mgr.notify("t", "m") is False
