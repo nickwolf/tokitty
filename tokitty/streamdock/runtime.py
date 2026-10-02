@@ -114,8 +114,10 @@ class StreamdockRuntime:
         monotonic_fn: Callable[[], float] = time.monotonic,
         list_running_distros_fn: Callable[[], List[str]] = list_running_distros,
         run_io: Optional[Callable[[Callable[[], None]], None]] = None,
+        hidden_accounts: Optional[List[str]] = None,
     ) -> None:
         self._presets = list(presets)
+        self._hidden = frozenset(hidden_accounts or ())
         self._accounts: Dict[int, AccountInput] = {a.index: a for a in accounts}
         self._open_in_window = open_in_window or (lambda request, reason: None)
         self._launch = launch_fn
@@ -226,9 +228,14 @@ class StreamdockRuntime:
         self._heartbeat(now)
         self._pending = [req for w in self._watchers.values() for req in w.get_pending()]
         self._decided &= {r.nonce for r in self._pending}
+        hidden = self._hidden_indices()
+        sessions_by_account = {i: v for i, v in sessions_by_account.items() if i not in hidden}
         self._request_titles(sessions_by_account, now)
         self._model.update(
-            sessions_by_account, self._pending, usage_by_account, titles=dict(self._titles)
+            sessions_by_account,
+            [req for req in self._pending if req.account_index not in hidden],
+            usage_by_account,
+            titles=dict(self._titles),
         )
         for action in actions:
             self._run_action(action, now)
@@ -396,6 +403,16 @@ class StreamdockRuntime:
     def set_presets(self, presets: List[dict]) -> None:
         """Swap the preset list. Tk thread, like every other method here."""
         self._presets = list(presets)
+
+    def set_hidden_accounts(self, names: List[str]) -> None:
+        """Swap the hidden-account list (name slugs). Tk thread; applies on the next tick."""
+        self._hidden = frozenset(names)
+
+    def _hidden_indices(self) -> set:
+        """Unit indices of the hidden accounts. The default unit has no Account, so it is never hidden."""
+        return {
+            a.index for a in self._accounts.values() if a.account is not None and a.account.name in self._hidden
+        }
 
     # heartbeat and titles
 

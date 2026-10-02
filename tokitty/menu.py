@@ -10,7 +10,7 @@ them accordingly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 
 @dataclass
@@ -32,9 +32,11 @@ def streamdock_menu_item(
     state: str,
     on_copy_install: Callable[[], None],
     on_edit_presets: Optional[Callable[[], None]] = None,
+    account_toggles: Optional[List[Tuple[str, Callable[[], bool], Callable[[], None]]]] = None,
 ) -> MenuItem:
     """The "Stream Dock" submenu. `state` is "connected", "not_connected" or "not_installed",
-    read by the caller when the menu opens. The presets editor is offered once installed."""
+    read by the caller when the menu opens. The presets editor and the account switches
+    (label, is shown, toggle) are offered once installed."""
     if state == "not_installed":
         sub = [
             MenuItem(label="Not installed", enabled=False),
@@ -44,6 +46,10 @@ def streamdock_menu_item(
         sub = [MenuItem(label="Connected" if state == "connected" else "Not connected", enabled=False)]
         if on_edit_presets is not None:
             sub.append(MenuItem(label="New-session presets…", action=on_edit_presets))
+        if account_toggles:
+            sub.append(MenuItem(label="Show sessions from", submenu=[
+                MenuItem(label=label, action=toggle, checkbox=shown) for label, shown, toggle in account_toggles
+            ]))
     return MenuItem(label="Stream Dock", submenu=sub)
 
 

@@ -78,7 +78,8 @@ def reset():
 
 
 def settings(port=4000, token="t"):
-    return SimpleNamespace(streamdock_port=port, streamdock_token=token, streamdock_presets=[{"name": "p"}])
+    return SimpleNamespace(streamdock_port=port, streamdock_token=token, streamdock_presets=[{"name": "p"}],
+                           streamdock_hidden_accounts=["w"])
 
 
 def test_start_streamdock_not_configured():
@@ -94,6 +95,7 @@ def test_start_streamdock_starts_runtime():
     assert (port, token, presets, len(accounts)) == (4000, "t", [{"name": "p"}], 1)
     assert "watcher_factory" in kw
     assert kw["list_running_distros_fn"] is list
+    assert kw["hidden_accounts"] == ["w"]
 
 
 def test_start_streamdock_bind_error_is_logged_not_raised(capsys):

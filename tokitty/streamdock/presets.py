@@ -67,3 +67,11 @@ def save_presets(state_dir, presets: List[dict]) -> List[dict]:
     current = load_settings(state_dir)
     save_settings(state_dir, dataclasses.replace(current, streamdock_presets=list(presets)))
     return load_settings(state_dir).streamdock_presets
+
+
+def save_hidden_accounts(state_dir, names: List[str]) -> List[str]:
+    """Write the hidden-account list into settings.json, leaving every other
+    setting as it is on disk, and return it as validated on reload."""
+    current = load_settings(state_dir)
+    save_settings(state_dir, dataclasses.replace(current, streamdock_hidden_accounts=list(names)))
+    return load_settings(state_dir).streamdock_hidden_accounts

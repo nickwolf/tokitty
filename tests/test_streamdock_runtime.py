@@ -625,3 +625,34 @@ def test_pending_nonces(h):
     h.watchers[0].pending = [req("n1", A0)]
     h.tick()
     assert h.rt.pending_nonces() == {"n1"}
+
+
+def test_hidden_account_sessions_and_pending_never_reach_the_deck(tmp_path):
+    h = Harness(tmp_path, hidden_accounts=["acct1"])
+    slots(h, 3)
+    assert h.spec("k0").ref == A0
+    assert h.spec("k1").kind == "status"
+    h.watchers[1].pending = [req("b", A1)]
+    h.watchers[0].pending = [req("a", A0)]
+    h.tick()
+    assert h.spec("k0").pending and h.spec("k1").kind == "status"
+    # No titles are asked for a hidden account either.
+    assert {c[1] for c in h.worker.of("title")} == {A0}
+
+
+def test_set_hidden_accounts_applies_live(h):
+    slots(h, 3)
+    assert [h.spec(f"k{i}").ref for i in range(2)] == [A0, A1]
+    h.rt.set_hidden_accounts(["acct0"])
+    h.tick()
+    assert [h.spec("k0").kind, h.spec("k1").ref] == ["status", A1]
+    h.rt.set_hidden_accounts([])
+    h.tick()
+    assert {h.spec("k0").ref, h.spec("k1").ref} == {A0, A1}
+
+
+def test_default_unit_cannot_be_hidden(tmp_path):
+    h = Harness(tmp_path, hidden_accounts=["Claude"])
+    h.rt._accounts[0] = AccountInput(0, "Claude", None, "/cfg0", h.dirs[0])
+    slots(h, 3)
+    assert [h.spec("k0").ref, h.spec("k1").ref] == [A0, A1]
