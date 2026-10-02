@@ -75,7 +75,10 @@ def _sessions(home):
     return f"{home}/tokitty/sessions"
 
 
-def _source_command(home, interpreter="python3"):
+def _source_command(home, interpreter=None):
+    if interpreter is None:
+        # A drive-letter home (tmp_path on Windows) gets python, as in _build_command.
+        interpreter = "python" if hi._is_windows_local_path(str(home)) else "python3"
     return f'{interpreter} "{home}/tokitty/hook_writer.py" --sessions-dir "{_sessions(home)}"'
 
 
