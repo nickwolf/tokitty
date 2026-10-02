@@ -37,3 +37,9 @@ def test_release_build_installs_the_streamdock_extra():
     # Stream Dock tab switching or Interrupt, and nothing fails to say so.
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert 'pip install -e ".[packaging,streamdock]"' in workflow
+
+
+def test_release_publish_names_the_repo():
+    # The publish job has no checkout, so gh cannot infer the repo from a .git.
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert 'gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"' in workflow

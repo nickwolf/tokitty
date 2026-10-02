@@ -288,7 +288,7 @@ jobs:
             echo "expected 4 archives, found ${#archives[@]}: ${archives[*]}" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$GITHUB_REF_NAME" \
             --notes "Automated build of tokitty $GITHUB_REF_NAME. Unsigned, see README for the macOS first-launch steps." \
