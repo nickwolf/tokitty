@@ -30,3 +30,10 @@ def test_hook_writer_is_bundled():
 def test_bundled_files_exist():
     for name in _bundle_files():
         assert (ROOT / "tokitty" / name).is_file(), name
+
+
+def test_release_build_installs_the_streamdock_extra():
+    # Without comtypes in the build environment, the frozen Windows app has no
+    # Stream Dock tab switching or Interrupt, and nothing fails to say so.
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert 'pip install -e ".[packaging,streamdock]"' in workflow
