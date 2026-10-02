@@ -24,6 +24,8 @@ from __future__ import annotations
 import hmac
 import json
 import queue
+import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -92,6 +94,18 @@ def parse_event(raw: Any) -> Optional[DeckEvent]:
     )
 
 
+class _ExclusiveServer(ThreadingHTTPServer):
+    """Owns its port outright. HTTPServer sets SO_REUSEADDR, which on Windows lets a
+    second socket bind the same port alongside this one instead of failing."""
+
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class DeckServer:
     """Serves the plugin page's requests on 127.0.0.1.
 
@@ -132,7 +146,7 @@ class DeckServer:
         class Handler(_Handler):
             server_deck = deck
 
-        httpd = ThreadingHTTPServer((HOST, self.port), Handler)
+        httpd = _ExclusiveServer((HOST, self.port), Handler)
         httpd.daemon_threads = True
         self.port = httpd.server_address[1]
         self._httpd = httpd
