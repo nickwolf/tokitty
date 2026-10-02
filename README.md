@@ -178,6 +178,7 @@ How answering from the deck works:
 - A command approved in the terminal that keeps running for a long time leaves its deck key flagged until it finishes, because Claude Code records nothing until the command returns. Answering from the deck doesn't have this problem.
 - Tokitty can't see tabs in a Windows Terminal running as Administrator, so those sessions always get the popup window.
 - The M18's ring isn't supported.
+- Pressing a key that shows "no tab" removes that session from the deck until it asks for permission or ends, and the Stream Dock menu's "Show sessions from" turns accounts on and off.
 
 ## Customization
 
