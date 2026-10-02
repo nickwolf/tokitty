@@ -66,3 +66,15 @@ def test_account_label():
 
     assert account_label(1, WSL) == f"Cat 2 ({WSL.config_dir})"
     assert account_label(1, WSL, "Work") == f"Work ({WSL.config_dir})"
+
+
+def test_save_presets_keeps_other_settings(tmp_path):
+    from tokitty.settings import Settings, load_settings, save_settings
+    from tokitty.streamdock.presets import save_presets
+
+    save_settings(tmp_path, Settings(tray_enabled=False, streamdock_port=4000, streamdock_token="a" * 32))
+    preset = {"name": "p", "account": "work", "account_index": 1, "env": "wsl", "distro": "Ubuntu", "cwd": "/w"}
+    assert save_presets(tmp_path, [preset]) == [preset]
+    loaded = load_settings(tmp_path)
+    assert loaded.streamdock_presets == [preset]
+    assert (loaded.tray_enabled, loaded.streamdock_port, loaded.streamdock_token) == (False, 4000, "a" * 32)

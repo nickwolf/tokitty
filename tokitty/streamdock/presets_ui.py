@@ -7,8 +7,15 @@ from tkinter import filedialog, ttk
 from typing import Callable, Dict, List, Optional
 
 from tokitty.accounts import Account
-from tokitty.settings import load_settings, save_settings
-from tokitty.streamdock.presets import account_label, check_preset, claude_accounts, is_wsl, preset_for
+from tokitty.settings import load_settings
+from tokitty.streamdock.presets import (
+    account_label,
+    check_preset,
+    claude_accounts,
+    is_wsl,
+    preset_for,
+    save_presets,
+)
 
 WSL_HINT = "A path inside WSL, such as /mnt/c/Tools or ~/repo"
 
@@ -102,11 +109,7 @@ class PresetsDialog:
         self._save(self._presets[:position] + self._presets[position + 1:])
 
     def _save(self, presets: List[dict]) -> None:
-        # Load fresh so nothing else in settings.json is clobbered.
-        current = load_settings(self.state_dir)
-        current.streamdock_presets = presets
-        save_settings(self.state_dir, current)
-        self._presets = load_settings(self.state_dir).streamdock_presets
+        self._presets = save_presets(self.state_dir, presets)
         self._on_saved(list(self._presets))
         self._refresh()
 
