@@ -1121,6 +1121,10 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.frozen import self_check
 
         return self_check()
+    if "--check-for-update" in argv:
+        from tokitty.updater import check_for_update_cli
+
+        return check_for_update_cli()
     if "--debug-print" in argv:
         return debug_print()
     if "--install-hooks" in argv:

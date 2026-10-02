@@ -35,6 +35,7 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
 class Settings:
     tray_enabled: bool = True
     surprise_me: bool = False
+    update_check: bool = True
     opacity: int = DEFAULT_LEVEL
     view_mode: str = DEFAULT_VIEW_MODE
     usage_window: str = DEFAULT_WINDOW
@@ -73,12 +74,16 @@ def load_settings(state_dir) -> Settings:
     surprise_me = data.get("surprise_me", False)
     if not isinstance(surprise_me, bool):
         surprise_me = False
+    update_check = data.get("update_check", True)
+    if not isinstance(update_check, bool):
+        update_check = True
     opacity = data.get("opacity", DEFAULT_LEVEL)
     if isinstance(opacity, bool) or opacity not in LEVELS:
         opacity = DEFAULT_LEVEL
     return Settings(
         tray_enabled=tray_enabled,
         surprise_me=surprise_me,
+        update_check=update_check,
         opacity=opacity,
         view_mode=_one_of(data.get("view_mode"), VIEW_MODES, DEFAULT_VIEW_MODE),
         usage_window=_one_of(data.get("usage_window"), WINDOWS, DEFAULT_WINDOW),

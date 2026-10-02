@@ -1313,6 +1313,16 @@ def test_main_dispatches_self_check(monkeypatch):
     assert calls == ["self-check"]
 
 
+def test_main_dispatches_check_for_update(monkeypatch):
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.updater.check_for_update_cli", lambda: calls.append("check") or 0)
+
+    assert main_module.main(["--check-for-update"]) == 0
+    assert calls == ["check"]
+
+
 def test_main_dispatches_install_autostart(monkeypatch):
     from tokitty import __main__ as main_module
 
