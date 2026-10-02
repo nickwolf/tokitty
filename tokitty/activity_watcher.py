@@ -75,6 +75,7 @@ class ActivityWatcher:
         self._time_fn = time_fn or time.time
         self._fast_interval = fast_interval
         self._slow_interval = slow_interval
+        self._idle_cap: Optional[float] = None
 
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
@@ -92,6 +93,11 @@ class ActivityWatcher:
         if self._thread is not None:
             self._thread.join(timeout=5)
 
+    def set_idle_cap(self, seconds: Optional[float]) -> None:
+        """Poll at least this often while idle (None restores the slow interval).
+        The Stream Dock sets it while connected, so a new session gets a key quickly."""
+        self._idle_cap = seconds
+
     def get_latest(self) -> Optional[ActivityView]:
         with self._lock:
             return self._latest
@@ -105,6 +111,9 @@ class ActivityWatcher:
             self._tick_once()
             latest = self.get_latest()
             interval = self._fast_interval if latest is not None and latest.state != "idle" else self._slow_interval
+            cap = self._idle_cap
+            if cap is not None:
+                interval = min(interval, cap)
             self._sleep_fn(interval)
 
     def _resolve(self, value):

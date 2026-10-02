@@ -278,6 +278,25 @@ def test_adaptive_cadence_slow_when_idle():
     assert sleeps[0] == SLOW_INTERVAL_S
 
 
+def test_idle_cap_shortens_the_idle_interval_and_can_be_lifted():
+    sleeps = []
+
+    def sleep_fn(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            watcher.set_idle_cap(None)
+        else:
+            watcher._stop_event.set()
+        return True
+
+    fs = FakeFs()
+    watcher = _watcher(fs, time_fn=lambda: 100.0, sleep_fn=sleep_fn)
+    watcher.set_idle_cap(3.0)
+    watcher._run()
+
+    assert sleeps == [3.0, SLOW_INTERVAL_S]
+
+
 def test_start_and_stop_run_thread_and_publish():
     fs = FakeFs()
     fs.files["s1"] = rec("PreToolUse", ts=100.0, tool_name="Bash")
