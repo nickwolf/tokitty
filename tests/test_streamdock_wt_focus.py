@@ -9,6 +9,7 @@ from tokitty.streamdock.wt_focus import (
     FocusWorker,
     InterruptDone,
     Tab,
+    TitleDone,
     VerifyDone,
     WtFocus,
     normalise_tab_name,
@@ -290,6 +291,12 @@ class FakeFocus:
     def forget(self, session):
         self.calls.append(("forget", session))
 
+    def title(self, session, config_dir):
+        self.calls.append(("title", session, config_dir))
+        if session == S2:
+            raise RuntimeError("boom")
+        return "My title"
+
 
 def run_worker(submit, make=None):
     fake = FakeFocus()
@@ -368,3 +375,14 @@ def test_worker_stop_joins():
     w = FocusWorker(FakeFocus, lambda r: None)
     w.stop(timeout=0.5)
     assert not w._thread.is_alive()
+
+
+def test_worker_title_job_reports_title_and_reports_none_on_failure():
+    def submit(w):
+        w.submit_title(S, "cfg")
+        w.submit_title(S2, "cfg")
+        w.submit_verify("n", S)
+
+    fake, results, _ = run_worker(submit)
+    assert results == [TitleDone(S, "My title"), TitleDone(S2, None), VerifyDone("n", True)]
+    assert [c[0] for c in fake.calls] == ["title", "title", "verify"]

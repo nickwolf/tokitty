@@ -225,6 +225,12 @@ class InterruptDone:
     sent: bool
 
 
+@dataclass(frozen=True)
+class TitleDone:
+    session: SessionRef
+    title: Optional[str]
+
+
 _STOP = object()
 _Job = Tuple[Callable[[WtFocus], Any], Any]
 
@@ -254,6 +260,11 @@ class FocusWorker:
 
     def submit_interrupt(self, session: SessionRef) -> None:
         self._jobs.put((lambda f: InterruptDone(session, f.send_escape(session)), InterruptDone(session, False)))
+
+    def submit_title(self, session: SessionRef, config_dir: str) -> None:
+        # Reading a transcript tail is slow over \\wsl.localhost, so it lives here
+        # rather than on the Tk thread. A failure reports a None title.
+        self._jobs.put((lambda f: TitleDone(session, f.title(session, config_dir)), TitleDone(session, None)))
 
     def forget(self, session: SessionRef) -> None:
         self._jobs.put((lambda f: f.forget(session), None))
