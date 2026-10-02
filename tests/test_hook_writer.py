@@ -929,6 +929,22 @@ class TestEmit:
         assert "print(" not in text.replace("never prints", "").replace("print a", "")
 
 
+class TestSubagentTranscript:
+    def test_main_session_uses_transcript_path(self):
+        assert hw._transcript_path({"transcript_path": "/p/s.jsonl"}) == "/p/s.jsonl"
+
+    def test_subagent_reads_its_own_transcript(self):
+        got = hw._transcript_path({"transcript_path": "/p/s.jsonl", "agent_id": "a2e07e30b37670bb8"})
+        assert got == os.path.join("/p/s", "subagents", "agent-a2e07e30b37670bb8.jsonl")
+
+    @pytest.mark.parametrize("agent_id", ["", "../x", "a/b", 5, "a b"])
+    def test_bad_agent_id_gives_up(self, agent_id):
+        assert hw._transcript_path({"transcript_path": "/p/s.jsonl", "agent_id": agent_id}) is None
+
+    def test_subagent_without_jsonl_suffix_gives_up(self):
+        assert hw._transcript_path({"transcript_path": "/p/s", "agent_id": "abc"}) is None
+
+
 class TestPermissionEndToEnd:
     def _launch(self, tmp_path, transcript, payload):
         sessions = tmp_path / "tokitty" / "sessions"
@@ -997,6 +1013,42 @@ class TestPermissionEndToEnd:
         assert proc.returncode == 0
         assert json.loads(out)["hookSpecificOutput"]["decision"] == {"behavior": "allow"}
         assert list(pend.iterdir()) == []
+
+    def test_subagent_allow_round_trip(self, tmp_path):
+        import time as _t
+
+        payload = self._payload(tmp_path)
+        # The main transcript only mentions the command; the call lives in the subagent's file.
+        (tmp_path / "t.jsonl").write_text("")
+        sub = tmp_path / "t" / "subagents"
+        sub.mkdir(parents=True)
+        (sub / "agent-abc123.jsonl").write_text(json.dumps(tool_use("toolu_SUB")) + "\n")
+        payload["agent_id"] = "abc123"
+        payload["agent_type"] = "general-purpose"
+        tdir = tmp_path / "tokitty"
+        tdir.mkdir()
+        (tdir / "streamdock.enabled").write_text("")
+        proc, data = self._launch(tmp_path, None, payload)
+        proc.stdin.write(data)
+        proc.stdin.close()
+        pend = tdir / "pending"
+        deadline = _t.time() + 8
+        files = []
+        while _t.time() < deadline and not files:
+            files = [p for p in pend.glob("*.json")] if pend.exists() else []
+            _t.sleep(0.05)
+        assert files, "pending file never appeared"
+        assert json.loads(files[0].read_text())["tool_use_id"] == "toolu_SUB"
+        nonce = files[0].stem
+        (tdir / "decisions").mkdir()
+        (tdir / "decisions" / f"{nonce}.json").write_text(
+            json.dumps({"nonce": nonce, "session_id": "sess-1", "digest": digest_of(TOOL_INPUT), "behavior": "allow"})
+        )
+        out = proc.stdout.read()
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        proc.stderr.close()
+        assert json.loads(out)["hookSpecificOutput"]["decision"] == {"behavior": "allow"}
 
 
 def iso(epoch):

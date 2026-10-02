@@ -269,12 +269,32 @@ def _unresolved_matches(tail, tool_name, digest, started):
     return [t for t in ids if not _answered(tail, t)]
 
 
+_AGENT_ID_CHARS = frozenset("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-")
+
+
+def _transcript_path(payload):
+    """The transcript that holds this call. A subagent's calls go to
+    <session transcript minus .jsonl>/subagents/agent-<agent_id>.jsonl, while
+    the payload's transcript_path still names the main session's file."""
+    path = payload.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return None
+    agent_id = payload.get("agent_id")
+    if agent_id is None:
+        return path
+    if not isinstance(agent_id, str) or not agent_id or not set(agent_id) <= _AGENT_ID_CHARS:
+        return None
+    if not path.endswith(".jsonl"):
+        return None
+    return os.path.join(path[: -len(".jsonl")], "subagents", "agent-" + agent_id + ".jsonl")
+
+
 def _lookup_tool_use_id(payload, digest, read_tail_fn, sleep_fn, started):
     """(tool_use_id, scan state) for the one unresolved matching call, or None
     (zero, several, unreadable). The scan state starts at the byte size the
     lookup read ended at, so later polls cover everything appended after it."""
-    path = payload.get("transcript_path")
-    if not isinstance(path, str) or not path:
+    path = _transcript_path(payload)
+    if path is None:
         return None
     for attempt in range(_LOOKUP_TRIES):
         try:
@@ -449,7 +469,7 @@ def _wait(
     if looked_up is None:
         return None
     tool_use_id, scan = looked_up
-    transcript = payload["transcript_path"]
+    transcript = _transcript_path(payload)
 
     nonce = rand_fn()
     if not isinstance(nonce, str) or not nonce or not set(nonce) <= _HEX:
