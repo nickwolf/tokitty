@@ -975,6 +975,9 @@ class TestPermissionEndToEnd:
             files = [p for p in pend.glob("*.json")] if pend.exists() else []
             _t.sleep(0.05)
         assert files, "pending file never appeared"
+        # The activity state is written before the wait starts, not after it.
+        state = json.loads((tdir / "sessions" / "sess-1.json").read_text())
+        assert state["event"] == "PermissionRequest" and state["tool_name"] == "Bash"
         nonce = files[0].stem
         (tdir / "decisions").mkdir()
         (tdir / "decisions" / f"{nonce}.json").write_text(

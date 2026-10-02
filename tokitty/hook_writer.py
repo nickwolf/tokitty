@@ -29,7 +29,9 @@ the user's answer, so every other path (error, ambiguity, timeout, disabled
 feature) prints nothing and exits 0, leaving Claude Code's own terminal
 prompt in charge. Nothing else in this module may print.
 
-PermissionRequest never touches the per-session state file in sessions/.
+A PermissionRequest updates the per-session state file like any other event
+(Codex sessions rely on it for their permission state) before the Stream Dock
+wait starts, so the wait never delays it.
 """
 
 import hashlib
@@ -606,12 +608,18 @@ def main():
         return
 
     event = payload.get("hook_event_name")
-    if event == "PermissionRequest":
-        _run_permission(payload, sessions_dir)
-        return
     if not event or event not in _KNOWN_EVENTS:
         return
 
+    try:
+        _write_state(sessions_dir, payload, session_id, event)
+    except Exception:
+        pass
+    if event == "PermissionRequest":
+        _run_permission(payload, sessions_dir)
+
+
+def _write_state(sessions_dir, payload, session_id, event):
     os.makedirs(sessions_dir, exist_ok=True)
 
     state_file = os.path.join(sessions_dir, f"{session_id}.json")
