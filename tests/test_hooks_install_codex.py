@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -721,3 +722,144 @@ def test_uninstall_removes_only_owned_handlers_from_codex_hooks(home):
 
     assert result.ok
     assert _hooks(home)["hooks"]["Stop"] == [{"hooks": [user_in_group]}]
+
+
+# ---------------------------------------------------------------------------
+# Shift warning (a user handler's position is its trust key)
+# ---------------------------------------------------------------------------
+
+SHIFT = "Codex will ask you to approve these hooks again: {}."
+
+
+def _tokitty(home):
+    return {"type": "command", "command": _source_command(home)}
+
+
+def _user(name):
+    return {"type": "command", "command": name}
+
+
+def test_uninstall_warns_when_a_user_group_after_tokittys_shifts(home):
+    _write_hooks(home, {"Stop": [{"hooks": [_tokitty(home)]}, {"hooks": [_user("mine.sh")]}]})
+
+    result = hi.uninstall_hooks_for_dir(str(home), "codex")
+
+    assert result.ok
+    assert result.warning == SHIFT.format("Stop")
+    assert _hooks(home)["hooks"]["Stop"] == [{"hooks": [_user("mine.sh")]}]
+
+
+def test_uninstall_warns_when_a_user_handler_after_tokittys_in_its_group_shifts(home):
+    _write_hooks(home, {"Stop": [{"hooks": [_tokitty(home), _user("mine.sh")]}]})
+
+    result = hi.uninstall_hooks_for_dir(str(home), "codex")
+
+    assert result.warning == SHIFT.format("Stop")
+    assert _hooks(home)["hooks"]["Stop"] == [{"hooks": [_user("mine.sh")]}]
+
+
+def test_uninstall_does_not_warn_when_the_user_group_is_before_tokittys(home):
+    _write_hooks(home, {"Stop": [{"hooks": [_user("mine.sh")]}, {"hooks": [_tokitty(home)]}]})
+
+    result = hi.uninstall_hooks_for_dir(str(home), "codex")
+
+    assert result.ok
+    assert result.warning is None
+    assert _hooks(home)["hooks"]["Stop"] == [{"hooks": [_user("mine.sh")]}]
+
+
+def test_uninstall_keeps_a_user_handler_inside_tokittys_group(home):
+    _write_hooks(home, {"Stop": [{"matcher": "x", "hooks": [_user("mine.sh"), _tokitty(home)]}]})
+
+    result = hi.uninstall_hooks_for_dir(str(home), "codex")
+
+    assert result.warning is None
+    assert _hooks(home)["hooks"]["Stop"] == [{"matcher": "x", "hooks": [_user("mine.sh")]}]
+
+
+def test_uninstall_names_every_shifted_event_in_event_order(home):
+    _write_hooks(home, {
+        "SessionEnd": [{"hooks": [_tokitty(home)]}, {"hooks": [_user("b.sh")]}],
+        "PreToolUse": [{"hooks": [_tokitty(home)]}, {"hooks": [_user("a.sh")]}],
+        "Stop": [{"hooks": [_user("c.sh")]}, {"hooks": [_tokitty(home)]}],
+    })
+
+    result = hi.uninstall_hooks_for_dir(str(home), "codex")
+
+    assert result.warning == SHIFT.format("PreToolUse, SessionEnd")
+
+
+def test_claude_uninstall_never_gets_the_shift_warning(tmp_path):
+    claude_home = tmp_path / ".claude"
+    claude_home.mkdir()
+    assert hi.install_hooks_for_dir(str(claude_home)).ok
+    settings = claude_home / "settings.json"
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    data["hooks"]["Stop"].append({"hooks": [_user("mine.sh")]})
+    settings.write_text(json.dumps(data), encoding="utf-8")
+
+    result = hi.uninstall_hooks_for_dir(str(claude_home))
+
+    assert result.ok
+    assert result.warning is None
+    assert json.loads(settings.read_text(encoding="utf-8"))["hooks"]["Stop"] == [{"hooks": [_user("mine.sh")]}]
+
+
+def test_refresh_collapsing_a_duplicate_ahead_of_a_user_group_warns(home, frozen):
+    stable = str(frozen / "current" / RUNNER_NAME)
+    _write_hooks(home, {
+        "Stop": [
+            {"hooks": [{"type": "command", "command": _runner_command(home, "/old/" + RUNNER_NAME)}]},
+            {"hooks": [_user("mine.sh")]},
+            {"hooks": [{"type": "command", "command": _runner_command(home, stable)}]},
+        ],
+    })
+
+    result = _refresh(home)
+
+    assert result.ok
+    # The kept stable handler moved (reapproval), and the user group shifted up.
+    assert result.warning == f"{REWARN} {SHIFT.format('Stop')}"
+    assert _hooks(home)["hooks"]["Stop"] == [
+        {"hooks": [_user("mine.sh")]},
+        {"hooks": [{"type": "command", "command": _runner_command(home, stable)}]},
+    ]
+
+
+def test_refresh_collapse_puts_the_link_warning_first(home, frozen, monkeypatch):
+    def boom(state_dir):
+        raise OSError("locked")
+
+    monkeypatch.setattr(runner_link, "ensure_runner_link", boom)
+    release = hi.hook_runner_path(os.path.realpath(hi.sys.executable), hi.sys.platform)
+    _write_hooks(home, {
+        "Stop": [
+            {"hooks": [{"type": "command", "command": _runner_command(home, release)}]},
+            {"hooks": [{"type": "command", "command": _runner_command(home, release)}]},
+            {"hooks": [_user("mine.sh")]},
+        ],
+    })
+
+    result = _refresh(home)
+
+    assert result.warning.startswith(hi.LINK_FALLBACK_WARNING.format(reason="locked"))
+    assert result.warning.endswith(SHIFT.format("Stop"))
+
+
+def test_shifted_events_tells_identical_user_handlers_apart():
+    first, second = _user("same.sh"), _user("same.sh")
+    tokitty = {"type": "command", "command": _source_command(Path("/home/nick/.codex"))}
+    before = {"Stop": [{"hooks": [tokitty, first]}, {"hooks": [second]}]}
+
+    # Dropping Tokitty's handler moves `first` to (0, 0) and leaves `second`
+    # at (1, 0) in a list that keeps both: only `first` shifted.
+    after = {"Stop": [{"hooks": [first]}, {"hooks": [second]}]}
+    assert hi._shifted_events(before, after, "/home/nick/.codex", "codex") == ["Stop"]
+
+    # Swapping which of two equal handlers occupies a slot is a shift by
+    # identity even though the values compare equal.
+    swapped = {"Stop": [{"hooks": [tokitty, second]}, {"hooks": [first]}]}
+    assert hi._shifted_events(before, swapped, "/home/nick/.codex", "codex") == ["Stop"]
+
+    same = {"Stop": [{"hooks": [tokitty, first]}, {"hooks": [second]}]}
+    assert hi._shifted_events(before, same, "/home/nick/.codex", "codex") == []

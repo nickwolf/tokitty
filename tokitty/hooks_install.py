@@ -76,6 +76,10 @@ CODEX_PROVIDER = "codex"
 # config and looks the hash up by position, so either change is a new review.
 CODEX_REAPPROVE_WARNING = "Codex will ask you to approve Tokitty's hooks again."
 
+# Shown when removing or collapsing Tokitty's handlers moved a user handler:
+# its trust key is its position, so it is a new review too.
+CODEX_SHIFT_WARNING = "Codex will ask you to approve these hooks again: {events}."
+
 
 @dataclass(frozen=True)
 class HookTarget:
@@ -598,6 +602,43 @@ def _collect_owned_positions(entries, config_dir: str, provider: str) -> List[Tu
     return positions
 
 
+def _shifted_events(before_hooks, after_hooks, config_dir: str, provider: str) -> List[str]:
+    """Events, in the provider's target order, where some handler that is not
+    Tokitty's sits at a different (group, handler) position in after_hooks
+    than in before_hooks. Both are {event: entries} maps. Handlers are matched
+    by object identity, not value, so two identical user handlers are still
+    told apart; the rebuild and uninstall paths keep untouched handler
+    objects, and a handler absent from after_hooks was removed, not shifted."""
+    shifted: List[str] = []
+    for event, _matcher in _hook_target(provider).events:
+        before = before_hooks.get(event)
+        if not isinstance(before, list):
+            continue
+        after_positions = {}
+        after = after_hooks.get(event)
+        for group_index, group in enumerate(after if isinstance(after, list) else []):
+            group_hooks = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(group_hooks, list):
+                continue
+            for handler_index, handler in enumerate(group_hooks):
+                after_positions[id(handler)] = (group_index, handler_index)
+        for group_index, group in enumerate(before):
+            group_hooks = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(group_hooks, list):
+                continue
+            for handler_index, handler in enumerate(group_hooks):
+                if _is_owned_hook(handler, config_dir, provider):
+                    continue
+                new_pos = after_positions.get(id(handler))
+                if new_pos is not None and new_pos != (group_index, handler_index):
+                    shifted.append(event)
+                    break
+            else:
+                continue
+            break
+    return shifted
+
+
 def _rebuild_entries(entries, replace_pos=None, replacement=None, remove_positions=()):
     """A new entries list built from entries: the hook at replace_pos (if
     given) becomes replacement, every hook at a position in
@@ -1004,6 +1045,8 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
     # rewritten or moved rather than just added.
     trust_changes: List[Tuple[str, int, int]] = []
     reapproval = False
+    collapsed = False
+    before_hooks = dict(hooks_dict)
 
     for event, matcher in target.events:
         local_entries = local_hooks.get(event)
@@ -1076,6 +1119,8 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
         hooks_dict[event] = new_entries
         changed = True
         refreshed_events.append(event)
+        if extra_positions:
+            collapsed = True
         if provider == CODEX_PROVIDER:
             final_pos = _find_handler(new_entries, kept)
             if rewrite or final_pos != primary_pos:
@@ -1109,6 +1154,11 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
 
     if reapproval:
         warning = f"{warning} {CODEX_REAPPROVE_WARNING}" if warning else CODEX_REAPPROVE_WARNING
+    if provider == CODEX_PROVIDER and collapsed:
+        shifted = _shifted_events(before_hooks, hooks_dict, config_dir, provider)
+        if shifted:
+            shift_warning = CODEX_SHIFT_WARNING.format(events=", ".join(shifted))
+            warning = f"{warning} {shift_warning}" if warning else shift_warning
 
     return ConfigDirResult(
         config_dir,
@@ -1211,6 +1261,7 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
         return ConfigDirResult(config_dir, True, msg, installed_events=[])
 
     removed = []
+    before_hooks = dict(hooks)
     for event in list(hooks.keys()):
         entries = hooks[event]
         if not isinstance(entries, list):
@@ -1254,7 +1305,12 @@ def uninstall_hooks_for_dir(config_dir: str, provider: str = DEFAULT_PROVIDER) -
     msg = "uninstalled"
     if warn_local:
         msg += f" (note: tokitty-marked entries found in {target.local_settings_file}, left untouched)"
-    return ConfigDirResult(config_dir, True, msg, installed_events=removed)
+    warning = None
+    if provider == CODEX_PROVIDER:
+        shifted = _shifted_events(before_hooks, hooks, config_dir, provider)
+        if shifted:
+            warning = CODEX_SHIFT_WARNING.format(events=", ".join(shifted))
+    return ConfigDirResult(config_dir, True, msg, installed_events=removed, warning=warning)
 
 
 PENDING_HOOK_OP_FILENAME = "pending_hook_op.json"
