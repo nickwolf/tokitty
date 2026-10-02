@@ -303,6 +303,50 @@ def stable_runner_path(state_dir, platform: str) -> str:
     return str(Path(state_dir) / "current" / HOOK_RUNNER_NAME)
 
 
+_SHELL_SAFE = re.compile(r"^[A-Za-z0-9._/:~\-]+$")
+
+
+def _win_short_path(path: str) -> Optional[str]:
+    """The Windows 8.3 short form of an existing directory, or None (not
+    Windows, no such directory, or short names are disabled on the volume)."""
+    if sys.platform != "win32" or not os.path.isdir(path):
+        return None
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+    if length == 0 or length >= len(buf):
+        return None
+    return buf.value
+
+
+def _codex_win_command(runner_path: str, home: str, sessions_dir: str) -> str:
+    """Codex's frozen command on Windows, written for any shell it may pick.
+
+    Codex runs hooks through the session shell, PowerShell by default
+    (powershell -NoProfile -Command <command>), where a line that starts with
+    a quoted string followed by more tokens is a parse error. So the runner
+    and sessions dir go unquoted with forward slashes when both are
+    shell-safe, shortening the directory (not the basename, ownership
+    matches on it) to its 8.3 form when they are not. If a token is still
+    unsafe the command falls back to PowerShell's call operator.
+    """
+    runner = runner_path.replace("\\", "/")
+    sessions = sessions_dir.replace("\\", "/")
+    if not _SHELL_SAFE.match(runner):
+        directory, _, basename = runner.rpartition("/")
+        short = _win_short_path(directory) if directory else None
+        if short:
+            runner = f"{short.replace(chr(92), '/').rstrip('/')}/{basename}"
+    if not _SHELL_SAFE.match(sessions):
+        short = _win_short_path(home)
+        if short:
+            sessions = f"{short.replace(chr(92), '/').rstrip('/')}/tokitty/sessions"
+    if _SHELL_SAFE.match(runner) and _SHELL_SAFE.match(sessions):
+        return f"{runner} --sessions-dir {sessions}"
+    return f'& "{runner_path}" --sessions-dir "{sessions_dir}"'
+
+
 def _build_command(
     config_dir: str, *, frozen=None, platform=None, runner=None, provider: str = DEFAULT_PROVIDER
 ) -> dict:
@@ -313,8 +357,9 @@ def _build_command(
     WSL ships it and it is twice as fast as the exe through interop.
 
     Codex has no exec form, so its frozen entry is one command string, the
-    runner quoted as a single token followed by --sessions-dir. Every other
-    Codex case gets the same Python string Claude does.
+    runner quoted as a single token followed by --sessions-dir (on Windows
+    see _codex_win_command, since PowerShell cannot run that quoted form).
+    Every other Codex case gets the same Python string Claude does.
     """
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     platform = sys.platform if platform is None else platform
@@ -323,6 +368,11 @@ def _build_command(
     if frozen and not (platform == "win32" and _is_wsl_unc(config_dir)):
         runner_path = runner if runner is not None else stable_runner_path(state_dir_path(), platform)
         if provider == CODEX_PROVIDER:
+            if platform == "win32":
+                return {
+                    "type": "command",
+                    "command": _codex_win_command(runner_path, native, sessions_dir),
+                }
             return {"type": "command", "command": f'"{runner_path}" --sessions-dir "{sessions_dir}"'}
         return {
             "type": "command",
@@ -447,7 +497,8 @@ def _codex_command_candidates(command: str) -> List[Tuple[str, str, str]]:
     """The (kind, runner, sessions) readings of a Codex command string.
 
     kind is "python" (interpreter, hook_writer.py, flag, sessions; runner is
-    the script) or "runner" (a runner path, flag, sessions). Paths come back
+    the script) or "runner" (a runner path, flag, sessions, optionally led by
+    PowerShell's & call operator). Paths come back
     under _normalize_token_path. shlex's reading comes first, then a plain
     whitespace split when the command has no quote characters, for the
     historical unquoted shape on a drive-letter home that shlex mangles. A
@@ -465,6 +516,8 @@ def _codex_command_candidates(command: str) -> List[Tuple[str, str, str]]:
             candidates.append(("python", _normalize_token_path(parts[1]), _normalize_token_path(parts[3])))
         elif len(parts) == 3 and parts[1] == "--sessions-dir":
             candidates.append(("runner", _normalize_token_path(parts[0]), _normalize_token_path(parts[2])))
+        elif len(parts) == 4 and parts[0] == "&" and parts[2] == "--sessions-dir":
+            candidates.append(("runner", _normalize_token_path(parts[1]), _normalize_token_path(parts[3])))
     return candidates
 
 
@@ -475,8 +528,11 @@ def _codex_owned_parts(command: str, config_dir: str) -> Optional[Tuple[str, str
     expected_script = f"{home}/tokitty/hook_writer.py"
     expected_sessions = f"{home}/tokitty/sessions"
     owned_names = (HOOK_RUNNER_NAME.casefold(), f"{HOOK_RUNNER_NAME}.exe".casefold())
+    # A Windows install may have written the sessions dir under the home's 8.3 short name.
+    short_home = _win_short_path(_wsl_native_path(config_dir))
+    short_sessions = f"{_normalize_home_path(short_home)}/tokitty/sessions" if short_home else None
     for kind, runner, sessions in _codex_command_candidates(command):
-        if sessions != expected_sessions:
+        if sessions != expected_sessions and sessions != short_sessions:
             continue
         if kind == "python":
             if runner == expected_script:
@@ -730,14 +786,19 @@ def _codex_parts_for_compare(handler: dict, config_dir: Optional[str]) -> Option
     return candidates[0] if candidates else None
 
 
+def _starts_quoted(handler: dict) -> bool:
+    return handler["command"].lstrip().startswith('"')
+
+
 def _codex_handler_needs_rewrite(
     old_handler: dict, desired_handler: dict, *, refresh: bool = False, config_dir: Optional[str] = None
 ) -> bool:
     """Codex's rewrite rule. Both shapes are strings, so each command is
     parsed into (kind, runner, sessions) with the interpreter name ignored
     and paths normalised; a difference in any of the three, or in
-    "timeout", is a rewrite, because Codex hashes both. A handler that
-    does not parse is rewritten.
+    "timeout", is a rewrite, because Codex hashes both. So is exactly one of
+    the two commands starting with a double quote. A handler that does not
+    parse is rewritten.
     """
     desired_handler = _codex_effective_desired(
         old_handler, desired_handler, refresh=refresh, config_dir=config_dir
@@ -745,6 +806,9 @@ def _codex_handler_needs_rewrite(
     old = _codex_parts_for_compare(old_handler, config_dir)
     new = _codex_parts_for_compare(desired_handler, config_dir)
     if old is None or new is None:
+        return True
+    if _starts_quoted(old_handler) != _starts_quoted(desired_handler):
+        # PowerShell cannot run a command that starts with a quote.
         return True
     return old != new or old_handler.get("timeout") != desired_handler.get("timeout")
 

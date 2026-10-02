@@ -6,6 +6,7 @@ SAFETY: every test operates on tmp_path fixtures only. Never touch a real
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ from tokitty import runner_link
 
 EXE_NAME = "tokitty.exe" if sys.platform == "win32" else "tokitty"
 RUNNER_NAME = "tokitty-hook.exe" if sys.platform == "win32" else "tokitty-hook"
+_real_build = hi._build_command
 WIN_RUNNER = r"C:\Users\nick\AppData\Local\Tokitty\current\tokitty-hook.exe"
 LINUX_RUNNER = "/home/nick/.config/tokitty/current/tokitty-hook"
 
@@ -84,6 +86,15 @@ def _source_command(home, interpreter=None):
 
 
 def _runner_command(home, runner):
+    if sys.platform == "win32":
+        # The frozen command a native Windows home gets: unquoted, for PowerShell.
+        return hi._build_command(
+            str(home), frozen=True, runner=runner, platform="win32", provider="codex"
+        )["command"]
+    return f'"{runner}" --sessions-dir "{_sessions(home)}"'
+
+
+def _quoted_runner_command(home, runner):
     return f'"{runner}" --sessions-dir "{_sessions(home)}"'
 
 
@@ -141,14 +152,62 @@ def test_codex_command_source_drive_letter_home_uses_python():
     assert "args" not in hook
 
 
-def test_codex_command_frozen_windows_native_home_quotes_stable_exe():
+def test_codex_command_frozen_windows_native_home_is_unquoted_forward_slashes():
     hook = hi._build_command(
         r"C:\Users\nick\.codex", frozen=True, runner=WIN_RUNNER, platform="win32", provider="codex"
     )
     assert hook == {
         "type": "command",
-        "command": f'"{WIN_RUNNER}" --sessions-dir "C:\\Users\\nick\\.codex/tokitty/sessions"',
+        "command": (
+            "C:/Users/nick/AppData/Local/Tokitty/current/tokitty-hook.exe"
+            " --sessions-dir C:/Users/nick/.codex/tokitty/sessions"
+        ),
     }
+
+
+def test_codex_command_frozen_windows_spaced_runner_dir_gets_its_directory_short_pathed(monkeypatch):
+    seen = []
+
+    def short(path):
+        seen.append(path)
+        return r"C:\PROGRA~1\Tokitty"
+
+    monkeypatch.setattr(hi, "_win_short_path", short)
+    hook = hi._build_command(
+        r"C:\Users\nick\.codex", frozen=True,
+        runner=r"C:\Program Files\Tokitty\tokitty-hook.exe", platform="win32", provider="codex",
+    )
+    assert seen == ["C:/Program Files/Tokitty"]
+    assert hook["command"] == (
+        "C:/PROGRA~1/Tokitty/tokitty-hook.exe --sessions-dir C:/Users/nick/.codex/tokitty/sessions"
+    )
+
+
+def test_codex_command_frozen_windows_spaced_home_gets_the_sessions_short_pathed(monkeypatch):
+    seen = []
+
+    def short(path):
+        seen.append(path)
+        return r"C:\Users\NICKWO~1\.codex"
+
+    monkeypatch.setattr(hi, "_win_short_path", short)
+    hook = hi._build_command(
+        r"C:\Users\nick wolf\.codex", frozen=True, runner=WIN_RUNNER, platform="win32", provider="codex"
+    )
+    assert seen == [r"C:\Users\nick wolf\.codex"]
+    assert hook["command"] == (
+        "C:/Users/nick/AppData/Local/Tokitty/current/tokitty-hook.exe"
+        " --sessions-dir C:/Users/NICKWO~1/.codex/tokitty/sessions"
+    )
+
+
+def test_codex_command_frozen_windows_without_short_names_falls_back_to_the_call_operator(monkeypatch):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: None)
+    runner = r"C:\Program Files\Tokitty\tokitty-hook.exe"
+    hook = hi._build_command(
+        r"C:\Users\nick\.codex", frozen=True, runner=runner, platform="win32", provider="codex"
+    )
+    assert hook["command"] == f'& "{runner}" --sessions-dir "C:\\Users\\nick\\.codex/tokitty/sessions"'
 
 
 def test_codex_command_frozen_windows_wsl_home_keeps_python3():
@@ -183,12 +242,47 @@ def test_codex_command_runner_with_space_is_one_quoted_token():
     assert hook["command"].startswith(f'"{runner}" ')
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="cmd /C is the Windows Codex launcher")
-def test_codex_command_survives_cmd_c_with_a_spaced_runner_path(tmp_path):
+def _powershells():
+    names = ["powershell.exe", "pwsh"]
+    return [found for found in (shutil.which(name) for name in names) if found]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd /C and PowerShell are the Windows Codex launchers")
+def test_codex_command_survives_cmd_c_and_powershell_with_a_spaced_runner_dir(tmp_path):
     runner_dir = tmp_path / "run ner"
     runner_dir.mkdir()
     seen = tmp_path / "seen.txt"
-    runner = runner_dir / "tokitty hook.cmd"
+    runner = runner_dir / "tokitty-hook.cmd"
+    runner.write_text(
+        f'@echo off\r\necho %~1> "{seen}"\r\necho %~2>> "{seen}"\r\n', encoding="utf-8"
+    )
+    config_dir = str(tmp_path / ".codex")
+    (tmp_path / ".codex").mkdir()
+    if hi._win_short_path(str(runner_dir)) is None:
+        pytest.skip("8.3 short names are disabled on this volume")
+    command = hi._build_command(
+        config_dir, frozen=True, runner=str(runner), platform="win32", provider="codex"
+    )["command"]
+    assert not command.startswith(('"', "&"))
+    expected_sessions = command.split(" --sessions-dir ")[1]
+
+    # A str (not a list) so the command line reaches cmd untouched, the way
+    # Codex builds it: cmd /C "<command>".
+    runs = [f'cmd /C "{command}"']
+    # A list, as Codex's Command::arg builds it: list2cmdline escapes inner quotes like Rust does.
+    runs += [[ps, "-NoProfile", "-Command", command] for ps in _powershells()]
+    for run in runs:
+        seen.unlink(missing_ok=True)
+        subprocess.run(run, check=True)
+        lines = seen.read_text(encoding="utf-8").splitlines()
+        assert lines[0].strip() == "--sessions-dir"
+        assert lines[1].strip() == expected_sessions
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd /C and PowerShell are the Windows Codex launchers")
+def test_codex_command_without_spaces_runs_unquoted_under_cmd_and_powershell(tmp_path):
+    seen = tmp_path / "seen.txt"
+    runner = tmp_path / "tokitty-hook.cmd"
     runner.write_text(
         f'@echo off\r\necho %~1> "{seen}"\r\necho %~2>> "{seen}"\r\n', encoding="utf-8"
     )
@@ -196,14 +290,18 @@ def test_codex_command_survives_cmd_c_with_a_spaced_runner_path(tmp_path):
     command = hi._build_command(
         config_dir, frozen=True, runner=str(runner), platform="win32", provider="codex"
     )["command"]
+    if command.startswith("&"):
+        pytest.skip("tmp_path is not shell-safe and short names are unavailable")
+    assert not command.startswith('"')
 
-    # A str (not a list) so the command line reaches cmd untouched, the way
-    # Codex builds it: cmd /C "<command>".
-    subprocess.run(f'cmd /C "{command}"', check=True)
-
-    lines = seen.read_text(encoding="utf-8").splitlines()
-    assert lines[0].strip() == "--sessions-dir"
-    assert lines[1].strip() == f"{config_dir}/tokitty/sessions"
+    runs = [f'cmd /C "{command}"']
+    runs += [[ps, "-NoProfile", "-Command", command] for ps in _powershells()]
+    for run in runs:
+        seen.unlink(missing_ok=True)
+        subprocess.run(run, check=True)
+        lines = seen.read_text(encoding="utf-8").splitlines()
+        assert lines[0].strip() == "--sessions-dir"
+        assert lines[1].strip() == command.split(" --sessions-dir ")[1]
 
 
 def test_claude_command_unchanged_by_provider_default():
@@ -246,9 +344,51 @@ def test_codex_owns_runner_at_stable_fallback_and_old_release_paths():
     assert _owned(_runner_command("/home/nick/.codex", r"C:\Tokitty\TOKITTY-HOOK.EXE"))
 
 
+def test_codex_owns_the_unquoted_windows_form():
+    command = (
+        "C:/Users/nick/AppData/Local/Tokitty/current/tokitty-hook.exe"
+        " --sessions-dir C:/Users/nick/.codex/tokitty/sessions"
+    )
+    assert _owned(command, r"C:\Users\nick\.codex")
+
+
+def test_codex_owns_the_call_operator_form():
+    command = (
+        '& "C:\\Program Files\\Tokitty\\tokitty-hook.exe"'
+        ' --sessions-dir "C:\\Users\\nick\\.codex/tokitty/sessions"'
+    )
+    assert _owned(command, r"C:\Users\nick\.codex")
+    assert not _owned(command.replace("tokitty-hook.exe", "other.exe"), r"C:\Users\nick\.codex")
+
+
+def test_codex_still_owns_the_old_quoted_windows_form():
+    command = f'"{WIN_RUNNER}" --sessions-dir "C:\\Users\\nick\\.codex/tokitty/sessions"'
+    assert _owned(command, r"C:\Users\nick\.codex")
+
+
+def test_codex_owns_the_short_path_sessions_form(monkeypatch):
+    monkeypatch.setattr(hi, "_win_short_path", lambda path: r"C:\Users\NICKWO~1\.codex")
+    command = (
+        "C:/Users/nick/AppData/Local/Tokitty/current/tokitty-hook.exe"
+        " --sessions-dir C:/Users/NICKWO~1/.codex/tokitty/sessions"
+    )
+    assert _owned(command, r"C:\Users\nick wolf\.codex")
+    assert not _owned(command.replace("NICKWO~1", "OTHERU~1"), r"C:\Users\nick wolf\.codex")
+
+
 def test_codex_does_not_own_hook_with_args_key():
     assert not _owned(
         f'"{LINUX_RUNNER}" --sessions-dir "/home/nick/.codex/tokitty/sessions"', args=["x"]
+    )
+
+
+def test_codex_does_not_own_the_unquoted_windows_form_with_args_or_another_home_or_user_command():
+    home = r"C:\Users\nick\.codex"
+    command = "C:/Users/nick/AppData/Local/Tokitty/current/tokitty-hook.exe --sessions-dir C:/Users/nick/.codex/tokitty/sessions"
+    assert not _owned(command, home, args=["x"])
+    assert not _owned(command, r"C:\Users\other\.codex")
+    assert not _owned(
+        "C:/tools/tokitty-notify.exe --sessions-dir C:/Users/nick/.codex/tokitty/sessions", home
     )
 
 
@@ -432,6 +572,36 @@ def test_refresh_source_to_frozen_rewrites_in_place_and_warns(home, frozen, monk
     assert session_end["timeout"] == 3
 
 
+def test_refresh_rewrites_an_old_quoted_windows_handler_to_the_unquoted_form(home, frozen, monkeypatch):
+    stable = str(frozen / "current" / RUNNER_NAME)
+    _install(home)
+    quoted = _quoted_runner_command(home, stable)
+    data = _hooks(home)
+    for groups in data["hooks"].values():
+        for group in groups:
+            for handler in group["hooks"]:
+                handler["command"] = quoted
+    (home / "hooks.json").write_text(json.dumps(data), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(hi, "_record_codex_trust", lambda config_dir, changes: seen.append(sorted(changes)))
+    monkeypatch.setattr(
+        hi, "_build_command",
+        lambda config_dir, **kw: _real_build(config_dir, **{**kw, "platform": "win32"}),
+    )
+
+    result = _refresh(home)
+
+    assert result.ok
+    assert sorted(result.refreshed_events) == sorted(EVENT_NAMES)
+    assert result.warning == REWARN
+    handler = _hooks(home)["hooks"]["Stop"][0]["hooks"][0]
+    assert not handler["command"].lstrip().startswith('"')
+    assert handler["command"] == f"{stable.replace(chr(92), '/')} --sessions-dir {_sessions(home).replace(chr(92), '/')}"
+    assert hi._codex_owned_parts(handler["command"], str(home)) is not None
+    (changes,) = seen
+    assert len(changes) == 8
+
+
 def test_refresh_moved_stable_path_with_same_basename_rewrites_and_warns(home, frozen):
     _install(home)
     data = _hooks(home)
@@ -562,7 +732,7 @@ def test_rewrite_keeps_a_user_added_key_on_tokittys_handler(home, frozen, monkey
 
     handler = _hooks(home)["hooks"]["Stop"][0]["hooks"][0]
     assert handler["statusMessage"] == "hi"
-    assert handler["command"].startswith('"')
+    assert handler["command"].startswith("C:/" if sys.platform == "win32" else '"')
 
 
 def test_refresh_never_adds_a_missing_event(home):
