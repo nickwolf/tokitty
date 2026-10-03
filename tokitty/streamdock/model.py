@@ -19,6 +19,10 @@ from tokitty.streamdock.pending import PendingRequest
 FOCUSED = "focused"
 UNVERIFIED = "unverified"
 PROMPT_DECISIONS = ("allow", "deny", "always")
+# Focus results that mean no Windows Terminal tab owns the session. A press on a
+# key already showing one of these dismisses the session; ambiguous and not_front
+# mean a tab exists, so those keys keep focusing.
+NO_TAB = ("not_found", "no_title", "unavailable")
 
 
 @dataclass(frozen=True)
@@ -196,6 +200,8 @@ class DeckModel:
         self._overlay: Optional[_Overlay] = None
         self._last_focused: Optional[SessionRef] = None
         self._overflow_ref: Optional[SessionRef] = None
+        # Sessions the user dismissed from a "no tab" key. In memory only.
+        self._dismissed: Set[SessionRef] = set()
         self._plan: Dict[str, KeySpec] = {}
         self._revision = 0
 
@@ -217,9 +223,11 @@ class DeckModel:
         *,
         titles: Optional[Dict[SessionRef, str]] = None,
     ) -> None:
-        self._views = {
-            SessionRef(acct, v.session_id): v for acct, views in sessions_by_account.items() for v in views
-        }
+        live = {SessionRef(acct, v.session_id): v for acct, views in sessions_by_account.items() for v in views}
+        # A dismissal is forgotten when its session ends, or when it asks for permission.
+        self._dismissed &= set(live)
+        self._dismissed -= {SessionRef(r.account_index, r.session_id) for r in pending}
+        self._views = {r: v for r, v in live.items() if r not in self._dismissed}
         self._assign_slots()
         self._pending = {}
         for req in sorted(pending, key=lambda r: r.started):
@@ -351,14 +359,30 @@ class DeckModel:
         self._overflow_ref = cur
         return cur
 
+    def _dismissable(self, ref: SessionRef) -> bool:
+        return self._focus.get(ref) in NO_TAB and ref not in self._pending
+
+    def _dismiss(self, ref: SessionRef) -> Action:
+        """Take a session with no tab off the deck and free its slot."""
+        self._dismissed.add(ref)
+        self._views.pop(ref, None)
+        self._focus.pop(ref, None)
+        self._assign_slots()
+        self._refresh()
+        return Noop("dismissed")
+
     def _press_slot(self, context: str) -> Action:
         shown, overflow_ctx, pool = self._layout_slots()
         if context == overflow_ctx:
             cur = self._overflow_shown(pool)
+            if self._dismissable(cur):
+                return self._dismiss(cur)
             ref = pool[(pool.index(cur) + 1) % len(pool)]
             self._overflow_ref = ref
         elif context in shown:
             ref = shown[context]
+            if self._dismissable(ref):
+                return self._dismiss(ref)
         else:
             return Noop("empty slot")
         self._last_focused = ref

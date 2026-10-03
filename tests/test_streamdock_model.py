@@ -1,3 +1,4 @@
+import pytest
 import threading
 import time
 
@@ -677,3 +678,95 @@ def test_overlay_exits_when_a_prompt_key_disappears_and_deny_cannot_be_placed():
     m.press("k0")
     m.disappear("k2")
     assert m.render_plan()["k1"] == KeySpec("status")
+
+
+def press_with_status(m, ctx, name, status):
+    """Press a slot key, then deliver the focus worker's result for that press."""
+    action = m.press(ctx)
+    focus(m, name, status)
+    return action
+
+
+@pytest.mark.parametrize("status", ["not_found", "no_title", "unavailable"])
+def test_second_press_on_a_no_tab_key_dismisses_the_session(status):
+    m = setup(["slot"] * 3, [sv("a", 1), sv("b", 2)])
+    assert isinstance(press_with_status(m, "k0", "a", status), Focus)
+    assert m.render_plan()["k0"].focus == status
+    assert m.press("k0") == Noop("dismissed")
+    plan = m.render_plan()
+    assert plan["k0"].kind == "status" and plan["k1"].ref == ref("b")
+
+
+@pytest.mark.parametrize("status", ["ambiguous", "not_front", "focused", "unverified"])
+def test_other_statuses_keep_focusing(status):
+    m = setup(["slot"] * 2, [sv("a", 1)])
+    press_with_status(m, "k0", "a", status)
+    assert isinstance(m.press("k0"), Focus)
+    assert m.render_plan()["k0"].ref == ref("a")
+
+
+def test_first_press_focuses_even_without_a_status():
+    m = setup(["slot"] * 2, [sv("a", 1)])
+    assert isinstance(m.press("k0"), Focus)
+    assert m.render_plan()["k0"].ref == ref("a")
+
+
+def test_pending_session_is_not_dismissed():
+    # Two keys cannot host the overlay, so every press is a plain FocusAndOpen.
+    m = setup(["slot"] * 2, [sv("a", 1)], [req("a")])
+    assert isinstance(press_with_status(m, "k0", "a", "not_found"), FocusAndOpen)
+    assert isinstance(m.press("k0"), FocusAndOpen)
+    assert m.render_plan()["k0"].ref == ref("a")
+
+
+def test_dismissed_session_returns_when_it_asks_for_permission():
+    m = setup(["slot"] * 2, [sv("a", 1)])
+    press_with_status(m, "k0", "a", "not_found")
+    m.press("k0")
+    feed(m, [sv("a", 1)])
+    assert m.render_plan()["k0"].kind == "status"
+    feed(m, [sv("a", 1)], [req("a")])
+    spec = m.render_plan()["k0"]
+    assert spec.ref == ref("a") and spec.pending and spec.focus == ""
+    # Once back it stays: the dismissal is not re-applied after the request ends.
+    feed(m, [sv("a", 1)])
+    assert m.render_plan()["k0"].ref == ref("a")
+
+
+def test_dismissal_is_forgotten_when_the_session_ends():
+    m = setup(["slot"] * 2, [sv("a", 1)])
+    press_with_status(m, "k0", "a", "not_found")
+    m.press("k0")
+    feed(m, [])
+    assert m._dismissed == set()
+    feed(m, [sv("a", 5)])
+    assert m.render_plan()["k0"].ref == ref("a")
+
+
+def test_dismissing_frees_the_slot_for_others():
+    m = setup(["slot"] * 2, [sv("a", 1), sv("b", 2)])
+    press_with_status(m, "k0", "a", "no_title")
+    m.press("k0")
+    feed(m, [sv("a", 1), sv("b", 2), sv("c", 3)])
+    plan = m.render_plan()
+    assert plan["k0"].ref == ref("c") and plan["k1"].ref == ref("b")
+
+
+def test_dismissing_the_last_focused_session_clears_the_interrupt_target():
+    m = setup(["slot", "interrupt"], [sv("a", 1)])
+    press_with_status(m, "k0", "a", "not_found")
+    m.press("k0")
+    assert m._last_focused is None
+    assert m.press("k1") == Noop("session tab not confirmed")
+
+
+def test_overflow_dismisses_the_session_it_shows():
+    m = setup(["slot"] * 2, [sv("a", 1), sv("b", 2), sv("c", 3)])
+    # k0 is a; k1 is overflow over b and c, showing b.
+    assert m.render_plan()["k1"].ref == ref("b") and m.render_plan()["k1"].count == 2
+    assert isinstance(m.press("k1"), Focus)  # cycles to c and focuses it
+    focus(m, "c", "not_found")
+    assert m.render_plan()["k1"].ref == ref("c")
+    assert m.press("k1") == Noop("dismissed")
+    plan = m.render_plan()
+    assert plan["k0"].ref == ref("a") and plan["k1"].ref == ref("b") and plan["k1"].kind == "slot"

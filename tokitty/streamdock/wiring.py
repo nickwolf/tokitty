@@ -111,6 +111,7 @@ def start_streamdock(
             open_in_window=open_in_window,
             watcher_factory=make_watcher_factory(units, list_running_distros_fn),
             list_running_distros_fn=list_running_distros_fn,
+            hidden_accounts=list(settings.streamdock_hidden_accounts),
         )
         runtime.start()
         return runtime

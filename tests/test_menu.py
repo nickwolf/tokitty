@@ -258,3 +258,23 @@ def test_check_items_are_independent_and_the_checkbox_needs_both_halves():
     kwargs, _, _ = _kwargs(on_toggle_update_check=seams["on_toggle_update_check"])
     labels = [i.label for i in build_menu(**kwargs) if not i.separator]
     assert "Check for updates automatically" not in labels and "Check for updates" not in labels
+
+
+def test_streamdock_account_switches_only_when_installed():
+    from tokitty.menu import streamdock_menu_item
+
+    shown = {"a": True, "b": False}
+    flips = []
+    toggles = [(n, (lambda n=n: shown[n]), (lambda n=n: flips.append(n))) for n in shown]
+    for state in ("connected", "not_connected"):
+        item = streamdock_menu_item(state, lambda: None, lambda: None, toggles)
+        sub = next(i for i in item.submenu if i.label == "Show sessions from")
+        assert [(i.label, i.checkbox()) for i in sub.submenu] == [("a", True), ("b", False)]
+        sub.submenu[1].action()
+    assert flips == ["b", "b"]
+    missing = streamdock_menu_item("not_installed", lambda: None, lambda: None, toggles)
+    assert "Show sessions from" not in [i.label for i in missing.submenu]
+    none = streamdock_menu_item("connected", lambda: None, lambda: None)
+    assert "Show sessions from" not in [i.label for i in none.submenu]
+    empty = streamdock_menu_item("connected", lambda: None, lambda: None, [])
+    assert "Show sessions from" not in [i.label for i in empty.submenu]

@@ -1073,6 +1073,36 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     window.on_toggle_update_check = toggle_update_check
     apply_exit = {"code": 1}
 
+    hidden_accounts = list(settings.streamdock_hidden_accounts)
+
+    def streamdock_account_toggles() -> list:
+        """(label, is shown, toggle) per account that can be hidden. Read when the menu opens."""
+        from tokitty.streamdock.presets import account_label, save_hidden_accounts
+
+        def toggle(name: str) -> None:
+            names = [n for n in hidden_accounts if n != name]
+            if name not in hidden_accounts:
+                names.append(name)
+            try:
+                saved = save_hidden_accounts(state_dir, names)
+            except OSError as exc:
+                print(f"tokitty: streamdock: could not save settings: {exc}", file=sys.stderr)
+                return
+            hidden_accounts[:] = saved
+            if streamdock is not None:
+                streamdock.set_hidden_accounts(saved)
+
+        out = []
+        for i, unit in enumerate(units):
+            account = unit.get("account")
+            if account is None:
+                continue
+            label = account_label(i, account, window.panes[i]._label if i < len(window.panes) else None)
+            out.append((label, (lambda n=account.name: n not in hidden_accounts), (lambda n=account.name: toggle(n))))
+        return out
+
+    window.streamdock_account_toggles = streamdock_account_toggles
+
     def tick():
         updates.tick()
         checker.tick()
