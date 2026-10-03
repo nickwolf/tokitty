@@ -159,17 +159,22 @@ def mac_swap_in(
             raise UpdateInstallError(f"{backup} is already there, so the update was not installed.")
         drop_owned(state_dir, backup)
     swap(staged_app, app)
+    renamed = False
     try:
         os.rename(staged_app, backup)
-    except OSError as exc:
+        renamed = True
+        add_owned(state_dir, backup, old_tag, "backup", **dir_identity(backup))
+    except Exception as exc:
+        # The swap is applied, so anything failing before we return undoes it.
         try:
+            if renamed:
+                os.rename(backup, staged_app)
             swap(staged_app, app)
         except (OSError, UpdateInstallError) as undo:
             raise UpdateInstallError(
                 f"The update was swapped in but could not be finished ({exc}), and undoing it failed ({undo})."
             ) from exc
         raise UpdateInstallError(f"Could not keep the old copy ({exc}), so the update was not installed.") from exc
-    add_owned(state_dir, backup, old_tag, "backup", **dir_identity(backup))
     discard_staging(state_dir, staged.staging)
     return backup
 

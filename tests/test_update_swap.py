@@ -336,6 +336,39 @@ def test_mac_swap_in_undoes_the_swap_when_it_cannot_keep_the_old_bundle(tmp_path
     assert str(backup_path(app, "v0.2.1")) not in _owned(state)
 
 
+def test_mac_swap_in_undoes_the_swap_when_it_cannot_record_the_backup(tmp_path, state, monkeypatch):
+    apps, app, staged = _mac_setup(tmp_path, state)
+
+    def failing(*args, **kwargs):
+        raise OSError(errno.EACCES, "state is read-only")
+
+    monkeypatch.setattr(update_swap, "add_owned", failing)
+    with pytest.raises(UpdateInstallError, match="not installed"):
+        mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)
+    assert binary_paths(app, "darwin")[0].read_text() == "old"
+    assert binary_paths(staged.top, "darwin")[0].read_text() == "new"
+    assert not backup_path(app, "v0.2.1").exists()
+    assert str(backup_path(app, "v0.2.1")) not in _owned(state)
+
+
+def test_mac_swap_in_says_so_when_the_undo_after_a_state_failure_fails(tmp_path, state, monkeypatch):
+    apps, app, staged = _mac_setup(tmp_path, state)
+    calls = []
+
+    def swap_once(a, b):
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError(errno.EBUSY, "busy")
+        _fake_swap(a, b)
+
+    def failing(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(update_swap, "add_owned", failing)
+    with pytest.raises(UpdateInstallError, match="undoing it failed"):
+        mac_swap_in(staged, app, "v0.2.1", state, swap=swap_once)
+
+
 # pending, launch and ack
 
 
