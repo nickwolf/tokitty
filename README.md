@@ -53,7 +53,7 @@ Nothing to do on first launch. The tray icon in this build only supports X11 (xo
 
 Tokitty checks GitHub Releases for a newer version about a minute after startup and then once a day, and it never installs anything without a click. **Check for updates automatically** in the right-click menu turns the daily check off. **Check for updates** in the same menu runs one on demand, whatever that setting is.
 
-When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and the tray menu. On Windows the tray also shows one notification per version. The Linux and macOS tray backends have no notifications, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
+When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and, where there is one, the tray menu. On Windows the tray also shows one notification per version. The Linux tray has no notifications and macOS has no tray icon, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
 
 Install downloads the archive for your platform, checks it against the release's `SHA256SUMS`, unpacks it, and runs the new build's self-check before touching anything. On Windows and Linux the new copy goes into a new `v<version>` folder next to the current one, so `releases\v0.2.1\Tokitty` becomes `releases\v0.3.0\Tokitty`. On macOS the new bundle is swapped in at the same path, and that folder has to be writable. A standard user with Tokitty in `/Applications` gets the release page instead, and so does a bundle that isn't named `Tokitty.app`.
 
@@ -61,7 +61,7 @@ The old copy keeps running until the new one has started and reported back. If t
 
 Tokitty keeps the copy it just replaced and deletes older copies it installed. On macOS the kept copy is a hidden `.Tokitty-<old tag>.app` beside the app. It only deletes what it installed itself, so folders you unpacked by hand are never touched, even when they sit in the same directory with a `v` name.
 
-A run from source only reports updates, and its menu item opens the release page. Releases from before the updater have no `SHA256SUMS`, so the first move onto a release that has the updater is a manual download.
+A run from source only reports updates, and its menu item opens the release page. The updater arrived in 0.2.2. Earlier releases have no `SHA256SUMS`, so getting onto 0.2.2 is a manual download, and updates from there on can come from the menu.
 
 Each release has a `SHA256SUMS` file, and the updater refuses a download that doesn't match it. That catches a corrupted or tampered download. It does nothing about someone who can publish releases on the repo, and the builds are unsigned, so the trust is the same as downloading by hand.
 
@@ -322,6 +322,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
 - Codex support reads Codex's rollout files, an internal format with no compatibility promise. The rules it relies on were measured against Codex CLI 0.147.0 and 0.155.0-alpha.9, and are written up in `docs/superpowers/specs/2026-09-22-codex-token-ledger-design.md`.
 - Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run: `python3-tk` isn't installed in the reference dev environment.
+- In-app updates are exercised on the release CI runners for every target, including the bundle swap on both Macs. Outside CI, the macOS swap and how SmartScreen treats an updated unsigned exe on Windows haven't been seen yet. If the new copy doesn't start, the old one keeps running and says so.
 - Sprite art is composed from three reusable 28x26 pose templates (sitting calm, sitting alert, lying down) with per-state substitutions, not a fully independent illustration per state.
 
 ## Roadmap
