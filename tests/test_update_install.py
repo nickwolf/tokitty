@@ -29,6 +29,10 @@ from tokitty.update_install import (
 )
 from tokitty.updater import Release, load_update_state
 
+needs_tar_filter = pytest.mark.skipif(
+    not hasattr(tarfile, "data_filter"), reason="tarfile has no data filter before 3.10.12"
+)
+
 TAG = "v0.3.0"
 BASE = "https://example.invalid/v0.3.0"
 
@@ -354,6 +358,7 @@ def test_stage_unpacks_a_good_zip_on_windows(tmp_path):
     ]
 
 
+@needs_tar_filter
 def test_stage_unpacks_a_good_tar_on_linux_and_keeps_modes_and_links(tmp_path):
     versions, state_dir, target, files, release = _setup(tmp_path, "linux", _good_tar(), name="a.tar.gz")
     staged = stage(release, target, state_dir, sys_platform="linux", urlopen=_urlopen(files))
@@ -373,6 +378,7 @@ def test_stage_unpacks_through_the_injected_ditto_on_macos(tmp_path):
     assert staged.gui == staged.top / "Contents" / "MacOS" / "Tokitty"
 
 
+@needs_tar_filter
 def test_stage_records_the_staging_folder_once_it_exists(tmp_path):
     versions, state_dir, target, files, release = _setup(tmp_path, "linux", _good_tar(), name="a.tar.gz")
     seen = []
@@ -408,6 +414,8 @@ def test_stage_never_removes_a_folder_that_was_already_at_its_path(tmp_path, mon
     ],
 )
 def test_stage_failures_leave_the_install_untouched(tmp_path, sys_platform, body, message):
+    if sys_platform == "linux" and not hasattr(tarfile, "data_filter"):
+        pytest.skip("tarfile has no data filter before 3.10.12")
     versions, state_dir, target, files, release = _setup(tmp_path, sys_platform, body, name="asset")
     (versions / "v0.2.0").mkdir()
     before = _snapshot(versions)
@@ -453,6 +461,7 @@ def test_stage_refuses_a_target_refusal_and_an_uninstallable_release(tmp_path):
     assert _snapshot(versions) == [] and not (state_dir / "update.json").exists()
 
 
+@needs_tar_filter
 def test_stage_runs_verify_and_cleans_up_when_it_fails(tmp_path):
     versions, state_dir, target, files, release = _setup(tmp_path, "linux", _good_tar())
     seen = []
@@ -521,3 +530,12 @@ def test_self_check_passes_and_uses_a_clean_env_and_timeout(tmp_path):
 def test_self_check_failures(tmp_path, runner, message):
     with pytest.raises(UpdateInstallError, match=message):
         run_self_check(tmp_path / "tokitty", TAG, runner=runner, sys_platform="linux")
+
+
+def test_unpacking_a_tar_is_refused_without_the_data_filter(tmp_path, monkeypatch):
+    from tokitty import update_install
+
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    with pytest.raises(UpdateInstallError, match="can't unpack the update safely"):
+        update_install._unpack_tar(tmp_path / "missing.tar.gz", tmp_path / "out")
+    assert not (tmp_path / "out").exists()

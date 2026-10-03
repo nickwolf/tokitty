@@ -186,6 +186,7 @@ def test_make_bad_layout_archive_has_an_extra_top_level_entry(vu, tmp_path):
         assert sorted({n.split("/")[0] for n in tf.getnames()}) == ["extra.txt", "tokitty"]
 
 
+@pytest.mark.skipif(not hasattr(tarfile, "data_filter"), reason="tarfile has no data filter before 3.10.12")
 def test_the_bad_layout_archive_is_rejected_by_the_updaters_layout_check(vu, tmp_path):
     from tokitty.update_install import UpdateInstallError, validate_layout
 

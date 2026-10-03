@@ -259,6 +259,10 @@ def _unpack_zip(archive: Path, dest: Path) -> None:
 
 
 def _unpack_tar(archive: Path, dest: Path) -> None:
+    # The "data" filter arrived in 3.10.12 and 3.11.4. Without it a tar can
+    # write outside dest, so refuse rather than unpack unfiltered.
+    if not hasattr(tarfile, "data_filter"):
+        raise UpdateInstallError("This Python can't unpack the update safely; download it from the release page.")
     try:
         with tarfile.open(archive, "r:gz") as tf:
             tf.extractall(dest, filter="data")
