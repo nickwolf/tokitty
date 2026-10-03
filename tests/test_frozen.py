@@ -141,6 +141,8 @@ def test_self_check_reports_env_names_not_values(monkeypatch, capsys):
     monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
     monkeypatch.setenv("HOME_UNRELATED", "x")
     monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    # The made-up TCL_LIBRARY would break a real Tk check on Windows.
+    monkeypatch.setattr(frozen, "_check_tkinter", lambda: "8.6")
     assert frozen.self_check() == 0
     out = capsys.readouterr().out
     report = json.loads(out)
