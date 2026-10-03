@@ -379,29 +379,27 @@ def cleanup(
         live = _norm(state.pending["staging"])
     running = parse_version(running_version)
     dropped: Set[str] = set()
-    valid, parents, holders = [], set(), []
+    valid, holders = [], []
     for entry in state.owned:
         path = Path(entry["path"])
         if not path.is_absolute():
             continue
         gone = not os.path.lexists(path)
-        if gone:
-            dropped.add(entry["path"])
         if not _location_ok(entry, target):
+            if gone:
+                dropped.add(entry["path"])
             continue
-        parents.add(path.parent)
+        # Only this entry's own trash path, the one `_trash_and_remove` makes.
+        # An entry whose trash survives stays recorded so the next run retries.
+        trash = path.with_name(TRASH_PREFIX + path.name)
+        if _is_dir(trash):
+            shutil.rmtree(trash, ignore_errors=True)
+        if gone and not os.path.lexists(trash):
+            dropped.add(entry["path"])
         if entry["kind"] == "copy":
             holders.append(path.parent)
         if not gone and _is_dir(path):
             valid.append(entry)
-    for parent in parents:
-        try:
-            names = os.listdir(parent)
-        except OSError:
-            continue
-        for name in names:
-            if name.startswith(TRASH_PREFIX) and _is_dir(parent / name):
-                shutil.rmtree(parent / name, ignore_errors=True)
     older = [
         v
         for e in valid

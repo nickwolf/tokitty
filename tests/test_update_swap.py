@@ -586,6 +586,28 @@ def test_cleanup_removes_leftover_trash_beside_owned_paths_only(tmp_path, state)
     assert unrelated.exists()
 
 
+def test_cleanup_leaves_an_unowned_trash_named_folder_beside_an_owned_path(tmp_path, state):
+    lay = Layout(tmp_path, state)
+    lay.copy("v0.3.0")
+    other = _touch(lay.versions / "v0.3.0" / ".tokitty-trash-other" / "f").parent
+    lay.run("v0.3.0")
+    assert other.is_dir()
+
+
+def test_cleanup_keeps_the_entry_of_a_gone_path_until_its_partial_trash_is_finished(tmp_path, state, monkeypatch):
+    lay = Layout(tmp_path, state)
+    lay.copy("v0.3.0")
+    gone = lay.copy("v0.1.0")
+    trash = _touch(gone.with_name(".tokitty-trash-tokitty") / "left").parent
+    shutil.rmtree(gone)
+    monkeypatch.setattr(update_swap.shutil, "rmtree", lambda path, ignore_errors=False: None)
+    lay.run("v0.3.0")
+    assert trash.is_dir() and str(gone) in _owned(state)
+    monkeypatch.undo()
+    lay.run("v0.3.0")
+    assert not trash.exists() and str(gone) not in _owned(state)
+
+
 def test_cleanup_ignores_entries_outside_the_versions_dir_or_with_the_wrong_name(tmp_path, state):
     lay = Layout(tmp_path, state)
     lay.copy("v0.3.0"), lay.copy("v0.2.0")
