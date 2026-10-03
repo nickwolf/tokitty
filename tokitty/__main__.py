@@ -68,6 +68,10 @@ from tokitty import sprites
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 UI_REFRESH_MS = 500
+# The ack waits for the window to be mapped, but not forever: a window manager
+# that never reports a map must not strand the handover.
+ACK_MAP_POLL_MS = 50
+ACK_MAP_TIMEOUT = 5.0
 
 
 def debug_print() -> int:
@@ -1175,11 +1179,18 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     root.after(UI_REFRESH_MS, tick)
     updates.startup(frozen=bool(getattr(sys, "frozen", False)))
     if after_update_token:
-        # Inside the mainloop, so the first window is up when the old copy
-        # hears from us.
+        # Inside the mainloop and once the window is mapped, so the first
+        # window is up when the old copy hears from us.
+        import time
+
+        ack_deadline = time.monotonic() + ACK_MAP_TIMEOUT
+
         def send_ack() -> None:
             from tokitty.update_swap import write_ack
 
+            if not window.root.winfo_ismapped() and time.monotonic() < ack_deadline:
+                root.after(ACK_MAP_POLL_MS, send_ack)
+                return
             try:
                 write_ack(state_dir, after_update_token)
             except OSError as exc:

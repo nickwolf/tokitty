@@ -1600,6 +1600,19 @@ def _pump_until_destroyed(tk, seconds=15.0):
     return mainloop
 
 
+def _pump_until_acked(state_dir, token="tok1", seconds=10.0):
+    """A mainloop that pumps events until the ack file shows up, which waits for
+    the first window to be mapped."""
+
+    def mainloop(self):
+        end = time.monotonic() + seconds
+        while not (state_dir / f"update-ack-{token}").exists() and time.monotonic() < end:
+            self.update()
+            time.sleep(0.01)
+
+    return mainloop
+
+
 def _release_listing(tag):
     name = f"tokitty-{tag}-linux-x86_64.tar.gz"
     return [
@@ -1747,10 +1760,11 @@ def test_a_rollback_outside_apply_mode_shows_the_message_and_keeps_running(tmp_p
 def test_after_update_writes_the_ack_once_the_mainloop_is_running(tmp_path, monkeypatch):
     seen = []
 
+    pump = _pump_until_acked(tmp_path)
+
     def mainloop(self):
         seen.append((tmp_path / "update-ack-tok1").exists())  # not before the mainloop
-        for _ in range(3):
-            self.update()
+        pump(self)
 
     tk, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
 
@@ -1761,10 +1775,54 @@ def test_after_update_writes_the_ack_once_the_mainloop_is_running(tmp_path, monk
 
 
 @pytest.mark.gui
+def test_after_update_acks_only_once_the_window_is_mapped(tmp_path, monkeypatch):
+    calls, seen = [], []
+
+    def mainloop(self):
+        end = time.monotonic() + 10
+        while not (tmp_path / "update-ack-tok1").exists() and time.monotonic() < end:
+            self.update()
+            seen.append(len(calls))
+            time.sleep(0.01)
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+    monkeypatch.setattr(main_module, "ACK_MAP_TIMEOUT", 30.0)
+    monkeypatch.setattr(tk.Tk, "winfo_ismapped", lambda self: calls.append(1) or len(calls) > 3)
+
+    assert main_module.run_gui(after_update_token="tok1") == 0
+
+    assert len(calls) == 4  # three unmapped checks rescheduled, the fourth acked
+    assert (tmp_path / "update-ack-tok1").read_text() == "tok1"
+
+
+@pytest.mark.gui
+def test_after_update_acks_anyway_when_no_map_is_ever_reported(tmp_path, monkeypatch):
+    started, early = [], []
+
+    def mainloop(self):
+        started.append(time.monotonic())
+        end = started[0] + 10
+        while not (tmp_path / "update-ack-tok1").exists() and time.monotonic() < end:
+            self.update()
+            early.append((tmp_path / "update-ack-tok1").exists())
+            time.sleep(0.01)
+        started.append(time.monotonic())
+
+    tk, main_module = _update_gui(tmp_path, monkeypatch, mainloop)
+    monkeypatch.setattr(main_module, "ACK_MAP_TIMEOUT", 0.4)
+    monkeypatch.setattr(tk.Tk, "winfo_ismapped", lambda self: False)
+
+    assert main_module.run_gui(after_update_token="tok1") == 0
+
+    assert (tmp_path / "update-ack-tok1").read_text() == "tok1"
+    assert started[1] - started[0] >= 0.3 and not any(early[:-1])
+
+
+@pytest.mark.gui
 def test_after_update_waits_for_the_old_copy_to_release_the_lock(tmp_path, monkeypatch):
     from tokitty.lock import SingleInstanceLock
 
-    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: self.update())
+    tk, main_module = _update_gui(tmp_path, monkeypatch, _pump_until_acked(tmp_path))
     old_copy = SingleInstanceLock(tmp_path)
     old_copy.acquire()
     timer = threading.Thread(target=lambda: (time.sleep(0.4), old_copy.release()))
@@ -1796,7 +1854,7 @@ def test_after_update_exits_quietly_without_an_ack_when_the_lock_stays_held(tmp_
 
 @pytest.mark.gui
 def test_no_ack_switch_exits_before_acking_only_alongside_the_api_url(tmp_path, monkeypatch):
-    tk, main_module = _update_gui(tmp_path, monkeypatch, lambda self: self.update())
+    tk, main_module = _update_gui(tmp_path, monkeypatch, _pump_until_acked(tmp_path))
     monkeypatch.setenv("TOKITTY_UPDATE_TEST_NO_ACK", "1")
 
     # Alone, the switch is ignored: a normal start that acks.
