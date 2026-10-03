@@ -348,7 +348,10 @@ def test_stage_unpacks_a_good_zip_on_windows(tmp_path):
     assert re.fullmatch(r"\.tokitty-update-v0\.3\.0-7-[0-9a-f]{8}", staged.staging.name)
     assert staged.gui == staged.staging / "unpacked" / "Tokitty" / "Tokitty.exe"
     assert staged.gui.read_bytes() == b"gui"
-    assert load_update_state(state_dir).owned == [{"path": str(staged.staging), "version": TAG, "kind": "staging"}]
+    st = os.lstat(staged.staging)
+    assert load_update_state(state_dir).owned == [
+        {"path": str(staged.staging), "version": TAG, "kind": "staging", "dev": st.st_dev, "ino": st.st_ino}
+    ]
 
 
 def test_stage_unpacks_a_good_tar_on_linux_and_keeps_modes_and_links(tmp_path):

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tokitty import update_swap
-from tokitty.update_install import MAC_TOP, Staged, Target, UpdateInstallError, binary_paths, top_name
+from tokitty.update_install import MAC_TOP, Staged, Target, UpdateInstallError, binary_paths, dir_identity, top_name
 from tokitty.update_swap import (
     RENAME_SWAP,
     ack_path,
@@ -26,10 +26,16 @@ from tokitty.update_swap import (
     write_ack,
     write_pending,
 )
-from tokitty.updater import UpdateState, add_owned, load_update_state, save_update_state
+from tokitty.updater import UpdateState, load_update_state, save_update_state
+from tokitty.updater import add_owned as _add_owned
 
 TAG = "v0.3.0"
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+
+
+def add_owned(state_dir, path, version, kind):
+    """Record `path` as the updater does: with its identity if it exists."""
+    _add_owned(state_dir, path, version, kind, **(dir_identity(path) if os.path.lexists(path) else {}))
 
 
 def _touch(path, text="x"):
@@ -78,6 +84,15 @@ def test_promote_renames_into_the_version_folder(tmp_path, state, sys_platform):
     assert binary_paths(final, sys_platform)[0].read_text() == "new"
     assert not staged.staging.exists()
     assert _owned(state) == {str(final): (TAG, "copy")}
+
+
+def test_promote_records_the_identity_of_the_copy_it_renamed_into_place(tmp_path, state):
+    versions = tmp_path / "releases"
+    staged = _staged(versions, "linux", state_dir=state)
+    final = promote(staged, Target(versions, "tokitty", "linux"), TAG, state, sys_platform="linux")
+    (entry,) = load_update_state(state).owned
+    st = os.lstat(final)
+    assert (entry["dev"], entry["ino"]) == (st.st_dev, st.st_ino)
 
 
 def test_promote_reuses_an_owned_copy_that_passes_its_checks(tmp_path, state):
@@ -250,6 +265,8 @@ def test_mac_swap_back_keeps_an_undeletable_failed_bundle_for_cleanup(tmp_path, 
     monkeypatch.setattr(update_swap, "_trash_and_remove", lambda path, rename: "kept")
     mac_swap_back(app, backup, state, swap=_fake_swap)
     assert _owned(state) == {str(backup): ("v0.2.1", "staging")}
+    (entry,) = load_update_state(state).owned
+    assert entry["ino"] == os.lstat(backup).st_ino
 
 
 def test_mac_swap_in_that_cannot_swap_changes_nothing(tmp_path, state):
@@ -271,6 +288,26 @@ def test_mac_swap_in_replaces_an_owned_backup_of_the_same_tag(tmp_path, state):
     add_owned(state, stale, "v0.2.1", "backup")
     backup = mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)
     assert binary_paths(backup, "darwin")[0].read_text() == "old"
+
+
+def test_mac_swap_in_records_the_identity_of_the_backup(tmp_path, state):
+    apps, app, staged = _mac_setup(tmp_path, state)
+    old_inode = os.lstat(app).st_ino
+    backup = mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)
+    (entry,) = load_update_state(state).owned
+    assert entry["ino"] == os.lstat(backup).st_ino and entry["dev"] == os.lstat(backup).st_dev
+    assert entry["ino"] == old_inode
+
+
+def test_mac_swap_in_will_not_remove_a_backup_that_is_not_the_recorded_folder(tmp_path, state):
+    apps, app, staged = _mac_setup(tmp_path, state)
+    stale = _release_tree(backup_path(app, "v0.2.1"), "darwin", "recorded")
+    add_owned(state, stale, "v0.2.1", "backup")
+    shutil.rmtree(stale)
+    replacement = _release_tree(backup_path(app, "v0.2.1"), "darwin", "by hand")
+    with pytest.raises(UpdateInstallError, match="already there"):
+        mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)
+    assert binary_paths(replacement, "darwin")[0].read_text() == "by hand"
 
 
 def test_mac_swap_in_refuses_an_unowned_backup_without_swapping(tmp_path, state):
@@ -606,6 +643,30 @@ def test_cleanup_keeps_the_entry_of_a_gone_path_until_its_partial_trash_is_finis
     monkeypatch.undo()
     lay.run("v0.3.0")
     assert not trash.exists() and str(gone) not in _owned(state)
+
+
+def test_cleanup_never_deletes_a_folder_that_replaced_the_recorded_one(tmp_path, state):
+    lay = Layout(tmp_path, state)
+    lay.copy("v0.3.0"), lay.copy("v0.2.0")
+    older = lay.copy("v0.1.0")
+    shutil.rmtree(older.parent)
+    replacement = _release_tree(older, "linux", "by hand")
+    assert os.lstat(replacement).st_ino != next(e["ino"] for e in load_update_state(state).owned if e["path"] == str(older))
+    assert lay.run("v0.3.0") == []
+    assert (replacement / "tokitty").read_text() == "by hand"
+    assert str(older) not in _owned(state)
+
+
+def test_cleanup_never_deletes_an_entry_recorded_without_an_identity(tmp_path, state):
+    lay = Layout(tmp_path, state)
+    lay.copy("v0.3.0"), lay.copy("v0.2.0")
+    older = lay.copy("v0.1.0", owned=False)
+    stale = lay.staging("v0.2.5", 99, owned=False)
+    _add_owned(state, older, "v0.1.0", "copy")
+    _add_owned(state, stale, "v0.2.5", "staging")
+    assert lay.run("v0.3.0") == []
+    assert older.is_dir() and stale.is_dir()
+    assert str(older) not in _owned(state) and str(stale) not in _owned(state)
 
 
 def test_cleanup_ignores_entries_outside_the_versions_dir_or_with_the_wrong_name(tmp_path, state):

@@ -238,6 +238,9 @@ def _owned(value) -> List[dict]:
         path, version = entry.get("path"), entry.get("version")
         if isinstance(path, str) and path and isinstance(version, str):
             kept.append({"path": path, "version": version, "kind": entry["kind"]})
+            for key in ("dev", "ino"):
+                if isinstance(entry.get(key), int) and not isinstance(entry[key], bool):
+                    kept[-1][key] = entry[key]
     return kept
 
 
@@ -286,12 +289,17 @@ def mutate_update_state(
         lock.release()
 
 
-def add_owned(state_dir, path, version: str, kind: str) -> None:
-    """Record a path the updater created, replacing any entry for that path."""
+def add_owned(state_dir, path, version: str, kind: str, *, dev: Optional[int] = None, ino: Optional[int] = None) -> None:
+    """Record a path the updater created, replacing any entry for that path.
+    `dev` and `ino` identify the directory itself, so cleanup can tell it from
+    a different folder later put at the same path."""
 
     def edit(state: UpdateState) -> None:
         state.owned = [e for e in state.owned if e["path"] != str(path)]
-        state.owned.append({"path": str(path), "version": version, "kind": kind})
+        entry = {"path": str(path), "version": version, "kind": kind}
+        if dev is not None and ino is not None:
+            entry.update(dev=dev, ino=ino)
+        state.owned.append(entry)
 
     mutate_update_state(state_dir, edit)
 

@@ -296,6 +296,21 @@ def test_update_state_degrades_per_field(tmp_path):
     assert load_update_state(tmp_path) == UpdateState(latest_tag="v0.3.0", owned=[good])
 
 
+def test_update_state_keeps_only_integer_identity_fields(tmp_path):
+    base = {"path": "/r/v0.3.0/tokitty", "version": "v0.3.0", "kind": "copy"}
+    entries = [
+        {**base, "dev": 5, "ino": 99},
+        {**base, "path": "/r/b", "dev": "5", "ino": True},
+        {**base, "path": "/r/c", "ino": 7},
+    ]
+    (tmp_path / "update.json").write_text(json.dumps({"owned": entries}), encoding="utf-8")
+    assert load_update_state(tmp_path).owned == [
+        {**base, "dev": 5, "ino": 99},
+        {**base, "path": "/r/b"},
+        {**base, "path": "/r/c", "ino": 7},
+    ]
+
+
 def test_update_state_unparseable_timestamp_is_dropped(tmp_path):
     (tmp_path / "update.json").write_text('{"last_checked": "yesterday"}', encoding="utf-8")
     assert load_update_state(tmp_path).last_checked is None
@@ -389,6 +404,14 @@ def test_add_and_drop_owned(tmp_path):
     ]
     drop_owned(tmp_path, "/r/b")
     assert [e["path"] for e in load_update_state(tmp_path).owned] == ["/r/a"]
+
+
+def test_add_owned_records_an_identity_only_when_given_both_halves(tmp_path):
+    add_owned(tmp_path, "/r/a", "v0.1.0", "copy", dev=3, ino=4)
+    add_owned(tmp_path, "/r/b", "v0.1.0", "copy", dev=3)
+    owned = {e["path"]: e for e in load_update_state(tmp_path).owned}
+    assert (owned["/r/a"]["dev"], owned["/r/a"]["ino"]) == (3, 4)
+    assert "dev" not in owned["/r/b"] and "ino" not in owned["/r/b"]
 
 
 def test_mutate_update_state_loses_no_edits_across_threads(tmp_path):

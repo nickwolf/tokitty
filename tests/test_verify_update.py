@@ -138,7 +138,7 @@ def test_cleanup_seed_agrees_with_the_real_cleanup(vu, tmp_path):
     running.mkdir(parents=True)
     state = tmp_path / "state"
     state.mkdir()
-    save_update_state(state, UpdateState(owned=seed["owned"]))
+    save_update_state(state, UpdateState(owned=vu.with_identity(seed["owned"])))
     cleanup(
         state,
         running_release=running,

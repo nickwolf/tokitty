@@ -27,6 +27,7 @@ from tokitty.update_install import (
     _is_link,
     _kind,
     binary_paths,
+    dir_identity,
     discard_staging,
     run_self_check,
     validate_layout,
@@ -96,7 +97,8 @@ def promote(
     made = not os.path.lexists(holder)
     try:
         holder.mkdir(parents=True, exist_ok=True)
-        add_owned(state_dir, final, tag, "copy")
+        # The rename keeps the inode, so the identity read first is the copy's.
+        add_owned(state_dir, final, tag, "copy", **dir_identity(staged.top))
         os.rename(staged.top, final)
     except OSError as exc:
         drop_owned(state_dir, final)
@@ -150,16 +152,16 @@ def mac_swap_in(
     app, staged_app = Path(app), staged.top
     backup = backup_path(app, old_tag)
     if os.path.lexists(backup):
-        recorded = any(e["path"] == str(backup) and e["kind"] == "backup" for e in load_update_state(state_dir).owned)
-        if not recorded or _trash_and_remove(backup, os.rename) != "removed":
+        entry = next(
+            (e for e in load_update_state(state_dir).owned if e["path"] == str(backup) and e["kind"] == "backup"), None
+        )
+        if entry is None or not _recorded(entry, backup) or _trash_and_remove(backup, os.rename) != "removed":
             raise UpdateInstallError(f"{backup} is already there, so the update was not installed.")
         drop_owned(state_dir, backup)
     swap(staged_app, app)
-    add_owned(state_dir, backup, old_tag, "backup")
     try:
         os.rename(staged_app, backup)
     except OSError as exc:
-        drop_owned(state_dir, backup)
         try:
             swap(staged_app, app)
         except (OSError, UpdateInstallError) as undo:
@@ -167,6 +169,7 @@ def mac_swap_in(
                 f"The update was swapped in but could not be finished ({exc}), and undoing it failed ({undo})."
             ) from exc
         raise UpdateInstallError(f"Could not keep the old copy ({exc}), so the update was not installed.") from exc
+    add_owned(state_dir, backup, old_tag, "backup", **dir_identity(backup))
     discard_staging(state_dir, staged.staging)
     return backup
 
@@ -179,10 +182,16 @@ def mac_swap_back(app, backup, state_dir, *, swap: Callable[[object, object], No
         drop_owned(state_dir, backup)
     else:
 
+        try:
+            identity = dir_identity(backup)
+        except OSError:
+            identity = {}
+
         def retag(state: UpdateState) -> None:
             for entry in state.owned:
                 if entry["path"] == str(backup):
                     entry["kind"] = "staging"
+                    entry.update(identity)
 
         mutate_update_state(state_dir, retag)
 
@@ -327,6 +336,17 @@ def _trash_and_remove(path: Path, rename) -> str:
     return "partial" if os.path.lexists(trash) else "removed"
 
 
+def _recorded(entry: dict, path) -> bool:
+    """True only if `path` is, right now, the very directory the entry
+    recorded. An entry with no identity, or a link or a replacement folder at
+    the path, is not."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return entry.get("dev") == st.st_dev and entry.get("ino") == st.st_ino
+
+
 def _location_ok(entry: dict, target: Target) -> bool:
     """An owned path is only touched where the updater puts things: staging
     folders and macOS backups beside the target, copies at
@@ -398,7 +418,12 @@ def cleanup(
             dropped.add(entry["path"])
         if entry["kind"] == "copy":
             holders.append(path.parent)
-        if not gone and _is_dir(path):
+        if gone:
+            continue
+        if not _recorded(entry, path):
+            # No longer the folder the updater made: stop tracking it, never delete it.
+            dropped.add(entry["path"])
+        elif _is_dir(path):
             valid.append(entry)
     older = [
         v

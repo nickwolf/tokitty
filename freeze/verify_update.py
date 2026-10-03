@@ -211,6 +211,17 @@ def cleanup_seed(plat: str, base: Path, tag: str) -> dict:
     }
 
 
+def with_identity(owned: Sequence[dict]) -> List[dict]:
+    """The seed's `owned` entries plus the `dev` and `ino` the updater records
+    when it makes a folder; cleanup deletes nothing without them. Call it once
+    the seed's folders and links exist."""
+    stamped = []
+    for entry in owned:
+        st = os.lstat(entry["path"])
+        stamped.append({**entry, "dev": st.st_dev, "ino": st.st_ino})
+    return stamped
+
+
 def make_bad_layout_archive(path, plat: str) -> None:
     """A small archive with the right top folder plus an extra top-level
     entry, which the updater's layout check must reject. Windows and macOS
@@ -1018,7 +1029,7 @@ def step_cleanup(ctx):
     (link_target / "sentinel.txt").write_text("must survive", encoding="utf-8")
     for link, target in seed["links"]:
         _make_link(link, target)
-    state = {"last_checked": None, "latest_tag": None, "notified_tag": None, "owned": seed["owned"], "pending": None}
+    state = {"last_checked": None, "latest_tag": None, "notified_tag": None, "owned": with_identity(seed["owned"]), "pending": None}
     (scn.state_dir / "update.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     kept = seed["kept"] + [scn.new_app_dir if sys.platform != "darwin" else scn.versions / "Tokitty.app"]
     detail: dict = {}

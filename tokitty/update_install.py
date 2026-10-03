@@ -210,6 +210,14 @@ def _is_link(path) -> bool:
     return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
+def dir_identity(path) -> dict:
+    """`dev` and `ino` of a directory itself (lstat), for an owned entry. A
+    rename keeps them. On Windows os.lstat gives a real st_ino (the file
+    index) on Python 3.12+, and the frozen runtime is 3.13."""
+    st = os.lstat(path)
+    return {"dev": st.st_dev, "ino": st.st_ino}
+
+
 def validate_layout(root, sys_platform: str) -> Path:
     """Check an unpacked tree and return its single top entry. Raises
     UpdateInstallError for anything but exactly the expected layout."""
@@ -315,7 +323,7 @@ def stage(
         # already there is never ours to discard.
         staging.mkdir()
         created = True
-        add_owned(state_dir, staging, release.tag, "staging")
+        add_owned(state_dir, staging, release.tag, "staging", **dir_identity(staging))
         sums = _fetch_sums(release.sums_url, urlopen)
         name = urllib.parse.unquote(urllib.parse.urlsplit(release.asset_url).path.rsplit("/", 1)[-1])
         if name not in sums:
