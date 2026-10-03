@@ -327,7 +327,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
+The five planned phases (finer sprites, live activity with a permission flag, multiple accounts, customization, screenshots) are complete, and [docs/ROADMAP.md](docs/ROADMAP.md) keeps them as a record. What's next is on the [backlog board](https://github.com/users/nickwolf/projects/1), ranked by drag order, and under the [`backlog` label](https://github.com/nickwolf/tokitty/issues?q=is%3Aissue+is%3Aopen+label%3Abacklog).
 
 ## License
 
