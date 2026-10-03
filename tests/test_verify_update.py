@@ -92,6 +92,32 @@ def test_survivor_problems(vu, tmp_path):
     ]
 
 
+def test_tls_github_passes_on_a_good_fetch(vu):
+    assert vu.tls_github_verdict(0, {"error": None, "latest": "v0.2.2"}) == (True, {})
+
+
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_tls_github_passes_on_any_http_status(vu, status):
+    report = {"error": f"HTTP {status} from the releases list", "latest": None}
+    assert vu.tls_github_verdict(1, report) == (True, {"tls": "ok", "http_status": status})
+
+
+@pytest.mark.parametrize(
+    ("code", "report"),
+    [
+        (1, {"error": "Network error reaching the releases list: [SSL: CERTIFICATE_VERIFY_FAILED] bad", "latest": None}),
+        (1, {"error": "Network error reaching the releases list: timed out", "latest": None}),
+        (1, {"error": "The releases list was not valid JSON: x", "latest": None}),
+        (0, {"error": None, "latest": None}),
+        (1, None),
+        (1, []),
+    ],
+)
+def test_tls_github_fails_on_network_tls_or_a_missing_report(vu, code, report):
+    ok, extra = vu.tls_github_verdict(code, report)
+    assert ok is False and extra == {}
+
+
 @pytest.mark.parametrize("plat", ["linux", "win32", "darwin"])
 def test_cleanup_seed_is_consistent_with_the_cleanup_rules(vu, plat, tmp_path):
     base = tmp_path / "releases"

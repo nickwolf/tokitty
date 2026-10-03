@@ -793,6 +793,22 @@ def step_env_dump(ctx):
     return {"ok": True, "detail": detail}
 
 
+def tls_github_verdict(returncode: int, report) -> Tuple[bool, dict]:
+    """Pass on a good fetch, or on any HTTP status: a status means the TLS
+    handshake and certificate check worked, and a shared CI runner IP can hit
+    GitHub's unauthenticated rate limit (403). Network, TLS and certificate
+    errors, and a missing report, fail."""
+    if not isinstance(report, dict):
+        return False, {}
+    error = report.get("error")
+    if returncode == 0 and error is None and report.get("latest"):
+        return True, {}
+    match = re.match(r"HTTP (\d+)", error) if isinstance(error, str) else None
+    if match:
+        return True, {"tls": "ok", "http_status": int(match.group(1))}
+    return False, {}
+
+
 def step_tls_github(ctx):
     scn = Scenario(ctx, "tls").prepare_old()
     proc, err = run_child([str(scn.old_gui), "--check-for-update"], scn.env, timeout=90)
@@ -802,8 +818,8 @@ def step_tls_github(ctx):
         report = json.loads(proc.stdout.decode("utf-8").strip())
     except ValueError:
         return {"ok": False, "detail": f"no JSON (exit {proc.returncode}): {tail(proc.stdout)} {tail(proc.stderr)}"}
-    from_github = proc.returncode == 0 and report.get("error") is None and report.get("latest")
-    return {"ok": bool(from_github), "detail": {"exit": proc.returncode, "report": report, "stderr": tail(proc.stderr)}}
+    ok, extra = tls_github_verdict(proc.returncode, report)
+    return {"ok": ok, "detail": {"exit": proc.returncode, "report": report, "stderr": tail(proc.stderr), **extra}}
 
 
 def _quarantine_problems(scn: Scenario) -> Tuple[List[str], dict]:
