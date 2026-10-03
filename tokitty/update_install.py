@@ -308,10 +308,14 @@ def stage(
         raise UpdateInstallError(target.refusal)
     if not release.installable_from_app or release.asset_size is None:
         raise UpdateInstallError(f"{release.tag} has no installable download for this platform.")
-    staging = target.parent / f".tokitty-update-{release.tag}-{os.getpid() if pid is None else pid}"
-    add_owned(state_dir, staging, release.tag, "staging")
+    staging = target.parent / f".tokitty-update-{release.tag}-{os.getpid() if pid is None else pid}-{uuid.uuid4().hex[:8]}"
+    created = False
     try:
+        # Exclusive, and recorded only once it exists, so a folder that was
+        # already there is never ours to discard.
         staging.mkdir()
+        created = True
+        add_owned(state_dir, staging, release.tag, "staging")
         sums = _fetch_sums(release.sums_url, urlopen)
         name = urllib.parse.unquote(urllib.parse.urlsplit(release.asset_url).path.rsplit("/", 1)[-1])
         if name not in sums:
@@ -342,7 +346,8 @@ def stage(
             verify(gui)
         return Staged(staging, top, gui)
     except BaseException as exc:
-        discard_staging(state_dir, staging)
+        if created:
+            discard_staging(state_dir, staging)
         if isinstance(exc, OSError):
             raise UpdateInstallError(f"Could not stage the update: {exc}") from exc
         raise

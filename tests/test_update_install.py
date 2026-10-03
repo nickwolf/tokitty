@@ -2,8 +2,10 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
+import uuid
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -342,7 +344,8 @@ def _fake_ditto(tree_files):
 def test_stage_unpacks_a_good_zip_on_windows(tmp_path):
     versions, state_dir, target, files, release = _setup(tmp_path, "win32", _good_zip(), name="a.zip")
     staged = stage(release, target, state_dir, sys_platform="win32", urlopen=_urlopen(files), pid=7)
-    assert staged.staging == versions / ".tokitty-update-v0.3.0-7"
+    assert staged.staging.parent == versions
+    assert re.fullmatch(r"\.tokitty-update-v0\.3\.0-7-[0-9a-f]{8}", staged.staging.name)
     assert staged.gui == staged.staging / "unpacked" / "Tokitty" / "Tokitty.exe"
     assert staged.gui.read_bytes() == b"gui"
     assert load_update_state(state_dir).owned == [{"path": str(staged.staging), "version": TAG, "kind": "staging"}]
@@ -367,7 +370,7 @@ def test_stage_unpacks_through_the_injected_ditto_on_macos(tmp_path):
     assert staged.gui == staged.top / "Contents" / "MacOS" / "Tokitty"
 
 
-def test_stage_records_the_staging_folder_before_creating_it(tmp_path):
+def test_stage_records_the_staging_folder_once_it_exists(tmp_path):
     versions, state_dir, target, files, release = _setup(tmp_path, "linux", _good_tar(), name="a.tar.gz")
     seen = []
 
@@ -376,7 +379,18 @@ def test_stage_records_the_staging_folder_before_creating_it(tmp_path):
         seen.append(([e["kind"] for e in state.owned], sorted(p.name for p in versions.iterdir())))
 
     stage(release, target, state_dir, sys_platform="linux", urlopen=_urlopen(files, on_open=on_open))
-    assert seen[0] == (["staging"], [".tokitty-update-v0.3.0-" + str(os.getpid())])
+    assert seen[0][0] == ["staging"]
+    assert [re.fullmatch(rf"\.tokitty-update-v0\.3\.0-{os.getpid()}-[0-9a-f]{{8}}", n) is not None for n in seen[0][1]] == [True]
+
+
+def test_stage_never_removes_a_folder_that_was_already_at_its_path(tmp_path, monkeypatch):
+    versions, state_dir, target, files, release = _setup(tmp_path, "linux", _good_tar(), name="a.tar.gz")
+    monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex="ab" * 16))
+    existing = _touch(versions / f".tokitty-update-v0.3.0-7-{'ab' * 4}" / "keep", "mine").parent
+    with pytest.raises(UpdateInstallError, match="Could not stage"):
+        stage(release, target, state_dir, sys_platform="linux", urlopen=_urlopen(files), pid=7)
+    assert (existing / "keep").read_text() == "mine"
+    assert load_update_state(state_dir).owned == []
 
 
 @pytest.mark.parametrize(
