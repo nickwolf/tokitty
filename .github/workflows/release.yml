@@ -79,6 +79,11 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: tar -czf "${{ steps.names.outputs.archive }}" -C dist tokitty
 
+      - name: Write archive checksum
+        run: |
+          python -c "import hashlib, sys; name = sys.argv[1]; digest = hashlib.file_digest(open(name, 'rb'), 'sha256').hexdigest(); open(name + '.sha256', 'w', newline='\n').write(f'{digest}  {name}\n')" "${{ steps.names.outputs.archive }}"
+          cat "${{ steps.names.outputs.archive }}.sha256"
+
       - name: Extract (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -113,6 +118,89 @@ jobs:
       - name: Verify artifact (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+
+      - name: Install cryptography (update verifier)
+        run: pip install cryptography
+
+      - name: Choose update test inputs
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            ext=tar.gz
+          else
+            ext=zip
+          fi
+          {
+            echo "OLD_ARCHIVE=$RUNNER_TEMP/old/tokitty-v0.0.1-${{ matrix.target }}.$ext"
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              # A dry run's build ID doesn't parse as a version, so the update
+              # test uses a v0.0.2 rebuild of this commit: a rehearsal.
+              echo "UPDATE_TAG=v0.0.2"
+              echo "REHEARSAL=true"
+              echo "NEW_ARCHIVE=$RUNNER_TEMP/new/tokitty-v0.0.2-${{ matrix.target }}.$ext"
+              echo "NEW_SUMS=$RUNNER_TEMP/new/tokitty-v0.0.2-${{ matrix.target }}.$ext.sha256"
+            else
+              echo "UPDATE_TAG=${{ steps.version.outputs.version }}"
+              echo "REHEARSAL=false"
+              echo "NEW_ARCHIVE=$GITHUB_WORKSPACE/${{ steps.names.outputs.archive }}"
+              echo "NEW_SUMS=$GITHUB_WORKSPACE/${{ steps.names.outputs.archive }}.sha256"
+            fi
+          } >> "$GITHUB_ENV"
+
+      - name: Build old fixture (v0.0.1)
+        env:
+          TOKITTY_BUILD_ID: v0.0.1
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-old --workpath build-old
+
+      - name: Archive old fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          case "${{ matrix.os }}" in
+            windows-latest)
+              python -c "import os, shutil; shutil.make_archive(os.path.join(os.environ['RUNNER_TEMP'], 'old', 'tokitty-v0.0.1-${{ matrix.target }}'), 'zip', 'dist-old', 'Tokitty')"
+              ;;
+            ubuntu-22.04)
+              tar -czf "$OLD_ARCHIVE" -C dist-old tokitty
+              ;;
+            *)
+              ditto -c -k --keepParent dist-old/Tokitty.app "$OLD_ARCHIVE"
+              ;;
+          esac
+
+      - name: Build rehearsal artifact (v0.0.2, workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TOKITTY_BUILD_ID: v0.0.2
+        run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-new --workpath build-new
+
+      - name: Archive rehearsal artifact (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p "$RUNNER_TEMP/new"
+          case "${{ matrix.os }}" in
+            windows-latest)
+              python -c "import os, shutil; shutil.make_archive(os.path.join(os.environ['RUNNER_TEMP'], 'new', 'tokitty-v0.0.2-${{ matrix.target }}'), 'zip', 'dist-new', 'Tokitty')"
+              ;;
+            ubuntu-22.04)
+              tar -czf "$NEW_ARCHIVE" -C dist-new tokitty
+              ;;
+            *)
+              ditto -c -k --keepParent dist-new/Tokitty.app "$NEW_ARCHIVE"
+              ;;
+          esac
+          python -c "import hashlib, os, sys; path = sys.argv[1]; digest = hashlib.file_digest(open(path, 'rb'), 'sha256').hexdigest(); open(path + '.sha256', 'w', newline='\n').write(f'{digest}  {os.path.basename(path)}\n')" "$NEW_ARCHIVE"
+          cat "$NEW_SUMS"
+
+      - name: Verify update
+        run: |
+          args=(--old-archive "$OLD_ARCHIVE" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --work "$RUNNER_TEMP/vu" --report "$RUNNER_TEMP/update-report.json")
+          if [ "$REHEARSAL" = "true" ]; then
+            args+=(--rehearsal)
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            xvfb-run -a python freeze/verify_update.py "${args[@]}"
+          else
+            python freeze/verify_update.py "${args[@]}"
+          fi
 
       - name: Append report summary
         if: always()
@@ -199,6 +287,44 @@ jobs:
                   print(f"- FAILED step `{name}`: {step.get('detail')}")
           PY
 
+      - name: Append update report summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+
+          report_path = os.path.join(os.environ["RUNNER_TEMP"], "update-report.json")
+          target = "${{ matrix.target }}"
+          print(f"### {target} update test")
+          if not os.path.exists(report_path):
+              print("- no update-report.json was written")
+              raise SystemExit(0)
+          with open(report_path, encoding="utf-8") as f:
+              data = json.load(f)
+          label = "REHEARSAL (v0.0.2 rebuild of this commit)" if data.get("rehearsal") else "the release being published"
+          print(f"- overall: {'PASS' if data.get('ok') else 'FAIL'}, new side: {data.get('tag')}, {label}")
+          steps = data.get("steps", {})
+          for name, step in steps.items():
+              print(f"- {name}: {'ok' if step.get('ok') else 'FAILED'}")
+              if not step.get("ok"):
+                  print(f"  `{json.dumps(step.get('detail'))[:1500]}`")
+          env = steps.get("env_dump", {}).get("detail", {})
+          if isinstance(env, dict):
+              for label_name, info in env.items():
+                  if isinstance(info, dict):
+                      print(f"- env_dump {label_name}: {', '.join(info.get('env') or []) or 'none set'}")
+          tls = steps.get("tls_github", {}).get("detail", {})
+          if isinstance(tls, dict) and isinstance(tls.get("report"), dict):
+              print(f"- tls_github: latest release seen {tls['report'].get('latest')}")
+          apply_run = steps.get("apply_update", {}).get("detail", {})
+          if isinstance(apply_run, dict) and isinstance(apply_run.get("apply"), dict):
+              print(f"- apply_update: exit {apply_run['apply'].get('returncode')} after {apply_run['apply'].get('elapsed_s')} s")
+          rollback = steps.get("no_ack_rollback", {}).get("detail", {})
+          if isinstance(rollback, dict) and isinstance(rollback.get("apply"), dict):
+              print(f"- no_ack_rollback: exit {rollback['apply'].get('returncode')} after {rollback['apply'].get('elapsed_s')} s")
+          PY
+
       - name: Upload archive and report
         if: always()
         uses: actions/upload-artifact@v4
@@ -206,7 +332,9 @@ jobs:
           name: tokitty-${{ matrix.target }}
           path: |
             ${{ steps.names.outputs.archive }}
+            ${{ steps.names.outputs.archive }}.sha256
             ${{ runner.temp }}/report.json
+            ${{ runner.temp }}/update-report.json
 
   keychain:
     name: macOS Keychain check (dry run, #48 Task 8)
@@ -288,8 +416,25 @@ jobs:
             echo "expected 4 archives, found ${#archives[@]}: ${archives[*]}" >&2
             exit 1
           fi
+          mapfile -t checksums < <(find artifacts -type f -name 'tokitty-*.sha256')
+          if [ "${#checksums[@]}" -ne 4 ]; then
+            echo "expected 4 .sha256 files, found ${#checksums[@]}: ${checksums[*]}" >&2
+            exit 1
+          fi
+          mkdir release-assets
+          cp "${archives[@]}" release-assets/
+          for f in "${checksums[@]}"; do
+            cat "$f" >> release-assets/SHA256SUMS
+          done
+          cat release-assets/SHA256SUMS
+          (cd release-assets && sha256sum -c SHA256SUMS)
+          assets=(release-assets/*)
+          if [ "${#assets[@]}" -ne 5 ]; then
+            echo "expected 5 assets, found ${#assets[@]}: ${assets[*]}" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$GITHUB_REF_NAME" \
             --notes "Automated build of tokitty $GITHUB_REF_NAME. Unsigned, see README for the macOS first-launch steps." \
-            "${archives[@]}"
+            "${assets[@]}"
