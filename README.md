@@ -29,7 +29,7 @@ There is a burn-rate projection too. When your current pace would hit a cap befo
 
 Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS.
 
-With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unzipping an update or moving the folder to a new location, launch the new copy once before deleting the old one. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
+With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unpacking a release by hand or moving the folder to a new location, launch the new copy once before deleting the old one. The in-app update (see [Updating](#updating)) does that for you. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
 
 ### Windows
 
@@ -48,6 +48,35 @@ Move Tokitty to Applications before turning on **Start at login** or adding an a
 ### Linux
 
 Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
+
+## Updating
+
+Tokitty checks GitHub Releases for a newer version about a minute after startup and then once a day, and it never installs anything without a click. **Check for updates automatically** in the right-click menu turns the daily check off. **Check for updates** in the same menu runs one on demand, whatever that setting is.
+
+When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and, where there is one, the tray menu. On Windows the tray also shows one notification per version. The Linux tray has no notifications and macOS has no tray icon, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
+
+Install downloads the archive for your platform, checks it against the release's `SHA256SUMS`, unpacks it, and runs the new build's self-check before touching anything. On Windows and Linux the new copy goes into a new `v<version>` folder next to the current one, so `releases\v0.2.1\Tokitty` becomes `releases\v0.3.0\Tokitty`. On macOS the new bundle is swapped in at the same path, and that folder has to be writable. A standard user with Tokitty in `/Applications` gets the release page instead, and so does a bundle that isn't named `Tokitty.app`.
+
+The old copy keeps running until the new one has started and reported back. If the new copy hasn't come up after two minutes, the old one stays (on macOS the swap is undone) and says so. Hooks and Start at login follow the new copy once it starts.
+
+Tokitty keeps the copy it just replaced and deletes older copies it installed. On macOS the kept copy is a hidden `.Tokitty-<old tag>.app` beside the app. It only deletes what it installed itself, so folders you unpacked by hand are never touched, even when they sit in the same directory with a `v` name.
+
+A run from source only reports updates, and its menu item opens the release page. The updater arrived in 0.2.2. Earlier releases have no `SHA256SUMS`, so getting onto 0.2.2 is a manual download, and updates from there on can come from the menu.
+
+Each release has a `SHA256SUMS` file, and the updater refuses a download that doesn't match it. That catches a corrupted or tampered download. It does nothing about someone who can publish releases on the repo, and the builds are unsigned, so the trust is the same as downloading by hand.
+
+### Rolling back
+
+On Windows and Linux, launch the previous copy from its folder. It repoints `current` at itself, and its own check will offer the newer version again unless you turn the daily check off.
+
+On macOS, quit Tokitty and run these in a terminal, with your own tags in place of `v0.2.1` and `v0.3.0`:
+
+```bash
+mv /Applications/Tokitty.app /Applications/.Tokitty-v0.3.0.app
+mv /Applications/.Tokitty-v0.2.1.app /Applications/Tokitty.app
+```
+
+The first command parks the new version under a hidden name, the second puts the old one back. Swap the names again to go forward.
 
 ## Live activity (thinking / working / permission / done)
 
@@ -212,15 +241,17 @@ Two things override the level you picked. A pending permission prompt forces the
 
 ## Security & privacy
 
-Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, and three app-wide settings (`position.json`, `customization.json`, and `settings.json`, the latter holding "show tray icon", "surprise me" and the transparency level) are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu. Autostart's on/off state is not among them: it lives entirely in the OS's own registration (a registry value, a LaunchAgent plist, or a desktop entry, depending on platform) and never in `settings.json`, so there is no stored copy to fall out of step with what the OS will actually do at your next login.
+Tokitty only *reads* your local Claude Code OAuth credentials file: it never writes to it, never touches the refresh token, and never transmits the access token anywhere except in a single request to `api.anthropic.com`. Window position, your per-pane look/color/label choices, app-wide settings, and the update check's own state (`position.json`, `customization.json`, `settings.json`, and `update.json`, which records when the check last ran, the newest version it saw, and the folders the updater installed) are the only things Tokitty's core (non-live-activity) code persists, and all live in your OS's normal per-user config directory, never inside this repo. `customization.json` only ever contains built-in colorway/pattern names, `#rrggbb` hex strings, and label text you chose yourself through the right-click menu. Autostart's on/off state is not among them: it lives entirely in the OS's own registration (a registry value, a LaunchAgent plist, or a desktop entry, depending on platform) and never in `settings.json`, so there is no stored copy to fall out of step with what the OS will actually do at your next login.
 
 The live-activity feature above is opt-in and changes this picture only if you turn it on:
 
 - `--install-hooks` registers a small hook script in each configured Claude Code config dir's `settings.json` (merged additively into any existing hooks, with a timestamped backup of `settings.json` taken first) and copies the hook script itself to `<config-dir>/tokitty/hook_writer.py`. It's idempotent, so re-running it skips events already installed, and every entry it adds is tagged so `--uninstall-hooks` can remove exactly tokitty's entries and nothing else.
-- Claude Code invokes that script once per hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) with that event's full JSON payload on stdin, which for `PreToolUse` includes the tool's input arguments. The script only reads that payload to decide what to write. It doesn't read prompts, file contents, or transcripts from anywhere else.
+- Claude Code invokes that script once per hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `PermissionRequest`, `Stop`, `SubagentStop`, `SessionEnd`) with that event's full JSON payload on stdin, which for `PreToolUse` and `PermissionRequest` includes the tool's input arguments. The script reads that payload to decide what to write. The one other thing it reads is the end of the session's own transcript (or the subagent's, for a prompt a subagent raised), on a `PermissionRequest` while the Stream Dock is connected, to find which pending tool call the prompt belongs to. It doesn't read prompts or file contents.
 - Per session, it writes one small JSON state file to `<config-dir>/tokitty/sessions/<session_id>.json` containing just the session id, the event name, a sequence number, a timestamp, and, for tool-call and agent events, the tool name and agent id. Prompt text, tool arguments/output, and file contents are never written to that file. On `SessionEnd` the file is deleted; tokitty's own watcher also deletes state files it judges stale (no update within its timeout window) so a crashed or killed session doesn't leave the cat stuck.
-- The hook script never writes to stdout and never exits non-zero, under any input. Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing it does can ever interfere with your actual session. This is covered by tests, not just a claim.
+- The hook script never exits non-zero, under any input, and writes to stdout only to deliver an answer you gave on the Stream Dock, after matching it to that exact request. Claude Code treats hook stdout/exit code as live control signals (e.g. a non-zero exit can block the tool call), so the script is wrapped so nothing else it does can ever interfere with your actual session. This is covered by tests, not just a claim.
 - None of this activity data is transmitted anywhere; it's read locally by tokitty's own watcher to drive the sprite.
+
+The update check (see [Updating](#updating)) is the only network request that isn't about usage. About a minute after startup and then once a day, or when you choose **Check for updates**, it fetches the public release list from `api.github.com` with no credentials and a `tokitty/<version>` user agent. Install downloads the release archive and its `SHA256SUMS` from GitHub. Turning off **Check for updates automatically** stops the scheduled request.
 
 On macOS the credentials are read from the login Keychain instead of a file. Tokitty's access stays read-only there too: it never writes to the item and never touches the refresh token. One thing worth knowing before you click **Always Allow**: macOS Keychain ACLs are per-*binary*, and the binary being authorized is `/usr/bin/security`. So granting it persistent access means any process running as you can afterwards read that token by shelling out to `security`, without a prompt. That is a property of how Keychain authorization works, not something tokitty can tighten. A narrower grant would require tokitty to be a signed app bundle with a stable identity rather than a Python script.
 
@@ -278,6 +309,8 @@ export TOKITTY_CREDENTIALS=/path/to/.claude/.credentials.json
 
 For a visual check without waiting for a state to happen for real, `TOKITTY_DEBUG_STATE=<state>` (`permission`, `flopped`, `done_hop`, any state name) pins the card to that sprite with placeholder numbers and skips polling.
 
+`TOKITTY_UPDATE_API_URL` points the update check at another server instead of the GitHub releases API. It is a test hook, and the CI verifier uses it to drive an update against a local server.
+
 ## How this was built
 
 Tokitty was built with [Claude](https://claude.com/product/claude-code) (Fable 5) using a subagent-driven-development workflow: an owner session designed the spec and implementation plan, then dispatched a fresh implementer subagent per task with a reviewer subagent checking spec compliance and code quality before each task landed. Model tiers were deliberately mixed: cheaper/faster models handled the mechanical, fully-specified logic modules (credentials, API client, locking, mood/wake-sequence state machine, formatting), while a standard-tier model handled the threading/integration work. The pixel-art sprites, the tkinter window, and the animation loop were built directly by the owner session rather than delegated, since that's the part where a bit of craft mattered most. The sprite templates were generated procedurally (simple shapes stamped onto a grid) to avoid hand-counting errors, then hand-tuned and baked in as static data.
@@ -289,11 +322,12 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
 - Codex support reads Codex's rollout files, an internal format with no compatibility promise. The rules it relies on were measured against Codex CLI 0.147.0 and 0.155.0-alpha.9, and are written up in `docs/superpowers/specs/2026-09-22-codex-token-ledger-design.md`.
 - Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run: `python3-tk` isn't installed in the reference dev environment.
+- In-app updates are exercised on the release CI runners for every target, including the bundle swap on both Macs. Outside CI, the macOS swap and how SmartScreen treats an updated unsigned exe on Windows haven't been seen yet. If the new copy doesn't start, the old one keeps running and says so.
 - Sprite art is composed from three reusable 28x26 pose templates (sitting calm, sitting alert, lying down) with per-state substitutions, not a fully independent illustration per state.
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan (higher-res sprites, live activity states with a permission flag, dual-account support, cat customization) plus the backlog (ntfy notifications, tray icon, per-model bars, click-to-pet, and more). Tracked as GitHub milestones/issues on this repo.
+The five planned phases (finer sprites, live activity with a permission flag, multiple accounts, customization, screenshots) are complete, and [docs/ROADMAP.md](docs/ROADMAP.md) keeps them as a record. What's next is on the [backlog board](https://github.com/users/nickwolf/projects/1), ranked by drag order, and under the [`backlog` label](https://github.com/nickwolf/tokitty/issues?q=is%3Aissue+is%3Aopen+label%3Abacklog).
 
 ## License
 

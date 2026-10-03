@@ -16,6 +16,11 @@ MOVE_TO_APPLICATIONS = (
 
 CRASH_LOG_FILENAME = "crash.log"
 
+# Variables a PyInstaller bootloader may set for a frozen child. --self-check
+# lists their names (never values) so the release verifier can record what
+# the built bootloader really does on each runner (#77).
+ENV_DUMP_PREFIXES = ("_PYI", "PYINSTALLER", "TCL", "TK", "LD_", "DYLD_")
+
 
 class AppTranslocatedError(OSError):
     def __init__(self):
@@ -119,6 +124,12 @@ def _check_hook_runner():
     return path
 
 
+def env_names(environ=None) -> list:
+    """Sorted names of the environment variables the bootloader may have set."""
+    environ = os.environ if environ is None else environ
+    return sorted(name for name in environ if name.startswith(ENV_DUMP_PREFIXES))
+
+
 def self_check() -> int:
     """Hidden --self-check: prove a bundle carries what the app needs.
     The release CI verifier depends on this, including the state_dir
@@ -144,6 +155,7 @@ def self_check() -> int:
         "executable": sys.executable,
         "build_id": os.environ.get("TOKITTY_BUILD_ID"),
         "state_dir": str(paths.state_dir_path()),
+        "env": env_names(),
     }
     if sys.stdout is not None:
         print(json.dumps(report))

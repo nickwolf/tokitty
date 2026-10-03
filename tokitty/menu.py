@@ -23,6 +23,10 @@ class MenuItem:
     radio_selected: Optional[Callable[[], bool]] = None
     # Only the Tk menu honours this; a status line, not a command.
     enabled: bool = True
+    # Evaluated each time the menu is drawn: the label to show, or None to
+    # hide the item. Lets the tray (built once) pick up an update that is
+    # found later, which a static label could not.
+    dynamic_label: Optional[Callable[[], Optional[str]]] = None
 
 
 INSTALL_STREAMDOCK_COMMAND = "python -m tokitty --install-streamdock"
@@ -88,6 +92,11 @@ def build_menu(
     current_usage_readout: Optional[Callable[[], str]] = None,
     on_usage_readout: Optional[Callable[[str], None]] = None,
     on_set_budget: Optional[Callable[[], None]] = None,
+    update_available_label: Optional[Callable[[], Optional[str]]] = None,
+    on_install_update: Optional[Callable[[], None]] = None,
+    on_check_updates: Optional[Callable[[], None]] = None,
+    update_check_enabled: Optional[Callable[[], bool]] = None,
+    on_toggle_update_check: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
     def radio_submenu(options, current, on_select) -> List[MenuItem]:
         return [
@@ -109,7 +118,14 @@ def build_menu(
                  radio_selected=(lambda n=n: current_pattern() == n))
         for n in patterns
     ]
-    items: List[MenuItem] = [
+    items: List[MenuItem] = []
+    if update_available_label is not None and on_install_update is not None:
+        # The getter returns None while no newer release is known, which
+        # hides the item in both menus.
+        items.append(MenuItem(
+            label=update_available_label() or "", action=on_install_update,
+            dynamic_label=update_available_label))
+    items += [
         MenuItem(label="Colorway", submenu=colorway_items),
         MenuItem(label="Pattern", submenu=pattern_items),
     ]
@@ -162,6 +178,12 @@ def build_menu(
         items.append(MenuItem(label="Set budget…", action=on_set_budget))
     if on_toggle_surprise is not None and surprise_me is not None:
         items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
+    if on_check_updates is not None:
+        items.append(MenuItem(label="Check for updates", action=on_check_updates))
+    if on_toggle_update_check is not None and update_check_enabled is not None:
+        items.append(MenuItem(
+            label="Check for updates automatically", action=on_toggle_update_check,
+            checkbox=update_check_enabled))
     items.append(MenuItem(separator=True))
     items.append(MenuItem(label="Exit", action=on_quit))
     return items

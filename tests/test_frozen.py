@@ -2,6 +2,7 @@
 windowed crash log / --self-check (#48)."""
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -126,6 +127,34 @@ def test_self_check_tk_root_when_env_var_set(monkeypatch, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["checks"]["tk_root"]["ok"] is True
     assert report["checks"]["tk_root"]["detail"]
+
+
+def test_self_check_reports_env_names_not_values(monkeypatch, capsys):
+    for name in list(os.environ):
+        if name.startswith(frozen.ENV_DUMP_PREFIXES):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "secret-value-1")
+    monkeypatch.setenv("TCL_LIBRARY", "secret-value-2")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "secret-value-3")
+    monkeypatch.setenv("DYLD_LIBRARY_PATH", "secret-value-4")
+    monkeypatch.setenv("TK_LIBRARY", "secret-value-5")
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+    monkeypatch.setenv("HOME_UNRELATED", "x")
+    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    # The made-up TCL_LIBRARY would break a real Tk check on Windows.
+    monkeypatch.setattr(frozen, "_check_tkinter", lambda: "8.6")
+    assert frozen.self_check() == 0
+    out = capsys.readouterr().out
+    report = json.loads(out)
+    assert report["env"] == [
+        "DYLD_LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+        "PYINSTALLER_RESET_ENVIRONMENT",
+        "TCL_LIBRARY",
+        "TK_LIBRARY",
+        "_PYI_APPLICATION_HOME_DIR",
+    ]
+    assert "secret-value" not in out
 
 
 def test_self_check_fails_without_prices(monkeypatch, tmp_path, capsys):

@@ -118,6 +118,23 @@ def _no_real_autostart_registration(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_update_check(monkeypatch):
+    """The daily update check must never reach api.github.com from a test.
+
+    run_gui builds an UpdateChecker whose default fetch is the module's own
+    fetch_releases, looked up at call time, so this one patch covers it.
+    Tests that exercise the checker pass their own fetch.
+    """
+    from tokitty import update_check
+    from tokitty.updater import UpdateCheckError
+
+    def refuse():
+        raise UpdateCheckError("tests never touch the network")
+
+    monkeypatch.setattr(update_check, "fetch_releases", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_state_dir_for_hooks(monkeypatch, tmp_path_factory):
     """Keep hook installs off the developer's real Tokitty state dir.
 

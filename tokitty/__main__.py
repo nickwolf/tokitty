@@ -32,7 +32,7 @@ from tokitty.display import (
 )
 from tokitty.distro_probe import RunningDistroProbe
 from tokitty.hooks_install import retry_pending_hook_op
-from tokitty.lock import LockAcquisitionError, SingleInstanceLock
+from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.paths import get_state_dir
 from tokitty.pose import resolve_pose
@@ -68,6 +68,10 @@ from tokitty import sprites
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 UI_REFRESH_MS = 500
+# The ack waits for the window to be mapped, but not forever: a window manager
+# that never reports a map must not strand the handover.
+ACK_MAP_POLL_MS = 50
+ACK_MAP_TIMEOUT = 5.0
 
 
 def debug_print() -> int:
@@ -376,18 +380,28 @@ def provider_tag_kind(provider, providers) -> Optional[str]:
     return provider.kind
 
 
-def run_gui() -> int:
+def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False) -> int:
     import tkinter as tk
 
+    from tokitty import update_controller
     from tokitty.ui import BG_COLOR, TokittyWindow
 
     state_dir = get_state_dir()
     lock = SingleInstanceLock(state_dir)
     try:
-        lock.acquire()
+        # The old copy releases the lock as it hands over, so a new copy
+        # started by an update waits for it instead of giving up.
+        if after_update_token:
+            acquire_with_retry(lock, 30)
+        else:
+            lock.acquire()
     except LockAcquisitionError:
-        print("Tokitty is already running.", file=sys.stderr)
+        if not after_update_token:
+            print("Tokitty is already running.", file=sys.stderr)
         return 1
+    if after_update_token and update_controller.skips_ack(os.environ):
+        lock.release()
+        return 0
 
     from tokitty.accounts import env_conflict_warning, load_accounts
 
@@ -1030,6 +1044,39 @@ def run_gui() -> int:
 
     window.on_edit_streamdock_presets = edit_streamdock_presets
 
+    update_host = update_controller.TkHost(
+        root,
+        [window.root, window.content],
+        tray,
+        lock,
+        state_dir,
+        autostart_backend,
+        quiet=apply_update,
+        tray_enabled=lambda: load_settings(state_dir).tray_enabled,
+    )
+    updates = update_controller.UpdateController(state_dir, update_host)
+    from tokitty.update_check import UpdateChecker, announcer
+    from tokitty.update_dialog import UpdateUi
+
+    # Plain-Python shadow state again: the tray menu reads it on pystray's thread.
+    update_check_state = {"on": settings.update_check}
+    checker = UpdateChecker(
+        state_dir, updates.running, enabled=lambda: update_check_state["on"],
+        on_available=announcer(state_dir, tray),
+    )
+    update_ui = UpdateUi(root, checker, updates)
+
+    def toggle_update_check() -> None:
+        update_check_state["on"] = not update_check_state["on"]
+        update_settings(state_dir, update_check=update_check_state["on"])
+
+    window.update_available_label = checker.menu_label
+    window.on_install_update = update_ui.install
+    window.on_check_updates = update_ui.check_now
+    window.update_check_enabled = lambda: update_check_state["on"]
+    window.on_toggle_update_check = toggle_update_check
+    apply_exit = {"code": 1}
+
     hidden_accounts = list(settings.streamdock_hidden_accounts)
 
     def streamdock_account_toggles() -> list:
@@ -1061,6 +1108,8 @@ def run_gui() -> int:
     window.streamdock_account_toggles = streamdock_account_toggles
 
     def tick():
+        updates.tick()
+        checker.tick()
         # Consume run_discovery's result here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
         # be done from run_discovery itself via root.after().
@@ -1119,7 +1168,7 @@ def run_gui() -> int:
                 deck_views.sync()
             except Exception as exc:
                 print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
-        root.after(UI_REFRESH_MS, tick)
+        root.after(100 if updates.busy else UI_REFRESH_MS, tick)
 
     for unit in units:
         unit["poller"].start()
@@ -1128,6 +1177,34 @@ def run_gui() -> int:
     if tray.available and settings.tray_enabled:
         tray.start()
     root.after(UI_REFRESH_MS, tick)
+    updates.startup(frozen=bool(getattr(sys, "frozen", False)))
+    if after_update_token:
+        # Inside the mainloop and once the window is mapped, so the first
+        # window is up when the old copy hears from us.
+        import time
+
+        ack_deadline = time.monotonic() + ACK_MAP_TIMEOUT
+
+        def send_ack() -> None:
+            from tokitty.update_swap import write_ack
+
+            if not window.root.winfo_ismapped() and time.monotonic() < ack_deadline:
+                root.after(ACK_MAP_POLL_MS, send_ack)
+                return
+            try:
+                write_ack(state_dir, after_update_token)
+            except OSError as exc:
+                print(f"tokitty: update: writing the ack: {exc}", file=sys.stderr)
+
+        root.after(0, send_ack)
+    if apply_update:
+        def on_apply_done(result) -> None:
+            apply_exit["code"] = {"installed": 0, "rolled_back": 2}.get(result.outcome, 1)
+            if result.outcome != "installed":
+                print(f"tokitty: update: {result.message}", file=sys.stderr)
+                update_host.finish()
+
+        updates.start_apply_newest(on_apply_done)
 
     try:
         root.mainloop()
@@ -1142,7 +1219,7 @@ def run_gui() -> int:
             unit["usage"].stop()
         lock.release()
 
-    return 0
+    return apply_exit["code"] if apply_update else 0
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -1151,6 +1228,10 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.frozen import self_check
 
         return self_check()
+    if "--check-for-update" in argv:
+        from tokitty.updater import check_for_update_cli
+
+        return check_for_update_cli()
     if "--debug-print" in argv:
         return debug_print()
     if "--install-hooks" in argv:
@@ -1177,6 +1258,17 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.autostart import uninstall_autostart
 
         return uninstall_autostart()
+    token = None
+    if "--after-update" in argv:
+        from tokitty.update_swap import valid_token
+
+        index = argv.index("--after-update") + 1
+        token = argv[index] if index < len(argv) else None
+        if not valid_token(token):
+            print("tokitty: --after-update needs a token", file=sys.stderr)
+            return 2
+    if token or "--apply-update" in argv:
+        return run_gui(after_update_token=token, apply_update="--apply-update" in argv)
     return run_gui()
 
 

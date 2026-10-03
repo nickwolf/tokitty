@@ -1,3 +1,5 @@
+import pytest
+
 from tokitty.menu import build_menu
 
 
@@ -192,6 +194,70 @@ def test_streamdock_presets_item_only_when_installed():
     missing = streamdock_menu_item("not_installed", lambda: None, lambda: None)
     assert "New-session presets…" not in [i.label for i in missing.submenu]
     assert "New-session presets…" not in [i.label for i in streamdock_menu_item("connected", lambda: None).submenu]
+
+
+def _update_seams(label=lambda: "Update to v0.3.0…"):
+    calls = {"install": 0, "check": 0, "toggle": 0}
+    state = {"auto": True}
+    return dict(
+        update_available_label=label,
+        on_install_update=lambda: calls.__setitem__("install", calls["install"] + 1),
+        on_check_updates=lambda: calls.__setitem__("check", calls["check"] + 1),
+        update_check_enabled=lambda: state["auto"],
+        on_toggle_update_check=lambda: calls.__setitem__("toggle", calls["toggle"] + 1),
+    ), calls, state
+
+
+def test_update_items_sit_first_and_above_the_exit_separator():
+    seams, calls, state = _update_seams()
+    kwargs, _, _ = _kwargs(**seams)
+    items = build_menu(**kwargs)
+    labels = [i.label for i in items if not i.separator]
+    assert labels == ["Update to v0.3.0…", "Colorway", "Pattern", "Customize…", "Rename…", "Refresh now",
+                      "Always in front", "Check for updates", "Check for updates automatically", "Exit"]
+    assert items[-2].separator and items[-1].label == "Exit"
+    by_label = {i.label: i for i in items if not i.separator}
+    by_label["Update to v0.3.0…"].action()
+    by_label["Check for updates"].action()
+    by_label["Check for updates automatically"].action()
+    assert calls == {"install": 1, "check": 1, "toggle": 1}
+    assert by_label["Check for updates automatically"].checkbox() is True
+    state["auto"] = False
+    assert by_label["Check for updates automatically"].checkbox() is False
+
+
+def test_update_item_label_follows_the_getter():
+    current = {"label": None}
+    seams, _, _ = _update_seams(label=lambda: current["label"])
+    kwargs, _, _ = _kwargs(**seams)
+    item = build_menu(**kwargs)[0]
+    assert item.dynamic_label() is None
+    current["label"] = "Update to v0.4.0…"
+    assert item.dynamic_label() == "Update to v0.4.0…"
+
+
+@pytest.mark.parametrize("drop", [
+    ["update_available_label"], ["on_install_update"],
+    ["update_available_label", "on_install_update"],
+])
+def test_update_item_needs_both_its_seams(drop):
+    seams, _, _ = _update_seams()
+    for key in drop:
+        del seams[key]
+    kwargs, _, _ = _kwargs(**seams)
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert labels[0] == "Colorway"
+    assert not any(label.startswith("Update to") for label in labels)
+
+
+def test_check_items_are_independent_and_the_checkbox_needs_both_halves():
+    seams, _, _ = _update_seams()
+    kwargs, _, _ = _kwargs(on_check_updates=seams["on_check_updates"])
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert "Check for updates" in labels and "Check for updates automatically" not in labels
+    kwargs, _, _ = _kwargs(on_toggle_update_check=seams["on_toggle_update_check"])
+    labels = [i.label for i in build_menu(**kwargs) if not i.separator]
+    assert "Check for updates automatically" not in labels and "Check for updates" not in labels
 
 
 def test_streamdock_account_switches_only_when_installed():

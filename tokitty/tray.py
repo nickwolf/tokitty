@@ -48,6 +48,11 @@ def _default_icon_factory(image, menu_model, wrap, title):
         for it in items:
             if it.separator:
                 entries.append(pystray.Menu.SEPARATOR)
+            elif it.dynamic_label is not None:
+                # Text and visibility are re-read on every update_menu().
+                entries.append(pystray.MenuItem(
+                    (lambda i, g=it.dynamic_label: g() or ""), wrap(it.action),
+                    visible=(lambda i, g=it.dynamic_label: bool(g()))))
             elif it.submenu is not None:
                 entries.append(pystray.MenuItem(it.label, pystray.Menu(*to_entries(it.submenu))))
             elif it.radio_selected is not None:
@@ -142,6 +147,21 @@ class TrayManager:
             # Same posture as the rest of this class: a tray that fails
             # to refresh must never take the app down with it.
             pass
+
+    def notify(self, title: str, message: str) -> bool:
+        """Show a tray notification. True only if one was handed to the
+        backend: pystray's xorg and darwin backends have no notifications,
+        and there is nothing to show with no icon running."""
+        icon = self._icon
+        if icon is None or not getattr(icon, "HAS_NOTIFICATION", False):
+            return False
+        try:
+            icon.notify(message, title)
+        except Exception:
+            # Same posture as refresh(): a failed notification must never
+            # take the app down with it.
+            return False
+        return True
 
     def stop(self) -> None:
         if self._icon is not None:

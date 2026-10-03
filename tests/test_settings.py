@@ -269,6 +269,20 @@ def test_presets_roundtrip(tmp_path):
     assert load_settings(tmp_path).streamdock_presets == presets
 
 
+def test_update_check_default_true(tmp_path):
+    assert load_settings(tmp_path).update_check is True
+
+
+def test_update_check_roundtrip(tmp_path):
+    save_settings(tmp_path, Settings(update_check=False))
+    assert load_settings(tmp_path).update_check is False
+
+
+def test_update_check_non_bool_defaults(tmp_path):
+    (tmp_path / "settings.json").write_text('{"update_check": "no"}', encoding="utf-8")
+    assert load_settings(tmp_path).update_check is True
+
+
 def test_hidden_accounts_default_empty(tmp_path):
     assert load_settings(tmp_path).streamdock_hidden_accounts == []
 
