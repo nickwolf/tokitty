@@ -791,10 +791,22 @@ class TestToolUseLookup:
         assert capsys.readouterr().out == ""
         assert pending_files(env) == []
 
-    def test_lookup_retries_five_times_100ms_apart(self, env):
+    def test_lookup_keeps_trying_for_five_seconds_100ms_apart(self, env):
         env.write_transcript(tool_use("toolu_X", inp={"command": "other"}))
         env.wait()
-        assert env.clock.sleeps == [0.1] * 4
+        assert env.clock.sleeps == [0.1] * 49
+
+    def test_lookup_finds_line_written_after_400ms(self, env):
+        # Claude Code 2.1.287 writes the tool_use about 0.4 s after the hook starts.
+        env.write_transcript()
+
+        def late(clock):
+            if len(clock.sleeps) == 5:
+                env.append_transcript(tool_use("toolu_A"))
+                env.decide()
+
+        env.clock.on_sleep = late
+        assert env.wait() == {"behavior": "allow"}
 
     def test_lookup_finds_line_written_late(self, env):
         env.write_transcript()
