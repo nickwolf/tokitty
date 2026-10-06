@@ -51,6 +51,8 @@ Verified with throwaway sessions and a `PermissionRequest` command hook that sle
 
 Re-checked on Claude Code 2.1.287 on 2026-10-01: the `PermissionRequest` payload still had exactly the same eight keys and no `tool_use_id`, and the transcript `tool_use` input was identical to the payload `tool_input`, including the `description` field, so matching on name and input is sound.
 
+Re-measured on Claude Code 2.1.287 on 2026-10-06 in an auto-mode session: the order in finding 7 has flipped. The assistant `tool_use` record reached the transcript 0.40 to 0.44 s after the `PermissionRequest` hook started (four prompts, timed from inside the hook), so the hook's original 0.5 s lookup missed it about half the time and the deck showed the permission flag with no request behind it. The lookup now keeps trying for 5 s.
+
 Always, measured on Claude Code 2.1.287 on 2026-10-02 with a throwaway session started with `--setting-sources project,local --permission-mode default` and a logging `PermissionRequest` hook:
 
 8. The payload now also carries `scratchpad_dir` and `permission_suggestions`, still no `tool_use_id`. The suggestions use the array shape: for `python3 -c 'print(6*7)'` it was `[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"python3 -c 'print(6*7)'"}],"behavior":"allow","destination":"localSettings"}]`; for a WebFetch of `https://example.com/` it was `domain:example.com`; for `touch` and Write in the project it offered `addDirectories` and `setMode acceptEdits` with destination `session`.
