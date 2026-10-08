@@ -878,41 +878,23 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         usage_state["readout"] = value
         update_settings(state_dir, usage_readout=value)
 
-    def set_budget(pane_index: int) -> None:
-        # Imported here, not at module scope: --debug-print must keep
-        # working on a machine with no GUI toolkit installed.
-        from tkinter import messagebox, simpledialog
+    def budget_for_pane(pane_index: int) -> Optional[float]:
+        from tokitty.settings import budget_for
 
-        from tokitty.settings import budget_for, with_budget
+        return budget_for(load_settings(state_dir), units[pane_index]["key"], usage_state["window"])
 
-        unit = units[pane_index]
-        window_key = usage_state["window"]
-        current = budget_for(load_settings(state_dir), unit["key"], window_key)
-        label = {"24h": "24 hours", "7d": "7 days", "month": "this month"}[window_key]
-        # askstring, not askfloat: askfloat cannot tell a cancel from a
-        # submitted blank, and clearing a budget has to be expressible.
-        answer = simpledialog.askstring(
-            "Set budget",
-            f"Budget in dollars for {label}\n(leave blank to clear):",
-            initialvalue="" if current is None else f"{current:g}",
-            parent=root,
-        )
-        if answer is None:
-            return
-        answer = answer.strip()
-        amount = None
-        if answer:
-            try:
-                amount = float(answer.lstrip("$"))
-            except ValueError:
-                messagebox.showerror("Set budget", f"'{answer}' is not a number.", parent=root)
-                return
-            if amount <= 0:
-                messagebox.showerror("Set budget", "Enter an amount greater than zero.", parent=root)
-                return
-        budgets = with_budget(load_settings(state_dir), unit["key"], window_key, amount)
+    def set_budget_for_pane(pane_index: int, text: str) -> Optional[str]:
+        """Save (or clear, on blank) one pane's budget for the current usage
+        window. Returns an error message, or None on success."""
+        from tokitty.settings import parse_budget, with_budget
+
+        amount, error = parse_budget(text)
+        if error is not None:
+            return error
+        budgets = with_budget(load_settings(state_dir), units[pane_index]["key"], usage_state["window"], amount)
         usage_state["budgets"] = budgets
         update_settings(state_dir, usage_budgets=budgets)
+        return None
 
     window.view_mode = lambda: usage_state["view"]
     window.on_view_mode = set_view_mode
@@ -920,7 +902,12 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     window.on_usage_window = set_usage_window
     window.usage_readout = lambda: usage_state["readout"]
     window.on_usage_readout = set_usage_readout
-    window.on_set_budget = set_budget
+    window.budget_for_pane = budget_for_pane
+    window.set_budget_for_pane = set_budget_for_pane
+
+    from tokitty.settings_ui import SettingsWindow
+
+    window.open_settings = lambda pane_index: SettingsWindow.open(window, pane_index)
 
     if settings.surprise_me:
         for index in range(len(units)):

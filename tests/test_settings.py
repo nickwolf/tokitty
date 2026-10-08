@@ -303,3 +303,18 @@ def test_hidden_accounts_keeps_valid_strings_once(tmp_path):
         json.dumps({"streamdock_hidden_accounts": ["a", "", "  ", 3, None, "a", "b"]})
     )
     assert load_settings(tmp_path).streamdock_hidden_accounts == ["a", "b"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("", None), ("   ", None), ("12.5", 12.5), ("$12.50", 12.5), (" $ 7 ", 7.0), ("1e2", 100.0),
+])
+def test_parse_budget_accepts(raw, expected):
+    from tokitty.settings import parse_budget
+    assert parse_budget(raw) == (expected, None)
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "$-3", "abc", "inf", "-inf", "nan", "$nan", "1,5"])
+def test_parse_budget_rejects(raw):
+    from tokitty.settings import parse_budget
+    amount, error = parse_budget(raw)
+    assert amount is None and error

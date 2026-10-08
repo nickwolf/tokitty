@@ -1199,6 +1199,52 @@ def test_live_customization_change_preserves_manager_added_key(tmp_path, monkeyp
     assert stored["acct-v1-added"].label == "Added in manager"
 
 
+@pytest.mark.gui
+def test_budget_seams_write_slug_and_current_window(tmp_path, monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tokitty import __main__ as main_module
+    from tokitty import ui
+    from tokitty.settings import Settings, load_settings, save_settings
+
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False))
+    monkeypatch.setattr(main_module, "get_state_dir", lambda: tmp_path)
+    holder = {}
+    real_window = ui.TokittyWindow
+
+    class CapturingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["window"] = self
+
+    monkeypatch.setattr(ui, "TokittyWindow", CapturingWindow)
+
+    def _mainloop(self):
+        w = holder["window"]
+        assert not hasattr(w, "on_set_budget")
+        assert w.budget_for_pane(0) is None
+        window_key = w.usage_window()
+        assert w.set_budget_for_pane(0, "$12.50") is None
+        assert w.budget_for_pane(0) == 12.5
+        slug_budgets = load_settings(tmp_path).usage_budgets
+        assert list(slug_budgets.values()) == [{window_key: 12.5}]
+        for bad in ("0", "-1", "abc", "inf", "nan"):
+            assert w.set_budget_for_pane(0, bad)
+        assert w.budget_for_pane(0) == 12.5
+        other = "24h" if window_key != "24h" else "7d"
+        w.on_usage_window(other)
+        assert w.budget_for_pane(0) is None
+        assert w.set_budget_for_pane(0, "3") is None
+        assert list(load_settings(tmp_path).usage_budgets.values()) == [{window_key: 12.5, other: 3.0}]
+        assert w.set_budget_for_pane(0, "") is None
+        w.on_usage_window(window_key)
+        assert w.set_budget_for_pane(0, "  ") is None
+        assert w.budget_for_pane(0) is None
+        assert load_settings(tmp_path).usage_budgets == {}
+
+    monkeypatch.setattr(tk.Tk, "mainloop", _mainloop)
+    assert main_module.run_gui() == 0
+
+
 class _FakeToggleBackend:
     def __init__(self, registered=False):
         self.registered = registered

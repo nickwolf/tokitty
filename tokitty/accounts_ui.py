@@ -1,7 +1,5 @@
 """The persistent Accounts manager dialog: add/rename/remove accounts
-without hand-editing accounts.json. Modeled on
-TokittyWindow._open_customize_dialog (ui.py:429-463) for the Toplevel
-shape, and _open_rename_dialog (ui.py:465-471) for simpledialog use.
+without hand-editing accounts.json.
 See docs/superpowers/specs/2026-08-24-accounts-setup-ui-design.md.
 """
 from __future__ import annotations

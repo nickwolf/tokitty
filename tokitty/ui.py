@@ -9,7 +9,6 @@ import math
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
-from tkinter import colorchooser, simpledialog
 from typing import Callable, Dict, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
@@ -571,7 +570,11 @@ class TokittyWindow:
         self.on_usage_window: Optional[Callable[[str], None]] = None
         self.usage_readout: Optional[Callable[[], str]] = None
         self.on_usage_readout: Optional[Callable[[str], None]] = None
-        self.on_set_budget: Optional[Callable[[int], None]] = None
+        # Per-pane budget for the current usage window: the getter returns
+        # the amount (or None), the setter takes the entry text and returns
+        # an error message or None.
+        self.budget_for_pane: Optional[Callable[[int], Optional[float]]] = None
+        self.set_budget_for_pane: Optional[Callable[[int, str], Optional[str]]] = None
         # Updates. The label getter reads plain-Python state and returns
         # None while no newer release is known.
         self.update_available_label: Optional[Callable[[], Optional[str]]] = None
@@ -876,55 +879,6 @@ class TokittyWindow:
     def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
         if self.on_customization_changed is not None:
             self.on_customization_changed(pane_index, field, value)
-
-    def _open_customize_dialog(self, pane_index: int) -> None:
-        pane = self.panes[pane_index]
-        label = pane._label or f"Cat {pane_index + 1}"
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title(f"Customize {label}")
-        dialog.transient(self.root)
-        dialog.configure(bg=BG_COLOR)
-        dialog.resizable(False, False)
-
-        rows = [
-            ("Coat base", "coat_base"),
-            ("Coat shading", "coat_shade"),
-            ("Card background", "card_bg"),
-            ("Bar color", "bar_fill"),
-        ]
-        for row_index, (row_label, field) in enumerate(rows):
-            tk.Label(dialog, text=row_label, fg=FG_COLOR, bg=BG_COLOR).grid(
-                row=row_index, column=0, sticky="w", padx=8, pady=6
-            )
-            tk.Button(
-                dialog,
-                text="Choose…",
-                command=lambda f=field: self._pick_color(pane_index, dialog, f),
-            ).grid(row=row_index, column=1, padx=8, pady=6)
-
-        button_row = len(rows)
-        tk.Button(
-            dialog,
-            text="Reset to preset",
-            command=lambda: self._fire_customization_changed(pane_index, "reset", None),
-        ).grid(row=button_row, column=0, padx=8, pady=(4, 10))
-        tk.Button(dialog, text="Close", command=dialog.destroy).grid(
-            row=button_row, column=1, padx=8, pady=(4, 10)
-        )
-
-    def _open_rename_dialog(self, pane_index: int) -> None:
-        pane = self.panes[pane_index]
-        result = simpledialog.askstring(
-            "Rename", "Cat name:", parent=self.root, initialvalue=pane._label
-        )
-        if result is not None:
-            self._fire_customization_changed(pane_index, "label", result)
-
-    def _pick_color(self, pane_index: int, dialog: tk.Toplevel, field: str) -> None:
-        _rgb, hex_color = colorchooser.askcolor(parent=dialog)
-        if hex_color:
-            self._fire_customization_changed(pane_index, field, hex_color)
 
     def _on_refresh_now(self) -> None:
         if self.on_refresh_requested is not None:
