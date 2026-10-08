@@ -4,7 +4,7 @@
 
 - The walkthrough replaces the first-run auto-open of the Accounts dialog. `resolve_first_run_action`, `ACTION_ACCOUNTS`, `ACTION_USAGE_SETUP`, `maybe_auto_open` and the `discovery_result["consumed"]` handshake in `tick()` go away. (The issue calls the old path `should_auto_open`; that name was already replaced by `resolve_first_run_action` in `tokitty/startup.py`.)
 - It never shows for someone who has run tokitty before, including on the update that ships it.
-- Every step can be skipped, and skipping leaves tokitty exactly as a launch of 0.3.0 would: no `accounts.json` written, no hooks installed.
+- Every step can be skipped. Skip means "skip the rest": each step applies only on its own button (step 2's reads "Add 2 accounts", step 3's Install buttons), so Skip never undoes what the user already confirmed and never does anything more. Skipping before step 2's button leaves tokitty exactly as a launch of 0.3.0 would: no `accounts.json`, no hooks. (Decided by Nick 2026-10-08, over an all-or-nothing Finish.)
 - Hook installs go through `apply_hook_operation` under `hook_guard`, on worker threads that never call Tk, the way Settings ▸ Accounts does.
 - It is drawn with the Settings window's kit (`settings_widgets.Kit`, its colours, fonts, pills and buttons). Any cat in it comes from `tokitty.sprites`.
 
@@ -51,7 +51,7 @@ Discovery, all on the worker:
 - WSL (Windows only): `find_all_wsl_credentials()` and `find_all_wsl_claude_dirs()` through the process's `WslCredentialsCache` (`all_matches()` and the memoized `claude_dirs()` that #87 adds, so #87 merges first), merged by `(distro, config dir)`. This is more than `run_discovery` does today: it only sweeps for transcripts when it found no credentials, and the walkthrough runs both sweeps so that a distro with transcripts but no sign-in still shows up. Both run once per process and on the worker, behind the spinner. Tests count the actual `wsl.exe` probes.
 - Codex: `discover_local_codex_home([])`.
 
-Every row starts checked. Next writes `accounts.json` with the checked rows, the same way the Accounts dialog's Add does (`assign_identity_slug` + `save_identity_history`, `absorb_implicit_default` for the first Claude row so the default look carries over, a `random_look` for the rest), but through `save_accounts` alone, with no hook install. That is a new helper next to `apply_account_mutation`, because today the only save path installs hooks in the same operation and the walkthrough asks about hooks on the next step.
+Every row starts checked. The primary button reads "Add N accounts" and writes `accounts.json` with the checked rows, the same way the Accounts dialog's Add does (`assign_identity_slug` + `save_identity_history`, `absorb_implicit_default` for the first Claude row so the default look carries over, a `random_look` for the rest), but through `save_accounts` alone, with no hook install. That is a new helper next to `apply_account_mutation`, because today the only save path installs hooks in the same operation and the walkthrough asks about hooks on the next step.
 
 Nothing found: the step says so, says Claude Code or Codex need to be installed and signed in once, and offers Skip. A single row is still shown, so the user sees what tokitty will watch.
 
@@ -79,7 +79,7 @@ The brand cat in its content pose, "You're set", and: right-click any cat for Se
 - Skip on Accounts (or uncheck everything): no `accounts.json`.
 - Skip on Live activity: accounts from step 2 stay, no hooks are installed. Same as using Manage accounts… with a provider that has no hooks, and fixable from Settings ▸ Accounts.
 - Closing the window is Skip.
-- A worker still running when the user skips (discovery or an install) is left to finish on its daemon thread. Its result is dropped (`Poller.cancel`). An install that completes after Skip is fine: it went through the guard and the journal like any other.
+- Skip and the close button are disabled while a hook install is in flight (it takes a second or two), so nothing gets installed after the user skipped. Discovery is read-only, so Skip stays enabled during it; its worker is left to finish on its daemon thread and its result is dropped (`Poller.cancel`).
 
 ## macOS
 
