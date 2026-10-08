@@ -129,6 +129,27 @@ def resolve_activity_sessions(config_dir: Optional[str] = None, credentials=None
     return sessions_dir, distro
 
 
+def _native_config_dir() -> Optional[str]:
+    """Config dir of natively available credentials, or None.
+
+    Mirrors resolve_credentials_source's order on Windows: the
+    TOKITTY_CREDENTIALS override (whose parent may be a wsl.localhost UNC
+    path), then ~/.claude/.credentials.json.
+    """
+    from tokitty.credentials import _home_relative_source, _override_source
+
+    override = _override_source()
+    if override is not None:
+        # Split by hand: a UNC string is not a parseable path on a posix host.
+        raw = str(override.path)
+        cut = max(raw.rfind("\\"), raw.rfind("/"))
+        return raw[:cut] if cut > 0 else str(Path("."))
+    home_relative = _home_relative_source()
+    if home_relative is not None:
+        return str(home_relative.path.parent)
+    return None
+
+
 def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
     """(projects_dir, distro_name) for the transcript scanner.
 
@@ -159,6 +180,14 @@ def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
         wsl_config_dir_from_credentials,
     )
 
+    # Native credentials win, same order as resolve_credentials_source, so
+    # the ledger and the limits read the same install and a launch that
+    # already has credentials never wakes a WSL distro (issue #87).
+    native_dir = _native_config_dir()
+    if native_dir is not None:
+        root, distro = _config_root_from(native_dir)
+        return _join(root, "projects"), distro
+
     try:
         if credentials is not None:
             distro, wsl_credentials_path = credentials.single()
@@ -166,7 +195,11 @@ def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
             distro, wsl_credentials_path = find_wsl_credentials()
     except CredentialsError:
         try:
-            matches = find_all_wsl_claude_dirs()
+            matches = (
+                credentials.claude_dirs()
+                if credentials is not None
+                else find_all_wsl_claude_dirs()
+            )
         except CredentialsError:
             matches = []
         if len(matches) != 1:

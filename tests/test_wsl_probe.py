@@ -326,3 +326,47 @@ def test_credentials_cache_disabled_never_sweeps():
     with pytest.raises(CredentialsError):
         cache.single()
     assert sweeps["n"] == 0
+
+
+def test_credentials_cache_claude_dirs_sweeps_once():
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_dirs():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude")]
+
+    cache = WslCredentialsCache(scan=lambda: [], claude_dirs_scan=fake_dirs)
+    assert cache.claude_dirs() == [("Ubuntu", "/home/n/.claude")]
+    assert cache.claude_dirs() == [("Ubuntu", "/home/n/.claude")]
+    assert sweeps["n"] == 1
+
+
+def test_credentials_cache_claude_dirs_disabled_never_sweeps():
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_dirs():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude")]
+
+    cache = WslCredentialsCache(enabled=False, claude_dirs_scan=fake_dirs)
+    assert cache.claude_dirs() == []
+    assert sweeps["n"] == 0
+
+
+def test_credentials_cache_claude_dirs_error_gives_empty_and_no_retry():
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    sweeps = {"n": 0}
+
+    def fake_dirs():
+        sweeps["n"] += 1
+        raise CredentialsError("wsl.exe not found")
+
+    cache = WslCredentialsCache(claude_dirs_scan=fake_dirs)
+    assert cache.claude_dirs() == []
+    assert cache.claude_dirs() == []
+    assert sweeps["n"] == 1

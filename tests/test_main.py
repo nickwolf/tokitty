@@ -1108,6 +1108,19 @@ def test_run_discovery_skips_wsl_scan_when_native_credentials_exist(
         "tokitty.wsl_probe.find_all_wsl_credentials",
         lambda: scans.append(1) or [],
     )
+    # Any WSL sweep at all (credentials or transcripts, Tk thread or
+    # discovery thread) goes through list_wsl_distros first. A real
+    # wsl.exe that hangs stalls these tests for 10 s and, in the app, the
+    # window at launch (issue #87).
+    distro_listings = []
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.list_wsl_distros",
+        lambda *a, **k: distro_listings.append(1) or [],
+    )
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_claude_dirs",
+        lambda *a, **k: distro_listings.append(1) or [],
+    )
     monkeypatch.setattr(
         main_module,
         "retry_pending_hook_op",
@@ -1126,6 +1139,7 @@ def test_run_discovery_skips_wsl_scan_when_native_credentials_exist(
     assert not discovery_threads[0].is_alive()
 
     assert scans == []
+    assert distro_listings == []
     assert retries == [tmp_path]
 
 
@@ -1531,13 +1545,16 @@ def test_usage_setup_first_run_opens_the_dialog_focused_on_usage(tmp_path, monke
     assert calls == [True]
 
 
-def test_both_resolvers_share_one_credential_sweep(monkeypatch):
+def test_both_resolvers_share_one_credential_sweep(tmp_path, monkeypatch):
     # Issue #52: a launch with no accounts.json used to sweep every WSL
     # distro once per caller. Both resolvers now read the same cache, so
     # whichever runs first pays for the only sweep there is.
     from tokitty.wsl_probe import WslCredentialsCache
 
     monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    # No native credentials, whatever this machine happens to have.
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "nohome"))
     sweeps = {"n": 0}
 
     def fake_scan():
@@ -2048,3 +2065,69 @@ def test_run_gui_wires_the_update_menu_seams_and_the_toggle_saves_the_setting(tm
 
     assert seen["labels"][0] == ""  # the update item is present and hidden
     assert (seen["before"], seen["after"], seen["saved"], seen["restored"]) == (True, False, False, True)
+
+
+def test_projects_dir_uses_env_override_dir_without_sweeping(tmp_path, monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    creds = tmp_path / "cfg" / ".credentials.json"
+    monkeypatch.setenv("TOKITTY_CREDENTIALS", str(creds))
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.list_wsl_distros",
+        lambda *a, **k: pytest.fail("native credentials must not sweep WSL"),
+    )
+    projects_dir, distro = resolve_projects_dir(None, credentials=_NoSweepCache())
+    assert projects_dir.replace("\\", "/") == str(tmp_path / "cfg" / "projects").replace("\\", "/")
+    assert distro is None
+
+
+def test_projects_dir_env_override_unc_keeps_distro(monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.setenv(
+        "TOKITTY_CREDENTIALS",
+        "\\\\wsl.localhost\\Ubuntu\\home\\n\\.claude-work\\.credentials.json",
+    )
+    projects_dir, distro = resolve_projects_dir(None, credentials=_NoSweepCache())
+    assert distro == "Ubuntu"
+    assert projects_dir.replace("\\", "/").endswith(".claude-work/projects")
+
+
+def test_projects_dir_uses_home_relative_dir_without_sweeping(tmp_path, monkeypatch):
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+    projects_dir, distro = resolve_projects_dir(None, credentials=_NoSweepCache())
+    assert projects_dir.replace("\\", "/") == str(home / ".claude" / "projects").replace("\\", "/")
+    assert distro is None
+
+
+class _NoSweepCache:
+    def single(self):
+        raise AssertionError("native credentials must not consult the WSL cache")
+
+    def claude_dirs(self):
+        raise AssertionError("native credentials must not consult the WSL cache")
+
+
+def test_transcript_fallback_shares_one_sweep_with_discovery(tmp_path, monkeypatch):
+    # Issue #87: with no native credentials and none in WSL, the ledger's
+    # transcript fallback and run_discovery's sweep read the same cache.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "nohome"))
+    sweeps = {"n": 0}
+
+    def fake_dirs():
+        sweeps["n"] += 1
+        return [("Ubuntu", "/home/n/.claude")]
+
+    cache = WslCredentialsCache(scan=lambda: [], claude_dirs_scan=fake_dirs)
+    projects_dir, distro = resolve_projects_dir(None, credentials=cache)
+    assert cache.claude_dirs() == [("Ubuntu", "/home/n/.claude")]  # the discovery thread's call
+    assert sweeps["n"] == 1
+    assert distro == "Ubuntu"
+    assert projects_dir == "\\\\wsl.localhost\\Ubuntu\\home\\n\\.claude\\projects"
