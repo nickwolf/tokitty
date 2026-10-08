@@ -254,8 +254,9 @@ def read_wsl_credentials(distro: str, wsl_path: str, run: Callable = subprocess.
 
 
 class WslCredentialsCache:
-    """One credential sweep per process, shared by every caller that needs
-    one (issue #52).
+    """One WSL sweep of each kind per process, shared by every caller that
+    needs one (issue #52): the credentials sweep (all_matches/single) and
+    the transcripts sweep (claude_dirs).
 
     Before this existed, a launch with no accounts.json ran the sweep three
     times over: once in resolve_activity_sessions, once in
@@ -274,10 +275,20 @@ class WslCredentialsCache:
     instead of each running their own.
     """
 
-    def __init__(self, scan: Callable[[], List[Tuple[str, str]]] = None, enabled: bool = True):
+    def __init__(
+        self,
+        scan: Callable[[], List[Tuple[str, str]]] = None,
+        enabled: bool = True,
+        claude_dirs_scan: Callable[[], List[Tuple[str, str]]] = None,
+    ):
         import threading
 
         self._scan = scan or find_all_wsl_credentials
+        # Looked up at call time, not bound here, so a patched
+        # find_all_wsl_claude_dirs is still honored.
+        self._claude_dirs_scan = claude_dirs_scan
+        self._claude_dirs_done = not enabled
+        self._claude_dirs: List[Tuple[str, str]] = []
         self._lock = threading.Lock()
         # enabled=False means there is nothing to sweep for: credentials
         # were already found natively, so a sweep would wake every distro to
@@ -300,6 +311,22 @@ class WslCredentialsCache:
                     self._matches = []
                 self._done = True
             return list(self._matches)
+
+    def claude_dirs(self) -> List[Tuple[str, str]]:
+        """Every (distro, wsl-side config dir) with transcripts, swept at
+        most once per process and [] on any probe failure. Disabled caches
+        never sweep: native credentials mean the ledger is read natively,
+        so waking distros to look for transcripts would be wasted work (and
+        a stall at launch whenever wsl.exe is slow)."""
+        with self._lock:
+            if not self._claude_dirs_done:
+                scan = self._claude_dirs_scan or find_all_wsl_claude_dirs
+                try:
+                    self._claude_dirs = list(scan())
+                except CredentialsError:
+                    self._claude_dirs = []
+                self._claude_dirs_done = True
+            return list(self._claude_dirs)
 
     def single(self) -> Tuple[str, str]:
         """find_wsl_credentials's contract, served from the cache: the one
