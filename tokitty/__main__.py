@@ -467,6 +467,12 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             running_distros=distro_probe.get_running,
         )
         root.wait_window(walkthrough.toplevel)
+        if env_override_set or home_relative_exists:
+            # The sweep above was only for listing installs. With native
+            # credentials the rest of the launch keeps the usual guard, or a
+            # skipped walkthrough would read activity from a WSL install
+            # while the limits come from this PC.
+            wsl_credentials = WslCredentialsCache(enabled=False)
 
     accounts = load_accounts(state_dir)
     warning = env_conflict_warning(accounts)

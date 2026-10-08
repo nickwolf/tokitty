@@ -2258,3 +2258,41 @@ def test_the_wsl_sweep_runs_once_across_the_walkthrough_and_the_unit_loop(tmp_pa
     discovery[0].join(timeout=5.0)
     # The walkthrough, run_discovery and the unit loop's resolver all read one cache.
     assert sweeps == [1]
+
+
+@pytest.mark.gui
+def test_native_credentials_keep_the_unit_loop_off_the_walkthrough_sweep(tmp_path, monkeypatch):
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.providers import claude
+
+    monkeypatch.setattr(SingleInstanceLock, "acquire", lambda self: None)
+    monkeypatch.setattr(SingleInstanceLock, "release", lambda self: None)
+    main_module, events, spawned = _first_run_gui(tmp_path, monkeypatch, sweep=True)
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    # Outside the state dir, which has to stay fresh for the walkthrough.
+    home = tmp_path.parent / f"{tmp_path.name}-home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(main_module.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(
+        "tokitty.wsl_probe.find_all_wsl_credentials",
+        lambda: [("Ubuntu", "/home/a/.claude/.credentials.json")],
+    )
+    sessions = []
+    real = claude.resolve_activity_sessions
+
+    def recording(config_dir=None, credentials=None):
+        result = real(config_dir, credentials=credentials)
+        sessions.append(result)
+        return result
+
+    monkeypatch.setattr(claude, "resolve_activity_sessions", recording)
+
+    assert main_module.run_gui() == 0
+    for thread in spawned:
+        thread.join(timeout=5.0)
+    # Skipped with no accounts: activity must not come from the WSL install
+    # the walkthrough listed while the limits come from this PC.
+    assert ("walkthrough closed", None) in events
+    assert sessions == [(None, None)]
