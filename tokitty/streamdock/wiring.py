@@ -1,7 +1,9 @@
 """Pure helpers that connect run_gui's per-account units to the Stream Dock runtime."""
 from __future__ import annotations
 
+import errno
 import sys
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tokitty.activity import SessionView
@@ -10,6 +12,12 @@ from tokitty.streamdock.runtime import AccountInput
 DEFAULT_NAME = "Claude"
 # How often an idle account is checked for new sessions while the deck is connected.
 DECK_IDLE_POLL_S = 3.0
+# How often a busy deck port is retried. The caller sets the deadline to cover an
+# in-app update's whole handover (its ack timeout plus this margin).
+BIND_RETRY_S = 1.0
+BIND_MARGIN_S = 30.0
+WSAEADDRINUSE = 10048
+WSAEACCES = 10013
 
 
 def parent_dir(path: Optional[str]) -> Optional[str]:
@@ -83,41 +91,141 @@ def make_watcher_factory(units: List[dict], list_running_distros_fn: Callable[[]
     return factory
 
 
-def start_streamdock(
-    settings: Any,
-    units: List[dict],
-    list_running_distros_fn: Callable[[], List[str]],
-    *,
-    palette_fn: Callable[[int], Dict[str, str]],
-    open_in_window: Optional[Callable] = None,
-    runtime_cls: Any = None,
-):
-    """Build and start the runtime, or return None when not installed or when starting fails.
+def is_port_busy(exc: BaseException) -> bool:
+    """True when a bind failed because another socket holds the port.
 
-    A bind error or any other failure is logged and the app carries on without the deck.
+    That is EADDRINUSE everywhere. On Windows the old copy's exclusive socket can
+    also surface as WSAEADDRINUSE (10048) or WSAEACCES (10013). A bare EACCES
+    (a privileged port on POSIX) is not retryable.
     """
-    from tokitty.streamdock.runtime import StreamdockRuntime
+    if not isinstance(exc, OSError):
+        return False
+    codes = {errno.EADDRINUSE, WSAEADDRINUSE, WSAEACCES}
+    return exc.errno in codes or getattr(exc, "winerror", None) in (WSAEADDRINUSE, WSAEACCES)
 
-    cls = runtime_cls or StreamdockRuntime
-    if not cls.configured(settings):
-        return None
-    try:
-        runtime = cls(
-            settings.streamdock_port,
-            settings.streamdock_token,
-            list(settings.streamdock_presets),
-            account_inputs(units),
-            palette_fn=palette_fn,
-            open_in_window=open_in_window,
-            watcher_factory=make_watcher_factory(units, list_running_distros_fn),
-            list_running_distros_fn=list_running_distros_fn,
-            hidden_accounts=list(settings.streamdock_hidden_accounts),
-        )
-        runtime.start()
-        return runtime
-    except Exception as exc:
+
+class DeckStarter:
+    """Starts the runtime and keeps retrying while its port is held by someone else.
+
+    After an in-app update the old copy keeps the deck port until the new copy's
+    window acks, so the bind fails at launch and succeeds a little later. The retry
+    runs on the Tk thread through `after`, never blocks it, and gives up at the
+    deadline. One runtime is built and its start() retried: a failed bind has
+    started nothing (see StreamdockRuntime.start), so there is nothing to leak.
+
+    `runtime` is the started runtime or None. `state` is "off" (not installed),
+    "starting", "running" or "failed"; `reason` is the last error text.
+    """
+
+    def __init__(
+        self,
+        settings: Any,
+        units: List[dict],
+        list_running_distros_fn: Callable[[], List[str]],
+        *,
+        palette_fn: Callable[[int], Dict[str, str]],
+        after: Callable[[int, Callable[[], None]], Any],
+        cancel: Callable[[Any], None],
+        deadline_s: float,
+        open_in_window: Optional[Callable] = None,
+        runtime_cls: Any = None,
+        now: Callable[[], float] = time.monotonic,
+        retry_s: float = BIND_RETRY_S,
+    ) -> None:
+        self._settings = settings
+        self._units = units
+        self._list_running = list_running_distros_fn
+        self._palette_fn = palette_fn
+        self._open_in_window = open_in_window
+        self._cls = runtime_cls
+        self._after = after
+        self._cancel = cancel
+        self._now = now
+        self._retry_s = retry_s
+        self._deadline_s = deadline_s
+        self._candidate: Any = None
+        self._handle: Any = None
+        self._deadline = 0.0
+        self._stopped = False
+        self.runtime: Any = None
+        self.state = "off"
+        self.reason = ""
+        self.port = getattr(settings, "streamdock_port", 0)
+
+    def begin(self) -> None:
+        """Build the runtime and make the first attempt. Tk thread."""
+        from tokitty.streamdock.runtime import StreamdockRuntime
+
+        cls = self._cls or StreamdockRuntime
+        settings = self._settings
+        if not cls.configured(settings):
+            return
+        try:
+            self._candidate = cls(
+                settings.streamdock_port,
+                settings.streamdock_token,
+                list(settings.streamdock_presets),
+                account_inputs(self._units),
+                palette_fn=self._palette_fn,
+                open_in_window=self._open_in_window,
+                watcher_factory=make_watcher_factory(self._units, self._list_running),
+                list_running_distros_fn=self._list_running,
+                hidden_accounts=list(settings.streamdock_hidden_accounts),
+            )
+        except Exception as exc:
+            self._fail(exc)
+            return
+        self._deadline = self._now() + self._deadline_s
+        self._attempt()
+
+    def _attempt(self) -> None:
+        self._handle = None
+        if self._stopped:
+            return
+        try:
+            self._candidate.start()
+        except Exception as exc:
+            if is_port_busy(exc) and self._now() + self._retry_s < self._deadline:
+                if self.state != "starting":
+                    print(f"tokitty: streamdock: port {self.port} is busy, retrying: {exc}", file=sys.stderr)
+                self.state = "starting"
+                self.reason = str(exc)
+                self._handle = self._after(int(self._retry_s * 1000), self._attempt)
+            else:
+                self._fail(exc)
+            return
+        self.runtime, self._candidate = self._candidate, None
+        self.state = "running"
+        self.reason = ""
+
+    def _fail(self, exc: BaseException) -> None:
+        self.state = "failed"
+        self.reason = str(exc)
+        self._candidate = None
         print(f"tokitty: streamdock: not started: {exc}", file=sys.stderr)
-        return None
+
+    def set_presets(self, presets: List[dict]) -> None:
+        target = self.runtime or self._candidate
+        if target is not None:
+            target.set_presets(presets)
+
+    def set_hidden_accounts(self, names: List[str]) -> None:
+        target = self.runtime or self._candidate
+        if target is not None:
+            target.set_hidden_accounts(names)
+
+    def stop(self) -> None:
+        """Cancel a pending retry and stop the runtime if it started. Tk thread."""
+        self._stopped = True
+        if self._handle is not None:
+            try:
+                self._cancel(self._handle)
+            except Exception:
+                pass
+            self._handle = None
+        self._candidate = None
+        if self.runtime is not None:
+            self.runtime.stop()
 
 
 def apply_idle_cap(units: List[dict], connected: bool) -> None:

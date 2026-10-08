@@ -586,8 +586,10 @@ class TokittyWindow:
         # hands it to the hook status query so it never wakes a stopped distro.
         self.running_distros: Optional[Callable[[], List[str]]] = None
         # "not_installed" | "not_connected" | "connected" | "restart_to_connect"
-        # | "restart_to_finish_removal"; None means no Stream Dock support.
+        # | "restart_to_finish_removal" | "starting" | "failed"; None means no Stream Dock support.
         self.streamdock_state: Optional[Callable[[], str]] = None
+        # () -> {"port": int, "reason": str}, for the "starting" and "failed" details.
+        self.streamdock_info: Optional[Callable[[], dict]] = None
         # () -> (ok, lines); run on a worker thread by the Settings tab.
         self.streamdock_install: Optional[Callable[[], Tuple[bool, List[str]]]] = None
         self.streamdock_uninstall: Optional[Callable[[], Tuple[bool, List[str]]]] = None

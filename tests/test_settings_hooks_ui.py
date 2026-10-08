@@ -15,6 +15,7 @@ from test_settings_ui import Harness  # noqa: E402
 from tokitty import hook_guard, settings_accounts, settings_ui  # noqa: E402
 from tokitty.hooks_install import HookOperationResult, HookStatus  # noqa: E402
 from tokitty.settings_ui import SettingsWindow  # noqa: E402
+from tokitty.settings_widgets import _PILL_COLORS  # noqa: E402
 
 MAIN = threading.main_thread()
 
@@ -423,16 +424,46 @@ class Deck:
 @pytest.mark.parametrize("state,label", [
     ("not_installed", "Not installed"), ("not_connected", "Installed, not connected"),
     ("connected", "Connected"), ("restart_to_connect", "Restart tokitty to finish"),
-    ("restart_to_finish_removal", "Restart tokitty to finish")])
+    ("restart_to_finish_removal", "Restart tokitty to finish"),
+    ("starting", "Starting"), ("failed", "Couldn't start")])
 def test_streamdock_state_maps_to_pill(harness, state, label):
     Deck(harness, state)
     _settings, tab = open_tab(harness, "streamdock")
     assert tab.pill.cget("text") == label
     assert (tab.install_button is not None) == (state in ("not_installed", "restart_to_finish_removal"))
     assert (tab.uninstall_button is not None) == (
-        state in ("not_connected", "connected", "restart_to_connect"))
+        state in ("not_connected", "connected", "restart_to_connect", "starting", "failed"))
     if state == "restart_to_finish_removal":
         assert not enabled(tab.install_button)
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("state,kind,words", [
+    ("starting", "warn", ["Waiting for port 59967", "older copy"]),
+    ("failed", "bad", ["listen on port 59967", "address in use", "Restart tokitty"])])
+def test_streamdock_starting_and_failed_details_name_port_and_reason(harness, state, kind, words):
+    Deck(harness, state)
+    harness.window.streamdock_info = lambda: {"port": 59967, "reason": "address in use"}
+    _settings, tab = open_tab(harness, "streamdock")
+    detail = tab.detail.cget("text")
+    assert all(w in detail for w in words)
+    assert tab.pill.cget("bg") == _PILL_COLORS[kind][1]
+    assert tab.presets_button is not None and enabled(tab.presets_button)
+
+
+@pytest.mark.gui
+def test_streamdock_open_tab_follows_state_without_switching_tabs(harness, monkeypatch):
+    from tokitty import settings_streamdock
+
+    monkeypatch.setattr(settings_streamdock, "STATE_WATCH_MS", 20)
+    deck = Deck(harness, "starting")
+    harness.window.streamdock_info = lambda: {"port": 59967, "reason": ""}
+    settings, tab = open_tab(harness, "streamdock")
+    assert tab.pill.cget("text") == "Starting"
+    deck.state = "connected"
+    pump(harness, lambda: tab.pill.cget("text") == "Connected")
+    settings.close()
+    assert tab._watch_id is None
 
 
 @pytest.mark.gui

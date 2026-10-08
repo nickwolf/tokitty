@@ -18,12 +18,12 @@ from tokitty.streamdock import install as install_mod
 from tokitty.streamdock.runtime import StreamdockRuntime
 
 STATES = ("not_installed", "not_connected", "connected", "restart_to_connect",
-          "restart_to_finish_removal")
+          "restart_to_finish_removal", "starting", "failed")
 
 
 class StreamdockHolder:
     def __init__(self, settings: Any, state_dir, runtime: Callable[[], Optional[Any]],
-                 *, load_fn=load_settings, install_fn=install_mod.gui_install,
+                 *, deck: Optional[Any] = None, load_fn=load_settings, install_fn=install_mod.gui_install,
                  uninstall_fn=install_mod.gui_uninstall):
         self.settings = settings
         self.override: Optional[str] = None
@@ -32,6 +32,8 @@ class StreamdockHolder:
         self._started_with = self._credentials(settings)
         self._state_dir = state_dir
         self._runtime = runtime
+        # Owns the start retry (wiring.DeckStarter); None means no retry state.
+        self._deck = deck
         self._load = load_fn
         self._install = install_fn
         self._uninstall = uninstall_fn
@@ -42,7 +44,21 @@ class StreamdockHolder:
         if not StreamdockRuntime.configured(self.settings):
             return "not_installed"
         runtime = self._runtime()
+        phase = self._phase()
+        if runtime is None and phase in ("starting", "failed"):
+            return phase
         return "connected" if runtime is not None and runtime.connected else "not_connected"
+
+    def _phase(self) -> Optional[str]:
+        return getattr(self._deck, "state", None)
+
+    def info(self) -> dict:
+        """What the starting and failed details name: the port and the last error."""
+        return {"port": getattr(self._deck, "port", 0), "reason": getattr(self._deck, "reason", "")}
+
+    def _serving(self) -> bool:
+        """True while the launch-time runtime holds or is still waiting for its port."""
+        return self._runtime() is not None or self._phase() == "starting"
 
     @staticmethod
     def _credentials(settings: Any) -> Tuple[Any, Any]:
@@ -55,12 +71,12 @@ class StreamdockHolder:
             # A running runtime serves the port and token it started with; the
             # plugin can reach it only if the install kept those.
             same = self._credentials(self.settings) == self._started_with
-            self.override = None if self._runtime() is not None and same else "restart_to_connect"
+            self.override = None if self._serving() and same else "restart_to_connect"
         return ok, lines
 
     def uninstall(self) -> Tuple[bool, List[str]]:
         ok, lines = self._uninstall(self._state_dir)
         if ok:
             self.settings = self._load(self._state_dir)
-            self.override = "restart_to_finish_removal" if self._runtime() is not None else None
+            self.override = "restart_to_finish_removal" if self._serving() else None
         return ok, lines
