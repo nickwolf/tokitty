@@ -405,21 +405,80 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         lock.release()
         return 0
 
+    from tokitty import first_run
     from tokitty.accounts import env_conflict_warning, load_accounts
+    from tokitty.settings import load_settings, update_settings
+
+    debug_state = os.environ.get(DEBUG_STATE_ENV)
+    debug_accounts = os.environ.get("TOKITTY_DEBUG_ACCOUNTS")
+
+    # Under the lock and before anything else writes to the state dir, so two
+    # near-simultaneous launches cannot both see a fresh dir. Debug launches
+    # and the update hand-offs neither show the walkthrough nor mark it.
+    show_walkthrough = first_run.classify(
+        state_dir,
+        load_settings(state_dir),
+        excluded=bool(debug_state or debug_accounts == "2" or after_update_token or apply_update),
+    )
+
+    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
+    home_relative_exists = (
+        Path.home() / ".claude" / ".credentials.json"
+    ).is_file()
+
+    # One wsl.exe credential sweep for the whole launch, shared by the
+    # walkthrough's discovery, run_discovery below and both per-account
+    # resolvers in the unit loop. The sweep shells into every installed
+    # distro, which starts a stopped one, so running it once per caller meant
+    # waking every distro three times per launch, and since autostart (#20)
+    # on every login.
+    #
+    # Disabled outright when credentials were already found natively, which
+    # is the guard run_discovery has always had on its own sweep. The
+    # resolvers never had it, so a launch with TOKITTY_CREDENTIALS set woke
+    # every distro looking for something it had already been handed. The
+    # walkthrough is the exception: it lists every install, so it needs the
+    # sweeps whatever was found natively.
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    wsl_credentials = WslCredentialsCache(
+        enabled=show_walkthrough or not (env_override_set or home_relative_exists)
+    )
+    distro_probe = RunningDistroProbe()
+
+    # Before tk.Tk(), and it has to stay before it: Windows refuses to
+    # change a process's DPI awareness once the process owns a window, and
+    # reports the refusal in the return value rather than by raising.
+    from tokitty import dpi
+
+    scale = dpi.init()
+
+    root = tk.Tk()
+    if show_walkthrough:
+        # The panes are built once from accounts.json, so the walkthrough
+        # runs first, as a Toplevel of a withdrawn root. Nothing else starts
+        # until it closes: no pollers, discovery thread or tray, which also
+        # keeps the hook guard free for its installs.
+        root.withdraw()
+        from tokitty.first_run_ui import Walkthrough
+
+        walkthrough = Walkthrough(
+            root, state_dir, scale, credentials_cache=wsl_credentials,
+            running_distros=distro_probe.get_running,
+        )
+        root.wait_window(walkthrough.toplevel)
 
     accounts = load_accounts(state_dir)
     warning = env_conflict_warning(accounts)
     if warning:
         print(f"tokitty: {warning}", file=sys.stderr)
 
-    debug_accounts = os.environ.get("TOKITTY_DEBUG_ACCOUNTS")
     pane_count = 2 if debug_accounts == "2" else (len(accounts) if accounts else 1)
 
     # Settings are read before the window exists so the stored opacity is
     # applied at construction. Loading them later made a cold start paint
-    # fully opaque and then snap to the saved level.
-    from tokitty.settings import load_settings, update_settings
-
+    # fully opaque and then snap to the saved level. Re-read after the
+    # walkthrough, which writes them.
     settings = load_settings(state_dir)
 
     # Plain-Python shadow state: menu.py's contract is that every getter
@@ -434,112 +493,34 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         "onboarding": settings.onboarding_version,
     }
 
-    # Before tk.Tk(), and it has to stay before it: Windows refuses to
-    # change a process's DPI awareness once the process owns a window, and
-    # reports the refusal in the return value rather than by raising.
-    from tokitty import dpi
-
-    scale = dpi.init()
-
-    root = tk.Tk()
     window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity, scale=scale)
     window.on_opacity_changed = lambda level: update_settings(state_dir, opacity=level)
+    if show_walkthrough:
+        # Built while withdrawn, so overrideredirect, topmost, geometry,
+        # opacity and the colour-key window are all in place before anything
+        # is visible.
+        window.reveal()
 
-    debug_state = os.environ.get(DEBUG_STATE_ENV)
+    # The pending-hook-op retry belongs here, not in TokittyWindow.__init__:
+    # it must run only after tk.Tk() has succeeded (a headless launch should
+    # fail for lack of a display before ever probing WSL), and the gui-marked
+    # tests that construct TokittyWindow directly (never through run_gui)
+    # must keep seeing zero WSL calls.
+    from tokitty.startup import ONBOARDING_MODELS_AUTOSELECT, should_auto_select_models
 
-    # First-run auto-open + the pending-hook-op retry both belong here, not in
-    # TokittyWindow.__init__: they must run only after tk.Tk() has succeeded
-    # (a headless launch should fail for lack of a display before ever
-    # probing WSL), and the gui-marked tests that construct TokittyWindow
-    # directly (never through run_gui) must keep seeing zero WSL calls.
-    from tokitty.startup import (
-        ACTION_USAGE_SETUP,
-        ONBOARDING_MODELS_AUTOSELECT,
-        resolve_first_run_action,
-        should_auto_select_models,
-    )
-
-    # Written by run_discovery() on a background thread, read by tick() on
-    # the Tk thread -- discovery_lock guards every access from either side.
-    # maybe_auto_open() itself must only ever be called from the Tk thread
-    # (it can construct a Toplevel via AccountsManager.open()), which is why
-    # it is invoked from inside tick() rather than from run_discovery
-    # directly: calling anything Tk-related (root.after included) from a
-    # background thread before root.mainloop() has actually started raises
-    # "main thread is not in main loop" *and the call is silently dropped
-    # forever*, not merely delayed -- confirmed by direct reproduction.
-    # run_discovery starts (just below) before the synchronous unit-building
-    # loop below even begins, so it can easily finish before mainloop() is
-    # reached. tick()'s existing root.after(UI_REFRESH_MS, tick) polling
-    # loop is the Tk-thread-owned mechanism this file already uses for
-    # exactly this producer/consumer shape (Poller/ActivityWatcher results),
-    # so first-run auto-open reuses it instead of introducing a new one.
+    # Written by run_discovery() on a background thread, read by tick() and
+    # open_accounts() on the Tk thread -- discovery_lock guards every access
+    # from either side. run_discovery must never touch Tk (not even
+    # root.after): calling anything Tk-related from a background thread
+    # before root.mainloop() has actually started raises "main thread is not
+    # in main loop" *and the call is silently dropped forever*, not merely
+    # delayed -- confirmed by direct reproduction. tick()'s existing
+    # root.after(UI_REFRESH_MS, tick) polling loop is the Tk-thread-owned
+    # mechanism this file already uses for exactly this producer/consumer
+    # shape (Poller/ActivityWatcher results), so the hook warnings reuse it.
     discovery_lock = threading.Lock()
-    discovery_result = {
-        "wsl_matches": [],
-        "transcript_matches": [],
-        "hook_warnings": [],
-        "done": False,
-        "consumed": False,
-    }
+    discovery_result = {"wsl_matches": [], "hook_warnings": []}
     discovery_accounts_state = load_accounts_result(state_dir).state
-    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
-    home_relative_exists = (
-        Path.home() / ".claude" / ".credentials.json"
-    ).is_file()
-
-    # One wsl.exe credential sweep for the whole launch, shared by
-    # run_discovery below and by both per-account resolvers in the unit
-    # loop. The sweep shells into every installed distro, which starts a
-    # stopped one, so running it once per caller meant waking every distro
-    # three times per launch, and since autostart (#20) on every login.
-    #
-    # Disabled outright when credentials were already found natively, which
-    # is the guard run_discovery has always had on its own sweep. The
-    # resolvers never had it, so a launch with TOKITTY_CREDENTIALS set woke
-    # every distro looking for something it had already been handed.
-    from tokitty.wsl_probe import WslCredentialsCache
-
-    wsl_credentials = WslCredentialsCache(
-        enabled=not (env_override_set or home_relative_exists)
-    )
-
-    def maybe_auto_open() -> None:
-        accounts_result = load_accounts_result(state_dir)
-        keychain_available = False
-        if sys.platform == "darwin":
-            from tokitty.keychain import KEYCHAIN_SERVICE, keychain_item_exists
-
-            keychain_available = keychain_item_exists(KEYCHAIN_SERVICE)
-        with discovery_lock:
-            wsl_matches = list(discovery_result["wsl_matches"])
-            wsl_match_count = len(wsl_matches)
-            transcripts_found = bool(discovery_result["transcript_matches"])
-        action = resolve_first_run_action(
-            accounts_state=accounts_result.state,
-            env_override_set=env_override_set,
-            home_relative_exists=home_relative_exists,
-            keychain_available=keychain_available,
-            platform=sys.platform,
-            wsl_match_count=wsl_match_count,
-            transcripts_found=transcripts_found,
-        )
-        if action is None:
-            return
-
-        from tokitty.accounts_ui import AccountsManager
-
-        # Both actions open the same dialog. A separate first-run wizard
-        # would cut against the way the rest of the app works: no
-        # installer, no admin rights, every feature opted into from a
-        # menu. ACTION_USAGE_SETUP just arrives with the usage section in
-        # focus, for the user who previously got only an error.
-        AccountsManager.open(
-            root,
-            state_dir,
-            discovered_matches=wsl_matches,
-            focus_usage=action == ACTION_USAGE_SETUP,
-        )
 
     def run_discovery() -> None:
         # Best-effort, silent unless it matters (see hooks_install.py's
@@ -635,6 +616,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             with discovery_lock:
                 discovery_result["hook_warnings"] = hook_warnings
 
+            # Only feeds the Manage accounts dialog (open_accounts below).
             wsl_matches = []
             if (
                 sys.platform == "win32"
@@ -647,38 +629,12 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 # one -- whichever thread gets here first pays for it once
                 # (issue #52).
                 wsl_matches = wsl_credentials.all_matches()
-
-            transcript_matches = []
-            if (
-                not wsl_matches
-                and discovery_accounts_state == "absent"
-                and not env_override_set
-                and not home_relative_exists
-            ):
-                # Credential-independent: an API-key user has a full
-                # billing ledger on disk and no OAuth credentials
-                # anywhere, so every credentials-keyed probe above reports
-                # that they have no Claude Code install at all.
-                if sys.platform == "win32":
-                    # Shared with the Tk thread's resolve_projects_dir
-                    # fallback, so one sweep per launch (issue #87).
-                    transcript_matches = wsl_credentials.claude_dirs()
-                else:
-                    local_projects, _ = resolve_projects_dir()
-                    if local_projects and Path(local_projects).is_dir():
-                        transcript_matches = [local_projects]
-
             with discovery_lock:
                 discovery_result["wsl_matches"] = wsl_matches
-                discovery_result["transcript_matches"] = transcript_matches
-        finally:
-            # Unconditional: tick() below is waiting on this flag to decide
-            # when to call maybe_auto_open(), exactly once. If an
-            # unanticipated exception ever slipped past the narrower
-            # excepts above, leaving this unset would silently drop
-            # auto-open for the whole launch -- worse than never trying.
-            with discovery_lock:
-                discovery_result["done"] = True
+        except Exception:
+            # Best-effort, like everything above: no matches just means the
+            # dialog opens without discovered paths.
+            pass
 
     if not (debug_state or debug_accounts == "2"):
         threading.Thread(target=run_discovery, daemon=True).start()
@@ -726,8 +682,6 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             bar_fill=custom.overrides.get("bar_fill", ""),
             colorway=custom.colorway, pattern=custom.pattern,
         )
-
-    distro_probe = RunningDistroProbe()
 
     # Providers are resolved in their own pass because the label rule needs
     # to know every harness in the window before the first pane is built.
@@ -1120,29 +1074,25 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     def tick():
         updates.tick()
         checker.tick()
-        # Consume run_discovery's result here, on the Tk thread, exactly
+        # Show run_discovery's hook warnings here, on the Tk thread, exactly
         # once -- see the discovery_lock comment above for why this can't
         # be done from run_discovery itself via root.after().
         with discovery_lock:
-            ready = discovery_result["done"] and not discovery_result["consumed"]
-            if ready:
-                discovery_result["consumed"] = True
-                hook_warnings = list(discovery_result["hook_warnings"])
-        if ready:
-            maybe_auto_open()
-            if hook_warnings:
-                # Deferred: showwarning is modal and would otherwise
-                # block tick() from finishing and rescheduling itself
-                # (root.after(UI_REFRESH_MS, tick), below) until the user
-                # dismisses it. root.after(0, ...) runs it as its own
-                # callback once this call returns, so tick's cadence is
-                # never held up by it.
-                def _show_hook_warnings(warnings=hook_warnings):
-                    from tkinter import messagebox
+            hook_warnings = discovery_result["hook_warnings"]
+            discovery_result["hook_warnings"] = []
+        if hook_warnings:
+            # Deferred: showwarning is modal and would otherwise
+            # block tick() from finishing and rescheduling itself
+            # (root.after(UI_REFRESH_MS, tick), below) until the user
+            # dismisses it. root.after(0, ...) runs it as its own
+            # callback once this call returns, so tick's cadence is
+            # never held up by it.
+            def _show_hook_warnings(warnings=hook_warnings):
+                from tkinter import messagebox
 
-                    messagebox.showwarning("Tokitty", "\n\n".join(warnings), parent=root)
+                messagebox.showwarning("Tokitty", "\n\n".join(warnings), parent=root)
 
-                root.after(0, _show_hook_warnings)
+            root.after(0, _show_hook_warnings)
 
         for unit in units:
             latest = unit["poller"].get_latest()

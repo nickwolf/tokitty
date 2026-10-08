@@ -143,6 +143,37 @@ def run_finish_pending(state_dir, running_distros):
         hook_guard.release(token)
 
 
+def render_banner(kit, holder: tk.Frame, banner: Optional[Tuple[str, str, Optional[str]]], *,
+                  name_for: Callable[[str], str], on_finish: Callable[[], None],
+                  finish_disabled: bool) -> Tuple[Optional[tk.Label], Optional[tk.Button]]:
+    """Paint a (kind, message, blocked_by) banner into `holder`, replacing
+    what was there. Returns (message label, Finish it button or None); both
+    None when there is no banner. Shared with the first-run walkthrough."""
+    for child in holder.winfo_children():
+        child.destroy()
+    if banner is None:
+        return None, None
+    kind, message, blocked_by = banner
+    px = kit.px
+    colour = {"bad": ("#3c272e", BAD)}.get(kind, ("#393128", WARN))
+    frame = tk.Frame(holder, bg=colour[0])
+    frame.pack(fill="x", pady=(0, px(9)))
+    glyph = "◌" if message == BUSY_MESSAGE else "!"
+    text(frame, glyph, bg=colour[0], color=colour[1], font=("Segoe UI", 12)).pack(
+        side="left", padx=(px(10), px(7)), pady=px(6))
+    if kind == "blocked":
+        message = f"{message} Pending change for {name_for(blocked_by)}."
+    label = text(frame, message, bg=colour[0], color=colour[1], font=FONT_SMALL,
+                 wraplength=px(430), justify="left")
+    label.pack(side="left", pady=px(6))
+    finish_button = None
+    if kind == "blocked":
+        finish_button = kit.button(frame, "Finish it", "secondary", compact=True,
+                                   command=on_finish, disabled=finish_disabled)
+        finish_button.pack(side="right", padx=px(8))
+    return label, finish_button
+
+
 class _RowView:
     """Handles to one rendered row, for tests and for repainting."""
 
@@ -343,32 +374,16 @@ class AccountsTab(_Tab):
             self._render_row(data, locked)
 
     def _render_banner(self, held_elsewhere: bool) -> None:
-        for child in self.banner_holder.winfo_children():
-            child.destroy()
         banner = self.banner
         if banner is None and held_elsewhere:
             banner = ("warn", BUSY_MESSAGE, None)
-        if banner is None:
-            return
-        kind, message, blocked_by = banner
-        px = self.kit.px
-        colour = {"bad": ("#3c272e", BAD)}.get(kind, ("#393128", WARN))
-        frame = tk.Frame(self.banner_holder, bg=colour[0])
-        frame.pack(fill="x", pady=(0, px(9)))
-        glyph = "◌" if message == BUSY_MESSAGE else "!"
-        text(frame, glyph, bg=colour[0], color=colour[1], font=("Segoe UI", 12)).pack(
-            side="left", padx=(px(10), px(7)), pady=px(6))
-        if kind == "blocked":
-            message = (f"{message} Pending change for {self._account_name_for(blocked_by)}.")
-        label = text(frame, message, bg=colour[0], color=colour[1], font=FONT_SMALL,
-                     wraplength=px(430), justify="left")
-        label.pack(side="left", pady=px(6))
-        self.banner_label = label
-        if kind == "blocked":
-            self.finish_button = self.kit.button(
-                frame, "Finish it", "secondary", compact=True, command=self._finish,
-                disabled=self._locked())
-            self.finish_button.pack(side="right", padx=px(8))
+        label, finish_button = render_banner(
+            self.kit, self.banner_holder, banner, name_for=self._account_name_for,
+            on_finish=self._finish, finish_disabled=self._locked())
+        if label is not None:
+            self.banner_label = label
+        if finish_button is not None:
+            self.finish_button = finish_button
 
     def _render_row(self, data: RowData, locked: bool) -> None:
         kit = self.kit

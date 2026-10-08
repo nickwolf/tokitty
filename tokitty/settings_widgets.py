@@ -13,9 +13,9 @@ never write back.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from tokitty.sprites import PALETTE, get_frames
+from tokitty.sprites import PALETTE, get_frames, resolve_palette
 
 BG_COLOR = "#1c1c22"
 FG_COLOR = "#f0f0f0"
@@ -74,6 +74,53 @@ def draw_sprite(canvas: tk.Canvas, palette: dict, cell: int, x0: int = 0, y0: in
 def sprite_size(state: str = "content") -> Tuple[int, int]:
     frame = get_frames(state)[0]
     return len(frame[0]), len(frame)
+
+
+def build_rail(kit: "Kit", rail: tk.Frame, entries: Sequence[Tuple[str, str]], version: str,
+               on_select: Optional[Callable[[str], None]] = None) -> Dict[str, tuple]:
+    """Fill a window's left rail: the brand block, one strip per entry and
+    the version text. Returns key -> (strip, marker, inner, name) for
+    paint_rail. With on_select None the strips are plain labels."""
+    px = kit.px
+    brand = tk.Frame(rail, bg=RAIL)
+    brand.pack(fill="x", padx=px(17), pady=(px(21), px(30)))
+    logo = tk.Canvas(brand, width=px(28), height=px(26), bg=RAIL, highlightthickness=0)
+    logo.pack(side="left", padx=(0, px(7)))
+    draw_sprite(logo, resolve_palette("orange", "tabby"), px(1))
+    text(brand, "tokitty", font=("Segoe UI", 11, "bold"), bg=RAIL).pack(side="left")
+
+    nav: Dict[str, tuple] = {}
+    for key, title in entries:
+        strip = tk.Frame(rail, bg=RAIL, height=px(38), cursor="hand2" if on_select else "arrow")
+        strip.pack(fill="x", pady=px(1))
+        strip.pack_propagate(False)
+        marker = tk.Frame(strip, bg=RAIL, width=px(3))
+        marker.pack(side="left", fill="y")
+        inner = tk.Frame(strip, bg=RAIL)
+        inner.pack(side="left", fill="both", expand=True, padx=(px(14), px(8)))
+        name = text(inner, title, bg=RAIL, font=FONT_MEDIUM, color=MUTED)
+        name.pack(side="left", fill="y")
+        nav[key] = (strip, marker, inner, name)
+        if on_select is not None:
+            for widget in (strip, marker, inner, name):
+                widget.bind("<Button-1>", lambda _e, k=key: on_select(k))
+
+    bottom = tk.Frame(rail, bg=RAIL)
+    bottom.pack(side="bottom", fill="x", padx=px(18), pady=px(19))
+    tk.Frame(bottom, bg=BORDER, height=px(1)).pack(fill="x", pady=(0, px(13)))
+    text(bottom, version, bg=RAIL, color=DIM_COLOR, font=FONT_SMALL).pack(anchor="w")
+    return nav
+
+
+def paint_rail(nav: Dict[str, tuple], current: str) -> None:
+    """Mark `current` with the accent strip and 3 px marker."""
+    for key, (strip, marker, inner, name) in nav.items():
+        active = key == current
+        bg = ACCENT_BG if active else RAIL
+        for widget in (strip, inner, name):
+            widget.configure(bg=bg)
+        marker.configure(bg=ACCENT_FG if active else RAIL)
+        name.configure(fg=FG_COLOR if active else MUTED)
 
 
 class Toggle:
