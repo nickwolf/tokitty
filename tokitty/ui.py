@@ -9,17 +9,16 @@ import math
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
-from tkinter import colorchooser, simpledialog
 from typing import Callable, Dict, List, Optional, Tuple
 
 from tokitty.display import bar_color, resolve_status_text
 from tokitty.usage_display import ROW_SLOTS
 from tokitty import monitors
 from tokitty.geometry import clamp_to_area, default_position
-from tokitty.menu import INSTALL_STREAMDOCK_COMMAND, MenuItem, build_menu, streamdock_menu_item
-from tokitty.sprites import COLORWAYS, PATTERNS, PALETTE, SCALE, get_frames
+from tokitty.menu import MenuItem, build_menu
+from tokitty.sprites import PALETTE, SCALE, get_frames
 from tokitty.transparency import (
-    KEY_COLOR, LEVELS, alpha_for, avoid_key, clamp_level, effective_level,
+    KEY_COLOR, alpha_for, avoid_key, clamp_level, effective_level,
     hide_from_taskbar, root_hwnd, set_content_owner, uses_color_key,
 )
 
@@ -534,11 +533,6 @@ class Pane:
         self.canvas.tag_raise(item)
 
 
-_PANE_SPECIFIC_LABELS = frozenset(
-    {"Colorway", "Pattern", "Randomize", "Customize…", "Rename…", "Set budget…"}
-)
-
-
 class TokittyWindow:
     def __init__(self, root: tk.Tk, state_dir: Path, pane_count: int = 1, opacity: int = 100,
                  scale: float = 1.0):
@@ -576,7 +570,11 @@ class TokittyWindow:
         self.on_usage_window: Optional[Callable[[str], None]] = None
         self.usage_readout: Optional[Callable[[], str]] = None
         self.on_usage_readout: Optional[Callable[[str], None]] = None
-        self.on_set_budget: Optional[Callable[[int], None]] = None
+        # Per-pane budget for the current usage window: the getter returns
+        # the amount (or None), the setter takes the entry text and returns
+        # an error message or None.
+        self.budget_for_pane: Optional[Callable[[int], Optional[float]]] = None
+        self.set_budget_for_pane: Optional[Callable[[int, str], Optional[str]]] = None
         # Updates. The label getter reads plain-Python state and returns
         # None while no newer release is known.
         self.update_available_label: Optional[Callable[[], Optional[str]]] = None
@@ -584,8 +582,16 @@ class TokittyWindow:
         self.on_check_updates: Optional[Callable[[], None]] = None
         self.update_check_enabled: Optional[Callable[[], bool]] = None
         self.on_toggle_update_check: Optional[Callable[[], None]] = None
-        # "connected" | "not_connected" | "not_installed"; None leaves the submenu out.
+        # The running-distro probe (no side effects); the Settings Accounts tab
+        # hands it to the hook status query so it never wakes a stopped distro.
+        self.running_distros: Optional[Callable[[], List[str]]] = None
+        # "not_installed" | "not_connected" | "connected" | "restart_to_connect"
+        # | "restart_to_finish_removal"; None means no Stream Dock support.
         self.streamdock_state: Optional[Callable[[], str]] = None
+        # () -> (ok, lines); run on a worker thread by the Settings tab.
+        self.streamdock_install: Optional[Callable[[], Tuple[bool, List[str]]]] = None
+        self.streamdock_uninstall: Optional[Callable[[], Tuple[bool, List[str]]]] = None
+        self.streamdock_install_supported: Optional[Callable[[], bool]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
         self.streamdock_account_toggles: Optional[Callable[[], list]] = None
         self._menu_vars: List = []
@@ -593,6 +599,10 @@ class TokittyWindow:
         # Fired after any right-click menu action, so __main__.py can
         # re-sync the tray menu, which pystray does not rebuild itself.
         self.on_menu_action_done: Optional[Callable[[], None]] = None
+        # Opens the Settings window on a pane; None omits the menu item.
+        self.open_settings: Optional[Callable[[int], None]] = None
+        # Re-reads an open Settings window's controls; None when closed/absent.
+        self.settings_refresh: Optional[Callable[[], None]] = None
         # (pane_index, field, value) -- set externally by __main__.py. field
         # is one of "colorway", "pattern", "coat_base", "coat_shade",
         # "card_bg", "bar_fill", "label", or "reset" (value ignored for
@@ -773,51 +783,29 @@ class TokittyWindow:
         read plain-Python shadow state so tray.py may evaluate them off the
         main thread; `on_toggle_tray`/`tray_enabled` are None unless a tray
         backend is available, which omits the "Show tray icon" item."""
-        pane = self.panes[pane_index]
         return build_menu(
-            colorways=list(COLORWAYS.keys()),
-            patterns=list(PATTERNS.keys()),
-            current_colorway=(lambda p=pane: p._colorway),
-            current_pattern=(lambda p=pane: p._pattern),
-            on_colorway=(lambda name, i=pane_index: self._select_colorway(i, name)),
-            on_pattern=(lambda name, i=pane_index: self._select_pattern(i, name)),
-            on_customize=(lambda i=pane_index: self._open_customize_dialog(i)),
-            on_rename=(lambda i=pane_index: self._open_rename_dialog(i)),
             on_refresh=self._on_refresh_now,
             always_on_top=(lambda: self._always_on_top_bool),
             on_toggle_always_on_top=self._toggle_always_on_top,
             on_quit=self.on_quit,
-            tray_enabled=self.tray_enabled,
-            on_toggle_tray=self.on_toggle_tray,
-            on_randomize=((lambda i=pane_index: self.on_randomize(i)) if self.on_randomize is not None else None),
-            surprise_me=self.surprise_me,
-            on_toggle_surprise=self.on_toggle_surprise,
-            on_open_accounts=self.on_open_accounts,
-            autostart_enabled=self.autostart_enabled,
-            on_toggle_autostart=self.on_toggle_autostart,
-            opacity_levels=list(LEVELS),
-            current_opacity=self.opacity,
-            on_opacity=self._select_opacity,
+            on_open_settings=(
+                (lambda i=pane_index: self.open_settings(i)) if self.open_settings is not None else None
+            ),
             view_modes=VIEW_MODE_ITEMS,
             current_view_mode=self.view_mode,
             on_view_mode=self.on_view_mode,
-            usage_windows=USAGE_WINDOW_ITEMS,
-            current_usage_window=self.usage_window,
-            on_usage_window=self.on_usage_window,
-            usage_readouts=USAGE_READOUT_ITEMS,
-            current_usage_readout=self.usage_readout,
-            on_usage_readout=self.on_usage_readout,
-            on_set_budget=(
-                (lambda i=pane_index: self.on_set_budget(i))
-                if self.on_set_budget is not None
-                else None
-            ),
             update_available_label=self.update_available_label,
             on_install_update=self.on_install_update,
-            on_check_updates=self.on_check_updates,
-            update_check_enabled=self.update_check_enabled,
-            on_toggle_update_check=self.on_toggle_update_check,
         )
+
+    def notify_state_changed(self) -> None:
+        """Re-sync every other view of shared state after a change: the
+        tray menu (via on_menu_action_done) and an open Settings window
+        (via settings_refresh). Tk thread only."""
+        if self.on_menu_action_done is not None:
+            self.on_menu_action_done()
+        if self.settings_refresh is not None:
+            self.settings_refresh()
 
     def _after_menu_action(self, action):
         """Run a right-click menu action, then let the caller re-sync any
@@ -835,8 +823,7 @@ class TokittyWindow:
 
         def run() -> None:
             action()
-            if self.on_menu_action_done is not None:
-                self.on_menu_action_done()
+            self.notify_state_changed()
 
         return run
 
@@ -877,22 +864,10 @@ class TokittyWindow:
             self.menu.destroy()
         self._menu_vars = []
         self.menu = tk.Menu(self.root, tearoff=0)
-        if self._menu_pane_index is None:
-            model = [item for item in self.build_menu_model(0) if item.label not in _PANE_SPECIFIC_LABELS]
-        else:
-            model = self.build_menu_model(self._menu_pane_index)
-        if self.streamdock_state is not None:
-            # Read now, when the menu opens. Tk only: the tray menu is built once and would go stale.
-            toggles = self.streamdock_account_toggles() if self.streamdock_account_toggles is not None else None
-            item = streamdock_menu_item(
-                self.streamdock_state(), self._copy_install_streamdock, self.on_edit_streamdock_presets, toggles
-            )
-            model.insert(len(model) - 2, item)
+        # A blank cell (None) maps to pane 0: the clicked pane only decides
+        # which pane Settings opens on.
+        model = self.build_menu_model(self._menu_pane_index or 0)
         self._render_tk_menu(self.menu, model)
-
-    def _copy_install_streamdock(self) -> None:
-        self.root.clipboard_clear()
-        self.root.clipboard_append(INSTALL_STREAMDOCK_COMMAND)
 
     def _show_context_menu(self, event: tk.Event) -> None:
         x_relative = event.x_root - self.root.winfo_rootx()
@@ -912,55 +887,6 @@ class TokittyWindow:
     def _fire_customization_changed(self, pane_index: int, field: str, value: Optional[str]) -> None:
         if self.on_customization_changed is not None:
             self.on_customization_changed(pane_index, field, value)
-
-    def _open_customize_dialog(self, pane_index: int) -> None:
-        pane = self.panes[pane_index]
-        label = pane._label or f"Cat {pane_index + 1}"
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title(f"Customize {label}")
-        dialog.transient(self.root)
-        dialog.configure(bg=BG_COLOR)
-        dialog.resizable(False, False)
-
-        rows = [
-            ("Coat base", "coat_base"),
-            ("Coat shading", "coat_shade"),
-            ("Card background", "card_bg"),
-            ("Bar color", "bar_fill"),
-        ]
-        for row_index, (row_label, field) in enumerate(rows):
-            tk.Label(dialog, text=row_label, fg=FG_COLOR, bg=BG_COLOR).grid(
-                row=row_index, column=0, sticky="w", padx=8, pady=6
-            )
-            tk.Button(
-                dialog,
-                text="Choose…",
-                command=lambda f=field: self._pick_color(pane_index, dialog, f),
-            ).grid(row=row_index, column=1, padx=8, pady=6)
-
-        button_row = len(rows)
-        tk.Button(
-            dialog,
-            text="Reset to preset",
-            command=lambda: self._fire_customization_changed(pane_index, "reset", None),
-        ).grid(row=button_row, column=0, padx=8, pady=(4, 10))
-        tk.Button(dialog, text="Close", command=dialog.destroy).grid(
-            row=button_row, column=1, padx=8, pady=(4, 10)
-        )
-
-    def _open_rename_dialog(self, pane_index: int) -> None:
-        pane = self.panes[pane_index]
-        result = simpledialog.askstring(
-            "Rename", "Cat name:", parent=self.root, initialvalue=pane._label
-        )
-        if result is not None:
-            self._fire_customization_changed(pane_index, "label", result)
-
-    def _pick_color(self, pane_index: int, dialog: tk.Toplevel, field: str) -> None:
-        _rgb, hex_color = colorchooser.askcolor(parent=dialog)
-        if hex_color:
-            self._fire_customization_changed(pane_index, field, hex_color)
 
     def _on_refresh_now(self) -> None:
         if self.on_refresh_requested is not None:

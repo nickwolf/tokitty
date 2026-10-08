@@ -73,8 +73,10 @@ def _default_icon_factory(image, menu_model, wrap, title):
 
 class TrayManager:
     def __init__(self, root, menu_provider: Callable[[], List], state_dir,
-                 colorway: str = "orange", pattern: str = "tabby", icon_factory=None, image_factory=None):
+                 colorway: str = "orange", pattern: str = "tabby", icon_factory=None, image_factory=None,
+                 on_action_done: Optional[Callable[[], None]] = None):
         self._root = root
+        self._on_action_done = on_action_done
         self._menu_provider = menu_provider
         self._state_dir = state_dir
         self._colorway = colorway
@@ -82,11 +84,24 @@ class TrayManager:
         self._title = "Tokitty"
         self._icon_factory = icon_factory or _default_icon_factory
         self._image_factory = image_factory or _default_image_factory
-        self._wrap = lambda action: (lambda *args: self._root.after(0, action))
+        self._wrap = self._make_wrap()
         self._icon = None
         self._thread: Optional[threading.Thread] = None
         self._image = None
         self.available = self._probe()
+
+    def _make_wrap(self):
+        def wrap(action):
+            def run() -> None:
+                # On the Tk thread, inside the same after callback, so the
+                # notification always follows the action.
+                action()
+                if self._on_action_done is not None:
+                    self._on_action_done()
+
+            return lambda *args: self._root.after(0, run)
+
+        return wrap
 
     def _probe(self) -> bool:
         """Build the icon image and a throwaway icon so both the PIL import

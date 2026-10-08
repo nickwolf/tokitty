@@ -53,7 +53,6 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
-from tokitty.streamdock.runtime import StreamdockRuntime
 from tokitty.streamdock.window import InWindowViews
 from tokitty.streamdock.wiring import DEFAULT_NAME, apply_idle_cap, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
@@ -597,22 +596,34 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 except OSError as exc:
                     _note(hooks_install.LINK_FALLBACK_WARNING.format(reason=str(exc)))
 
-            try:
-                retry_result = retry_pending_hook_op(state_dir)
-            except (OSError, PermissionError):
-                retry_result = None
-            if retry_result is not None:
-                _note(retry_result.warning)
-                if not retry_result.ok:
-                    _note(retry_result.message)
+            # Hold the state_dir hook guard so the Accounts dialog and the
+            # Settings Accounts tab see this writer. If something already
+            # holds it, that writer owns the journal: skip both calls.
+            from tokitty import hook_guard
 
+            guard_token = hook_guard.try_acquire(state_dir, "startup")
+            refresh_results = []
             try:
-                refresh_results = hooks_install.ensure_current(state_dir)
-            except Exception:
-                # Broad on purpose: a reconcile call that raises anything
-                # must not lose the retry warning just collected above,
-                # or skip the WSL/transcript discovery below.
-                refresh_results = []
+                if guard_token is not None:
+                    try:
+                        retry_result = retry_pending_hook_op(state_dir)
+                    except (OSError, PermissionError):
+                        retry_result = None
+                    if retry_result is not None:
+                        _note(retry_result.warning)
+                        if not retry_result.ok:
+                            _note(retry_result.message)
+
+                    try:
+                        refresh_results = hooks_install.ensure_current(state_dir)
+                    except Exception:
+                        # Broad on purpose: a reconcile call that raises anything
+                        # must not lose the retry warning just collected above,
+                        # or skip the WSL/transcript discovery below.
+                        refresh_results = []
+            finally:
+                if guard_token is not None:
+                    hook_guard.release(guard_token)
             for refresh_result in refresh_results:
                 _note(refresh_result.warning)
                 if not refresh_result.ok:
@@ -848,6 +859,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         AccountsManager.open(root, state_dir, discovered_matches=matches)
 
     window.on_open_accounts = open_accounts
+    # The Accounts tab's status probe must not wake a stopped WSL distro.
+    window.running_distros = distro_probe.get_running
 
     def set_view_mode(value: str) -> None:
         usage_state["view"] = value
@@ -866,41 +879,23 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         usage_state["readout"] = value
         update_settings(state_dir, usage_readout=value)
 
-    def set_budget(pane_index: int) -> None:
-        # Imported here, not at module scope: --debug-print must keep
-        # working on a machine with no GUI toolkit installed.
-        from tkinter import messagebox, simpledialog
+    def budget_for_pane(pane_index: int) -> Optional[float]:
+        from tokitty.settings import budget_for
 
-        from tokitty.settings import budget_for, with_budget
+        return budget_for(load_settings(state_dir), units[pane_index]["key"], usage_state["window"])
 
-        unit = units[pane_index]
-        window_key = usage_state["window"]
-        current = budget_for(load_settings(state_dir), unit["key"], window_key)
-        label = {"24h": "24 hours", "7d": "7 days", "month": "this month"}[window_key]
-        # askstring, not askfloat: askfloat cannot tell a cancel from a
-        # submitted blank, and clearing a budget has to be expressible.
-        answer = simpledialog.askstring(
-            "Set budget",
-            f"Budget in dollars for {label}\n(leave blank to clear):",
-            initialvalue="" if current is None else f"{current:g}",
-            parent=root,
-        )
-        if answer is None:
-            return
-        answer = answer.strip()
-        amount = None
-        if answer:
-            try:
-                amount = float(answer.lstrip("$"))
-            except ValueError:
-                messagebox.showerror("Set budget", f"'{answer}' is not a number.", parent=root)
-                return
-            if amount <= 0:
-                messagebox.showerror("Set budget", "Enter an amount greater than zero.", parent=root)
-                return
-        budgets = with_budget(load_settings(state_dir), unit["key"], window_key, amount)
+    def set_budget_for_pane(pane_index: int, text: str) -> Optional[str]:
+        """Save (or clear, on blank) one pane's budget for the current usage
+        window. Returns an error message, or None on success."""
+        from tokitty.settings import parse_budget, with_budget
+
+        amount, error = parse_budget(text)
+        if error is not None:
+            return error
+        budgets = with_budget(load_settings(state_dir), units[pane_index]["key"], usage_state["window"], amount)
         usage_state["budgets"] = budgets
         update_settings(state_dir, usage_budgets=budgets)
+        return None
 
     window.view_mode = lambda: usage_state["view"]
     window.on_view_mode = set_view_mode
@@ -908,7 +903,12 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     window.on_usage_window = set_usage_window
     window.usage_readout = lambda: usage_state["readout"]
     window.on_usage_readout = set_usage_readout
-    window.on_set_budget = set_budget
+    window.budget_for_pane = budget_for_pane
+    window.set_budget_for_pane = set_budget_for_pane
+
+    from tokitty.settings_ui import SettingsWindow
+
+    window.open_settings = lambda pane_index: SettingsWindow.open(window, pane_index)
 
     if settings.surprise_me:
         for index in range(len(units)):
@@ -916,7 +916,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
 
     pane0 = window.panes[0]
     tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir,
-                       colorway=pane0._colorway, pattern=pane0._pattern)
+                       colorway=pane0._colorway, pattern=pane0._pattern,
+                       on_action_done=window.notify_state_changed)
 
     window.on_quit = lambda: (tray.stop(), root.destroy())
     # The right-click menu rebuilds itself on every open, but pystray
@@ -1020,12 +1021,16 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         open_in_window=deck_views.open,
     )
 
-    def streamdock_state() -> str:
-        if not StreamdockRuntime.configured(settings):
-            return "not_installed"
-        return "connected" if streamdock is not None and streamdock.connected else "not_connected"
+    from tokitty.streamdock.gui_state import StreamdockHolder
+    from tokitty.streamdock.install import install_supported
 
-    window.streamdock_state = streamdock_state
+    # The Settings tab updates this after an install or uninstall; the state
+    # is read from it, not from the startup `settings`.
+    streamdock_holder = StreamdockHolder(settings, state_dir, lambda: streamdock)
+    window.streamdock_state = streamdock_holder.state
+    window.streamdock_install = streamdock_holder.install
+    window.streamdock_uninstall = streamdock_holder.uninstall
+    window.streamdock_install_supported = install_supported
 
     def edit_streamdock_presets() -> None:
         from tokitty.streamdock.presets_ui import PresetsDialog

@@ -7,11 +7,12 @@ to defaults instead of crashing the app.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from tokitty.transparency import DEFAULT_LEVEL, LEVELS
 from tokitty.usage_scan import DEFAULT_WINDOW, WINDOWS
@@ -209,6 +210,24 @@ def _preset(entry):
 def budget_for(settings: Settings, slug: str, window: str):
     """The budget that applies to one account in one window, or None."""
     return settings.usage_budgets.get(slug, {}).get(window)
+
+
+def parse_budget(text: str) -> Tuple[Optional[float], Optional[str]]:
+    """Parse a budget entry into (amount, error). Blank clears (None, None);
+    an optional leading "$" is stripped; anything else must be a finite
+    number above zero."""
+    answer = (text or "").strip()
+    if not answer:
+        return None, None
+    try:
+        amount = float(answer.lstrip("$").strip())
+    except ValueError:
+        return None, f"'{answer}' is not a number."
+    if not math.isfinite(amount):
+        return None, f"'{answer}' is not a number."
+    if amount <= 0:
+        return None, "Enter an amount greater than zero."
+    return amount, None
 
 
 def with_budget(settings: Settings, slug: str, window: str, amount) -> Dict[str, Dict[str, float]]:
