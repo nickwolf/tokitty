@@ -193,6 +193,10 @@ def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
             distro, wsl_credentials_path = credentials.single()
         else:
             distro, wsl_credentials_path = find_wsl_credentials()
+    except AmbiguousCredentialsError:
+        # Several signed-in installs: the Accounts dialog resolves that, so
+        # don't sweep again for transcripts on the Tk thread just to guess.
+        return None, None
     except CredentialsError:
         try:
             matches = (

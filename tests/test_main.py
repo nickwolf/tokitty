@@ -2131,3 +2131,20 @@ def test_transcript_fallback_shares_one_sweep_with_discovery(tmp_path, monkeypat
     assert sweeps["n"] == 1
     assert distro == "Ubuntu"
     assert projects_dir == "\\\\wsl.localhost\\Ubuntu\\home\\n\\.claude\\projects"
+
+
+def test_projects_dir_ambiguous_credentials_skip_the_transcript_sweep(tmp_path, monkeypatch):
+    from tokitty.credentials import AmbiguousCredentialsError
+
+    monkeypatch.setattr("tokitty.__main__.sys.platform", "win32")
+    monkeypatch.delenv("TOKITTY_CREDENTIALS", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path / "home"))
+
+    class Ambiguous:
+        def single(self):
+            raise AmbiguousCredentialsError("two installs")
+
+        def claude_dirs(self):
+            raise AssertionError("ambiguous credentials must not sweep for transcripts")
+
+    assert resolve_projects_dir(None, credentials=Ambiguous()) == (None, None)
