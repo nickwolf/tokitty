@@ -51,7 +51,7 @@ Discovery, all on the worker:
 - WSL (Windows only): `find_all_wsl_credentials()` and `find_all_wsl_claude_dirs()` through the process's `WslCredentialsCache` (`all_matches()` and the memoized `claude_dirs()` that #87 adds, so #87 merges first), merged by `(distro, config dir)`. This is more than `run_discovery` does today: it only sweeps for transcripts when it found no credentials, and the walkthrough runs both sweeps so that a distro with transcripts but no sign-in still shows up. Both run once per process and on the worker, behind the spinner. Tests count the actual `wsl.exe` probes.
 - Codex: `discover_local_codex_home([])`.
 
-Every row starts checked. The primary button reads "Add N accounts" and writes `accounts.json` with the checked rows, the same way the Accounts dialog's Add does (`assign_identity_slug` + `save_identity_history`, `absorb_implicit_default` for the first Claude row so the default look carries over, a `random_look` for the rest), but through `save_accounts` alone, with no hook install. That is a new helper next to `apply_account_mutation`, because today the only save path installs hooks in the same operation and the walkthrough asks about hooks on the next step.
+Signed-in rows start checked. A row with transcripts but no sign-in starts unchecked, since adding it gives a pane with usage history and no limits (Nick, 2026-10-08). The primary button reads "Add N accounts" and writes `accounts.json` with the checked rows, the same way the Accounts dialog's Add does (`assign_identity_slug` + `save_identity_history`, `absorb_implicit_default` for the first Claude row so the default look carries over, a `random_look` for the rest), but through `save_accounts` alone, with no hook install. That is a new helper next to `apply_account_mutation`, because today the only save path installs hooks in the same operation and the walkthrough asks about hooks on the next step.
 
 Nothing found: the step says so, says Claude Code or Codex need to be installed and signed in once, and offers Skip. A single row is still shown, so the user sees what tokitty will watch.
 
@@ -71,7 +71,7 @@ Below the rows, the same reminders the Accounts tab and `--install-hooks` give: 
 
 ### 4. Done
 
-The brand cat in its content pose, "You're set", and: right-click any cat for Settings…, where accounts, hooks, looks and the Stream Dock live. Finish closes the walkthrough and the widget appears.
+The brand cat in its content pose, "You're set", and: right-click any cat for Settings…, where accounts, hooks, looks and the Stream Dock live. Finish closes the walkthrough and the widget appears. Done has Back and Finish only, no Skip.
 
 ## Skipping
 
