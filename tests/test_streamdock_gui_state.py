@@ -1,5 +1,6 @@
 """The Stream Dock state holder behind the Settings tab, and the install
 wrappers it calls. Fakes stand in for the real install and settings."""
+from pathlib import Path
 from types import SimpleNamespace
 
 from tokitty.streamdock import install
@@ -101,4 +102,4 @@ def test_gui_uninstall_passes_the_tokitty_dirs(tmp_path):
     ok, lines = install.gui_uninstall(
         tmp_path, tmp_path, uninstall_fn=fake, config_dirs_fn=lambda sd: [("/c/a", "claude")])
     assert ok and lines == ["Removed."]
-    assert [str(p) for p in seen["dirs"]] == ["/c/a/tokitty"]
+    assert seen["dirs"] == [Path("/c/a") / "tokitty"]
