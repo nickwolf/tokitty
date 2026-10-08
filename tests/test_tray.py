@@ -63,9 +63,22 @@ def test_start_builds_icon_and_thread(tmp_path):
 
 def test_action_wrapping_marshals_to_main_thread(tmp_path):
     mgr, root, _ = _managers(tmp_path)
-    sentinel = lambda: None  # noqa: E731
-    mgr._wrap(sentinel)("icon", "item")   # pystray calls with (icon, item)
-    assert root.after_calls == [(0, sentinel)]
+    ran = []
+    mgr._wrap(lambda: ran.append("action"))("icon", "item")   # pystray calls with (icon, item)
+    assert len(root.after_calls) == 1 and root.after_calls[0][0] == 0
+    assert ran == []   # nothing runs on the calling (pystray) thread
+    root.after_calls[0][1]()
+    assert ran == ["action"]
+
+
+def test_action_done_runs_after_the_action_inside_the_same_after_callback(tmp_path):
+    order = []
+    mgr, root, _ = _managers(tmp_path, on_action_done=lambda: order.append("done"))
+    mgr._wrap(lambda: order.append("action"))("icon", "item")
+    assert order == []
+    assert len(root.after_calls) == 1
+    root.after_calls[0][1]()
+    assert order == ["action", "done"]
 
 
 def test_stop_calls_icon_stop_and_is_noop_before_start(tmp_path):

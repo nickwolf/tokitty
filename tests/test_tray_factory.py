@@ -75,28 +75,22 @@ def _noop():
 
 
 def _shadow_model():
-    """A real MenuItem model from build_menu(), with the tray seam supplied
-    (so "Show tray icon" is present) and backed by plain-dict shadow state
+    """A real MenuItem model from build_menu(), with the View and Settings
+    seams supplied (so every item kind is present) and backed by plain-dict shadow state
     so getters can be driven *after* the model -- and the icon built from
     it -- already exist. That ordering is what would catch a late-binding
     closure bug in to_entries."""
-    state = {"colorway": "gray", "pattern": "tabby", "aot": True, "tray": True}
+    state = {"view": "compact", "aot": True}
 
     model = build_menu(
-        colorways=["orange", "gray", "black"],
-        patterns=["solid", "tabby", "calico"],
-        current_colorway=lambda: state["colorway"],
-        current_pattern=lambda: state["pattern"],
-        on_colorway=lambda name: None,
-        on_pattern=lambda name: None,
-        on_customize=_noop,
-        on_rename=_noop,
         on_refresh=_noop,
         always_on_top=lambda: state["aot"],
         on_toggle_always_on_top=_noop,
         on_quit=_noop,
-        tray_enabled=lambda: state["tray"],
-        on_toggle_tray=_noop,
+        on_open_settings=_noop,
+        view_modes=[("cards", "Cards"), ("compact", "Compact"), ("tiny", "Tiny")],
+        current_view_mode=lambda: state["view"],
+        on_view_mode=lambda v: None,
     )
     return model, state
 
@@ -128,8 +122,7 @@ def test_icon_factory_maps_menu_model_to_pystray_entries(monkeypatch):
 
     non_sep_labels = [item.label for item in model if not item.separator]
     assert non_sep_labels == [
-        "Colorway", "Pattern", "Customize…", "Rename…", "Refresh now",
-        "Always in front", "Show tray icon", "Exit",
+        "Refresh now", "View", "Always in front", "Settings…", "Exit",
     ]
 
     items_by_label = {item.label: item for item in model if not item.separator}
@@ -155,25 +148,15 @@ def test_icon_factory_maps_menu_model_to_pystray_entries(monkeypatch):
                 assert entry.radio is False
                 assert callable(entry.checked)
             else:
-                # Plain command entries: Customize…, Rename…, Refresh now, Exit.
+                # Plain command entries: Refresh now, Settings…, Exit.
                 assert entry.radio is False
                 assert entry.checked is None
 
-    # Colorway/Pattern submenus: each entry is a radio MenuItem with a
-    # checked getter.
-    colorway_item = items_by_label["Colorway"]
-    colorway_entries = entries_by_label["Colorway"].action.entries
-    assert len(colorway_entries) == len(colorway_item.submenu) == 3
-    for entry, sub_item in zip(colorway_entries, colorway_item.submenu):
-        assert entry.text == sub_item.label
-        assert entry.radio is True
-        assert entry.action == ("WRAPPED", sub_item.action)
-        assert callable(entry.checked)
-
-    pattern_item = items_by_label["Pattern"]
-    pattern_entries = entries_by_label["Pattern"].action.entries
-    assert len(pattern_entries) == len(pattern_item.submenu) == 3
-    for entry, sub_item in zip(pattern_entries, pattern_item.submenu):
+    # View submenu: each entry is a radio MenuItem with a checked getter.
+    view_item = items_by_label["View"]
+    view_entries = entries_by_label["View"].action.entries
+    assert len(view_entries) == len(view_item.submenu) == 3
+    for entry, sub_item in zip(view_entries, view_item.submenu):
         assert entry.text == sub_item.label
         assert entry.radio is True
         assert entry.action == ("WRAPPED", sub_item.action)
@@ -183,14 +166,11 @@ def test_icon_factory_maps_menu_model_to_pystray_entries(monkeypatch):
     # submenu resolved inline before its parent's siblings), and never for
     # a separator or a submenu parent itself (whose own action is None).
     expected_wrap_order = (
-        [c.action for c in colorway_item.submenu]
-        + [p.action for p in pattern_item.submenu]
+        [items_by_label["Refresh now"].action]
+        + [v.action for v in view_item.submenu]
         + [
-            items_by_label["Customize…"].action,
-            items_by_label["Rename…"].action,
-            items_by_label["Refresh now"].action,
             items_by_label["Always in front"].action,
-            items_by_label["Show tray icon"].action,
+            items_by_label["Settings…"].action,
             items_by_label["Exit"].action,
         ]
     )
@@ -204,33 +184,25 @@ def test_icon_factory_checked_getters_track_live_shadow_state(monkeypatch):
     items_by_label = {item.label: item for item in model if not item.separator}
     entries_by_label = _entries_by_label(model, entries)
 
-    colorway_entries = entries_by_label["Colorway"].action.entries
-    colorway_items = items_by_label["Colorway"].submenu
-    pattern_entries = entries_by_label["Pattern"].action.entries
-    pattern_items = items_by_label["Pattern"].submenu
+    view_entries = entries_by_label["View"].action.entries
+    view_items = items_by_label["View"].submenu
 
     dummy_item = object()  # pystray calls checked() with one positional MenuItem.
 
-    def _selected(entries, items):
-        return {sub.label for entry, sub in zip(entries, items) if entry.checked(dummy_item)}
+    def _selected():
+        return {sub.label for entry, sub in zip(view_entries, view_items) if entry.checked(dummy_item)}
 
-    assert _selected(colorway_entries, colorway_items) == {"gray"}
-    assert _selected(pattern_entries, pattern_items) == {"tabby"}
+    assert _selected() == {"Compact"}
     assert entries_by_label["Always in front"].checked(dummy_item) is True
-    assert entries_by_label["Show tray icon"].checked(dummy_item) is True
 
     # Flip the shadow state after the model/icon were already built: a
     # late-binding closure bug would freeze these on the values captured at
     # build time instead of re-reading state on every call.
-    state["colorway"] = "black"
-    state["pattern"] = "calico"
+    state["view"] = "tiny"
     state["aot"] = False
-    state["tray"] = False
 
-    assert _selected(colorway_entries, colorway_items) == {"black"}
-    assert _selected(pattern_entries, pattern_items) == {"calico"}
+    assert _selected() == {"Tiny"}
     assert entries_by_label["Always in front"].checked(dummy_item) is False
-    assert entries_by_label["Show tray icon"].checked(dummy_item) is False
 
 
 def test_image_factory_produces_square_transparent_rgba_icon():
@@ -254,10 +226,7 @@ def test_dynamic_label_item_becomes_a_callable_text_and_visibility(monkeypatch):
     monkeypatch.setitem(sys.modules, "pystray", _fake_pystray_module())
     found = {"label": None}
     model = build_menu(
-        colorways=["orange"], patterns=["solid"],
-        current_colorway=lambda: "orange", current_pattern=lambda: "solid",
-        on_colorway=lambda n: None, on_pattern=lambda n: None,
-        on_customize=_noop, on_rename=_noop, on_refresh=_noop,
+        on_refresh=_noop,
         always_on_top=lambda: True, on_toggle_always_on_top=_noop, on_quit=_noop,
         update_available_label=lambda: found["label"], on_install_update=_noop,
     )

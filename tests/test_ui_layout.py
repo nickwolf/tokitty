@@ -155,9 +155,8 @@ def test_build_menu_model_reads_shadow_state():
             window = TokittyWindow(root, Path(d), pane_count=1)
             model = window.build_menu_model(0)
             labels = [i.label for i in model if not i.separator]
-            # No tray seam wired by default -> no "Show tray icon".
-            assert labels == ["Colorway", "Pattern", "Customize…", "Rename…",
-                              "Refresh now", "Always in front", "Transparency", "Exit"]
+            # No open_settings seam wired by default -> no "Settings…".
+            assert labels == ["Refresh now", "Always in front", "Exit"]
             # always_on_top getter reads the plain-Python shadow, not a tk Var.
             aot = {i.label: i for i in model if not i.separator}["Always in front"]
             assert aot.checkbox() == window._always_on_top_bool
@@ -186,7 +185,7 @@ def test_toggle_always_on_top_flips_shadow():
 
 
 @pytest.mark.gui
-def test_tray_seam_adds_show_tray_item():
+def test_open_settings_seam_adds_the_item_and_passes_the_pane():
     tk = pytest.importorskip("tkinter")
     from tokitty.ui import TokittyWindow
     import tempfile
@@ -195,51 +194,16 @@ def test_tray_seam_adds_show_tray_item():
     root = tk.Tk()
     try:
         with tempfile.TemporaryDirectory() as d:
-            window = TokittyWindow(root, Path(d), pane_count=1)
-            state = {"enabled": True}
-            window.tray_enabled = lambda: state["enabled"]
-            window.on_toggle_tray = lambda: None
-            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
-            assert "Show tray icon" in labels
-    finally:
-        root.destroy()
-
-
-@pytest.mark.gui
-def test_randomize_and_surprise_seams_add_items():
-    tk = pytest.importorskip("tkinter")
-    from tokitty.ui import TokittyWindow
-    import tempfile
-    from pathlib import Path
-
-    root = tk.Tk()
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            window = TokittyWindow(root, Path(d), pane_count=1)
-            window.on_randomize = lambda i: None
-            window.surprise_me = lambda: True
-            window.on_toggle_surprise = lambda: None
-            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
-            assert "Randomize" in labels and "Surprise me" in labels
-    finally:
-        root.destroy()
-
-
-@pytest.mark.gui
-def test_autostart_seam_adds_start_at_login_item():
-    tk = pytest.importorskip("tkinter")
-    from tokitty.ui import TokittyWindow
-    import tempfile
-    from pathlib import Path
-
-    root = tk.Tk()
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            window = TokittyWindow(root, Path(d), pane_count=1)
-            window.autostart_enabled = lambda: True
-            window.on_toggle_autostart = lambda: None
-            labels = [i.label for i in window.build_menu_model(0) if not i.separator]
-            assert "Start at login" in labels
+            window = TokittyWindow(root, Path(d), pane_count=3)
+            opened = []
+            window.open_settings = opened.append
+            model = window.build_menu_model(2)
+            item = {i.label: i for i in model if not i.separator}["Settings…"]
+            item.action()
+            assert opened == [2]
+            # Pane-specific items are gone from the menu entirely.
+            labels = [i.label for i in model if not i.separator]
+            assert not {"Colorway", "Pattern", "Randomize", "Customize…", "Rename…", "Set budget…"} & set(labels)
     finally:
         root.destroy()
 
@@ -268,8 +232,8 @@ def test_update_seams_add_the_update_items_and_the_item_hides_without_a_release(
             window.on_toggle_update_check = lambda: None
             # Hidden in the Tk menu until a newer release is known.
             labels = tk_labels(window)
-            assert labels[0] == "Colorway"
-            assert labels[-3:] == ["Check for updates", "Check for updates automatically", "Exit"]
+            assert labels[0] == "Refresh now"
+            assert labels[-1] == "Exit"
             found["label"] = "Update to v0.3.0…"
             assert tk_labels(window)[0] == "Update to v0.3.0…"
             # The tray gets the same model, with the getter intact.
@@ -279,9 +243,9 @@ def test_update_seams_add_the_update_items_and_the_item_hides_without_a_release(
 
 
 @pytest.mark.gui
-def test_none_pane_index_rebuilds_menu_with_only_global_items():
+def test_blank_cell_rebuilds_menu_with_settings_on_pane_zero():
     tk = pytest.importorskip("tkinter")
-    from tokitty.ui import TokittyWindow, _PANE_SPECIFIC_LABELS
+    from tokitty.ui import TokittyWindow
     import tempfile
     from pathlib import Path
 
@@ -289,30 +253,21 @@ def test_none_pane_index_rebuilds_menu_with_only_global_items():
     try:
         with tempfile.TemporaryDirectory() as d:
             window = TokittyWindow(root, Path(d), pane_count=5)
-            # Wire every optional seam so all five global items are present.
-            window.on_randomize = lambda i: None
-            window.surprise_me = lambda: True
-            window.on_toggle_surprise = lambda: None
-            window.tray_enabled = lambda: True
-            window.on_toggle_tray = lambda: None
+            opened = []
+            window.open_settings = opened.append
 
-            window._menu_pane_index = None
+            window._menu_pane_index = None   # right-click on a blank cell
             window._rebuild_context_menu()
 
-            end = window.menu.index("end")
             labels = []
-            for i in range(end + 1):
+            for i in range(window.menu.index("end") + 1):
                 try:
                     labels.append(window.menu.entrycget(i, "label"))
                 except tk.TclError:
                     pass  # separator: no label to read
-            label_set = set(labels)
-
-            # Pane-specific items must be fully omitted, not just disabled.
-            assert label_set.isdisjoint(_PANE_SPECIFIC_LABELS)
-            # Global items must all be present.
-            assert {"Refresh now", "Always in front", "Show tray icon",
-                    "Surprise me", "Exit"} <= label_set
+            assert labels == ["Refresh now", "Always in front", "Settings…", "Exit"]
+            window.menu.invoke(labels.index("Settings…") + 1)   # +1: the separator before it
+            assert opened == [0]
     finally:
         root.destroy()
 
@@ -346,6 +301,7 @@ def _bare_window():
 
     window = TokittyWindow.__new__(TokittyWindow)
     window.on_menu_action_done = None
+    window.settings_refresh = None
     return window
 
 
@@ -366,12 +322,35 @@ def test_after_menu_action_without_a_done_hook_still_runs_the_action():
     assert ran == ["action"]
 
 
+def test_notify_state_changed_runs_the_tray_hook_then_the_settings_refresh():
+    window = _bare_window()
+    order = []
+    window.on_menu_action_done = lambda: order.append("tray")
+    window.settings_refresh = lambda: order.append("settings")
+    window.notify_state_changed()
+    assert order == ["tray", "settings"]
+
+
+def test_notify_state_changed_with_no_hooks_is_a_noop():
+    window = _bare_window()
+    window.settings_refresh = None
+    window.notify_state_changed()
+
+
+def test_after_menu_action_also_refreshes_settings():
+    window = _bare_window()
+    order = []
+    window.settings_refresh = lambda: order.append("settings")
+    window._after_menu_action(lambda: order.append("action"))()
+    assert order == ["action", "settings"]
+
+
 def test_after_menu_action_passes_none_through():
     assert _bare_window()._after_menu_action(None) is None
 
 
 @pytest.mark.gui
-def test_transparency_submenu_tracks_the_window_level():
+def test_select_opacity_updates_the_window_level_and_saves():
     tk = pytest.importorskip("tkinter")
     from tokitty.ui import TokittyWindow
     from tokitty.transparency import LEVELS
@@ -385,16 +364,11 @@ def test_transparency_submenu_tracks_the_window_level():
             saved = []
             window.on_opacity_changed = saved.append
 
-            submenu = {i.label: i for i in window.build_menu_model(0)}["Transparency"].submenu
-            assert [i.label for i in submenu] == [f"{level}%" for level in LEVELS]
-            assert [i.label for i in submenu if i.radio_selected()] == ["100%"]
-
-            {i.label: i for i in submenu}["60%"].action()
+            assert window.opacity() == 100
+            window._select_opacity(60)
             assert window.opacity() == 60
             assert saved == [60]
-            # The getters are plain-Python shadow reads, so pystray may call
-            # them off the main thread when it redraws the tray menu.
-            assert [i.label for i in submenu if i.radio_selected()] == ["60%"]
+            assert window.opacity() in LEVELS
     finally:
         root.destroy()
 
@@ -491,7 +465,7 @@ def test_an_unknown_tool_name_is_cut_to_fit_the_canvas():
 
 
 @pytest.mark.gui
-def test_choosing_a_level_from_the_tk_menu_resyncs_the_tray():
+def test_choosing_an_item_from_the_tk_menu_resyncs_the_tray():
     tk = pytest.importorskip("tkinter")
     from tokitty.ui import TokittyWindow
     import tempfile
@@ -508,12 +482,11 @@ def test_choosing_a_level_from_the_tk_menu_resyncs_the_tray():
             # native HMENU, so anything changed from this menu is invisible in
             # the tray until update_menu runs (PR #54).
             window._rebuild_context_menu()
-            transparency = window.menu.entrycget(window.menu.index("Transparency"), "menu")
-            submenu = window.menu.nametowidget(transparency)
-            submenu.invoke(submenu.index("70%"))
+            before = window._always_on_top_bool
+            window.menu.invoke(window.menu.index("Always in front"))
 
-            assert window.opacity() == 70
-            assert resyncs == [70]
+            assert window._always_on_top_bool is (not before)
+            assert resyncs == [100]
     finally:
         root.destroy()
 

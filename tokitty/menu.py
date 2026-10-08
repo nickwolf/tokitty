@@ -10,7 +10,7 @@ them accordingly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 
 @dataclass
@@ -29,95 +29,19 @@ class MenuItem:
     dynamic_label: Optional[Callable[[], Optional[str]]] = None
 
 
-INSTALL_STREAMDOCK_COMMAND = "python -m tokitty --install-streamdock"
-
-
-def streamdock_menu_item(
-    state: str,
-    on_copy_install: Callable[[], None],
-    on_edit_presets: Optional[Callable[[], None]] = None,
-    account_toggles: Optional[List[Tuple[str, Callable[[], bool], Callable[[], None]]]] = None,
-) -> MenuItem:
-    """The "Stream Dock" submenu. `state` is "connected", "not_connected" or "not_installed",
-    read by the caller when the menu opens. The presets editor and the account switches
-    (label, is shown, toggle) are offered once installed."""
-    if state == "not_installed":
-        sub = [
-            MenuItem(label="Not installed", enabled=False),
-            MenuItem(label=f"Copy: {INSTALL_STREAMDOCK_COMMAND}", action=on_copy_install),
-        ]
-    else:
-        sub = [MenuItem(label="Connected" if state == "connected" else "Not connected", enabled=False)]
-        if on_edit_presets is not None:
-            sub.append(MenuItem(label="New-session presets…", action=on_edit_presets))
-        if account_toggles:
-            sub.append(MenuItem(label="Show sessions from", submenu=[
-                MenuItem(label=label, action=toggle, checkbox=shown) for label, shown, toggle in account_toggles
-            ]))
-    return MenuItem(label="Stream Dock", submenu=sub)
-
-
 def build_menu(
     *,
-    colorways: List[str],
-    patterns: List[str],
-    current_colorway: Callable[[], str],
-    current_pattern: Callable[[], str],
-    on_colorway: Callable[[str], None],
-    on_pattern: Callable[[str], None],
-    on_customize: Callable[[], None],
-    on_rename: Callable[[], None],
     on_refresh: Callable[[], None],
     always_on_top: Callable[[], bool],
     on_toggle_always_on_top: Callable[[], None],
     on_quit: Callable[[], None],
-    tray_enabled: Optional[Callable[[], bool]] = None,
-    on_toggle_tray: Optional[Callable[[], None]] = None,
-    on_randomize: Optional[Callable[[], None]] = None,
-    surprise_me: Optional[Callable[[], bool]] = None,
-    on_toggle_surprise: Optional[Callable[[], None]] = None,
-    on_open_accounts: Optional[Callable[[], None]] = None,
-    autostart_enabled: Optional[Callable[[], bool]] = None,
-    on_toggle_autostart: Optional[Callable[[], None]] = None,
-    opacity_levels: Optional[List[int]] = None,
-    current_opacity: Optional[Callable[[], int]] = None,
-    on_opacity: Optional[Callable[[int], None]] = None,
+    on_open_settings: Optional[Callable[[], None]] = None,
     view_modes: Optional[List[tuple]] = None,
     current_view_mode: Optional[Callable[[], str]] = None,
     on_view_mode: Optional[Callable[[str], None]] = None,
-    usage_windows: Optional[List[tuple]] = None,
-    current_usage_window: Optional[Callable[[], str]] = None,
-    on_usage_window: Optional[Callable[[str], None]] = None,
-    usage_readouts: Optional[List[tuple]] = None,
-    current_usage_readout: Optional[Callable[[], str]] = None,
-    on_usage_readout: Optional[Callable[[str], None]] = None,
-    on_set_budget: Optional[Callable[[], None]] = None,
     update_available_label: Optional[Callable[[], Optional[str]]] = None,
     on_install_update: Optional[Callable[[], None]] = None,
-    on_check_updates: Optional[Callable[[], None]] = None,
-    update_check_enabled: Optional[Callable[[], bool]] = None,
-    on_toggle_update_check: Optional[Callable[[], None]] = None,
 ) -> List[MenuItem]:
-    def radio_submenu(options, current, on_select) -> List[MenuItem]:
-        return [
-            MenuItem(
-                label=label,
-                action=(lambda value=value: on_select(value)),
-                radio_selected=(lambda value=value: current() == value),
-            )
-            for value, label in options
-        ]
-
-    colorway_items = [
-        MenuItem(label=n, action=(lambda n=n: on_colorway(n)),
-                 radio_selected=(lambda n=n: current_colorway() == n))
-        for n in colorways
-    ]
-    pattern_items = [
-        MenuItem(label=n, action=(lambda n=n: on_pattern(n)),
-                 radio_selected=(lambda n=n: current_pattern() == n))
-        for n in patterns
-    ]
     items: List[MenuItem] = []
     if update_available_label is not None and on_install_update is not None:
         # The getter returns None while no newer release is known, which
@@ -125,65 +49,20 @@ def build_menu(
         items.append(MenuItem(
             label=update_available_label() or "", action=on_install_update,
             dynamic_label=update_available_label))
-    items += [
-        MenuItem(label="Colorway", submenu=colorway_items),
-        MenuItem(label="Pattern", submenu=pattern_items),
-    ]
-    if on_randomize is not None:
-        items.append(MenuItem(label="Randomize", action=on_randomize))
-    items += [
-        MenuItem(label="Customize…", action=on_customize),
-        MenuItem(label="Rename…", action=on_rename),
-    ]
-    if on_open_accounts is not None:
-        items.append(MenuItem(label="Accounts…", action=on_open_accounts))
-    items += [
-        MenuItem(separator=True),
-        MenuItem(label="Refresh now", action=on_refresh),
-        MenuItem(label="Always in front", action=on_toggle_always_on_top, checkbox=always_on_top),
-    ]
-    if on_toggle_tray is not None and tray_enabled is not None:
-        items.append(MenuItem(label="Show tray icon", action=on_toggle_tray, checkbox=tray_enabled))
-    if on_toggle_autostart is not None and autostart_enabled is not None:
-        items.append(MenuItem(label="Start at login", action=on_toggle_autostart, checkbox=autostart_enabled))
-    if opacity_levels and current_opacity is not None and on_opacity is not None:
-        # Discrete levels rather than a slider: tk.Menu has no slider widget
-        # and pystray cannot render one at all, and this model feeds both.
-        items.append(MenuItem(label="Transparency", submenu=[
-            MenuItem(label=f"{level}%", action=(lambda level=level: on_opacity(level)),
-                     radio_selected=(lambda level=level: current_opacity() == level))
-            for level in opacity_levels
-        ]))
-    # Each usage group appears only when both halves are supplied, the
-    # same way tray_enabled/on_toggle_tray already gate each other.
+    items.append(MenuItem(label="Refresh now", action=on_refresh))
     if view_modes and current_view_mode is not None and on_view_mode is not None:
-        items.append(
-            MenuItem(label="View", submenu=radio_submenu(view_modes, current_view_mode, on_view_mode))
-        )
-    if usage_windows and current_usage_window is not None and on_usage_window is not None:
-        items.append(
+        items.append(MenuItem(label="View", submenu=[
             MenuItem(
-                label="Usage window",
-                submenu=radio_submenu(usage_windows, current_usage_window, on_usage_window),
+                label=label,
+                action=(lambda value=value: on_view_mode(value)),
+                radio_selected=(lambda value=value: current_view_mode() == value),
             )
-        )
-    if usage_readouts and current_usage_readout is not None and on_usage_readout is not None:
-        items.append(
-            MenuItem(
-                label="Usage readout",
-                submenu=radio_submenu(usage_readouts, current_usage_readout, on_usage_readout),
-            )
-        )
-    if on_set_budget is not None:
-        items.append(MenuItem(label="Set budget…", action=on_set_budget))
-    if on_toggle_surprise is not None and surprise_me is not None:
-        items.append(MenuItem(label="Surprise me", action=on_toggle_surprise, checkbox=surprise_me))
-    if on_check_updates is not None:
-        items.append(MenuItem(label="Check for updates", action=on_check_updates))
-    if on_toggle_update_check is not None and update_check_enabled is not None:
-        items.append(MenuItem(
-            label="Check for updates automatically", action=on_toggle_update_check,
-            checkbox=update_check_enabled))
+            for value, label in view_modes
+        ]))
+    items.append(MenuItem(label="Always in front", action=on_toggle_always_on_top, checkbox=always_on_top))
+    if on_open_settings is not None:
+        items.append(MenuItem(separator=True))
+        items.append(MenuItem(label="Settings…", action=on_open_settings))
     items.append(MenuItem(separator=True))
     items.append(MenuItem(label="Exit", action=on_quit))
     return items

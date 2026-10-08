@@ -928,7 +928,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
 
     pane0 = window.panes[0]
     tray = TrayManager(root, lambda: window.build_menu_model(0), state_dir,
-                       colorway=pane0._colorway, pattern=pane0._pattern)
+                       colorway=pane0._colorway, pattern=pane0._pattern,
+                       on_action_done=window.notify_state_changed)
 
     window.on_quit = lambda: (tray.stop(), root.destroy())
     # The right-click menu rebuilds itself on every open, but pystray

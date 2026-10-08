@@ -2001,5 +2001,4 @@ def test_run_gui_wires_the_update_menu_seams_and_the_toggle_saves_the_setting(tm
     assert main_module.run_gui() == 0
 
     assert seen["labels"][0] == ""  # the update item is present and hidden
-    assert "Check for updates" in seen["labels"] and "Check for updates automatically" in seen["labels"]
     assert (seen["before"], seen["after"], seen["saved"], seen["restored"]) == (True, False, False, True)
