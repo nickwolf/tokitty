@@ -23,6 +23,9 @@ VIEW_MODES = ("limits", "models")
 DEFAULT_VIEW_MODE = "limits"
 READOUTS = ("cost", "tokens")
 DEFAULT_READOUT = "cost"
+# "" = never classified (every existing user), "pending" = the first-run
+# walkthrough is owed, "done" = finished or skipped.
+FIRST_RUN_STATES = ("", "pending", "done")
 PRESET_ENVS = ("wsl", "native")
 PRESET_NAME_MAX = 40
 MIN_PORT = 1024
@@ -60,6 +63,7 @@ class Settings:
     # Account name slugs whose sessions get no key on the deck. The default
     # no-Account unit has no slug and cannot be hidden.
     streamdock_hidden_accounts: List[str] = field(default_factory=list)
+    first_run: str = ""
 
 
 def load_settings(state_dir) -> Settings:
@@ -98,6 +102,7 @@ def load_settings(state_dir) -> Settings:
         streamdock_port=_port(data.get("streamdock_port")),
         streamdock_token=_token(data.get("streamdock_token")),
         streamdock_hidden_accounts=_names(data.get("streamdock_hidden_accounts")),
+        first_run=_one_of(data.get("first_run"), FIRST_RUN_STATES, ""),
     )
 
 

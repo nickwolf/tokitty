@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Callable
 
 
+LOCK_FILENAME = "tokitty.lock"
+
+
 class LockAcquisitionError(Exception):
     """Raised when another instance already holds the lock."""
 
@@ -19,7 +22,7 @@ class SingleInstanceLock:
     unlike a PID file this can never go stale.
     """
 
-    def __init__(self, lock_dir: Path, name: str = "tokitty.lock"):
+    def __init__(self, lock_dir: Path, name: str = LOCK_FILENAME):
         self._path = lock_dir / name
         self._file = None
 

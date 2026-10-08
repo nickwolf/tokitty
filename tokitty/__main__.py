@@ -256,8 +256,11 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
 
     hints = {
         "stale_token": "token stale, open Claude Code",
-        "credentials_unreachable": "can't find credentials",
-        "ambiguous_credentials": "multiple installs, use Accounts…",
+        "credentials_unreachable": (
+            "can't find credentials. Right-click ▸ Settings… ▸ Accounts "
+            "to read usage from transcripts."
+        ),
+        "ambiguous_credentials": "multiple installs. Right-click ▸ Settings… ▸ Accounts to choose.",
         "api_error": "API hiccup, retrying",
         "keychain_denied": _KEYCHAIN_DENIED_HINT,
         "source_unreachable": "no recent sessions found",

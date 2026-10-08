@@ -120,7 +120,10 @@ def test_no_good_snapshot_credentials_unreachable_matches_generic_fallback():
     display = _display_state_for(_error("credentials_unreachable"), previous=None, now=NOW)
     assert display["state"] == "confused"
     assert display["dimmed"] is True
-    assert display["hint_text"] == "can't find credentials"
+    assert display["hint_text"] == (
+        "can't find credentials. Right-click ▸ Settings… ▸ Accounts "
+        "to read usage from transcripts."
+    )
 
 
 def test_boot_race_recovers_without_manual_refresh(monkeypatch):
@@ -480,6 +483,7 @@ def test_ambiguous_credentials_hint_without_cache_points_at_accounts_not_env_var
     display = _display_state_for(_error("ambiguous_credentials"), previous=None, now=NOW)
     assert "TOKITTY_CREDENTIALS" not in display["hint_text"]
     assert "Accounts" in display["hint_text"]
+    assert display["hint_text"].endswith("Right-click ▸ Settings… ▸ Accounts to choose.")
 
 
 def test_ambiguous_credentials_hint_overdue_cache_points_at_accounts_not_env_var():
