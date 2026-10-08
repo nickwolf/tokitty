@@ -39,6 +39,9 @@ STATE_INFO = {
                "Couldn't listen on port {port}: {reason}. Restart tokitty to try again."),
 }
 UNSUPPORTED_NOTE = "Installing the Stream Dock plugin needs Windows and VSD Craft."
+# How often an open tab re-reads the state, so "Starting" and "Connected" show up
+# without switching tabs.
+STATE_WATCH_MS = 1000
 
 
 class StreamDockTab(_Tab):
@@ -79,7 +82,10 @@ class StreamDockTab(_Tab):
         self.install_button: Optional[tk.Button] = None
         self.uninstall_button: Optional[tk.Button] = None
         self.presets_button: Optional[tk.Button] = None
+        self._painted: Optional[Tuple[str, str]] = None
+        self._watch_id: Optional[str] = None
         self._paint_log()
+        self._watch()
 
     # -- state ---------------------------------------------------------------
 
@@ -94,12 +100,32 @@ class StreamDockTab(_Tab):
 
     def close(self) -> None:
         self.poller.cancel()
+        if self._watch_id is not None:
+            try:
+                self.owner.toplevel.after_cancel(self._watch_id)
+            except tk.TclError:
+                pass
+            self._watch_id = None
+
+    def _watch(self) -> None:
+        """Repaint when the state or its detail changed since the last paint."""
+        self._watch_id = None
+        if self._painted is not None and self._painted != self._status():
+            self.refresh()
+        try:
+            self._watch_id = self.owner.toplevel.after(STATE_WATCH_MS, self._watch)
+        except tk.TclError:
+            pass
+
+    def _status(self) -> Tuple[str, str]:
+        state = self.state()
+        info = self.win.streamdock_info
+        detail = STATE_INFO[state][2].format(**(info() if info is not None else {"port": "?", "reason": ""}))
+        return state, detail
 
     def refresh(self) -> None:
-        state = self.state()
-        label, kind, detail = STATE_INFO[state]
-        info = self.win.streamdock_info
-        detail = detail.format(**(info() if info is not None else {"port": "?", "reason": ""}))
+        state, detail = self._painted = self._status()
+        label, kind, _ = STATE_INFO[state]
         self.kit.set_pill(self.pill, label, kind)
         self.detail.configure(text=detail)
         supported = self.supported()

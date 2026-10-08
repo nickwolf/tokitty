@@ -452,6 +452,21 @@ def test_streamdock_starting_and_failed_details_name_port_and_reason(harness, st
 
 
 @pytest.mark.gui
+def test_streamdock_open_tab_follows_state_without_switching_tabs(harness, monkeypatch):
+    from tokitty import settings_streamdock
+
+    monkeypatch.setattr(settings_streamdock, "STATE_WATCH_MS", 20)
+    deck = Deck(harness, "starting")
+    harness.window.streamdock_info = lambda: {"port": 59967, "reason": ""}
+    settings, tab = open_tab(harness, "streamdock")
+    assert tab.pill.cget("text") == "Starting"
+    deck.state = "connected"
+    pump(harness, lambda: tab.pill.cget("text") == "Connected")
+    settings.close()
+    assert tab._watch_id is None
+
+
+@pytest.mark.gui
 def test_streamdock_install_runs_on_worker_and_updates_pill(harness):
     deck = Deck(harness, "not_installed")
     _settings, tab = open_tab(harness, "streamdock")
