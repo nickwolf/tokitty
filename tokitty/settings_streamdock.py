@@ -32,6 +32,11 @@ STATE_INFO = {
                            "Plugin installed. Restart tokitty, then restart VSD Craft."),
     "restart_to_finish_removal": ("Restart tokitty to finish", "warn",
                                   "Plugin removed. Restart tokitty to stop its Stream Dock connection."),
+    # Details with {port} and {reason} are formatted from window.streamdock_info().
+    "starting": ("Starting", "warn",
+                 "Waiting for port {port}. An older copy of tokitty may still be closing."),
+    "failed": ("Couldn't start", "bad",
+               "Couldn't listen on port {port}: {reason}. Restart tokitty to try again."),
 }
 UNSUPPORTED_NOTE = "Installing the Stream Dock plugin needs Windows and VSD Craft."
 
@@ -93,6 +98,8 @@ class StreamDockTab(_Tab):
     def refresh(self) -> None:
         state = self.state()
         label, kind, detail = STATE_INFO[state]
+        info = self.win.streamdock_info
+        detail = detail.format(**(info() if info is not None else {"port": "?", "reason": ""}))
         self.kit.set_pill(self.pill, label, kind)
         self.detail.configure(text=detail)
         supported = self.supported()
@@ -110,7 +117,7 @@ class StreamDockTab(_Tab):
         for child in self.actions.winfo_children():
             child.destroy()
         self.install_button = self.uninstall_button = None
-        installed = state in ("not_connected", "connected", "restart_to_connect")
+        installed = state in ("not_connected", "connected", "restart_to_connect", "starting", "failed")
         if self._confirming and installed:
             text(self.actions, "Remove the plugin?", bg=SURFACE, color=MUTED,
                  font=FONT_SMALL).pack(side="left", padx=(0, kit.px(8)))

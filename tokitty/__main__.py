@@ -54,7 +54,7 @@ from tokitty.providers.claude import (  # noqa: F401
 )
 from tokitty.settings import Settings
 from tokitty.streamdock.window import InWindowViews
-from tokitty.streamdock.wiring import DEFAULT_NAME, apply_idle_cap, gather_inputs, start_streamdock, usage_from_display
+from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, apply_idle_cap, gather_inputs, usage_from_display
 from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty.randomize import random_look
@@ -1014,20 +1014,24 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         account = units[index]["account"]
         return account.name if account else DEFAULT_NAME
 
-    streamdock = None
-    deck_views = InWindowViews(root, lambda: streamdock, account_name, pane_anchor)
-    streamdock = start_streamdock(
+    deck_views = InWindowViews(root, lambda: deck.runtime, account_name, pane_anchor)
+    # A busy deck port is retried on the Tk thread for as long as an update's
+    # handover can take, so a new copy launched by the updater still gets it.
+    deck = DeckStarter(
         settings, units, distro_probe.get_running, palette_fn=lambda i: units[i]["pane"].palette,
-        open_in_window=deck_views.open,
+        open_in_window=deck_views.open, after=root.after, cancel=root.after_cancel,
+        deadline_s=update_controller.ACK_TIMEOUT + BIND_MARGIN_S,
     )
+    deck.begin()
 
     from tokitty.streamdock.gui_state import StreamdockHolder
     from tokitty.streamdock.install import install_supported
 
     # The Settings tab updates this after an install or uninstall; the state
     # is read from it, not from the startup `settings`.
-    streamdock_holder = StreamdockHolder(settings, state_dir, lambda: streamdock)
+    streamdock_holder = StreamdockHolder(settings, state_dir, lambda: deck.runtime, deck=deck)
     window.streamdock_state = streamdock_holder.state
+    window.streamdock_info = streamdock_holder.info
     window.streamdock_install = streamdock_holder.install
     window.streamdock_uninstall = streamdock_holder.uninstall
     window.streamdock_install_supported = install_supported
@@ -1036,8 +1040,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         from tokitty.streamdock.presets_ui import PresetsDialog
 
         def on_saved(presets) -> None:
-            if streamdock is not None:
-                streamdock.set_presets(presets)
+            deck.set_presets(presets)
 
         PresetsDialog.open(
             root,
@@ -1098,8 +1101,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 print(f"tokitty: streamdock: could not save settings: {exc}", file=sys.stderr)
                 return
             hidden_accounts[:] = saved
-            if streamdock is not None:
-                streamdock.set_hidden_accounts(saved)
+            deck.set_hidden_accounts(saved)
 
         out = []
         for i, unit in enumerate(units):
@@ -1166,6 +1168,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 display["accent"] = pose["accent"]
                 unit["pane"].render(**display)
             unit["last_good"] = _next_last_good(latest, unit["last_good"])
+        streamdock = deck.runtime
         if streamdock is not None:
             try:
                 streamdock.tick(*gather_inputs(units))
@@ -1216,8 +1219,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     finally:
         tray.stop()
         deck_views.close_all()
-        if streamdock is not None:
-            streamdock.stop()
+        deck.stop()
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()

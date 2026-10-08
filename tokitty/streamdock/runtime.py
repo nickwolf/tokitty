@@ -174,7 +174,12 @@ class StreamdockRuntime:
     # lifecycle
 
     def start(self) -> None:
-        """Start the focus worker, the watchers and the server. A bind error propagates."""
+        """Bind the server, then start the focus worker and the watchers. A bind error propagates.
+
+        The bind comes first and, when it fails, has started nothing, so the caller
+        can call start() again once the port frees up.
+        """
+        self._server.start()
         try:
             if self._run_io == self._io_jobs.put:
                 self._io_thread = threading.Thread(target=self._io_loop, name="streamdock-io", daemon=True)
@@ -182,7 +187,6 @@ class StreamdockRuntime:
             self._worker = self._worker_factory(self._inbound.put)
             for watcher in self._watchers.values():
                 watcher.start()
-            self._server.start()
         except BaseException:
             self.stop()
             raise

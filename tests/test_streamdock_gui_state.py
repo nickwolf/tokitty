@@ -103,3 +103,37 @@ def test_gui_uninstall_passes_the_tokitty_dirs(tmp_path):
         tmp_path, tmp_path, uninstall_fn=fake, config_dirs_fn=lambda sd: [("/c/a", "claude")])
     assert ok and lines == ["Removed."]
     assert seen["dirs"] == [Path("/c/a") / "tokitty"]
+
+
+def test_starting_and_failed_come_from_the_deck_while_there_is_no_runtime():
+    deck = SimpleNamespace(state="starting", port=40000, reason="in use")
+    h = StreamdockHolder(CONFIGURED, "state", lambda: None, deck=deck)
+    assert h.state() == "starting"
+    assert h.info() == {"port": 40000, "reason": "in use"}
+    deck.state = "failed"
+    assert h.state() == "failed"
+    deck.state = "running"
+    assert h.state() == "not_connected"
+    assert holder(EMPTY).state() == "not_installed"
+
+
+def test_a_live_runtime_wins_over_a_stale_deck_state():
+    deck = SimpleNamespace(state="starting", port=1, reason="")
+    h = StreamdockHolder(CONFIGURED, "state", lambda: SimpleNamespace(connected=True), deck=deck)
+    assert h.state() == "connected"
+
+
+def test_restart_overrides_still_win_over_starting():
+    deck = SimpleNamespace(state="starting", port=40000, reason="")
+    h = StreamdockHolder(CONFIGURED, "state", lambda: None, deck=deck, load_fn=lambda _sd: EMPTY,
+                         uninstall_fn=lambda _sd: (True, []))
+    h.uninstall()
+    assert h.state() == "restart_to_finish_removal"
+
+
+def test_reinstall_while_starting_keeps_the_same_credentials_live():
+    deck = SimpleNamespace(state="starting", port=40000, reason="")
+    h = StreamdockHolder(CONFIGURED, "state", lambda: None, deck=deck, load_fn=lambda _sd: CONFIGURED,
+                         install_fn=lambda _sd: (True, []))
+    h.install()
+    assert h.state() == "starting"
