@@ -18,7 +18,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from tokitty.accounts import (
     DEFAULT_PROVIDER,
@@ -1057,13 +1057,21 @@ def _find_handler(entries, handler) -> Tuple[int, int]:
     raise LookupError("handler not found")
 
 
-def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> ConfigDirResult:
+def _reconcile_hooks(
+    config_dir: str, provider: str, add_missing: bool, dry_run: bool = False
+) -> ConfigDirResult:
     """Bring config_dir's hooks in line with what tokitty would write
     today, adding a missing handler only when add_missing is true. Driven
     by the provider's HookTarget, so it serves Claude (settings.json) and
     Codex (hooks.json) alike. Shared by install_hooks_for_dir
     (add_missing=True) and refresh_hooks_for_dir (add_missing=False, the
-    startup refresh)."""
+    startup refresh).
+
+    dry_run makes every decision exactly as a real run would but performs
+    no write of any kind (no mkdir, hook_writer.py copy, runner link,
+    trust record, backup or settings write): the result lists what would
+    change. hook_status_for_dir uses it so the status query and the
+    installer cannot drift apart."""
     target = _hook_target(provider)
     base = Path(_local_config_path(config_dir))
     settings_path = base / target.settings_file
@@ -1094,7 +1102,16 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
     stable = None
     fallback_bundled = None
 
-    if is_exec:
+    if is_exec and dry_run:
+        # Read-only stand-in for the link work below: a runner link that
+        # exists counts as healthy, otherwise the bundled fallback applies.
+        platform = sys.platform
+        stable = stable_runner_path(state_dir_path(), platform)
+        if os.path.exists(stable):
+            healthy_runner = stable
+        else:
+            fallback_bundled = hook_runner_path(os.path.realpath(sys.executable), platform)
+    elif is_exec:
         # Exec form (a frozen build, not the WSL-from-Windows row): the
         # link has to be made, or the fallback below resolved, before
         # anything is written. Lazy import: hooks_install and runner_link
@@ -1210,9 +1227,10 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
                 return pos
         return main_positions[0]
 
-    hooks_dest = base / "tokitty" / "hook_writer.py"
-    hooks_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_HOOK_WRITER_SOURCE, hooks_dest)
+    if not dry_run:
+        hooks_dest = base / "tokitty" / "hook_writer.py"
+        hooks_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_HOOK_WRITER_SOURCE, hooks_dest)
 
     hooks_dict = data.setdefault("hooks", {})
 
@@ -1333,7 +1351,7 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
                 trust_changes.append((event, final_pos[0], final_pos[1]))
                 reapproval = True
 
-    if changed:
+    if changed and not dry_run:
         if provider == CODEX_PROVIDER:
             try:
                 _record_codex_trust(config_dir, trust_changes)
@@ -1364,7 +1382,7 @@ def _reconcile_hooks(config_dir: str, provider: str, add_missing: bool) -> Confi
             "a locally-owned hook differs from what Tokitty would write for: "
             + ", ".join(stale_local_events)
         )
-    if provider == CODEX_PROVIDER and add_missing:
+    if provider == CODEX_PROVIDER and add_missing and not dry_run:
         note = _codex_install_note(config_dir)
 
     if reapproval:
@@ -1595,6 +1613,201 @@ def clear_pending_hook_op(state_dir: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
+
+
+@dataclass(frozen=True)
+class HookStatus:
+    """One account's hook state, from hook_status_for_dir. state is one of
+    HOOK_STATES; detail is a short human sentence (empty when there is
+    nothing to add)."""
+    state: str
+    detail: str = ""
+
+
+HOOK_STATES = (
+    "installed",
+    "outdated",
+    "local_only",
+    "not_installed",
+    "awaiting_approval",
+    "unreachable",
+    "unsupported",
+    "error",
+)
+
+
+def _hook_writer_stale(base: Path) -> bool:
+    dest = base / "tokitty" / "hook_writer.py"
+    try:
+        return dest.read_bytes() != _HOOK_WRITER_SOURCE.read_bytes()
+    except OSError:
+        return True
+
+
+def hook_status_for_dir(
+    config_dir: str,
+    provider: str = DEFAULT_PROVIDER,
+    *,
+    distro_running: Optional[Callable[[str], bool]] = None,
+    state_dir: Optional[Path] = None,
+) -> HookStatus:
+    """Read-only hook state for one account. Never writes anything.
+
+    The decision on "what is missing or stale" is _reconcile_hooks run with
+    dry_run=True, the same code install and the startup refresh run, so the
+    two cannot disagree. This function adds only what a dry reconcile does
+    not say: whether anything is owned at all, whether the owned entries sit
+    only in settings.local.json, and Codex approval.
+
+    distro_running(distro_name) -> bool is the WSL probe, injectable for
+    tests. A \\wsl$ or \\wsl.localhost config dir whose distro is not
+    running is "unreachable" without its path being touched, since opening
+    it would start the distro. Without an injected probe the gate applies on
+    Windows only (elsewhere the UNC form is translated to a native path and
+    touching it wakes nothing).
+    """
+    try:
+        if not provider_has_hooks(provider):
+            return HookStatus("unsupported", "This harness has no hooks.")
+        target = _hook_target(provider)
+    except ValueError:
+        return HookStatus("unsupported", "This harness has no hooks.")
+
+    parsed = parse_wsl_unc(config_dir)
+    if parsed is not None and (distro_running is not None or sys.platform == "win32"):
+        if distro_running is not None:
+            running = bool(distro_running(parsed[0]))
+        else:
+            running = distro_is_running(config_dir)
+        if not running:
+            return HookStatus("unreachable", f"WSL distro {parsed[0]} is not running.")
+
+    base = Path(_local_config_path(config_dir))
+    try:
+        base.stat()
+    except FileNotFoundError:
+        return HookStatus("not_installed", "")
+    except OSError as exc:
+        return HookStatus("unreachable", f"Cannot read {config_dir}: {exc}")
+    try:
+        (base / target.settings_file).open("rb").close()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return HookStatus("unreachable", f"Cannot read {target.settings_file}: {exc}")
+
+    data, local_hooks, problem = _load_reconcile_state(base, target)
+    if problem is not None:
+        return HookStatus("error", problem[1])
+
+    main_hooks = data.get("hooks") or {}
+    main_owned = any(
+        _collect_owned_positions(main_hooks.get(event), config_dir, provider)
+        for event, _matcher in target.events
+    )
+    local_owned = any(
+        _collect_owned_positions(local_hooks.get(event), config_dir, provider)
+        for event, _matcher in target.events
+    )
+    if not main_owned and not local_owned:
+        return HookStatus("not_installed", "")
+    if local_owned and not main_owned:
+        return HookStatus(
+            "local_only",
+            f"Hooks are in {target.local_settings_file}, which Tokitty never edits.",
+        )
+
+    try:
+        plan = _reconcile_hooks(config_dir, provider, True, dry_run=True)
+    except Exception as exc:
+        return HookStatus("error", str(exc))
+    if not plan.ok:
+        return HookStatus("error", plan.message)
+    changes = plan.installed_events + plan.refreshed_events + plan.removed_events
+    if changes or _hook_writer_stale(base):
+        detail = ("Needs update: " + ", ".join(changes)) if changes else "hook_writer.py differs."
+        return HookStatus("outdated", detail)
+
+    if provider == CODEX_PROVIDER:
+        from tokitty import codex_trust
+
+        status = codex_trust.codex_hook_status(
+            config_dir,
+            state_dir if state_dir is not None else state_dir_path(),
+            (lambda: [parsed[0]]) if parsed is not None else None,
+        )
+        if status == codex_trust.NEEDS_APPROVAL:
+            return HookStatus("awaiting_approval", CODEX_APPROVAL_NOTE)
+    return HookStatus("installed", "")
+
+
+@dataclass(frozen=True)
+class HookOperationResult:
+    ok: bool
+    message: str
+    # Set when the op was refused because another dir has a pending op.
+    blocked_by: Optional[str] = None
+    result: Optional[ConfigDirResult] = None
+
+
+def apply_hook_operation(
+    state_dir: Path,
+    config_dir: str,
+    provider: str,
+    op: str,
+    install_fn=install_hooks_for_dir,
+    uninstall_fn=uninstall_hooks_for_dir,
+) -> HookOperationResult:
+    """Install or uninstall hooks for one dir through the pending-op
+    journal, without touching accounts.json (unlike apply_account_mutation).
+
+    op is "install" or "uninstall". The journal is a single slot, so:
+    a pending op for a different dir refuses this one (blocked_by names
+    that dir; run retry_pending_hook_op first); a pending op for this same
+    dir is superseded by this one, so a Remove cannot be undone by an older
+    Install at the next startup retry. The op is journalled, run, and the
+    journal cleared only on success; on failure (result not ok, or any
+    exception, OSError included) it stays so the startup retry finishes the
+    job.
+
+    The caller must hold the hook_guard for state_dir (and call this off
+    the Tk thread); this function does not take it.
+    """
+    if op not in ("install", "uninstall", "remove"):
+        raise ValueError(f"unknown hook operation {op!r}")
+    journal_op = "install" if op == "install" else "remove"
+    if not provider_has_hooks(provider):
+        return HookOperationResult(False, "This harness has no hooks.")
+
+    pending = load_pending_hook_op(state_dir)
+    if pending is not None and not _same_config_dir(pending["config_dir"], config_dir):
+        return HookOperationResult(
+            False,
+            f"Finish the pending change for {pending['config_dir']} first.",
+            blocked_by=pending["config_dir"],
+        )
+    try:
+        save_pending_hook_op(state_dir, journal_op, config_dir, provider)
+    except OSError as exc:
+        return HookOperationResult(False, f"Could not record the change: {exc}")
+
+    fn = install_fn if journal_op == "install" else uninstall_fn
+    try:
+        result = fn(config_dir, provider)
+    except Exception as exc:
+        return HookOperationResult(False, str(exc) or exc.__class__.__name__)
+    if result.ok:
+        clear_pending_hook_op(state_dir)
+    return HookOperationResult(result.ok, result.message, result=result)
+
+
+def _same_config_dir(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    try:
+        return canonicalize_locator(a) == canonicalize_locator(b)
+    except ValueError:
+        return False
 
 
 def apply_account_mutation(

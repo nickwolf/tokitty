@@ -597,22 +597,34 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 except OSError as exc:
                     _note(hooks_install.LINK_FALLBACK_WARNING.format(reason=str(exc)))
 
-            try:
-                retry_result = retry_pending_hook_op(state_dir)
-            except (OSError, PermissionError):
-                retry_result = None
-            if retry_result is not None:
-                _note(retry_result.warning)
-                if not retry_result.ok:
-                    _note(retry_result.message)
+            # Hold the state_dir hook guard so the Accounts dialog and the
+            # Settings Accounts tab see this writer. If something already
+            # holds it, that writer owns the journal: skip both calls.
+            from tokitty import hook_guard
 
+            guard_token = hook_guard.try_acquire(state_dir, "startup")
+            refresh_results = []
             try:
-                refresh_results = hooks_install.ensure_current(state_dir)
-            except Exception:
-                # Broad on purpose: a reconcile call that raises anything
-                # must not lose the retry warning just collected above,
-                # or skip the WSL/transcript discovery below.
-                refresh_results = []
+                if guard_token is not None:
+                    try:
+                        retry_result = retry_pending_hook_op(state_dir)
+                    except (OSError, PermissionError):
+                        retry_result = None
+                    if retry_result is not None:
+                        _note(retry_result.warning)
+                        if not retry_result.ok:
+                            _note(retry_result.message)
+
+                    try:
+                        refresh_results = hooks_install.ensure_current(state_dir)
+                    except Exception:
+                        # Broad on purpose: a reconcile call that raises anything
+                        # must not lose the retry warning just collected above,
+                        # or skip the WSL/transcript discovery below.
+                        refresh_results = []
+            finally:
+                if guard_token is not None:
+                    hook_guard.release(guard_token)
             for refresh_result in refresh_results:
                 _note(refresh_result.warning)
                 if not refresh_result.ok:

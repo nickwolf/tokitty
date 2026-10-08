@@ -38,6 +38,11 @@ from tokitty.manual_path import PathValidationResult, validate_codex_path, valid
 from tokitty.migration import absorb_implicit_default
 from tokitty.providers import UnknownProviderError, get_provider, supported_kinds
 from tokitty.providers.codex import default_codex_home
+from tokitty.hook_guard import (
+    InFlightOperation as _InFlightOperation,
+    claim_operation as _claim_operation,
+    complete_operation as _complete_operation,
+)
 from tokitty.randomize import random_look
 from tokitty import sprites
 from tokitty.wsl_probe import (
@@ -47,16 +52,6 @@ from tokitty.wsl_probe import (
 
 _manager_instances: Dict[int, "AccountsManager"] = {}
 
-
-@dataclass
-class _InFlightOperation:
-    kind: str
-    lock: threading.Lock
-    state: Dict[str, object]
-
-
-_in_flight_operations: Dict[Path, _InFlightOperation] = {}
-_in_flight_operations_lock = threading.Lock()
 
 # How often __init__'s Tk-thread-owned poll checks whether the background
 # pending-hook-op retry has finished (see AccountsManager.__init__). Short,
@@ -217,42 +212,6 @@ def reconcile_before_save(state_dir: Path, in_memory_accounts: List[Account]) ->
     if result.state in ("valid_empty", "valid_non_empty"):
         return result.accounts
     return in_memory_accounts
-
-
-def _state_dir_key(state_dir: Path) -> Path:
-    return state_dir.resolve()
-
-
-def _claim_operation(
-    state_dir: Path, kind: str
-) -> Tuple[Path, _InFlightOperation, bool]:
-    """Claim the single process-wide hook-operation slot for state_dir."""
-    key = _state_dir_key(state_dir)
-    with _in_flight_operations_lock:
-        existing = _in_flight_operations.get(key)
-        if existing is not None:
-            return key, existing, False
-        operation = _InFlightOperation(
-            kind=kind,
-            lock=threading.Lock(),
-            state={"done": False},
-        )
-        _in_flight_operations[key] = operation
-        return key, operation, True
-
-
-def _complete_operation(
-    key: Path, operation: _InFlightOperation, outcome: object
-) -> None:
-    """Publish an outcome and release the shared slot from the worker."""
-    with operation.lock:
-        if operation.state["done"]:
-            return
-        operation.state["outcome"] = outcome
-        operation.state["done"] = True
-    with _in_flight_operations_lock:
-        if _in_flight_operations.get(key) is operation:
-            _in_flight_operations.pop(key)
 
 
 def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
