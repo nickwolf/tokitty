@@ -13,7 +13,7 @@ from tokitty.accounts import Account, load_accounts_result
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.burn import BurnTracker
-from tokitty.credentials import CredentialLoader, CredentialsError
+from tokitty.credentials import CredentialLoader
 from tokitty.customize import (
     Customization,
     SINGLE_KEY,
@@ -646,18 +646,20 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
                 wsl_matches = wsl_credentials.all_matches()
 
             transcript_matches = []
-            if not wsl_matches and discovery_accounts_state == "absent" and not env_override_set:
+            if (
+                not wsl_matches
+                and discovery_accounts_state == "absent"
+                and not env_override_set
+                and not home_relative_exists
+            ):
                 # Credential-independent: an API-key user has a full
                 # billing ledger on disk and no OAuth credentials
                 # anywhere, so every credentials-keyed probe above reports
                 # that they have no Claude Code install at all.
                 if sys.platform == "win32":
-                    from tokitty.wsl_probe import find_all_wsl_claude_dirs
-
-                    try:
-                        transcript_matches = find_all_wsl_claude_dirs()
-                    except CredentialsError:
-                        transcript_matches = []
+                    # Shared with the Tk thread's resolve_projects_dir
+                    # fallback, so one sweep per launch (issue #87).
+                    transcript_matches = wsl_credentials.claude_dirs()
                 else:
                     local_projects, _ = resolve_projects_dir()
                     if local_projects and Path(local_projects).is_dir():
