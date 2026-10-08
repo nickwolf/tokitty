@@ -99,6 +99,9 @@ class _Tab:
     def refresh(self) -> None:
         pass
 
+    def close(self) -> None:
+        """The window is going away: cancel any poll this tab scheduled."""
+
     def write(self, action: Callable[[], None]) -> None:
         """Run a seam, then re-sync every view (this one included)."""
         action()
@@ -401,47 +404,19 @@ class UsageTab(_Tab):
             self._show_budget_error(None)
 
 
-class PlaceholderTab(_Tab):
-    """Stands in for the Accounts and Stream Dock tabs until they land."""
+def _tab_classes() -> Dict[str, type]:
+    # The hook-aware tabs subclass _Tab, so they import this module; load
+    # them here to keep the import one-directional at module load.
+    from tokitty.settings_accounts import AccountsTab
+    from tokitty.settings_streamdock import StreamDockTab
 
-    TITLE = ""
-    SUBTITLE = ""
-
-    def build(self) -> None:
-        self.kit.page_header(self.frame, self.TITLE, self.SUBTITLE)
-        text(self.frame, "This page is not available yet.", color=MUTED).pack(anchor="w")
-        action = self.action()
-        if action is not None:
-            title, command = action
-            self.kit.button(self.frame, title, "secondary", compact=True,
-                            command=command).pack(anchor="w", pady=(self.kit.px(10), 0))
-
-    def action(self):
-        return None
-
-
-class AccountsPlaceholder(PlaceholderTab):
-    TITLE = "Accounts"
-    SUBTITLE = "Connections and usage hooks for each profile."
-
-    def action(self):
-        if self.win.on_open_accounts is None:
-            return None
-        return "Manage accounts…", self.win.on_open_accounts
-
-
-class StreamDockPlaceholder(PlaceholderTab):
-    TITLE = "Stream Dock"
-    SUBTITLE = "Session controls beside your Tokitty panes."
-
-
-_TAB_CLASSES = {
-    "general": GeneralTab,
-    "look": LookTab,
-    "usage": UsageTab,
-    "accounts": AccountsPlaceholder,
-    "streamdock": StreamDockPlaceholder,
-}
+    return {
+        "general": GeneralTab,
+        "look": LookTab,
+        "usage": UsageTab,
+        "accounts": AccountsTab,
+        "streamdock": StreamDockTab,
+    }
 
 
 class SettingsWindow:
@@ -500,7 +475,8 @@ class SettingsWindow:
         stack = tk.Frame(body, bg=BG_COLOR)
         stack.pack(fill="both", expand=True)
 
-        self.tabs = {key: _TAB_CLASSES[key](self, stack) for key, _title in TABS}
+        classes = _tab_classes()
+        self.tabs = {key: classes[key](self, stack) for key, _title in TABS}
         self.current = "general"
         self._show(self.current)
         self.window.settings_refresh = self.refresh
@@ -612,6 +588,8 @@ class SettingsWindow:
 
     def _release(self) -> None:
         self._closed = True
+        for tab in getattr(self, "tabs", {}).values():
+            tab.close()
         if self.window.settings_refresh == self.refresh:
             self.window.settings_refresh = None
         if _instances.get(id(self.root)) is self:

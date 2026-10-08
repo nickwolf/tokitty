@@ -12,6 +12,7 @@ import os
 import secrets
 import shutil
 import socket
+import sys
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -123,3 +124,42 @@ def run_uninstall() -> int:
     state_dir = get_state_dir()
     dirs = [Path(config_dir) / "tokitty" for config_dir, _ in get_config_dirs(state_dir)]
     return uninstall_streamdock(state_dir=state_dir, appdata=_real_appdata(), tokitty_dirs=dirs)
+
+
+def install_supported() -> bool:
+    """The plugin folder lives under %APPDATA%, so install and uninstall are Windows only."""
+    return sys.platform == "win32"
+
+
+def gui_install(state_dir, appdata=None, *, install_fn=install_streamdock):
+    """Install for the Settings window: (ok, lines). Same arguments as run_install.
+
+    install_streamdock saves the port and token before it copies, so a copy
+    that failed halfway would otherwise read as installed; ok also needs the
+    plugin folder to exist."""
+    appdata = _real_appdata() if appdata is None else appdata
+    lines: list = []
+    try:
+        code = install_fn(state_dir=state_dir, appdata=appdata, print_fn=lines.append)
+    except Exception as exc:
+        lines.append(f"Install failed: {exc}")
+        return False, lines
+    if code == 0 and not (_plugins_dir(appdata) / PLUGIN_FOLDER).is_dir():
+        lines.append("The plugin folder was not created.")
+        return False, lines
+    return code == 0, lines
+
+
+def gui_uninstall(state_dir, appdata=None, *, uninstall_fn=uninstall_streamdock, config_dirs_fn=None):
+    """Uninstall for the Settings window: (ok, lines). Same arguments as run_uninstall."""
+    appdata = _real_appdata() if appdata is None else appdata
+    lines: list = []
+    try:
+        if config_dirs_fn is None:
+            from tokitty.hooks_install import get_config_dirs as config_dirs_fn
+        dirs = [Path(config_dir) / "tokitty" for config_dir, _ in config_dirs_fn(state_dir)]
+        code = uninstall_fn(state_dir=state_dir, appdata=appdata, tokitty_dirs=dirs, print_fn=lines.append)
+    except Exception as exc:
+        lines.append(f"Uninstall failed: {exc}")
+        return False, lines
+    return code == 0, lines

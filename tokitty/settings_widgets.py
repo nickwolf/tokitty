@@ -84,6 +84,7 @@ class Toggle:
                  on_change: Optional[Callable[[bool], None]] = None):
         px = kit.px
         self.value = False
+        self.enabled = True
         self._on_change = on_change
         self._bg = bg
         self.frame = tk.Frame(parent, bg=bg)
@@ -105,10 +106,18 @@ class Toggle:
                 widget.bind("<Button-1>", self._clicked)
 
     def _clicked(self, _event=None) -> None:
+        if not self.enabled:
+            return
         self.value = not self.value
         self._paint()
         if self._on_change is not None:
             self._on_change(self.value)
+
+    def set_enabled(self, enabled: bool) -> None:
+        if enabled != self.enabled:
+            self.enabled = enabled
+            self.switch.configure(cursor="hand2" if enabled else "arrow")
+            self._paint()
 
     def set(self, value: bool) -> None:
         value = bool(value)
@@ -125,6 +134,8 @@ class Toggle:
         sw.delete("all")
         x0, y0, x1, y1 = map(px, (1, 2, 33, 18))
         track = ACCENT_FG if on else "#555560"
+        if not self.enabled:
+            track = "#6b4f4a" if on else "#3f3f48"
         sw.create_oval(x0, y0, x0 + px(16), y1, fill=track, outline=track)
         sw.create_oval(x1 - px(16), y0, x1, y1, fill=track, outline=track)
         sw.create_rectangle(x0 + px(8), y0, x1 - px(8), y1, fill=track, outline=track)

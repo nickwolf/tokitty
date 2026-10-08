@@ -53,7 +53,6 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.settings import Settings
-from tokitty.streamdock.runtime import StreamdockRuntime
 from tokitty.streamdock.window import InWindowViews
 from tokitty.streamdock.wiring import DEFAULT_NAME, apply_idle_cap, gather_inputs, start_streamdock, usage_from_display
 from tokitty.usage_display import build_view
@@ -860,6 +859,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         AccountsManager.open(root, state_dir, discovered_matches=matches)
 
     window.on_open_accounts = open_accounts
+    # The Accounts tab's status probe must not wake a stopped WSL distro.
+    window.running_distros = distro_probe.get_running
 
     def set_view_mode(value: str) -> None:
         usage_state["view"] = value
@@ -1020,12 +1021,16 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         open_in_window=deck_views.open,
     )
 
-    def streamdock_state() -> str:
-        if not StreamdockRuntime.configured(settings):
-            return "not_installed"
-        return "connected" if streamdock is not None and streamdock.connected else "not_connected"
+    from tokitty.streamdock.gui_state import StreamdockHolder
+    from tokitty.streamdock.install import install_supported
 
-    window.streamdock_state = streamdock_state
+    # The Settings tab updates this after an install or uninstall; the state
+    # is read from it, not from the startup `settings`.
+    streamdock_holder = StreamdockHolder(settings, state_dir, lambda: streamdock)
+    window.streamdock_state = streamdock_holder.state
+    window.streamdock_install = streamdock_holder.install
+    window.streamdock_uninstall = streamdock_holder.uninstall
+    window.streamdock_install_supported = install_supported
 
     def edit_streamdock_presets() -> None:
         from tokitty.streamdock.presets_ui import PresetsDialog

@@ -582,8 +582,16 @@ class TokittyWindow:
         self.on_check_updates: Optional[Callable[[], None]] = None
         self.update_check_enabled: Optional[Callable[[], bool]] = None
         self.on_toggle_update_check: Optional[Callable[[], None]] = None
-        # "connected" | "not_connected" | "not_installed"; None leaves the submenu out.
+        # The running-distro probe (no side effects); the Settings Accounts tab
+        # hands it to the hook status query so it never wakes a stopped distro.
+        self.running_distros: Optional[Callable[[], List[str]]] = None
+        # "not_installed" | "not_connected" | "connected" | "restart_to_connect"
+        # | "restart_to_finish_removal"; None means no Stream Dock support.
         self.streamdock_state: Optional[Callable[[], str]] = None
+        # () -> (ok, lines); run on a worker thread by the Settings tab.
+        self.streamdock_install: Optional[Callable[[], Tuple[bool, List[str]]]] = None
+        self.streamdock_uninstall: Optional[Callable[[], Tuple[bool, List[str]]]] = None
+        self.streamdock_install_supported: Optional[Callable[[], bool]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
         self.streamdock_account_toggles: Optional[Callable[[], list]] = None
         self._menu_vars: List = []
