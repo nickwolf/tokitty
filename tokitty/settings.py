@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import secrets
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -33,6 +34,9 @@ MAX_PORT = 65535
 TOKEN_MIN = 32
 TOKEN_MAX = 128
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
+DEFAULT_NTFY_URL = "https://ntfy.sh"
+_NTFY_TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+NTFY_TOPIC_ERROR = "Use 1 to 64 letters, digits, - or _."
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,12 @@ class Settings:
     usage_notes_enabled: bool = True
     usage_note_session_pct: int = 90
     usage_note_weekly_pct: int = 95
+    # Push the same threshold alerts to a phone through ntfy (see ntfy.py).
+    # The token is only for servers with access control.
+    ntfy_enabled: bool = False
+    ntfy_url: str = DEFAULT_NTFY_URL
+    ntfy_topic: str = ""
+    ntfy_token: str = ""
 
 
 def load_settings(state_dir) -> Settings:
@@ -96,6 +106,9 @@ def load_settings(state_dir) -> Settings:
     usage_notes_enabled = data.get("usage_notes_enabled", True)
     if not isinstance(usage_notes_enabled, bool):
         usage_notes_enabled = True
+    ntfy_enabled = data.get("ntfy_enabled", False)
+    if not isinstance(ntfy_enabled, bool):
+        ntfy_enabled = False
     return Settings(
         tray_enabled=tray_enabled,
         surprise_me=surprise_me,
@@ -114,6 +127,10 @@ def load_settings(state_dir) -> Settings:
         usage_notes_enabled=usage_notes_enabled,
         usage_note_session_pct=_percent(data.get("usage_note_session_pct"), 90),
         usage_note_weekly_pct=_percent(data.get("usage_note_weekly_pct"), 95),
+        ntfy_enabled=ntfy_enabled,
+        ntfy_url=_ntfy_url(data.get("ntfy_url")),
+        ntfy_topic=_ntfy_topic(data.get("ntfy_topic")),
+        ntfy_token=_ntfy_token(data.get("ntfy_token")),
     )
 
 
@@ -145,6 +162,54 @@ def parse_percent(text: str) -> Tuple[Optional[int], Optional[str]]:
     if not 1 <= value <= 100:
         return None, "Enter a whole number from 1 to 100."
     return value, None
+
+
+def _ntfy_url(value) -> str:
+    if not isinstance(value, str):
+        return DEFAULT_NTFY_URL
+    value = value.strip()
+    if re.fullmatch(r"https?://[^\s/?#]+[^\s?#]*", value):
+        return value
+    return DEFAULT_NTFY_URL
+
+
+def _ntfy_topic(value) -> str:
+    if isinstance(value, str) and _NTFY_TOPIC_RE.fullmatch(value):
+        return value
+    return ""
+
+
+def _ntfy_token(value) -> str:
+    if isinstance(value, str) and value.strip() and len(value) <= 256 and value.isprintable() and " " not in value:
+        return value
+    return ""
+
+
+def parse_ntfy_url(text: str) -> Tuple[Optional[str], Optional[str]]:
+    answer = (text or "").strip() or DEFAULT_NTFY_URL
+    if _ntfy_url(answer) != answer:
+        return None, "Enter a URL starting with http:// or https://."
+    return answer, None
+
+
+def parse_ntfy_topic(text: str) -> Tuple[Optional[str], Optional[str]]:
+    answer = (text or "").strip()
+    if not _NTFY_TOPIC_RE.fullmatch(answer):
+        return None, NTFY_TOPIC_ERROR
+    return answer, None
+
+
+def parse_ntfy_token(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Empty clears the token."""
+    answer = (text or "").strip()
+    if answer and not _ntfy_token(answer):
+        return None, "Tokens have no spaces and are at most 256 characters."
+    return answer, None
+
+
+def generate_ntfy_topic() -> str:
+    """Topics on public ntfy.sh are readable by anyone who knows the name."""
+    return "tokitty-" + secrets.token_hex(6)
 
 
 def _port(value) -> int:

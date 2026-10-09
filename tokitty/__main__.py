@@ -52,6 +52,7 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_activity_sessions,
     resolve_projects_dir,
 )
+from tokitty.ntfy import Notifier, send_test as ntfy_send_test
 from tokitty.settings import Settings
 from tokitty.streamdock.window import InWindowViews
 from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, apply_idle_cap, gather_inputs, usage_from_display
@@ -415,6 +416,25 @@ def refresh_streamdock_plugin(state_dir) -> None:
         print(f"tokitty: streamdock: plugin refresh: {exc}", file=sys.stderr)
 
 
+def publish_ntfy(unit: dict, latest: Optional[PollResult], usage_state: dict, notifier,
+                 customization_store: dict) -> None:
+    """Hand the account's threshold alerts to the ntfy notifier. Every
+    provider; never raises."""
+    try:
+        enabled, url, topic, token = usage_state["ntfy"]
+        if not enabled or latest is None or latest.snapshot is None:
+            return
+        from tokitty.usage_notes import alerts_for
+
+        _, session_pct, weekly_pct = usage_state["notes"]
+        alerts = alerts_for(latest.snapshot, session_pct, weekly_pct)
+        custom = customization_store.get(unit["key"])
+        label = (custom.label.strip() if custom is not None else "") or unit["provider"].kind.capitalize()
+        notifier.check(unit["key"], label, alerts, (url, topic, token))
+    except Exception as exc:
+        print(f"tokitty: ntfy: {exc}", file=sys.stderr)
+
+
 def provider_tag_kind(provider, providers) -> Optional[str]:
     """The kind to show on one pane, or None when every pane in the window
     is the same harness and there is nothing to tell apart."""
@@ -540,7 +560,10 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         "onboarding": settings.onboarding_version,
         "notes": (settings.usage_notes_enabled, settings.usage_note_session_pct,
                   settings.usage_note_weekly_pct),
+        # (enabled, url, topic, token) for ntfy alerts.
+        "ntfy": (settings.ntfy_enabled, settings.ntfy_url, settings.ntfy_topic, settings.ntfy_token),
     }
+    notifier = Notifier(state_dir)
 
     window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity, scale=scale)
     window.on_opacity_changed = lambda level: update_settings(state_dir, opacity=level)
@@ -928,6 +951,47 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             update_settings(state_dir, usage_note_weekly_pct=value)
         return None
 
+    def toggle_ntfy() -> None:
+        from tokitty.settings import generate_ntfy_topic
+
+        enabled, url, topic, token = usage_state["ntfy"]
+        enabled = not enabled
+        changes = {"ntfy_enabled": enabled}
+        if enabled and not topic:
+            topic = generate_ntfy_topic()
+            changes["ntfy_topic"] = topic
+        usage_state["ntfy"] = (enabled, url, topic, token)
+        update_settings(state_dir, **changes)
+
+    def ntfy_value(field: str) -> str:
+        return usage_state["ntfy"][{"url": 1, "topic": 2, "token": 3}[field]]
+
+    def set_ntfy_value(field: str, text: str) -> Optional[str]:
+        from tokitty.settings import parse_ntfy_token, parse_ntfy_topic, parse_ntfy_url
+
+        if field == "url":
+            value, error = parse_ntfy_url(text)
+        elif field == "topic":
+            value, error = parse_ntfy_topic(text)
+        else:
+            value, error = parse_ntfy_token(text)
+        if error is not None:
+            return error
+        saved = update_settings(state_dir, **{"ntfy_" + field: value})
+        usage_state["ntfy"] = (saved.ntfy_enabled, saved.ntfy_url, saved.ntfy_topic, saved.ntfy_token)
+        return None
+
+    def send_ntfy_test() -> Optional[str]:
+        _enabled, url, topic, token = usage_state["ntfy"]
+        if not topic:
+            return "Enter a topic first."
+        return ntfy_send_test(url, topic, token)
+
+    window.ntfy_enabled = lambda: usage_state["ntfy"][0]
+    window.on_toggle_ntfy = toggle_ntfy
+    window.ntfy_value = ntfy_value
+    window.set_ntfy_value = set_ntfy_value
+    window.send_ntfy_test = send_ntfy_test
     window.usage_notes_enabled = lambda: usage_state["notes"][0]
     window.on_toggle_usage_notes = toggle_usage_notes
     window.usage_note_threshold = usage_note_threshold
@@ -1181,6 +1245,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             maybe_onboard(unit, latest, breakdown)
 
             publish_usage_notes(unit, latest, usage_state["notes"], notes_removed)
+            publish_ntfy(unit, latest, usage_state, notifier, customization_store)
             if latest is None:
                 continue
             display = _display_state_for(latest, unit["last_good"])
@@ -1255,6 +1320,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         tray.stop()
         deck_views.close_all()
         deck.stop()
+        notifier.stop()
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()
