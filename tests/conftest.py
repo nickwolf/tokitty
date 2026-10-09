@@ -29,6 +29,9 @@ def _no_real_codex_home(monkeypatch, tmp_path_factory):
 
     missing = tmp_path_factory.mktemp("no-codex-home") / ".codex"
     monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(missing))
+    from tokitty import first_run
+
+    monkeypatch.setattr(first_run, "default_codex_home", lambda: str(missing))
     yield
 
 

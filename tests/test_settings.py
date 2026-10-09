@@ -318,3 +318,32 @@ def test_parse_budget_rejects(raw):
     from tokitty.settings import parse_budget
     amount, error = parse_budget(raw)
     assert amount is None and error
+
+
+def test_first_run_defaults_empty(tmp_path):
+    assert load_settings(tmp_path).first_run == ""
+    (tmp_path / "settings.json").write_text('{"opacity": 100}', encoding="utf-8")
+    assert load_settings(tmp_path).first_run == ""
+
+
+@pytest.mark.parametrize("value", ["", "pending", "done"])
+def test_first_run_roundtrip(tmp_path, value):
+    save_settings(tmp_path, Settings(first_run=value))
+    assert load_settings(tmp_path).first_run == value
+
+
+@pytest.mark.parametrize("junk", ["later", 3, None, ["pending"], {"a": 1}, True])
+def test_first_run_junk_degrades_without_touching_other_fields(tmp_path, junk):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"first_run": junk, "surprise_me": True}), encoding="utf-8"
+    )
+    loaded = load_settings(tmp_path)
+    assert loaded.first_run == ""
+    assert loaded.surprise_me is True
+
+
+def test_update_settings_sets_first_run(tmp_path):
+    update_settings(tmp_path, surprise_me=True)
+    updated = update_settings(tmp_path, first_run="pending")
+    assert updated.first_run == "pending"
+    assert load_settings(tmp_path).surprise_me is True

@@ -650,6 +650,10 @@ class TokittyWindow:
         if not uses_color_key():
             return self.root
         content = tk.Toplevel(self.root)
+        # Built under a withdrawn root (first-run walkthrough): stay hidden
+        # until reveal(), or the keyed window would show before the card.
+        if self.root.state() == "withdrawn":
+            content.withdraw()
         content.overrideredirect(True)
         content.attributes("-topmost", self._always_on_top_bool)
         content.geometry(f"{self._width}x{self._height}")
@@ -664,6 +668,15 @@ class TokittyWindow:
             content.destroy()
             return self.root
         return content
+
+    def reveal(self) -> None:
+        """Show a window that was built under a withdrawn root, card and
+        keyed content window together."""
+        self.root.deiconify()
+        if self.content is not self.root:
+            self.content.deiconify()
+            self.content.lift()
+        self._keep_off_taskbar()
 
     def _own_content_window(self) -> None:
         """Make the content window a native owned window of the card.

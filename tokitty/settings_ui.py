@@ -17,9 +17,9 @@ from typing import Callable, Dict, List, Optional
 
 from tokitty import sprites
 from tokitty.settings_widgets import (
-    ACCENT_BG, ACCENT_FG, BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR,
-    FG_COLOR, FONT_BODY, FONT_MEDIUM, FONT_MONO, FONT_SMALL, MUTED, RAIL, SURFACE,
-    Kit, draw_sprite, sprite_size, text,
+    BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR,
+    FONT_BODY, FONT_MEDIUM, FONT_MONO, FONT_SMALL, MUTED, RAIL, SURFACE,
+    Kit, build_rail, draw_sprite, paint_rail, sprite_size, text,
 )
 from tokitty.transparency import LEVELS, level_label
 from tokitty.ui import (
@@ -484,43 +484,11 @@ class SettingsWindow:
     # -- shell -------------------------------------------------------------
 
     def _build_rail(self) -> None:
-        px = self.kit.px
-        brand = tk.Frame(self.rail, bg=RAIL)
-        brand.pack(fill="x", padx=px(17), pady=(px(21), px(30)))
-        logo = tk.Canvas(brand, width=px(28), height=px(26), bg=RAIL, highlightthickness=0)
-        logo.pack(side="left", padx=(0, px(7)))
-        draw_sprite(logo, sprites.resolve_palette("orange", "tabby"), px(1))
-        text(brand, "tokitty", font=("Segoe UI", 11, "bold"), bg=RAIL).pack(side="left")
-
-        self.nav: Dict[str, tuple] = {}
-        for key, title in TABS:
-            strip = tk.Frame(self.rail, bg=RAIL, height=px(38), cursor="hand2")
-            strip.pack(fill="x", pady=px(1))
-            strip.pack_propagate(False)
-            marker = tk.Frame(strip, bg=RAIL, width=px(3))
-            marker.pack(side="left", fill="y")
-            inner = tk.Frame(strip, bg=RAIL)
-            inner.pack(side="left", fill="both", expand=True, padx=(px(14), px(8)))
-            name = text(inner, title, bg=RAIL, font=FONT_MEDIUM, color=MUTED)
-            name.pack(side="left", fill="y")
-            self.nav[key] = (strip, marker, inner, name)
-            for widget in (strip, marker, inner, name):
-                widget.bind("<Button-1>", lambda _e, k=key: self._show(k))
-
-        bottom = tk.Frame(self.rail, bg=RAIL)
-        bottom.pack(side="bottom", fill="x", padx=px(18), pady=px(19))
-        tk.Frame(bottom, bg=BORDER, height=px(1)).pack(fill="x", pady=(0, px(13)))
-        text(bottom, version_text(), bg=RAIL, color=DIM_COLOR, font=FONT_SMALL).pack(anchor="w")
+        self.nav = build_rail(self.kit, self.rail, TABS, version_text(), on_select=self._show)
 
     def _show(self, key: str) -> None:
         self.current = key
-        for tab_key, (strip, marker, inner, name) in self.nav.items():
-            active = tab_key == key
-            bg = ACCENT_BG if active else RAIL
-            for widget in (strip, inner, name):
-                widget.configure(bg=bg)
-            marker.configure(bg=ACCENT_FG if active else RAIL)
-            name.configure(fg=FG_COLOR if active else MUTED)
+        paint_rail(self.nav, key)
         for tab_key, tab in self.tabs.items():
             if tab_key == key:
                 tab.frame.pack(fill="both", expand=True)

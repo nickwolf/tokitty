@@ -49,8 +49,33 @@ def test_window_constructs_and_renders(tmp_path):
         window.set_opacity(70)
         root.update()  # process the pending event cycle; never enter mainloop
         assert_stays_out_of_the_taskbar(root)
+        assert_walkthrough_boots(root, tmp_path)
     finally:
         root.destroy()
+
+
+def assert_walkthrough_boots(root, state_dir) -> None:
+    """The first-run walkthrough constructs and steps through Welcome,
+    Accounts (fake discovery) and Done, on the same root for the same reason."""
+    import time
+
+    from tokitty.first_run import Candidate
+    from tokitty.first_run_ui import Walkthrough
+
+    found = [Candidate("claude", str(state_dir / ".claude"), "This PC", True)]
+    walkthrough = Walkthrough(root, state_dir, 1.0, discover=lambda: found)
+    try:
+        walkthrough.primary_button.invoke()
+        deadline = time.monotonic() + 5.0
+        while walkthrough.candidates is None and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.01)
+        assert walkthrough.candidates == found
+        assert walkthrough.primary_button.cget("text") == "Add 1 account"
+        walkthrough.go("done")
+        root.update()
+    finally:
+        walkthrough.skip()
 
 
 def assert_stays_out_of_the_taskbar(root) -> None:
