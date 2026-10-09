@@ -16,8 +16,9 @@ from tkinter import colorchooser
 from typing import Callable, Dict, List, Optional
 
 from tokitty import sprites
+from tokitty.settings_async import Mailbox, Poller, run_worker
 from tokitty.settings_widgets import (
-    BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR,
+    BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR, GOOD,
     FONT_BODY, FONT_MEDIUM, FONT_MONO, FONT_SMALL, MUTED, RAIL, SURFACE,
     Kit, build_rail, draw_sprite, paint_rail, sprite_size, text,
 )
@@ -374,18 +375,13 @@ class UsageTab(_Tab):
 
     def _build_notes(self, kit, px) -> None:
         win = self.win
-        kit.section_header(self.frame, "Usage notes for Claude Code", top=17)
+        kit.section_header(self.frame, "Usage alerts", top=17)
         card = tk.Frame(self.frame, bg=SURFACE)
         card.pack(fill="x")
-        self.notes_toggle = kit.toggle(
-            card, "Tell Claude Code sessions",
-            detail="Tells running Claude Code sessions when usage passes these levels.",
-            on_change=lambda _v: self.write(win.on_toggle_usage_notes))
-        self.notes_toggle.frame.pack(fill="x", padx=px(12), pady=(px(2), px(4)))
         self.note_entries: Dict[str, tuple] = {}
         for kind, caption in (("session", "Session %"), ("weekly", "Weekly %")):
             row = tk.Frame(card, bg=SURFACE)
-            row.pack(fill="x", padx=px(12), pady=(0, px(5)))
+            row.pack(fill="x", padx=px(12), pady=(px(8) if kind == "session" else 0, px(5)))
             text(row, caption, bg=SURFACE).pack(side="left")
             holder, entry = kit.entry(row, width=6)
             holder.pack(side="right")
@@ -394,6 +390,84 @@ class UsageTab(_Tab):
             for sequence in ("<Return>", "<FocusOut>"):
                 entry.bind(sequence, lambda _e, k=kind: self._save_note_threshold(k))
             self.note_entries[kind] = (holder, entry, error)
+        self.notes_toggle = kit.toggle(
+            card, "Tell Claude Code sessions",
+            detail="Tells running Claude Code sessions when usage passes these levels.",
+            on_change=lambda _v: self.write(win.on_toggle_usage_notes))
+        self.notes_toggle.frame.pack(fill="x", padx=px(12), pady=(px(2), px(4)))
+        self.has_ntfy = all(seam is not None for seam in (
+            win.ntfy_enabled, win.on_toggle_ntfy, win.ntfy_value, win.set_ntfy_value))
+        if self.has_ntfy:
+            self._build_ntfy(kit, px, card)
+
+    def _build_ntfy(self, kit, px, card) -> None:
+        win = self.win
+        self.ntfy_toggle = kit.toggle(
+            card, "Send to ntfy",
+            detail="Pushes a notification when usage passes these levels.",
+            on_change=lambda _v: self.write(win.on_toggle_ntfy))
+        self.ntfy_toggle.frame.pack(fill="x", padx=px(12), pady=(px(2), px(4)))
+        self.ntfy_entries: Dict[str, tuple] = {}
+        for field, caption, secret in (("url", "Server", False), ("topic", "Topic", False),
+                                       ("token", "Access token", True)):
+            row = tk.Frame(card, bg=SURFACE)
+            row.pack(fill="x", padx=px(12), pady=(0, px(5)))
+            text(row, caption, bg=SURFACE).pack(side="left")
+            holder, entry = kit.entry(row, width=30)
+            if secret:
+                entry.configure(show="*")
+            holder.pack(side="right")
+            error = text(card, "", bg=SURFACE, color=BAD, font=FONT_SMALL)
+            error.pack(anchor="e", padx=px(12))
+            for sequence in ("<Return>", "<FocusOut>"):
+                entry.bind(sequence, lambda _e, f=field: self._save_ntfy(f))
+            self.ntfy_entries[field] = (holder, entry, error)
+        row = tk.Frame(card, bg=SURFACE)
+        row.pack(fill="x", padx=px(12), pady=(0, px(10)))
+        self.ntfy_test_button = kit.button(row, "Send test", "secondary", self._send_ntfy_test,
+                                           compact=True)
+        self.ntfy_test_button.pack(side="left")
+        self.ntfy_result = text(row, "", bg=SURFACE, color=MUTED, font=FONT_SMALL)
+        self.ntfy_result.pack(side="left", padx=(px(10), 0))
+        self._ntfy_testing = False
+        self.ntfy_mailbox = Mailbox()
+        self.ntfy_poller = Poller(self.owner.toplevel, self.ntfy_mailbox, self._on_ntfy_result,
+                                  lambda: self._ntfy_testing)
+
+    def close(self) -> None:
+        if getattr(self, "has_ntfy", False):
+            self.ntfy_poller.cancel()
+
+    def _save_ntfy(self, field: str) -> bool:
+        """Save one ntfy entry if it changed. True when the entry is valid."""
+        holder, entry, error_label = self.ntfy_entries[field]
+        if entry.get().strip() == self.win.ntfy_value(field):
+            error = None
+        else:
+            error = self.win.set_ntfy_value(field, entry.get())
+            if error is None:
+                self.win.notify_state_changed()
+        error_label.configure(text=error or "")
+        self.kit.set_entry_error(holder, error is not None)
+        return error is None
+
+    def _send_ntfy_test(self) -> None:
+        if self._ntfy_testing or self.win.send_ntfy_test is None:
+            return
+        if not all([self._save_ntfy(f) for f in self.ntfy_entries]):
+            return
+        self._ntfy_testing = True
+        self.ntfy_result.configure(text="Sending...", fg=MUTED)
+        run_worker(self.ntfy_mailbox, "ntfy-test", self.win.send_ntfy_test)
+        self.ntfy_poller.start()
+
+    def _on_ntfy_result(self, _tag: str, ok: bool, value) -> None:
+        self._ntfy_testing = False
+        error = value if ok else str(value)
+        if error:
+            self.ntfy_result.configure(text=str(error), fg=BAD)
+        else:
+            self.ntfy_result.configure(text="Sent", fg=GOOD)
 
     def _save_note_threshold(self, kind: str) -> None:
         holder, entry, error_label = self.note_entries[kind]
@@ -433,6 +507,12 @@ class UsageTab(_Tab):
                 if not _has_focus(entry):
                     entry.delete(0, "end")
                     entry.insert(0, str(self.win.usage_note_threshold(kind)))
+            if self.has_ntfy:
+                self.ntfy_toggle.set(self.win.ntfy_enabled())
+                for field, (_holder, entry, _error) in self.ntfy_entries.items():
+                    if not _has_focus(entry):
+                        entry.delete(0, "end")
+                        entry.insert(0, self.win.ntfy_value(field))
         if not self.has_budget:
             return
         owner = self.owner
