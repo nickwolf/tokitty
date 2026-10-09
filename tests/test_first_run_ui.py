@@ -470,3 +470,17 @@ def test_unsupported_rows_show_a_pill_and_no_button(rig):
     r.walk._query()
     r.pump(lambda: r.walk.hook_rows[0]["pill"].cget("text") == "Not supported")
     assert r.walk.hook_rows[0]["install"] is None
+
+
+def test_mac_search_line_names_the_mac_and_not_wsl(rig):
+    r = rig(platform="darwin")
+    r.walk.primary_button.invoke()
+    texts = r.texts()
+    assert "Checking this Mac" in texts
+    assert not any("WSL" in t for t in texts)
+
+
+def test_windows_search_line_still_mentions_wsl(rig):
+    r = rig(platform="win32")
+    r.walk.primary_button.invoke()
+    assert "Checking this PC and WSL installs" in r.texts()

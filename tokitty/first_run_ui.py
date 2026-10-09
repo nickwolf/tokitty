@@ -123,6 +123,7 @@ class Walkthrough:
         self._finish_pending = finish_pending or (
             lambda: settings_accounts.run_finish_pending(self.state_dir, self._running_distros))
 
+        self._platform = platform
         self.step = "welcome"
         self._discovery_started = False
         self._finished = False
@@ -549,7 +550,9 @@ class Walkthrough:
             box = tk.Frame(holder, bg=BG_COLOR)
             box.pack(side="left")
             text(box, "Looking for Claude Code and Codex…", font=FONT_MEDIUM).pack(anchor="w")
-            text(box, "Checking this PC and WSL installs", color=DIM_COLOR,
+            searching = ("Checking this PC and WSL installs" if self._platform == "win32"
+                         else "Checking t" + first_run.machine_label(self._platform)[1:])
+            text(box, searching, color=DIM_COLOR,
                  font=FONT_SMALL).pack(anchor="w", pady=(px(3), 0))
             self._paint_spinner()
             return

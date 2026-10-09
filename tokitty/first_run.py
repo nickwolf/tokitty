@@ -121,6 +121,15 @@ def macos_source_label(resolve: Callable = resolve_credentials_source) -> str:
     return LABEL_KEYCHAIN if isinstance(source, KeychainCredentialsSource) else LABEL_HOME
 
 
+def machine_label(platform: str = sys.platform) -> str:
+    """What the walkthrough calls the machine it runs on."""
+    if platform == "darwin":
+        return "This Mac"
+    if platform == "win32":
+        return "This PC"
+    return "This computer"
+
+
 def discover_candidates(
     credentials_cache,
     *,
@@ -136,27 +145,28 @@ def discover_candidates(
     WslCredentialsCache) so each runs at most once per process."""
     env = os.environ if environ is None else environ
     base = Path(home) if home is not None else Path.home()
+    here = machine_label(platform)
     if platform == "darwin":
         label = macos_label()
         return [Candidate(
-            provider=DEFAULT_PROVIDER, config_dir=str(base / ".claude"), where="This PC",
+            provider=DEFAULT_PROVIDER, config_dir=str(base / ".claude"), where=here,
             signed_in=label != LABEL_NONE, read_only=True, detail=label,
         )]
     found: List[Candidate] = []
-    native = _native_claude(env, base)
+    native = _native_claude(env, base, here)
     if native is not None:
         found.append(native)
     if platform == "win32":
         found.extend(_wsl_claude(credentials_cache))
     codex = _codex(codex_home if codex_home is not None else (
         str(base / ".codex") if home is not None else default_codex_home()
-    ))
+    ), here)
     if codex is not None:
         found.append(codex)
     return found
 
 
-def _native_claude(env: Mapping[str, str], base: Path) -> Optional[Candidate]:
+def _native_claude(env: Mapping[str, str], base: Path, here: str) -> Optional[Candidate]:
     override = env.get(ENV_OVERRIDE)
     if override:
         if parse_wsl_unc(override) is not None:
@@ -164,17 +174,17 @@ def _native_claude(env: Mapping[str, str], base: Path) -> Optional[Candidate]:
             # so the file is taken on trust: the user pointed at it.
             parent = override.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[0]
             distro = parse_wsl_unc(parent)
-            where = f"WSL: {distro[0]}" if distro else "This PC"
+            where = f"WSL: {distro[0]}" if distro else here
             return Candidate(DEFAULT_PROVIDER, parent, where, signed_in=True)
         parent_dir = Path(override).parent
         signed_in = Path(override).is_file()
         if signed_in or (parent_dir / "projects").is_dir():
-            return Candidate(DEFAULT_PROVIDER, str(parent_dir), "This PC", signed_in)
+            return Candidate(DEFAULT_PROVIDER, str(parent_dir), here, signed_in)
         return None
     config = base / ".claude"
     signed_in = (config / ".credentials.json").is_file()
     if signed_in or (config / "projects").is_dir():
-        return Candidate(DEFAULT_PROVIDER, str(config), "This PC", signed_in)
+        return Candidate(DEFAULT_PROVIDER, str(config), here, signed_in)
     return None
 
 
@@ -196,11 +206,11 @@ def _wsl_claude(credentials_cache) -> List[Candidate]:
     ]
 
 
-def _codex(home: str) -> Optional[Candidate]:
+def _codex(home: str, here: str) -> Optional[Candidate]:
     # Local only, like accounts_ui.discover_local_codex_home (which imports
     # Tk, so it cannot run here): probing WSL for .codex would boot distros.
     if any((Path(home) / name).is_dir() for name in ("sessions", "archived_sessions")):
-        return Candidate(CODEX_PROVIDER, home, "This PC", signed_in=True)
+        return Candidate(CODEX_PROVIDER, home, here, signed_in=True)
     return None
 
 

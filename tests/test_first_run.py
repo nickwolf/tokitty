@@ -166,13 +166,13 @@ def _discover(cache=None, home=None, **kwargs):
 
 def test_native_claude_with_credentials(tmp_path):
     config = _claude_home(tmp_path)
-    assert _discover(home=tmp_path) == [Candidate("claude", str(config), "This PC", True)]
+    assert _discover(home=tmp_path) == [Candidate("claude", str(config), "This computer", True)]
 
 
 def test_native_claude_transcripts_only_starts_unchecked(tmp_path):
     config = _claude_home(tmp_path, credentials=False, projects=True)
     [found] = _discover(home=tmp_path)
-    assert found == Candidate("claude", str(config), "This PC", False)
+    assert found == Candidate("claude", str(config), "This computer", False)
     assert found.default_checked is False
 
 
@@ -199,7 +199,7 @@ def test_env_override_local(tmp_path):
     _claude_home(home)
     found = _discover(home=home, environ={"TOKITTY_CREDENTIALS": str(creds)})
     # The override replaces ~/.claude rather than adding to it.
-    assert found == [Candidate("claude", str(creds.parent), "This PC", True)]
+    assert found == [Candidate("claude", str(creds.parent), "This computer", True)]
 
 
 def test_env_override_missing_file_with_no_transcripts_is_dropped(tmp_path):
@@ -266,7 +266,7 @@ def test_codex_present_and_absent(tmp_path):
     assert _discover(home=tmp_path, codex_home=str(codex)) == []
     (codex / "sessions").mkdir(parents=True)
     assert _discover(home=tmp_path, codex_home=str(codex)) == [
-        Candidate("codex", str(codex), "This PC", True)
+        Candidate("codex", str(codex), "This computer", True)
     ]
     assert _discover(home=tmp_path) == []  # default is home/.codex, tested below
 
@@ -274,7 +274,7 @@ def test_codex_present_and_absent(tmp_path):
 def test_codex_home_defaults_under_the_given_home(tmp_path):
     (tmp_path / ".codex" / "archived_sessions").mkdir(parents=True)
     found = discover_candidates(FakeCache(), platform="linux", environ={}, home=tmp_path)
-    assert found == [Candidate("codex", str(tmp_path / ".codex"), "This PC", True)]
+    assert found == [Candidate("codex", str(tmp_path / ".codex"), "This computer", True)]
 
 
 def test_order_is_native_then_wsl_then_codex(tmp_path):
@@ -294,10 +294,22 @@ def test_darwin_is_one_read_only_candidate(tmp_path):
         macos_label=lambda: "Signed in (Keychain)",
     )
     assert found == [Candidate(
-        "claude", str(tmp_path / ".claude"), "This PC", True,
+        "claude", str(tmp_path / ".claude"), "This Mac", True,
         read_only=True, detail="Signed in (Keychain)",
     )]
     assert (cache.all_matches_calls, cache.claude_dirs_calls) == (0, 0)
+
+
+def test_machine_label_names_each_platform():
+    assert first_run.machine_label("darwin") == "This Mac"
+    assert first_run.machine_label("win32") == "This PC"
+    assert first_run.machine_label("linux") == "This computer"
+
+
+def test_linux_native_claude_is_this_computer(tmp_path):
+    _claude_home(tmp_path)
+    [found] = _discover(home=tmp_path, platform="linux")
+    assert found.where == "This computer"
 
 
 def test_darwin_not_signed_in(tmp_path):
