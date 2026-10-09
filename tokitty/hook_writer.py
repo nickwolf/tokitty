@@ -19,15 +19,23 @@ garbage input, missing args, unwritable directories, anything. All logic
 lives inside main(), which is wrapped in a bare try/except at module level
 so no exception can ever propagate out.
 
-It also never writes to stdout, with ONE exception: on a PermissionRequest
-event, _emit_decision() prints a single allow/deny JSON line (an "always"
-answer is an allow that also carries one session-scoped addRules entry, built
-here from the stdin payload and never from the decision file), and only after
-_wait() has found a decision file whose nonce, session id and
-input digest all match this exact request. Claude Code applies that line as
+It prints only validated control output, through _print_line(): the
+PermissionRequest decision and the usage note.
+
+On a PermissionRequest event, _emit_decision() prints a single allow/deny JSON
+line (an "always" answer is an allow that also carries one session-scoped
+addRules entry, built here from the stdin payload and never from the decision
+file), and only after _wait() has found a decision file whose nonce, session id
+and input digest all match this exact request. Claude Code applies that line as
 the user's answer, so every other path (error, ambiguity, timeout, disabled
 feature) prints nothing and exits 0, leaving Claude Code's own terminal
-prompt in charge. Nothing else in this module may print.
+prompt in charge.
+
+On PostToolUse, SessionStart and SubagentStart, _usage_note() may print one
+additionalContext line when the widget's usage.json (next to the sessions dir)
+holds a fresh alert this context has not been told about yet. SessionStart and
+SubagentStart write no state file, so activity resolution never sees them.
+Nothing else in this module may print.
 
 A PermissionRequest updates the per-session state file like any other event
 (Codex sessions rely on it for their permission state) before the Stream Dock
@@ -44,7 +52,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _read_stdin_payload():
@@ -93,8 +101,15 @@ _KNOWN_EVENTS = frozenset(
         "SessionEnd",
         "PermissionRequest",
         "Interrupt",
+        "SessionStart",
+        "SubagentStart",
     }
 )
+
+# Events that only carry the usage note; they never write the state file.
+_NOTE_ONLY_EVENTS = frozenset({"SessionStart", "SubagentStart"})
+_NOTE_EVENTS = frozenset({"PostToolUse", "SessionStart", "SubagentStart"})
+_USAGE_MAX_AGE_S = 900.0
 
 
 # Permission wait (Stream Dock). Tunables are module constants.
@@ -547,8 +562,12 @@ def _wait(
 
 
 def _emit_decision(decision):
-    """The only place this module prints: one JSON line for a validated decision."""
-    out = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}
+    """One JSON line for a validated decision."""
+    _print_line({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}})
+
+
+def _print_line(out):
+    """The only place this module prints: one validated JSON line."""
     line = json.dumps(out, separators=(",", ":")) + "\n"
     if sys.stdout is not None:
         sys.stdout.write(line)
@@ -559,6 +578,118 @@ def _emit_decision(decision):
         os.write(1, line.encode("ascii"))
     except Exception:
         pass
+
+
+def _safe_name(name):
+    """True for a string usable as a file name component."""
+    return (
+        isinstance(name, str)
+        and bool(name)
+        and ".." not in name
+        and not any(c in name for c in ("/", "\\", "\0"))
+    )
+
+
+def _parse_iso(text):
+    """Epoch seconds for an ISO-8601 string (naive means UTC), or None."""
+    if not isinstance(text, str):
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _note_text(alerts, fetched_ts):
+    parts = []
+    reading = time.strftime("%H:%M", time.localtime(fetched_ts))
+    for a in alerts:
+        text = f"{a['kind']} usage {int(a['pct'])}% (threshold {int(a['threshold'])}%)"
+        resets = _parse_iso(a.get("resets_at"))
+        if resets is not None:
+            tm = time.localtime(resets)
+            text += f", resets {time.strftime('%a %b', tm)} {tm.tm_mday} {time.strftime('%H:%M', tm)} local"
+        parts.append(text + f", reading from {reading} local")
+    return "tokitty: " + "; ".join(parts)
+
+
+def _usage_note(payload, sessions_dir, session_id, event, now_fn=time.time):
+    """Print the usage note once per (session, context, window), or nothing.
+
+    Cheap on the common path: one failed open of usage.json when the feature
+    is off. Any error means no output.
+    """
+    try:
+        if not _safe_name(session_id):
+            return
+        tokitty_dir = os.path.dirname(os.path.abspath(sessions_dir))
+        try:
+            with open(os.path.join(tokitty_dir, "usage.json"), "r", encoding="utf-8") as f:
+                usage = json.load(f)
+        except FileNotFoundError:
+            return
+        if not isinstance(usage, dict) or usage.get("v") != 1:
+            return
+        fetched_ts = _parse_iso(usage.get("fetched_at"))
+        if fetched_ts is None or now_fn() - fetched_ts > _USAGE_MAX_AGE_S:
+            return
+        raw = usage.get("alerts")
+        if not isinstance(raw, list):
+            return
+        alerts = []
+        for a in raw:
+            if (
+                isinstance(a, dict)
+                and a.get("kind") in ("session", "weekly")
+                and isinstance(a.get("pct"), (int, float))
+                and not isinstance(a.get("pct"), bool)
+                and isinstance(a.get("threshold"), (int, float))
+                and not isinstance(a.get("threshold"), bool)
+                and isinstance(a.get("window"), str)
+                and a["window"]
+            ):
+                alerts.append(a)
+        if not alerts:
+            return
+
+        agent_id = payload.get("agent_id")
+        if agent_id is None:
+            context = "main"
+        elif isinstance(agent_id, str) and agent_id:
+            context = agent_id
+        else:
+            return
+
+        notes_dir = os.path.join(tokitty_dir, "usage_notes")
+        notes_file = os.path.join(notes_dir, f"{session_id}.json")
+        try:
+            with open(notes_file, "r", encoding="utf-8") as f:
+                notes = json.load(f)
+        except Exception:
+            notes = {}
+        if not isinstance(notes, dict):
+            notes = {}
+        seen = notes.get(context)
+        if not isinstance(seen, list):
+            seen = []
+        fresh = [a for a in alerts if a["window"] not in seen]
+        if not fresh:
+            return
+
+        # Record before printing: a failed write means no output, never a repeat.
+        os.makedirs(notes_dir, exist_ok=True)
+        notes[context] = seen + [a["window"] for a in fresh]
+        _atomic_write(notes_dir, notes_file, notes)
+        _print_line(
+            {"hookSpecificOutput": {"hookEventName": event, "additionalContext": _note_text(fresh, fetched_ts)}}
+        )
+    except Exception:
+        return
 
 
 def _raise_exit(signum, frame):
@@ -631,12 +762,17 @@ def main():
     if not event or event not in _KNOWN_EVENTS:
         return
 
-    try:
-        _write_state(sessions_dir, payload, session_id, event)
-    except Exception:
-        pass
+    if event not in _NOTE_ONLY_EVENTS:
+        try:
+            _write_state(sessions_dir, payload, session_id, event)
+        except Exception:
+            pass
+    if event == "SessionEnd" and _safe_name(session_id):
+        _remove(os.path.join(os.path.dirname(os.path.abspath(sessions_dir)), "usage_notes", f"{session_id}.json"))
     if event == "PermissionRequest":
         _run_permission(payload, sessions_dir)
+    elif event in _NOTE_EVENTS:
+        _usage_note(payload, sessions_dir, session_id, event)
 
 
 def _write_state(sessions_dir, payload, session_id, event):

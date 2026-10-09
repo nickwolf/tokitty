@@ -57,7 +57,15 @@ HOOK_EVENTS = [
     ("SubagentStop", ""),
     ("SessionEnd", ""),
     ("PermissionRequest", ""),
+    ("SessionStart", ""),
+    ("SubagentStart", ""),
 ]
+
+# Events added after tokitty first shipped hooks. A refresh (the startup path)
+# adds these to a home that already owns at least one tokitty handler, so an
+# existing install picks up a new feature's hook without a manual reinstall.
+# Every other event is never added by a refresh.
+REFRESH_ADDED_EVENTS = frozenset({"SessionStart", "SubagentStart"})
 
 # Codex has no matcher on any of these: its MatcherGroup.matcher is optional
 # and is part of the hashed config, so the group carries no "matcher" key.
@@ -1298,7 +1306,7 @@ def _reconcile_hooks(
             continue
 
         if not main_positions:
-            if add_missing:
+            if add_missing or (event in REFRESH_ADDED_EVENTS and any_owned):
                 desired = desired_for(event, None)
                 group = {"hooks": [dict(desired)]}
                 if matcher is not None:

@@ -374,6 +374,34 @@ def initial_label(account: Optional[Account], custom: Customization,
     return format_pane_label(custom.label, provider_kind)
 
 
+def publish_usage_notes(unit: dict, latest: Optional[PollResult], notes, removed: set) -> None:
+    """Write (or, when the feature is off, remove once) the account's usage.json
+    for the Claude Code hook. Claude accounts only; never raises."""
+    try:
+        if unit["provider"].kind != DEFAULT_KIND:
+            return
+        from tokitty.streamdock.wiring import _resolve, parent_dir
+        from tokitty.usage_notes import alerts_for, remove_usage_file, write_usage_file
+
+        tokitty_dir = parent_dir(_resolve(unit.get("sessions_dir")))
+        if not tokitty_dir:
+            return
+        enabled, session_pct, weekly_pct = notes
+        if not enabled:
+            if tokitty_dir not in removed:
+                removed.add(tokitty_dir)
+                remove_usage_file(tokitty_dir)
+            return
+        removed.discard(tokitty_dir)
+        if latest is None or latest.snapshot is None:
+            return
+        snapshot = latest.snapshot
+        write_usage_file(tokitty_dir, snapshot.fetched_at or latest.fetched_at,
+                         alerts_for(snapshot, session_pct, weekly_pct))
+    except Exception as exc:
+        print(f"tokitty: usage notes: {exc}", file=sys.stderr)
+
+
 def provider_tag_kind(provider, providers) -> Optional[str]:
     """The kind to show on one pane, or None when every pane in the window
     is the same harness and there is nothing to tell apart."""
@@ -497,6 +525,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         "readout": settings.usage_readout,
         "budgets": settings.usage_budgets,
         "onboarding": settings.onboarding_version,
+        "notes": (settings.usage_notes_enabled, settings.usage_note_session_pct,
+                  settings.usage_note_weekly_pct),
     }
 
     window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity, scale=scale)
@@ -862,6 +892,33 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         update_settings(state_dir, usage_budgets=budgets)
         return None
 
+    def toggle_usage_notes() -> None:
+        enabled, session_pct, weekly_pct = usage_state["notes"]
+        usage_state["notes"] = (not enabled, session_pct, weekly_pct)
+        update_settings(state_dir, usage_notes_enabled=not enabled)
+
+    def usage_note_threshold(kind: str) -> int:
+        return usage_state["notes"][1 if kind == "session" else 2]
+
+    def set_usage_note_threshold(kind: str, text: str) -> Optional[str]:
+        from tokitty.settings import parse_percent
+
+        value, error = parse_percent(text)
+        if error is not None:
+            return error
+        enabled, session_pct, weekly_pct = usage_state["notes"]
+        if kind == "session":
+            usage_state["notes"] = (enabled, value, weekly_pct)
+            update_settings(state_dir, usage_note_session_pct=value)
+        else:
+            usage_state["notes"] = (enabled, session_pct, value)
+            update_settings(state_dir, usage_note_weekly_pct=value)
+        return None
+
+    window.usage_notes_enabled = lambda: usage_state["notes"][0]
+    window.on_toggle_usage_notes = toggle_usage_notes
+    window.usage_note_threshold = usage_note_threshold
+    window.set_usage_note_threshold = set_usage_note_threshold
     window.view_mode = lambda: usage_state["view"]
     window.on_view_mode = set_view_mode
     window.usage_window = lambda: usage_state["window"]
@@ -1079,6 +1136,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
 
     window.streamdock_account_toggles = streamdock_account_toggles
 
+    notes_removed: set = set()
+
     def tick():
         updates.tick()
         checker.tick()
@@ -1107,6 +1166,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
             breakdown = unit["usage"].get_latest()
             maybe_onboard(unit, latest, breakdown)
 
+            publish_usage_notes(unit, latest, usage_state["notes"], notes_removed)
             if latest is None:
                 continue
             display = _display_state_for(latest, unit["last_good"])

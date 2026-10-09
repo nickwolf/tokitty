@@ -1059,7 +1059,16 @@ def test_uninstall_no_op_when_nothing_installed(tmp_path):
 # _reconcile_hooks / refresh_hooks_for_dir / ensure_current
 # ---------------------------------------------------------------------------
 
-def test_refresh_never_adds_missing_events(tmp_path):
+def _with_added_events(existing):
+    """Copy the Stop handler onto the events a refresh adds on its own, so a
+    fixture models an install that already has them."""
+    group = existing["hooks"]["Stop"]
+    for event in sorted(hi.REFRESH_ADDED_EVENTS):
+        existing["hooks"][event] = json.loads(json.dumps(group))
+    return existing
+
+
+def test_refresh_adds_only_the_designated_new_events(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
     owned = hi._build_command(str(config_dir))
@@ -1069,9 +1078,44 @@ def test_refresh_never_adds_missing_events(tmp_path):
     result = hi.refresh_hooks_for_dir(str(config_dir))
 
     assert result.ok
-    assert result.installed_events == []
+    assert sorted(result.installed_events) == sorted(hi.REFRESH_ADDED_EVENTS)
     data = json.loads((config_dir / "settings.json").read_text())
-    assert set(data["hooks"].keys()) == {"Stop"}
+    assert set(data["hooks"].keys()) == {"Stop"} | hi.REFRESH_ADDED_EVENTS
+    for event in hi.REFRESH_ADDED_EVENTS:
+        assert len(data["hooks"][event]) == 1
+        assert data["hooks"][event][0]["matcher"] == ""
+        assert hi._is_tokitty_entry(data["hooks"][event][0], str(config_dir))
+
+
+def test_refresh_adds_new_events_to_existing_install_once(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned = hi._build_command(str(config_dir))
+    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [dict(owned)]}]}}
+    (config_dir / "settings.json").write_text(json.dumps(existing))
+
+    hi.refresh_hooks_for_dir(str(config_dir))
+    second = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert second.installed_events == []
+    data = json.loads((config_dir / "settings.json").read_text())
+    for event in hi.REFRESH_ADDED_EVENTS:
+        assert len(data["hooks"][event]) == 1
+    assert "PreToolUse" not in data["hooks"]
+    assert "SessionEnd" not in data["hooks"]
+
+
+def test_refresh_does_not_add_new_events_when_settings_local_owns_them(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    owned = hi._build_command(str(config_dir))
+    local = {"hooks": {e: [{"matcher": "", "hooks": [dict(owned)]}] for e in ["Stop", *hi.REFRESH_ADDED_EVENTS]}}
+    (config_dir / "settings.local.json").write_text(json.dumps(local))
+
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+
+    assert result.installed_events == []
+    assert not (config_dir / "settings.json").exists()
 
 
 def test_refresh_on_never_installed_home_writes_nothing(tmp_path):
@@ -1109,7 +1153,7 @@ def test_refresh_leaves_equivalent_spelling_python_handler_byte_identical(tmp_pa
         f"python3 {config_dir}/tokitty/hook_writer.py "
         f"--sessions-dir {config_dir}/tokitty/sessions"
     )
-    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": historical}]}]}}
+    existing = _with_added_events({"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": historical}]}]}})
     (config_dir / "settings.json").write_text(json.dumps(existing))
     before = (config_dir / "settings.json").read_bytes()
 
@@ -1527,7 +1571,7 @@ def test_refresh_leaves_exec_form_handler_alone_when_not_frozen(tmp_path):
         "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
         "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
     }
-    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    existing = _with_added_events({"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}})
     (config_dir / "settings.json").write_text(json.dumps(existing))
     before = (config_dir / "settings.json").read_bytes()
 
@@ -1551,7 +1595,7 @@ def test_install_still_converts_exec_form_to_python_when_not_frozen(tmp_path):
         "command": str(tmp_path / "state" / "current" / RUNNER_NAME),
         "args": ["--sessions-dir", f"{config_dir}/tokitty/sessions"],
     }
-    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}}
+    existing = _with_added_events({"hooks": {"Stop": [{"matcher": "", "hooks": [exec_handler]}]}})
     (config_dir / "settings.json").write_text(json.dumps(existing))
 
     result = hi.install_hooks_for_dir(str(config_dir))
@@ -1666,7 +1710,7 @@ def test_refresh_leaves_doubled_slash_stable_spelling_byte_identical(tmp_path, m
         "command": doubled_stable,
         "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
     }
-    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    existing = _with_added_events({"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}})
     (home / "settings.json").write_text(json.dumps(existing))
     before = (home / "settings.json").read_bytes()
 
@@ -1700,7 +1744,7 @@ def test_fallback_recognizes_doubled_slash_stable_spelling_as_already_stable(tmp
         "command": doubled_stable,
         "args": ["--sessions-dir", f"{home}/tokitty/sessions"],
     }
-    existing = {"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}}
+    existing = _with_added_events({"hooks": {"Stop": [{"matcher": "", "hooks": [handler]}]}})
     (home / "settings.json").write_text(json.dumps(existing))
     before = (home / "settings.json").read_bytes()
 

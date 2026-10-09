@@ -64,6 +64,11 @@ class Settings:
     # no-Account unit has no slug and cannot be hidden.
     streamdock_hidden_accounts: List[str] = field(default_factory=list)
     first_run: str = ""
+    # Tell running Claude Code sessions when a usage limit passes these
+    # percentages (see usage_notes.py). Claude accounts only.
+    usage_notes_enabled: bool = True
+    usage_note_session_pct: int = 90
+    usage_note_weekly_pct: int = 95
 
 
 def load_settings(state_dir) -> Settings:
@@ -88,6 +93,9 @@ def load_settings(state_dir) -> Settings:
     opacity = data.get("opacity", DEFAULT_LEVEL)
     if isinstance(opacity, bool) or opacity not in LEVELS:
         opacity = DEFAULT_LEVEL
+    usage_notes_enabled = data.get("usage_notes_enabled", True)
+    if not isinstance(usage_notes_enabled, bool):
+        usage_notes_enabled = True
     return Settings(
         tray_enabled=tray_enabled,
         surprise_me=surprise_me,
@@ -103,6 +111,9 @@ def load_settings(state_dir) -> Settings:
         streamdock_token=_token(data.get("streamdock_token")),
         streamdock_hidden_accounts=_names(data.get("streamdock_hidden_accounts")),
         first_run=_one_of(data.get("first_run"), FIRST_RUN_STATES, ""),
+        usage_notes_enabled=usage_notes_enabled,
+        usage_note_session_pct=_percent(data.get("usage_note_session_pct"), 90),
+        usage_note_weekly_pct=_percent(data.get("usage_note_weekly_pct"), 95),
     )
 
 
@@ -116,6 +127,24 @@ def _non_negative_int(value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _percent(value, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        return default
+    return value
+
+
+def parse_percent(text: str) -> Tuple[Optional[int], Optional[str]]:
+    """Parse a threshold entry into (percent, error): a whole number 1-100."""
+    answer = (text or "").strip().rstrip("%").strip()
+    try:
+        value = int(answer)
+    except ValueError:
+        return None, "Enter a whole number from 1 to 100."
+    if not 1 <= value <= 100:
+        return None, "Enter a whole number from 1 to 100."
+    return value, None
 
 
 def _port(value) -> int:

@@ -341,6 +341,11 @@ class UsageTab(_Tab):
             self.groups[key] = (control, getter)
 
         self.budget_hint = None
+        self.has_notes = (win.usage_notes_enabled is not None and win.on_toggle_usage_notes is not None
+                          and win.usage_note_threshold is not None
+                          and win.set_usage_note_threshold is not None)
+        if self.has_notes:
+            self._build_notes(kit, px)
         self.has_budget = win.budget_for_pane is not None and win.set_budget_for_pane is not None
         if not self.has_budget:
             return
@@ -367,6 +372,40 @@ class UsageTab(_Tab):
         self.budget_error = text(card, "", bg=SURFACE, color=BAD, font=FONT_SMALL)
         self.budget_error.pack(anchor="e", padx=px(12), pady=(0, px(10)))
 
+    def _build_notes(self, kit, px) -> None:
+        win = self.win
+        kit.section_header(self.frame, "Usage notes for Claude Code", top=17)
+        card = tk.Frame(self.frame, bg=SURFACE)
+        card.pack(fill="x")
+        self.notes_toggle = kit.toggle(
+            card, "Tell Claude Code sessions",
+            detail="Tells running Claude Code sessions when usage passes these levels.",
+            on_change=lambda _v: self.write(win.on_toggle_usage_notes))
+        self.notes_toggle.frame.pack(fill="x", padx=px(12), pady=(px(2), px(4)))
+        self.note_entries: Dict[str, tuple] = {}
+        for kind, caption in (("session", "Session %"), ("weekly", "Weekly %")):
+            row = tk.Frame(card, bg=SURFACE)
+            row.pack(fill="x", padx=px(12), pady=(0, px(5)))
+            text(row, caption, bg=SURFACE).pack(side="left")
+            holder, entry = kit.entry(row, width=6)
+            holder.pack(side="right")
+            error = text(card, "", bg=SURFACE, color=BAD, font=FONT_SMALL)
+            error.pack(anchor="e", padx=px(12))
+            for sequence in ("<Return>", "<FocusOut>"):
+                entry.bind(sequence, lambda _e, k=kind: self._save_note_threshold(k))
+            self.note_entries[kind] = (holder, entry, error)
+
+    def _save_note_threshold(self, kind: str) -> None:
+        holder, entry, error_label = self.note_entries[kind]
+        if entry.get().strip() == str(self.win.usage_note_threshold(kind)):
+            error = None
+        else:
+            error = self.win.set_usage_note_threshold(kind, entry.get())
+            if error is None:
+                self.win.notify_state_changed()
+        error_label.configure(text=error or "")
+        self.kit.set_entry_error(holder, error is not None)
+
     def _budget_text(self) -> str:
         current = self.win.budget_for_pane(self.owner.pane_index)
         return "" if current is None else f"{current:g}"
@@ -388,6 +427,12 @@ class UsageTab(_Tab):
     def refresh(self) -> None:
         for control, getter in self.groups.values():
             control.set(getter())
+        if self.has_notes:
+            self.notes_toggle.set(self.win.usage_notes_enabled())
+            for kind, (holder, entry, _error) in self.note_entries.items():
+                if not _has_focus(entry):
+                    entry.delete(0, "end")
+                    entry.insert(0, str(self.win.usage_note_threshold(kind)))
         if not self.has_budget:
             return
         owner = self.owner

@@ -17,7 +17,8 @@ class Harness:
         self.calls = []
         self.state = {"tray": True, "autostart": False, "surprise": False,
                       "update_check": True, "view": "limits", "window": "7d",
-                      "readout": "cost", "budgets": {}}
+                      "readout": "cost", "budgets": {},
+                      "notes": True, "note_session": 90, "note_weekly": 95}
         w = self.window = TokittyWindow(root, state_dir, pane_count=panes)
         w.on_menu_action_done = lambda: self.calls.append("done")
         w.on_toggle_tray = lambda: self._flip("tray")
@@ -41,6 +42,10 @@ class Harness:
         w.on_usage_readout = lambda v: self._set("readout", v)
         w.budget_for_pane = lambda i: self.state["budgets"].get((i, self.state["window"]))
         w.set_budget_for_pane = self._set_budget
+        w.usage_notes_enabled = lambda: self.state["notes"]
+        w.on_toggle_usage_notes = lambda: self._flip("notes")
+        w.usage_note_threshold = lambda kind: self.state["note_" + kind]
+        w.set_usage_note_threshold = self._set_note
 
     def _flip(self, key):
         self.state[key] = not self.state[key]
@@ -49,6 +54,15 @@ class Harness:
     def _set(self, key, value):
         self.state[key] = value
         self.calls.append(("seam", key))
+
+    def _set_note(self, kind, text):
+        from tokitty.settings import parse_percent
+
+        value, error = parse_percent(text)
+        if error is None:
+            self.state["note_" + kind] = value
+            self.calls.append(("note", kind, value))
+        return error
 
     def _set_budget(self, i, text):
         text = text.strip().lstrip("$")
@@ -313,3 +327,49 @@ def test_rail_has_five_entries_and_placeholders_switch(harness):
     settings._show("accounts")
     assert settings.tabs["accounts"].frame.winfo_manager() == "pack"
     assert settings.tabs["general"].frame.winfo_manager() == ""
+
+
+@pytest.mark.gui
+def test_usage_notes_section_reflects_state(harness):
+    harness.state.update(notes=False, note_session=80, note_weekly=99)
+    usage = _open(harness).tabs["usage"]
+    assert usage.notes_toggle.get() is False
+    assert usage.note_entries["session"][1].get() == "80"
+    assert usage.note_entries["weekly"][1].get() == "99"
+
+
+@pytest.mark.gui
+def test_usage_notes_toggle_calls_seam_then_notifies(harness):
+    usage = _open(harness).tabs["usage"]
+    harness.calls.clear()
+    usage.notes_toggle._clicked()
+    assert ("seam", "notes") in harness.calls
+    assert harness.state["notes"] is False
+    assert "done" in harness.calls
+
+
+@pytest.mark.gui
+def test_usage_note_threshold_saves_and_notifies(harness):
+    usage = _open(harness).tabs["usage"]
+    _holder, entry, error = usage.note_entries["weekly"]
+    entry.delete(0, "end")
+    entry.insert(0, "85")
+    harness.calls.clear()
+    usage._save_note_threshold("weekly")
+    assert harness.state["note_weekly"] == 85
+    assert error.cget("text") == ""
+    assert "done" in harness.calls
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("bad", ["0", "101", "abc", ""])
+def test_usage_note_threshold_error_is_inline_and_does_not_notify(harness, bad):
+    usage = _open(harness).tabs["usage"]
+    holder, entry, error = usage.note_entries["session"]
+    entry.delete(0, "end")
+    entry.insert(0, bad)
+    harness.calls.clear()
+    usage._save_note_threshold("session")
+    assert error.cget("text")
+    assert harness.state["note_session"] == 90
+    assert "done" not in harness.calls
