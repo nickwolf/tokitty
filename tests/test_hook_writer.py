@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = str(Path(__file__).resolve().parent.parent / "tokitty" / "hook_writer.py")
 
@@ -252,8 +254,6 @@ class TestNormalBehavior:
 
 import hashlib  # noqa: E402
 import signal  # noqa: E402
-
-import pytest  # noqa: E402
 
 from tokitty import hook_writer as hw  # noqa: E402
 
@@ -1533,3 +1533,187 @@ class TestNarrowRule:
     @pytest.mark.parametrize("tool", [None, 5, ["Bash"]])
     def test_non_str_tool(self, tool):
         assert hw._narrow_rule(tool, {"command": "ls"}) is None
+
+
+class TestUsageNote:
+    """usage.json (next to the sessions dir) -> additionalContext, once per
+    session, context and window."""
+
+    def _setup(self, tmp_path):
+        sessions = tmp_path / "tokitty" / "sessions"
+        return tmp_path / "tokitty", sessions
+
+    def _write_usage(self, tk, alerts, age_s=0, fetched_at="unset"):
+        from datetime import datetime, timedelta, timezone
+
+        if fetched_at == "unset":
+            fetched_at = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
+        tk.mkdir(parents=True, exist_ok=True)
+        (tk / "usage.json").write_text(json.dumps({"v": 1, "fetched_at": fetched_at, "alerts": alerts}))
+
+    def _alert(self, kind="weekly", pct=95.7, threshold=95, resets="2026-10-12T18:00:00+00:00", window=None):
+        return {
+            "kind": kind,
+            "pct": pct,
+            "threshold": threshold,
+            "resets_at": resets,
+            "window": window or f"{kind}:{resets}",
+        }
+
+    def _run(self, sessions, event, session_id="s1", **extra):
+        payload = {"session_id": session_id, "hook_event_name": event, **extra}
+        return run_hook(json.dumps(payload).encode(), ["--sessions-dir", str(sessions)])
+
+    def _lines(self, result):
+        assert result.returncode == 0
+        return [json.loads(x) for x in result.stdout.decode().splitlines()]
+
+    def test_emits_once_per_context(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        first = self._run(sessions, "PostToolUse")
+        out = self._lines(first)
+        assert len(out) == 1 and first.stdout.count(b"\n") == 1
+        specific = out[0]["hookSpecificOutput"]
+        assert specific["hookEventName"] == "PostToolUse"
+        assert specific["additionalContext"].startswith("tokitty: weekly usage 95% (threshold 95%), resets ")
+        assert ", reading from " in specific["additionalContext"]
+        assert self._run(sessions, "PostToolUse").stdout == b""
+        for agent in ("agent-a", "agent-b"):
+            got = self._lines(self._run(sessions, "SubagentStart", agent_id=agent))
+            assert got[0]["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+            assert self._run(sessions, "PostToolUse", agent_id=agent).stdout == b""
+
+    def test_session_start_emits_and_separate_session_gets_own_note(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        assert self._lines(self._run(sessions, "SessionStart"))[0]["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+        assert self._run(sessions, "SessionStart").stdout == b""
+        assert self._lines(self._run(sessions, "SessionStart", session_id="s2"))
+
+    def test_new_window_emits_again(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert(window="weekly:A")])
+        assert self._lines(self._run(sessions, "PostToolUse"))
+        self._write_usage(tk, [self._alert(window="weekly:A"), self._alert(kind="session", pct=91, threshold=90, window="session:B")])
+        out = self._lines(self._run(sessions, "PostToolUse"))
+        text = out[0]["hookSpecificOutput"]["additionalContext"]
+        assert "session usage 91%" in text and "weekly" not in text
+        self._write_usage(tk, [self._alert(window="weekly:C")])
+        assert self._lines(self._run(sessions, "PostToolUse"))
+
+    def test_stale_fetch_is_silent(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()], age_s=901)
+        result = self._run(sessions, "PostToolUse")
+        assert result.stdout == b"" and result.returncode == 0
+        assert not (tk / "usage_notes").exists()
+
+    @pytest.mark.parametrize("fetched_at", [None, "garbage", 5])
+    def test_bad_fetched_at_is_silent(self, tmp_path, fetched_at):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()], fetched_at=fetched_at)
+        assert self._run(sessions, "PostToolUse").stdout == b""
+
+    @pytest.mark.parametrize("content", [None, "{{{ not json", "[]", '{"v": 2}', '{"v":1,"fetched_at":"x"}'])
+    def test_missing_or_garbage_usage_is_silent(self, tmp_path, content):
+        tk, sessions = self._setup(tmp_path)
+        tk.mkdir(parents=True)
+        if content is not None:
+            (tk / "usage.json").write_text(content)
+        result = self._run(sessions, "PostToolUse")
+        assert result.stdout == b"" and result.returncode == 0
+
+    def test_no_alerts_is_silent(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [])
+        assert self._run(sessions, "PostToolUse").stdout == b""
+
+    def test_null_resets_at_omits_resets_clause(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert(resets=None, window="weekly:unknown")])
+        text = self._lines(self._run(sessions, "PostToolUse"))[0]["hookSpecificOutput"]["additionalContext"]
+        assert text.startswith("tokitty: weekly usage 95% (threshold 95%), reading from ")
+        assert "resets" not in text
+
+    def test_text_uses_local_time(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert(resets="2026-10-12T18:00:00+00:00")])
+        env = {**os.environ, "TZ": "UTC"}
+        payload = json.dumps({"session_id": "s1", "hook_event_name": "PostToolUse"}).encode()
+        result = subprocess.run(
+            [sys.executable, SCRIPT, "--sessions-dir", str(sessions)],
+            input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=10,
+        )
+        text = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "resets Mon Oct 12 18:00 local" in text
+
+    def test_two_alerts_joined_with_semicolon(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert(), self._alert(kind="session", pct=91, threshold=90, window="session:B")])
+        text = self._lines(self._run(sessions, "PostToolUse"))[0]["hookSpecificOutput"]["additionalContext"]
+        assert text.count("tokitty: ") == 1 and "; session usage 91%" in text
+
+    @pytest.mark.parametrize("event", ["PreToolUse", "Stop", "UserPromptSubmit", "Notification", "SubagentStop", "SessionEnd"])
+    def test_other_events_never_print(self, tmp_path, event):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        assert self._run(sessions, event).stdout == b""
+        assert not (tk / "usage_notes").exists()
+
+    @pytest.mark.parametrize("event", ["SessionStart", "SubagentStart"])
+    def test_note_only_events_write_no_state(self, tmp_path, event):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        self._run(sessions, event)
+        assert not state_path(sessions, "s1").exists()
+        # With no usage.json at all they also leave the sessions dir alone.
+        (tk / "usage.json").unlink()
+        self._run(sessions, event, session_id="s2")
+        assert not state_path(sessions, "s2").exists()
+
+    def test_state_file_still_written_on_post_tool_use(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        self._run(sessions, "PostToolUse", tool_name="Bash")
+        assert json.loads(state_path(sessions, "s1").read_text())["event"] == "PostToolUse"
+
+    def test_session_end_removes_notes(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        self._run(sessions, "PostToolUse")
+        notes = tk / "usage_notes" / "s1.json"
+        assert notes.exists()
+        self._run(sessions, "SessionEnd")
+        assert not notes.exists()
+        # A fresh session with the same id is told again.
+        assert self._lines(self._run(sessions, "PostToolUse"))
+
+    @pytest.mark.parametrize("session_id", ["../evil", "a/b", "a\\b", ".."])
+    def test_unsafe_session_id_is_silent_and_writes_nothing(self, tmp_path, session_id):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        result = self._run(sessions, "PostToolUse", session_id=session_id)
+        assert result.stdout == b"" and result.returncode == 0
+        assert not (tk / "usage_notes").exists()
+        assert not (tmp_path / "evil.json").exists()
+
+    def test_bad_agent_id_type_is_silent(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        assert self._run(sessions, "PostToolUse", agent_id=5).stdout == b""
+
+    def test_corrupt_notes_file_is_replaced(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        (tk / "usage_notes").mkdir()
+        (tk / "usage_notes" / "s1.json").write_text("garbage")
+        assert self._lines(self._run(sessions, "PostToolUse"))
+        assert self._run(sessions, "PostToolUse").stdout == b""
+
+    def test_unwritable_notes_dir_is_silent(self, tmp_path):
+        tk, sessions = self._setup(tmp_path)
+        self._write_usage(tk, [self._alert()])
+        (tk / "usage_notes").write_text("a file where the dir should be")
+        result = self._run(sessions, "PostToolUse")
+        assert result.stdout == b"" and result.returncode == 0

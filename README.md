@@ -154,6 +154,8 @@ To price a model before the next release, put a `prices.json` of the same shape 
 
 I have Claude Code run `python3 -m tokitty --debug-print` at natural checkpoints in long sessions, before dispatching a subagent or starting a long build. When the weekly figure gets close to 100% it stops starting new work, commits what's finished, and writes down where it got to. Before this, sessions and their subagents would hit the limit mid-change and leave uncommitted edits behind. Each run makes one usage request per account, the same one the widget makes on every poll.
 
+Claude Code sessions also get told without asking. While the widget is running, a session's hook adds one line to its context the first time session or weekly usage reaches a threshold, for example `tokitty: weekly usage 95% (threshold 95%), resets Mon Oct 12 18:00 local, reading from 11:42 local`. The main session and each subagent are told once per limit window, and a subagent that starts after the crossing hears about it when it starts. The thresholds (90% session and 95% weekly by default) and an off switch are under **Usage notes for Claude Code** on the Settings window's Usage tab. The widget writes its last reading to `<claude home>/tokitty/usage.json` and makes no extra requests for this; a reading older than 15 minutes is ignored, so nothing is said while the widget is closed. Codex accounts don't get notes.
+
 ## Codex
 
 A pane can track an OpenAI Codex account instead of a Claude Code one. It gets the same limit bars (whichever windows your plan has) and the same Per-model view, both read from the rollout files Codex writes under `<codex-home>/sessions/` and `archived_sessions/`. Nothing is fetched and no credentials are read, so a Codex pane works offline.

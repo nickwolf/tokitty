@@ -347,3 +347,47 @@ def test_update_settings_sets_first_run(tmp_path):
     updated = update_settings(tmp_path, first_run="pending")
     assert updated.first_run == "pending"
     assert load_settings(tmp_path).surprise_me is True
+
+
+def test_usage_note_defaults(tmp_path):
+    s = load_settings(tmp_path)
+    assert (s.usage_notes_enabled, s.usage_note_session_pct, s.usage_note_weekly_pct) == (True, 90, 95)
+
+
+def test_usage_note_roundtrip(tmp_path):
+    save_settings(tmp_path, Settings(usage_notes_enabled=False, usage_note_session_pct=80, usage_note_weekly_pct=100))
+    s = load_settings(tmp_path)
+    assert (s.usage_notes_enabled, s.usage_note_session_pct, s.usage_note_weekly_pct) == (False, 80, 100)
+
+
+@pytest.mark.parametrize("bad", [0, 101, -5, True, 90.5, "90", None, [90]])
+def test_usage_note_pct_invalid_falls_back(tmp_path, bad):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"usage_note_session_pct": bad, "usage_note_weekly_pct": bad}), encoding="utf-8")
+    s = load_settings(tmp_path)
+    assert (s.usage_note_session_pct, s.usage_note_weekly_pct) == (90, 95)
+
+
+def test_usage_note_pct_bounds_accepted(tmp_path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"usage_note_session_pct": 1, "usage_note_weekly_pct": 100}), encoding="utf-8")
+    s = load_settings(tmp_path)
+    assert (s.usage_note_session_pct, s.usage_note_weekly_pct) == (1, 100)
+
+
+def test_usage_notes_enabled_non_bool_defaults(tmp_path):
+    (tmp_path / "settings.json").write_text('{"usage_notes_enabled": 0}', encoding="utf-8")
+    assert load_settings(tmp_path).usage_notes_enabled is True
+
+
+@pytest.mark.parametrize("text,expected", [("90", 90), (" 5% ", 5), ("100", 100), ("1", 1)])
+def test_parse_percent_ok(text, expected):
+    from tokitty.settings import parse_percent
+    assert parse_percent(text) == (expected, None)
+
+
+@pytest.mark.parametrize("text", ["", "0", "101", "abc", "9.5", "-1"])
+def test_parse_percent_errors(text):
+    from tokitty.settings import parse_percent
+    value, error = parse_percent(text)
+    assert value is None and error

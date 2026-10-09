@@ -575,6 +575,13 @@ class TokittyWindow:
         # an error message or None.
         self.budget_for_pane: Optional[Callable[[int], Optional[float]]] = None
         self.set_budget_for_pane: Optional[Callable[[int, str], Optional[str]]] = None
+        # Usage notes for Claude Code sessions: enabled flag plus the two
+        # thresholds. The setters take entry text for a kind ("session" or
+        # "weekly") and return an error message or None.
+        self.usage_notes_enabled: Optional[Callable[[], bool]] = None
+        self.on_toggle_usage_notes: Optional[Callable[[], None]] = None
+        self.usage_note_threshold: Optional[Callable[[str], int]] = None
+        self.set_usage_note_threshold: Optional[Callable[[str, str], Optional[str]]] = None
         # Updates. The label getter reads plain-Python state and returns
         # None while no newer release is known.
         self.update_available_label: Optional[Callable[[], Optional[str]]] = None
