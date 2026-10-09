@@ -149,3 +149,33 @@ def test_settings_validation_of_port_and_token(tmp_path):
     for bad in ("x" * 31, "x" * 129, "a b" * 20, "é" * 40, 5, None, "a" * 31 + "!"):
         assert load(streamdock_token=bad).streamdock_token == ""
     assert Settings().streamdock_port == 0 and Settings().streamdock_token == ""
+
+
+def run_refresh(env):
+    return install.refresh_streamdock(state_dir=env["state"], appdata=env["appdata"], plugin_src=env["src"])
+
+
+def test_refresh_updates_changed_files_and_keeps_config(env):
+    assert run_install(env, []) == 0
+    before = config(env)
+    (env["src"] / "index.html").write_text("new index")
+    (env["target"] / "pi.html").unlink()
+    assert run_refresh(env) is True
+    assert (env["target"] / "index.html").read_text() == "new index"
+    assert (env["target"] / "pi.html").read_text() == "pi.html"
+    assert config(env) == before
+    assert not list(env["target"].glob("*.tmp"))
+    assert run_refresh(env) is False
+
+
+def test_refresh_does_nothing_when_not_installed(env):
+    assert run_refresh(env) is False
+    assert not env["target"].exists()
+
+
+def test_refresh_does_nothing_without_saved_port_and_token(env):
+    assert run_install(env, []) == 0
+    save_settings(env["state"], Settings())
+    (env["src"] / "index.html").write_text("new index")
+    assert run_refresh(env) is False
+    assert (env["target"] / "index.html").read_text() == "index.html"

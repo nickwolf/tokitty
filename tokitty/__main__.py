@@ -403,6 +403,19 @@ def publish_usage_notes(unit: dict, latest: Optional[PollResult], notes, removed
         print(f"tokitty: usage notes: {exc}", file=sys.stderr)
 
 
+def refresh_streamdock_plugin(state_dir) -> None:
+    """Update an installed Stream Dock plugin to this build's copy. Never raises."""
+    from tokitty.streamdock.install import _real_appdata, install_supported, refresh_streamdock
+
+    if not install_supported():
+        return
+    try:
+        if refresh_streamdock(state_dir=state_dir, appdata=_real_appdata()):
+            print("tokitty: streamdock: plugin updated; restart VSD Craft to load it", file=sys.stderr)
+    except Exception as exc:
+        print(f"tokitty: streamdock: plugin refresh: {exc}", file=sys.stderr)
+
+
 def publish_ntfy(unit: dict, latest: Optional[PollResult], usage_state: dict, notifier,
                  customization_store: dict) -> None:
     """Hand the account's threshold alerts to the ntfy notifier. Every
@@ -1109,6 +1122,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         deadline_s=update_controller.ACK_TIMEOUT + BIND_MARGIN_S,
     )
     deck.begin()
+    refresh_streamdock_plugin(state_dir)
 
     from tokitty.streamdock.gui_state import StreamdockHolder
     from tokitty.streamdock.install import install_supported

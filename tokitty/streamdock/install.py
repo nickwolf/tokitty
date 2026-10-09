@@ -85,6 +85,30 @@ def install_streamdock(
     return 0
 
 
+def refresh_streamdock(*, state_dir, appdata, plugin_src=None) -> bool:
+    """Bring an installed plugin's files up to the bundled copy, so a plugin fix
+    reaches the deck with an update. config.js (port and token) is kept. True
+    when a file changed; VSD Craft loads it on its next start."""
+    settings = load_settings(state_dir)
+    target = _plugins_dir(appdata) / PLUGIN_FOLDER
+    src = Path(plugin_src) if plugin_src is not None else default_plugin_src()
+    if not (settings.streamdock_port and settings.streamdock_token) or not target.is_dir() or not src.is_dir():
+        return False
+    changed = False
+    for path in sorted(src.iterdir()):
+        if not path.is_file() or path.name == CONFIG_NAME:
+            continue
+        dest = target / path.name
+        data = path.read_bytes()
+        if dest.is_file() and dest.read_bytes() == data:
+            continue
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)
+        changed = True
+    return changed
+
+
 def uninstall_streamdock(
     *,
     state_dir,
