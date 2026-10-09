@@ -12,6 +12,7 @@ never write back.
 """
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -239,11 +240,15 @@ class Dropdown:
         self._on_change = on_change
         self.var = tk.StringVar(value="")
         self.frame = tk.Frame(parent, bg=BORDER, padx=px(1), pady=px(1))
-        self.button = tk.Menubutton(
-            self.frame, textvariable=self.var, anchor="w", indicatoron=False,
-            relief="flat", bd=0, font=FONT_BODY, fg=FG_COLOR, bg=SURFACE,
-            activebackground=SURFACE_HOVER, activeforeground=FG_COLOR,
-            padx=px(9), pady=px(6), cursor="hand2")
+        options = dict(textvariable=self.var, anchor="w", relief="flat", bd=0, font=FONT_BODY,
+                       fg=FG_COLOR, bg=SURFACE, padx=px(9), pady=px(6), cursor="hand2")
+        if kit.platform == "darwin":
+            # Aqua draws a Menubutton as a native white popup button and
+            # ignores bg, the same problem as tk.Button (see FlatButton).
+            self.button = tk.Label(self.frame, **options)
+        else:
+            self.button = tk.Menubutton(self.frame, indicatoron=False, activebackground=SURFACE_HOVER,
+                                        activeforeground=FG_COLOR, **options)
         self.button.pack(fill="both", expand=True)
         if width is not None:
             self.button.configure(width=width)
@@ -251,13 +256,18 @@ class Dropdown:
                             activebackground=ACCENT_BG, activeforeground=ACCENT_FG,
                             font=FONT_BODY, bd=1, relief="solid",
                             activeborderwidth=0, selectcolor=ACCENT_FG)
-        self.button.configure(menu=self.menu)
+        if isinstance(self.button, tk.Menubutton):
+            self.button.configure(menu=self.menu)
+        else:
+            self.button.bind("<Button-1>", self._popup)
         arrow = tk.Label(self.button, text="▾", bg=SURFACE, fg=MUTED, font=FONT_BODY)
         arrow.place(relx=1, x=-px(17), rely=.5, anchor="center")
         # Clicks on the arrow label would not reach the Menubutton binding.
-        arrow.bind("<Button-1>", lambda _e: self.menu.tk_popup(
-            self.button.winfo_rootx(), self.button.winfo_rooty() + self.button.winfo_height()))
+        arrow.bind("<Button-1>", self._popup)
         self.set_choices(choices)
+
+    def _popup(self, _event=None) -> None:
+        self.menu.tk_popup(self.button.winfo_rootx(), self.button.winfo_rooty() + self.button.winfo_height())
 
     def set_choices(self, choices: Iterable[str]) -> None:
         self.menu.delete(0, "end")
@@ -276,11 +286,109 @@ class Dropdown:
         return self.var.get()
 
 
+class FlatButton(tk.Label):
+    """A button drawn as a Label, for macOS: Aqua Tk renders tk.Button as a
+    native bezel and ignores bg, which puts the theme's light text on white.
+    Offers what callers use of tk.Button: text, state, and invoke()."""
+
+    def __init__(self, parent, *, text: str, command: Optional[Callable[[], None]], fg: str, bg: str,
+                 hover_fg: str, hover_bg: str, disabled: bool, **options):
+        super().__init__(parent, text=text, fg=fg, bg=bg, disabledforeground=fg,
+                         state="disabled" if disabled else "normal", **options)
+        self._command = command
+        self._colors = (fg, bg, hover_fg, hover_bg)
+        self.bind("<Enter>", lambda _e: self._hover(True))
+        self.bind("<Leave>", lambda _e: self._hover(False))
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def _hover(self, inside: bool) -> None:
+        if str(self.cget("state")) == "disabled":
+            return
+        fg, bg, hover_fg, hover_bg = self._colors
+        self.configure(fg=hover_fg if inside else fg, bg=hover_bg if inside else bg)
+
+    def _on_release(self, event) -> None:
+        # Like a real button, letting go outside it cancels the click.
+        if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
+            self.invoke()
+
+    def invoke(self):
+        if str(self.cget("state")) == "disabled" or self._command is None:
+            return None
+        return self._command()
+
+
+class ThinScrollbar(tk.Canvas):
+    """A slim dark scrollbar. tk.Scrollbar is native on macOS and Windows and
+    brings a light track into the dark window. Speaks the Scrollbar protocol:
+    set(first, last) from the scrolled widget, and command("moveto", f) or
+    command("scroll", n, "pages") back to it."""
+
+    def __init__(self, kit: "Kit", parent, command: Optional[Callable[..., None]] = None):
+        self._px = kit.px
+        super().__init__(parent, width=kit.px(10), bg=BG_COLOR, highlightthickness=0, bd=0)
+        self._command = command
+        self._first, self._last = 0.0, 1.0
+        self._thumb = self.create_rectangle(0, 0, 0, 0, fill=BORDER, outline="")
+        self._grab_y: Optional[int] = None
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_motion)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_grab_y", None))
+        self.bind("<Enter>", lambda _e: self.itemconfigure(self._thumb, fill=MUTED))
+        self.bind("<Leave>", lambda _e: self.itemconfigure(self._thumb, fill=BORDER))
+
+    def configure(self, cnf=None, **kw):
+        if "command" in kw:
+            self._command = kw.pop("command")
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+    def set(self, first, last) -> None:
+        self._first, self._last = float(first), float(last)
+        self._draw()
+
+    def thumb_span(self, track: int) -> Tuple[int, int]:
+        return round(self._first * track), round(self._last * track)
+
+    def _track(self) -> int:
+        return max(self.winfo_height(), self.winfo_reqheight(), 1)
+
+    def _draw(self) -> None:
+        top, bottom = self.thumb_span(self._track())
+        inset = self._px(2)
+        self.coords(self._thumb, inset, top + inset, self.winfo_reqwidth() - inset, bottom - inset)
+
+    def drag(self, from_y: int, to_y: int, track: int) -> None:
+        if self._command is not None:
+            self._command("moveto", self._first + (to_y - from_y) / track)
+
+    def click(self, y: int, track: int) -> None:
+        top, bottom = self.thumb_span(track)
+        if self._command is not None and not top <= y <= bottom:
+            self._command("scroll", 1 if y > bottom else -1, "pages")
+
+    def _on_press(self, event) -> None:
+        top, bottom = self.thumb_span(self._track())
+        if top <= event.y <= bottom:
+            self._grab_y = event.y
+        else:
+            self.click(event.y, self._track())
+
+    def _on_motion(self, event) -> None:
+        if self._grab_y is None:
+            return
+        self.drag(self._grab_y, event.y, self._track())
+        self._grab_y = event.y
+
+
 class Kit:
     """Scale-aware factory for the Settings window's widgets."""
 
-    def __init__(self, scale: float = 1.0):
+    def __init__(self, scale: float = 1.0, *, platform: str = sys.platform):
         self.scale = max(1.0, float(scale))
+        self.platform = platform
 
     def px(self, logical: float) -> int:
         return round(logical * self.scale)
@@ -303,7 +411,7 @@ class Kit:
 
     def button(self, parent, title: str, style: str = "secondary",
                command: Optional[Callable[[], None]] = None, *, compact: bool = False,
-               disabled: bool = False) -> tk.Button:
+               disabled: bool = False) -> tk.Widget:
         colors = {
             "primary": (ACCENT_FG, ACCENT_BG, "#ffd0c7"),
             "secondary": (FG_COLOR, SURFACE, "#ffffff"),
@@ -313,14 +421,23 @@ class Kit:
         fg, bg, hover_fg = colors[style]
         if disabled:
             fg, bg, hover_fg = ("#686872", "#292930", "#686872")
+        font = FONT_SMALL if compact else FONT_MEDIUM
+        padx = self.px(10 if compact else 13)
+        pady = self.px(5 if compact else 7)
+        hover_bg = SURFACE_HOVER if style == "secondary" else bg
+        cursor = "arrow" if disabled else "hand2"
+        if self.platform == "darwin":
+            return FlatButton(parent, text=title, command=command, fg=fg, bg=bg, hover_fg=hover_fg,
+                              hover_bg=hover_bg, disabled=disabled, font=font, padx=padx, pady=pady,
+                              cursor=cursor)
         return tk.Button(
             parent, text=title, command=None if disabled else command,
-            font=FONT_SMALL if compact else FONT_MEDIUM, fg=fg, bg=bg,
+            font=font, fg=fg, bg=bg,
             activeforeground=hover_fg,
-            activebackground=SURFACE_HOVER if style == "secondary" else bg,
+            activebackground=hover_bg,
             relief="flat", bd=0, highlightthickness=0,
-            padx=self.px(10 if compact else 13), pady=self.px(5 if compact else 7),
-            cursor="arrow" if disabled else "hand2",
+            padx=padx, pady=pady,
+            cursor=cursor,
             state="disabled" if disabled else "normal", disabledforeground=fg)
 
     def pill(self, parent, title: str, kind: str = "good") -> tk.Label:

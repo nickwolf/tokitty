@@ -487,3 +487,19 @@ def test_unsupported_rows_show_a_pill_and_no_button(rig):
     r.walk._query()
     r.pump(lambda: r.walk.hook_rows[0]["pill"].cget("text") == "Not supported")
     assert r.walk.hook_rows[0]["install"] is None
+
+
+def test_done_points_mac_users_at_the_app_menu(rig):
+    r = rig(platform="darwin")
+    r.to_hooks()
+    r.walk.primary_button.invoke()
+    assert any("Tokitty ▸ Settings…" in t for t in r.texts())
+
+
+def test_done_says_right_click_elsewhere(rig):
+    r = rig(platform="win32")
+    r.to_hooks()
+    r.walk.primary_button.invoke()
+    texts = r.texts()
+    assert any("Right-click any cat" in t for t in texts)
+    assert not any("Tokitty ▸ Settings…" in t for t in texts)

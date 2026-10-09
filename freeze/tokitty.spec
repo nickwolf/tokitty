@@ -7,10 +7,25 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
-from bundle_data import DATA_FILES  # noqa: E402
+from bundle_data import DATA_FILES, info_plist, project_version  # noqa: E402
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
+
+# The app icon is drawn from the sprites at build time (#100), so it can't
+# drift from the cat the build ships.
+sys.path.insert(0, str(ROOT))
+from tokitty import app_icon  # noqa: E402
+
+icns_path = Path(workpath) / "Tokitty.icns"
+ico_path = Path(workpath) / "Tokitty.ico"
+icns_path.parent.mkdir(parents=True, exist_ok=True)
+gui_icon = None
+if sys.platform == "darwin":
+    app_icon.write_icns(icns_path)
+elif sys.platform == "win32":
+    app_icon.write_ico(ico_path)
+    gui_icon = str(ico_path)
 
 rthook = Path(workpath) / "rthook_build_id.py"
 rthook.parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +55,7 @@ gui_exe = EXE(
     exclude_binaries=True,
     name=APP_NAME,
     console=False,
+    icon=gui_icon,
 )
 hook_exe = EXE(
     PYZ(hook.pure),
@@ -61,4 +77,7 @@ if sys.platform == "darwin":
         coll,
         name="Tokitty.app",
         bundle_identifier="com.nickwolf.tokitty",
+        version=project_version(ROOT),
+        info_plist=info_plist(project_version(ROOT)),
+        icon=str(icns_path),
     )
