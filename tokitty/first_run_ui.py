@@ -123,6 +123,7 @@ class Walkthrough:
         self._finish_pending = finish_pending or (
             lambda: settings_accounts.run_finish_pending(self.state_dir, self._running_distros))
 
+        self._platform = platform
         self.step = "welcome"
         self._discovery_started = False
         self._finished = False
@@ -525,10 +526,9 @@ class Walkthrough:
 
     def _build_done(self) -> None:
         self.kit.page_header(self.page, "Done", "Your desktop cats are ready.")
-        self._hero(
-            "You're set",
-            "Right-click any cat and choose Settings… to manage accounts, hooks, looks, and "
-            "the Stream Dock.", 40)
+        where = ("Choose Tokitty ▸ Settings… from the menu bar, or right-click any cat,"
+                 if self._platform == "darwin" else "Right-click any cat and choose Settings…")
+        self._hero("You're set", f"{where} to manage accounts, hooks, looks, and the Stream Dock.", 40)
 
     def _build_accounts(self) -> None:
         kit = self.kit

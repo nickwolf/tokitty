@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
@@ -70,6 +71,15 @@ USAGE_READOUT_ITEMS = [("cost", "Cost"), ("tokens", "Tokens")]
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
+
+
+def context_menu_sequences(platform: str = sys.platform) -> List[str]:
+    """Events that open the context menu. On macOS Aqua Tk has reported the
+    right button as Button-2 or Button-3 depending on the version, and
+    Control-click is the one-button way to right-click."""
+    if platform == "darwin":
+        return ["<Button-2>", "<Button-3>", "<Control-Button-1>"]
+    return ["<Button-3>"]
 
 
 def cell_size(scale: float = 1.0) -> Tuple[int, int]:
@@ -546,7 +556,9 @@ class TokittyWindow:
         self._card_w, self._pane_h = cell_size(scale)
         self._width, self._height, self._cols = grid_size(pane_count, scale)
         self._position_path = state_dir / POSITION_FILENAME
-        self._drag_offset = (0, 0)
+        # None unless a press on the card started a drag. Aqua Tk sends the
+        # card B1-Motion while the native About panel is dragged, with no press.
+        self._drag_offset: Optional[Tuple[int, int]] = None
         self._always_on_top_bool = True
         self._opacity = clamp_level(opacity)
         self._opacity_pending = False
@@ -799,14 +811,50 @@ class TokittyWindow:
             self.content.lift()
 
     def _on_drag_move(self, event: tk.Event) -> None:
+        if self._drag_offset is None:
+            return
         self._move_to(event.x_root - self._drag_offset[0], event.y_root - self._drag_offset[1])
 
     def _on_drag_end(self, _event: tk.Event) -> None:
+        self._drag_offset = None
         self._save_position()
 
     def _build_context_menu(self) -> None:
         self._rebuild_context_menu()
-        self.root.bind_all("<Button-3>", self._show_context_menu)
+        for sequence in context_menu_sequences():
+            self.root.bind_all(sequence, self._show_context_menu)
+
+    def register_app_menu_settings(self) -> None:
+        """Wire Tokitty ▸ Settings… (and Cmd-comma) in the macOS app menu to
+        the Settings window on pane 0. Aqua Tk shows that item only once
+        this command exists; other platforms never call it."""
+        self.root.createcommand("::tk::mac::ShowPreferences", lambda: self.open_settings(0))
+
+    def register_about_panel(self, frozen: bool) -> None:
+        """Answer Tokitty ▸ About Tokitty in the macOS app menu (#98). Aqua
+        Tk calls tkAboutDialog for it, which by default shows Tk's own
+        about box. A frozen build has a real Info.plist, so the native panel
+        shows its name, version and copyright; a source run would get
+        Python's, so it shows the version in a plain dialog instead."""
+        def show() -> None:
+            if frozen:
+                # Straight to AppKit: Tk 9's ::tk::mac::standardAboutPanel
+                # sends orderFrontStandardAboutPanel:, which Tk routes back
+                # here. pyobjc ships in the macOS build with pystray.
+                import AppKit
+
+                # An empty build version drops the "(0.6.0)" that would repeat the
+                # version, since CFBundleVersion matches it.
+                AppKit.NSApp().orderFrontStandardAboutPanelWithOptions_({"Version": ""})
+                return
+            from tkinter import messagebox
+
+            from tokitty.settings_ui import version_text
+
+            messagebox.showinfo("About Tokitty", f"Tokitty {version_text()}\nRunning from source.",
+                                parent=self.root)
+
+        self.root.createcommand("tkAboutDialog", show)
 
     def build_menu_model(self, pane_index: int) -> List[MenuItem]:
         """The single-source menu model for a given pane. Rendered here as
