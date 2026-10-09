@@ -582,6 +582,15 @@ class TokittyWindow:
         self.on_toggle_usage_notes: Optional[Callable[[], None]] = None
         self.usage_note_threshold: Optional[Callable[[str], int]] = None
         self.set_usage_note_threshold: Optional[Callable[[str, str], Optional[str]]] = None
+        # ntfy push alerts. Field is "url", "topic" or "token"; the setter takes
+        # entry text and returns an error message or None. send_ntfy_test
+        # blocks (the Settings window calls it off the Tk thread) and returns
+        # an error string or None.
+        self.ntfy_enabled: Optional[Callable[[], bool]] = None
+        self.on_toggle_ntfy: Optional[Callable[[], None]] = None
+        self.ntfy_value: Optional[Callable[[str], str]] = None
+        self.set_ntfy_value: Optional[Callable[[str, str], Optional[str]]] = None
+        self.send_ntfy_test: Optional[Callable[[], Optional[str]]] = None
         # Updates. The label getter reads plain-Python state and returns
         # None while no newer release is known.
         self.update_available_label: Optional[Callable[[], Optional[str]]] = None

@@ -391,3 +391,57 @@ def test_parse_percent_errors(text):
     from tokitty.settings import parse_percent
     value, error = parse_percent(text)
     assert value is None and error
+
+
+def test_ntfy_defaults(tmp_path):
+    s = load_settings(tmp_path)
+    assert (s.ntfy_enabled, s.ntfy_url, s.ntfy_topic, s.ntfy_token) == (False, "https://ntfy.sh", "", "")
+
+
+def test_ntfy_roundtrip(tmp_path):
+    save_settings(tmp_path, Settings(ntfy_enabled=True, ntfy_url="http://10.0.0.5:8095", ntfy_topic="tokitty-abc", ntfy_token="tk_x"))
+    s = load_settings(tmp_path)
+    assert (s.ntfy_enabled, s.ntfy_url, s.ntfy_topic, s.ntfy_token) == (True, "http://10.0.0.5:8095", "tokitty-abc", "tk_x")
+
+
+@pytest.mark.parametrize("bad", ["ntfy.sh", "ftp://x", "", "http://", "https://a b", 5, None])
+def test_ntfy_url_invalid_falls_back(tmp_path, bad):
+    (tmp_path / "settings.json").write_text(json.dumps({"ntfy_url": bad}), encoding="utf-8")
+    assert load_settings(tmp_path).ntfy_url == "https://ntfy.sh"
+
+
+@pytest.mark.parametrize("bad", ["", "a b", "a/b", "x" * 65, "é", 5, None])
+def test_ntfy_topic_invalid_becomes_empty(tmp_path, bad):
+    (tmp_path / "settings.json").write_text(json.dumps({"ntfy_topic": bad}), encoding="utf-8")
+    assert load_settings(tmp_path).ntfy_topic == ""
+
+
+def test_ntfy_topic_bounds_and_enabled_type(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"ntfy_topic": "x" * 64, "ntfy_enabled": 1}), encoding="utf-8")
+    s = load_settings(tmp_path)
+    assert s.ntfy_topic == "x" * 64 and s.ntfy_enabled is False
+
+
+def test_generate_ntfy_topic_is_valid_and_random():
+    from tokitty.settings import generate_ntfy_topic, parse_ntfy_topic
+
+    a, b = generate_ntfy_topic(), generate_ntfy_topic()
+    assert a != b and a.startswith("tokitty-") and parse_ntfy_topic(a) == (a, None)
+
+
+def test_parse_ntfy_url_and_topic_errors():
+    from tokitty.settings import parse_ntfy_topic, parse_ntfy_url
+
+    assert parse_ntfy_url("") == ("https://ntfy.sh", None)
+    assert parse_ntfy_url("nope")[1]
+    assert parse_ntfy_topic("bad topic")[1]
+
+
+def test_parse_ntfy_token():
+    from tokitty.settings import parse_ntfy_token
+
+    assert parse_ntfy_token("  tk_abc  ") == ("tk_abc", None)
+    assert parse_ntfy_token("") == ("", None)
+    for bad in ("tk abc", "x" * 257):
+        value, error = parse_ntfy_token(bad)
+        assert value is None and error

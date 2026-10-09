@@ -18,7 +18,9 @@ class Harness:
         self.state = {"tray": True, "autostart": False, "surprise": False,
                       "update_check": True, "view": "limits", "window": "7d",
                       "readout": "cost", "budgets": {},
-                      "notes": True, "note_session": 90, "note_weekly": 95}
+                      "notes": True, "note_session": 90, "note_weekly": 95,
+                      "ntfy": False, "ntfy_url": "https://ntfy.sh", "ntfy_topic": "", "ntfy_token": "",
+                      "ntfy_test_result": None}
         w = self.window = TokittyWindow(root, state_dir, pane_count=panes)
         w.on_menu_action_done = lambda: self.calls.append("done")
         w.on_toggle_tray = lambda: self._flip("tray")
@@ -46,6 +48,33 @@ class Harness:
         w.on_toggle_usage_notes = lambda: self._flip("notes")
         w.usage_note_threshold = lambda kind: self.state["note_" + kind]
         w.set_usage_note_threshold = self._set_note
+        w.ntfy_enabled = lambda: self.state["ntfy"]
+        w.on_toggle_ntfy = self._toggle_ntfy
+        w.ntfy_value = lambda field: self.state["ntfy_" + field]
+        w.set_ntfy_value = self._set_ntfy
+        w.send_ntfy_test = self._send_test
+
+    def _toggle_ntfy(self):
+        self.state["ntfy"] = not self.state["ntfy"]
+        if self.state["ntfy"] and not self.state["ntfy_topic"]:
+            self.state["ntfy_topic"] = "tokitty-generated"
+        self.calls.append(("seam", "ntfy"))
+
+    def _set_ntfy(self, field, text):
+        from tokitty.settings import parse_ntfy_topic
+
+        if field == "topic":
+            value, error = parse_ntfy_topic(text)
+            if error:
+                return error
+            text = value
+        self.state["ntfy_" + field] = text.strip()
+        self.calls.append(("ntfy", field, text.strip()))
+        return None
+
+    def _send_test(self):
+        self.calls.append("ntfy-test")
+        return self.state["ntfy_test_result"]
 
     def _flip(self, key):
         self.state[key] = not self.state[key]
@@ -373,3 +402,67 @@ def test_usage_note_threshold_error_is_inline_and_does_not_notify(harness, bad):
     assert error.cget("text")
     assert harness.state["note_session"] == 90
     assert "done" not in harness.calls
+
+
+def _pump(root, predicate, timeout=3.0):
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end and not predicate():
+        root.update()
+        time.sleep(0.01)
+    assert predicate()
+
+
+@pytest.mark.gui
+def test_ntfy_section_layout_and_masking(harness):
+    usage = _open(harness).tabs["usage"]
+    assert usage.ntfy_entries["token"][1].cget("show") == "*"
+    assert usage.ntfy_entries["url"][1].cget("show") == ""
+    assert usage.ntfy_entries["url"][1].get() == "https://ntfy.sh"
+    assert usage.ntfy_toggle.get() is False
+
+
+@pytest.mark.gui
+def test_ntfy_toggle_on_generates_topic_and_shows_it(harness):
+    usage = _open(harness).tabs["usage"]
+    usage.ntfy_toggle._clicked()
+    assert harness.state["ntfy"] is True
+    assert usage.ntfy_entries["topic"][1].get() == "tokitty-generated"
+
+
+@pytest.mark.gui
+def test_ntfy_invalid_topic_is_inline_error(harness):
+    usage = _open(harness).tabs["usage"]
+    holder, entry, error = usage.ntfy_entries["topic"]
+    entry.delete(0, "end")
+    entry.insert(0, "bad topic!")
+    usage._save_ntfy("topic")
+    assert error.cget("text")
+    assert harness.state["ntfy_topic"] == ""
+    entry.delete(0, "end")
+    entry.insert(0, "good-topic")
+    usage._save_ntfy("topic")
+    assert error.cget("text") == ""
+    assert harness.state["ntfy_topic"] == "good-topic"
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("result,shown", [(None, "Sent"), ("HTTP 403", "HTTP 403")])
+def test_ntfy_send_test_shows_result(harness, result, shown):
+    harness.state.update(ntfy_topic="abc", ntfy_test_result=result)
+    usage = _open(harness).tabs["usage"]
+    usage._send_ntfy_test()
+    _pump(harness.window.root, lambda: usage.ntfy_result.cget("text") == shown)
+    assert "ntfy-test" in harness.calls
+
+
+@pytest.mark.gui
+def test_ntfy_send_test_saves_pending_entries_first(harness):
+    usage = _open(harness).tabs["usage"]
+    entry = usage.ntfy_entries["topic"][1]
+    entry.delete(0, "end")
+    entry.insert(0, "typed-topic")
+    usage._send_ntfy_test()
+    _pump(harness.window.root, lambda: usage.ntfy_result.cget("text") == "Sent")
+    assert harness.calls.index(("ntfy", "topic", "typed-topic")) < harness.calls.index("ntfy-test")
