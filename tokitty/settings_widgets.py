@@ -240,11 +240,15 @@ class Dropdown:
         self._on_change = on_change
         self.var = tk.StringVar(value="")
         self.frame = tk.Frame(parent, bg=BORDER, padx=px(1), pady=px(1))
-        self.button = tk.Menubutton(
-            self.frame, textvariable=self.var, anchor="w", indicatoron=False,
-            relief="flat", bd=0, font=FONT_BODY, fg=FG_COLOR, bg=SURFACE,
-            activebackground=SURFACE_HOVER, activeforeground=FG_COLOR,
-            padx=px(9), pady=px(6), cursor="hand2")
+        options = dict(textvariable=self.var, anchor="w", relief="flat", bd=0, font=FONT_BODY,
+                       fg=FG_COLOR, bg=SURFACE, padx=px(9), pady=px(6), cursor="hand2")
+        if kit.platform == "darwin":
+            # Aqua draws a Menubutton as a native white popup button and
+            # ignores bg, the same problem as tk.Button (see FlatButton).
+            self.button = tk.Label(self.frame, **options)
+        else:
+            self.button = tk.Menubutton(self.frame, indicatoron=False, activebackground=SURFACE_HOVER,
+                                        activeforeground=FG_COLOR, **options)
         self.button.pack(fill="both", expand=True)
         if width is not None:
             self.button.configure(width=width)
@@ -252,13 +256,18 @@ class Dropdown:
                             activebackground=ACCENT_BG, activeforeground=ACCENT_FG,
                             font=FONT_BODY, bd=1, relief="solid",
                             activeborderwidth=0, selectcolor=ACCENT_FG)
-        self.button.configure(menu=self.menu)
+        if isinstance(self.button, tk.Menubutton):
+            self.button.configure(menu=self.menu)
+        else:
+            self.button.bind("<Button-1>", self._popup)
         arrow = tk.Label(self.button, text="▾", bg=SURFACE, fg=MUTED, font=FONT_BODY)
         arrow.place(relx=1, x=-px(17), rely=.5, anchor="center")
         # Clicks on the arrow label would not reach the Menubutton binding.
-        arrow.bind("<Button-1>", lambda _e: self.menu.tk_popup(
-            self.button.winfo_rootx(), self.button.winfo_rooty() + self.button.winfo_height()))
+        arrow.bind("<Button-1>", self._popup)
         self.set_choices(choices)
+
+    def _popup(self, _event=None) -> None:
+        self.menu.tk_popup(self.button.winfo_rootx(), self.button.winfo_rooty() + self.button.winfo_height())
 
     def set_choices(self, choices: Iterable[str]) -> None:
         self.menu.delete(0, "end")

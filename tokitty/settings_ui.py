@@ -572,8 +572,10 @@ class SettingsWindow:
         top = self.toplevel = tk.Toplevel(self.root)
         top.title("Tokitty — Settings")
         top.configure(bg=BG_COLOR)
-        top.resizable(False, False)
-        top.geometry(f"{px(BASE_WIDTH)}x{px(BASE_HEIGHT)}")
+        top.resizable(True, True)
+        top.minsize(px(BASE_WIDTH), px(BASE_HEIGHT))
+        self.size = (px(BASE_WIDTH), px(BASE_HEIGHT))
+        top.geometry(f"{self.size[0]}x{self.size[1]}")
         try:
             top.transient(self.root)
         except tk.TclError:
@@ -602,9 +604,27 @@ class SettingsWindow:
 
         classes = _tab_classes()
         self.tabs = {key: classes[key](self, stack) for key, _title in TABS}
+        self._fit_to_tallest_tab()
         self.current = "general"
         self._show(self.current)
         self.window.settings_refresh = self.refresh
+
+    def _fit_to_tallest_tab(self) -> None:
+        """Grow past the base size when a tab needs it. The base fits Windows
+        fonts; macOS ones run larger and cut off the bottom of Usage. Capped
+        to the screen, and the window stays resizable either way."""
+        top = self.toplevel
+        needed = 0
+        # Frames only, not _show: that refreshes, and refreshing Accounts
+        # starts a hook status query.
+        for tab in self.tabs.values():
+            tab.frame.pack(fill="both", expand=True)
+            top.update_idletasks()
+            needed = max(needed, top.winfo_reqheight())
+            tab.frame.pack_forget()
+        height = max(self.size[1], min(needed, top.winfo_screenheight() - self.kit.px(80)))
+        self.size = (self.size[0], height)
+        top.geometry(f"{self.size[0]}x{self.size[1]}")
 
     # -- shell -------------------------------------------------------------
 

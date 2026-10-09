@@ -52,3 +52,29 @@ def test_other_platforms_keep_native_buttons(root):
     for platform in ("win32", "linux"):
         button = Kit(platform=platform).button(root, "Install")
         assert type(button) is tk.Button
+
+
+def test_macos_dropdown_keeps_its_theme_colours(root):
+    from tokitty.settings_widgets import Dropdown
+
+    dropdown = Dropdown(Kit(platform="darwin"), root, ["Orange", "Gray"])
+    assert dropdown.button.winfo_class() == "Label"
+    assert dropdown.button.cget("bg") == SURFACE
+    assert dropdown.button.bind("<Button-1>")
+
+
+def test_macos_dropdown_menu_still_picks(root):
+    from tokitty.settings_widgets import Dropdown
+
+    picked = []
+    dropdown = Dropdown(Kit(platform="darwin"), root, ["Orange", "Gray"], on_change=picked.append)
+    dropdown.menu.invoke(1)
+    assert dropdown.get() == "Gray"
+    assert picked == ["Gray"]
+
+
+def test_other_platforms_keep_the_menubutton_dropdown(root):
+    from tokitty.settings_widgets import Dropdown
+
+    dropdown = Dropdown(Kit(platform="win32"), root, ["Orange"])
+    assert dropdown.button.winfo_class() == "Menubutton"

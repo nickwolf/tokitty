@@ -467,3 +467,28 @@ def test_ntfy_send_test_saves_pending_entries_first(harness):
     usage._send_ntfy_test()
     _pump(harness.window.root, lambda: usage.ntfy_result.cget("text") == "Sent")
     assert harness.calls.index(("ntfy", "topic", "typed-topic")) < harness.calls.index("ntfy-test")
+
+
+@pytest.mark.gui
+def test_settings_window_can_be_resized_down_to_the_base_size(harness):
+    from tokitty.settings_widgets import BASE_HEIGHT, BASE_WIDTH
+
+    settings = _open(harness)
+    top = settings.toplevel
+    assert tuple(bool(x) for x in top.resizable()) == (True, True)
+    px = settings.kit.px
+    assert top.minsize() == (px(BASE_WIDTH), px(BASE_HEIGHT))
+
+
+@pytest.mark.gui
+def test_settings_window_opens_tall_enough_for_every_tab(harness):
+    # macOS fonts run larger than Windows ones, and the fixed 540 px cut off
+    # the bottom of the Usage tab there.
+    settings = _open(harness)
+    top = settings.toplevel
+    height = settings.size[1]
+    for key in settings.tabs:
+        settings._show(key)
+        top.update_idletasks()
+        needed = min(top.winfo_reqheight(), top.winfo_screenheight() - settings.kit.px(80))
+        assert height >= needed, key
