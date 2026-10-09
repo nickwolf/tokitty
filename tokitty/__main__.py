@@ -1008,6 +1008,8 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     from tokitty.settings_ui import SettingsWindow
 
     window.open_settings = lambda pane_index: SettingsWindow.open(window, pane_index)
+    if sys.platform == "darwin":
+        window.register_about_panel(frozen=bool(getattr(sys, "frozen", False)))
 
     if settings.surprise_me:
         for index in range(len(units)):

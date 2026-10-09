@@ -51,6 +51,15 @@ jobs:
             echo "version=dryrun-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check the tag matches pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          want="v$(python -c 'import sys; sys.path.insert(0, "freeze"); from bundle_data import project_version; print(project_version("."))')"
+          if [[ "$GITHUB_REF_NAME" != "$want" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME, but pyproject.toml is $want. Push the version bump before tagging."
+            exit 1
+          fi
+
       - name: Determine archive name
         id: names
         run: |

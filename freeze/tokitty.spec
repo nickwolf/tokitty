@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
-from bundle_data import DATA_FILES  # noqa: E402
+from bundle_data import DATA_FILES, info_plist, project_version  # noqa: E402
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
@@ -61,4 +61,6 @@ if sys.platform == "darwin":
         coll,
         name="Tokitty.app",
         bundle_identifier="com.nickwolf.tokitty",
+        version=project_version(ROOT),
+        info_plist=info_plist(project_version(ROOT)),
     )

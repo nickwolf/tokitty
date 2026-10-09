@@ -696,3 +696,48 @@ def test_unscaled_grid_and_hit_test_are_unchanged():
     assert cell_size(1.0) == (CARD_WIDTH, PANE_HEIGHT)
     assert grid_size(5) == grid_size(5, 1.0) == (600, 384, 2)
     assert pane_index_at(350, 50, 5, 2) == pane_index_at(350, 50, 5, 2, 300, 128) == 1
+
+
+@pytest.mark.gui
+def test_about_item_in_a_frozen_build_shows_the_native_panel():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            shown = []
+            root.createcommand("::tk::mac::standardAboutPanel", lambda: shown.append("native"))
+            window.register_about_panel(frozen=True)
+            # What Aqua Tk calls for Tokitty ▸ About Tokitty.
+            root.tk.call("tkAboutDialog")
+            assert shown == ["native"]
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_about_item_from_source_names_the_version(monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tkinter import messagebox
+    from tokitty import settings_ui
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda title, message, **kw: shown.append((title, message)))
+    monkeypatch.setattr(settings_ui, "version_text", lambda: "v9.9.9")
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            window.register_about_panel(frozen=False)
+            root.tk.call("tkAboutDialog")
+            assert shown and shown[0][0] == "About Tokitty"
+            assert "v9.9.9" in shown[0][1]
+    finally:
+        root.destroy()

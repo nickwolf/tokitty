@@ -808,6 +808,25 @@ class TokittyWindow:
         self._rebuild_context_menu()
         self.root.bind_all("<Button-3>", self._show_context_menu)
 
+    def register_about_panel(self, frozen: bool) -> None:
+        """Answer Tokitty ▸ About Tokitty in the macOS app menu (#98). Aqua
+        Tk calls tkAboutDialog for it, which by default shows Tk's own
+        about box. A frozen build has a real Info.plist, so the native panel
+        shows its name, version and copyright; a source run would get
+        Python's, so it shows the version in a plain dialog instead."""
+        def show() -> None:
+            if frozen:
+                self.root.tk.call("::tk::mac::standardAboutPanel")
+                return
+            from tkinter import messagebox
+
+            from tokitty.settings_ui import version_text
+
+            messagebox.showinfo("About Tokitty", f"Tokitty {version_text()}\nRunning from source.",
+                                parent=self.root)
+
+        self.root.createcommand("tkAboutDialog", show)
+
     def build_menu_model(self, pane_index: int) -> List[MenuItem]:
         """The single-source menu model for a given pane. Rendered here as
         a tk.Menu and (for pane 0) by tray.py as a pystray menu. Getters
