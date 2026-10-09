@@ -255,8 +255,6 @@ class TestNormalBehavior:
 import hashlib  # noqa: E402
 import signal  # noqa: E402
 
-import pytest  # noqa: E402
-
 from tokitty import hook_writer as hw  # noqa: E402
 
 T0 = 1_000_000.0
@@ -398,6 +396,35 @@ def env(tmp_path, monkeypatch):
 def pending_files(e):
     d = e.tokitty / "pending"
     return list(d.iterdir()) if d.exists() else []
+
+
+class TestQuiet:
+    def run_quiet(self, tmp_path, event, value):
+        env = dict(os.environ, TOKITTY_QUIET=value)
+        env.pop("PYTHONPATH", None)
+        payload = json.dumps({"session_id": "sess-q", "hook_event_name": event, "tool_name": "Bash",
+                              "tool_input": {"command": "ls"}}).encode()
+        (tmp_path.parent / "streamdock.enabled").touch()
+        return subprocess.run([sys.executable, SCRIPT, "--sessions-dir", str(tmp_path)], input=payload,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=10)
+
+    @pytest.mark.parametrize("event", ["PermissionRequest", "Notification"])
+    @pytest.mark.parametrize("value", ["1", "true", "yes"])
+    def test_permission_events_dropped(self, tmp_path, event, value):
+        result = self.run_quiet(tmp_path, event, value)
+        assert result.returncode == 0 and result.stdout == b""
+        assert not state_path(tmp_path, "sess-q").exists()
+        assert not (tmp_path.parent / "pending").exists()
+
+    def test_other_events_still_recorded(self, tmp_path):
+        result = self.run_quiet(tmp_path, "PreToolUse", "1")
+        assert result.returncode == 0
+        assert json.loads(state_path(tmp_path, "sess-q").read_text())["event"] == "PreToolUse"
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "No"])
+    def test_off_values_keep_the_flag(self, tmp_path, value):
+        self.run_quiet(tmp_path, "Notification", value)
+        assert json.loads(state_path(tmp_path, "sess-q").read_text())["event"] == "Notification"
 
 
 class TestPermissionDisabled:
