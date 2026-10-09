@@ -546,7 +546,9 @@ class TokittyWindow:
         self._card_w, self._pane_h = cell_size(scale)
         self._width, self._height, self._cols = grid_size(pane_count, scale)
         self._position_path = state_dir / POSITION_FILENAME
-        self._drag_offset = (0, 0)
+        # None unless a press on the card started a drag. Aqua Tk sends the
+        # card B1-Motion while the native About panel is dragged, with no press.
+        self._drag_offset: Optional[Tuple[int, int]] = None
         self._always_on_top_bool = True
         self._opacity = clamp_level(opacity)
         self._opacity_pending = False
@@ -799,9 +801,12 @@ class TokittyWindow:
             self.content.lift()
 
     def _on_drag_move(self, event: tk.Event) -> None:
+        if self._drag_offset is None:
+            return
         self._move_to(event.x_root - self._drag_offset[0], event.y_root - self._drag_offset[1])
 
     def _on_drag_end(self, _event: tk.Event) -> None:
+        self._drag_offset = None
         self._save_position()
 
     def _build_context_menu(self) -> None:
@@ -821,7 +826,9 @@ class TokittyWindow:
                 # here. pyobjc ships in the macOS build with pystray.
                 import AppKit
 
-                AppKit.NSApp().orderFrontStandardAboutPanelWithOptions_({})
+                # An empty build version drops the "(0.6.0)" that would repeat the
+                # version, since CFBundleVersion matches it.
+                AppKit.NSApp().orderFrontStandardAboutPanelWithOptions_({"Version": ""})
                 return
             from tkinter import messagebox
 
