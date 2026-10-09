@@ -85,3 +85,9 @@ def test_release_refuses_a_tag_that_pyproject_was_not_bumped_for():
 def test_verifier_checks_the_bundle_version():
     script = (ROOT / "freeze" / "verify_artifact.py").read_text(encoding="utf-8")
     assert '("bundle_version", step_bundle_version)' in script
+
+
+def test_spec_gives_the_mac_bundle_and_windows_exe_an_icon():
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    assert "icon=str(icns_path)" in spec
+    assert "icon=gui_icon" in spec

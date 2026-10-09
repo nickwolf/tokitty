@@ -875,3 +875,17 @@ def test_a_drag_that_starts_on_the_card_still_moves_it_and_ends_on_release():
             assert len(moves) == 1
     finally:
         root.destroy()
+
+
+@pytest.mark.gui
+def test_source_run_dock_icon_is_the_app_icon():
+    tk = pytest.importorskip("tkinter")
+    pytest.importorskip("PIL")
+    from tokitty import app_icon
+
+    root = tk.Tk()
+    try:
+        photo = app_icon.photo(root, 256)
+        assert (photo.width(), photo.height()) == (256, 256)
+    finally:
+        root.destroy()
