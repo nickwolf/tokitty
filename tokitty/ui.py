@@ -816,7 +816,12 @@ class TokittyWindow:
         Python's, so it shows the version in a plain dialog instead."""
         def show() -> None:
             if frozen:
-                self.root.tk.call("::tk::mac::standardAboutPanel")
+                # Straight to AppKit: Tk 9's ::tk::mac::standardAboutPanel
+                # sends orderFrontStandardAboutPanel:, which Tk routes back
+                # here. pyobjc ships in the macOS build with pystray.
+                import AppKit
+
+                AppKit.NSApp().orderFrontStandardAboutPanelWithOptions_({})
                 return
             from tkinter import messagebox
 

@@ -1,6 +1,7 @@
 """Layout-constant tests that must not require a display. ui.py imports
 tkinter at module level, so only run what's importable headlessly."""
 import inspect
+import sys
 
 import pytest
 
@@ -698,25 +699,42 @@ def test_unscaled_grid_and_hit_test_are_unchanged():
     assert pane_index_at(350, 50, 5, 2) == pane_index_at(350, 50, 5, 2, 300, 128) == 1
 
 
-@pytest.mark.gui
-def test_about_item_in_a_frozen_build_shows_the_native_panel():
-    tk = pytest.importorskip("tkinter")
-    from tokitty.ui import TokittyWindow
-    import tempfile
-    from pathlib import Path
+_FROZEN_ABOUT_CHECK = """
+import sys, tempfile, tkinter as tk
+from pathlib import Path
+import AppKit
+from tokitty.ui import TokittyWindow
 
-    root = tk.Tk()
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            window = TokittyWindow(root, Path(d), pane_count=1)
-            shown = []
-            root.createcommand("::tk::mac::standardAboutPanel", lambda: shown.append("native"))
-            window.register_about_panel(frozen=True)
-            # What Aqua Tk calls for Tokitty ▸ About Tokitty.
-            root.tk.call("tkAboutDialog")
-            assert shown == ["native"]
-    finally:
-        root.destroy()
+root = tk.Tk()
+window = TokittyWindow(root, Path(tempfile.mkdtemp()), pane_count=1)
+window.register_about_panel(frozen=True)
+calls = []
+root.tk.call("trace", "add", "execution", "tkAboutDialog", "enter", root.register(lambda *_: calls.append(1)))
+root.tk.call("tkAboutDialog")
+root.update()
+panels = [w for w in AppKit.NSApp().windows() if w.className() == "NSPanel" and w.isVisible()]
+for panel in panels:
+    panel.orderOut_(None)
+print(f"calls={len(calls)} panels={len(panels)}")
+"""
+
+
+@pytest.mark.gui
+def test_about_item_in_a_frozen_build_opens_the_native_panel_once():
+    # No stand-in for the native call: in Tk 9 ::tk::mac::standardAboutPanel
+    # sends orderFrontStandardAboutPanel:, which Tk routes back to
+    # tkAboutDialog, so calling it from the handler recursed and showed nothing.
+    # Its own process, since AppKit redraws windows left by earlier tests' Tk
+    # roots and crashes on them; the app only ever has one root.
+    if sys.platform != "darwin":
+        pytest.skip("Aqua only")
+    pytest.importorskip("AppKit")
+    import subprocess
+
+    result = subprocess.run([sys.executable, "-c", _FROZEN_ABOUT_CHECK],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip().splitlines()[-1] == "calls=1 panels=1"
 
 
 @pytest.mark.gui
