@@ -614,6 +614,17 @@ def _run_permission(payload, sessions_dir, **kwargs):
             _remove(c)
 
 
+# TOKITTY_QUIET in the environment of an unattended session (a cron `claude -p`,
+# a remote-control server) drops its permission events, so nobody's cat raises
+# a flag and no Stream Dock prompt waits on an empty room. The session's other
+# activity is still recorded.
+_QUIET_EVENTS = frozenset({"Notification", "PermissionRequest"})
+
+
+def _quiet():
+    return os.environ.get("TOKITTY_QUIET", "").strip().lower() not in ("", "0", "false", "no")
+
+
 def main():
     sessions_dir = _parse_sessions_dir(sys.argv[1:])
     if not sessions_dir:
@@ -625,6 +636,8 @@ def main():
 
     session_id = payload.get("session_id")
     if not session_id:
+        return
+    if payload.get("hook_event_name") in _QUIET_EVENTS and _quiet():
         return
 
     event = payload.get("hook_event_name")

@@ -90,6 +90,8 @@ and the cat starts reacting to what a running Claude Code session is doing: a th
 
 The install also registers a `PermissionRequest` hook for the Stream Dock. It is inert unless a Stream Dock is connected: with no deck it prints nothing and Claude Code's own prompt is unaffected. Running Claude Code sessions pick it up after a restart.
 
+A session nobody is watching (a scheduled `claude -p`, a remote-control server) can still hit a permission prompt, and a flag for it just means an empty room. Start those with `TOKITTY_QUIET=1` in the environment: their permission prompts raise no flag and never reach the Stream Dock, while the rest of their activity shows as usual.
+
 On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in the Windows-native `~/.claude`. `--install-hooks` (and `--uninstall-hooks`) detect this automatically, using the same WSL-credentials probe the live-activity watcher uses, and target the `\\wsl.localhost\<distro>\home\<user>\.claude` dir instead, falling back to the Windows-local `~/.claude` only if WSL resolution fails (no WSL installed, no Claude Code credentials found, etc). Running `python3 -m tokitty --install-hooks` from inside WSL itself installs to the same dir and is equivalent, so pick whichever shell is convenient.
 
 ## Autostart
