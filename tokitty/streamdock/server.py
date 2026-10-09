@@ -24,6 +24,7 @@ from __future__ import annotations
 import hmac
 import json
 import queue
+import secrets
 import socket
 import sys
 import threading
@@ -137,6 +138,8 @@ class DeckServer:
         self._meta_fn = meta_fn
         self._monotonic = monotonic_fn
         self._poll_timeout = poll_timeout
+        # Changes with every start, so the plugin can tell a new tokitty from the old one.
+        self.boot = secrets.token_hex(8)
         self._lock = threading.Lock()
         self._last_plan: Optional[float] = None
         self._httpd: Optional[ThreadingHTTPServer] = None
@@ -185,7 +188,7 @@ class DeckServer:
         snap = self._box.wait_for_change(rev, self._poll_timeout)
         self._touch()
         keys = {ctx: {"image": self._image_fn(spec), "title": ""} for ctx, spec in snap.plan.items()}
-        return json.dumps({"rev": snap.revision, "keys": keys}).encode("utf-8")
+        return json.dumps({"boot": self.boot, "rev": snap.revision, "keys": keys}).encode("utf-8")
 
 
 class _Handler(BaseHTTPRequestHandler):

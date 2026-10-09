@@ -104,8 +104,18 @@ def test_plan_returns_immediately_on_a_stale_rev(rig):
     assert status == 200
     assert resp.getheader("Access-Control-Allow-Origin") == "*"
     body = json.loads(data)
-    assert body == {"rev": 3, "keys": {"c1": {"image": "img:interrupt", "title": ""},
+    assert body == {"boot": srv.boot, "rev": 3, "keys": {"c1": {"image": "img:interrupt", "title": ""},
                                        "c2": {"image": "img:status", "title": ""}}}
+
+
+def test_plan_carries_a_boot_id_that_differs_per_server(rig):
+    srv, box, *_ = rig
+    box.publish(1, {})
+    first = json.loads(req(srv, "GET", f"/v1/plan?t={TOKEN}")[1])["boot"]
+    again = json.loads(req(srv, "GET", f"/v1/plan?t={TOKEN}")[1])["boot"]
+    other = DeckServer(0, TOKEN, box, queue.Queue(), image_fn=str, meta_fn=dict)
+    assert first == again == srv.boot
+    assert other.boot != srv.boot
 
 
 def test_bad_or_missing_rev_returns_at_once(rig):
