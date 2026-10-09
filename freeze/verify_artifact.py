@@ -54,6 +54,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -266,6 +267,25 @@ def _locate_binaries(app_dir: Path):
         gui = app_dir / "tokitty"
         hook = app_dir / "tokitty-hook"
     return gui, hook
+
+
+def _pyproject_version(repo_root: Path):
+    match = re.search(r'^version\s*=\s*"([^"]+)"',
+                      (repo_root / "pyproject.toml").read_text(encoding="utf-8"), re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def bundle_version_problem(plist_data: dict, build_id, pyproject_version):
+    """Why a macOS bundle's Info.plist version is wrong, or None (#98). Both
+    version keys must equal pyproject.toml, and a release tag must equal it
+    too. A dry run's build ID isn't a version, so only pyproject applies."""
+    expected = {"CFBundleShortVersionString": pyproject_version, "CFBundleVersion": pyproject_version}
+    actual = {key: plist_data.get(key) for key in expected}
+    if actual != expected:
+        return f"Info.plist has {actual}, pyproject.toml says {pyproject_version}"
+    if re.fullmatch(r"v\d+\.\d+\.\d+", build_id or "") and build_id != f"v{pyproject_version}":
+        return f"tag {build_id} but pyproject.toml says {pyproject_version}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -966,9 +986,25 @@ def step_autostart(ctx):
     return result
 
 
+def step_bundle_version(ctx):
+    if sys.platform != "darwin":
+        return {"ok": True, "detail": "not a macOS bundle"}
+    plist_path = ctx["gui"].parent.parent / "Info.plist"
+    try:
+        data = plistlib.loads(plist_path.read_bytes())
+    except Exception as exc:
+        return {"ok": False, "detail": f"could not read {plist_path}: {exc}"}
+    build_id = (ctx.get("self_check_report") or {}).get("build_id")
+    problem = bundle_version_problem(data, build_id, _pyproject_version(ctx["repo_root"]))
+    if problem:
+        return {"ok": False, "detail": problem}
+    return {"ok": True, "detail": {"version": data["CFBundleShortVersionString"], "build_id": build_id}}
+
+
 STEPS = [
     ("locate_binaries", step_locate_binaries),
     ("self_check", step_self_check),
+    ("bundle_version", step_bundle_version),
     ("preflight_accounts", step_preflight_accounts),
     ("install_hooks", step_install_hooks),
     ("second_release", step_second_release),
