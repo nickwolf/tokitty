@@ -20,7 +20,7 @@ from tokitty.settings_async import Mailbox, Poller, run_worker
 from tokitty.settings_widgets import (
     BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR, GOOD,
     FONT_BODY, FONT_MEDIUM, FONT_MONO, FONT_SMALL, MUTED, RAIL, SURFACE,
-    Kit, build_rail, draw_sprite, paint_rail, sprite_size, text,
+    Kit, ThinScrollbar, build_rail, draw_sprite, paint_rail, sprite_size, text,
 )
 from tokitty.transparency import LEVELS, level_label
 from tokitty.ui import (
@@ -599,8 +599,27 @@ class SettingsWindow:
         tk.Frame(footer, height=px(1), bg=BORDER).pack(fill="x", pady=(0, px(9)))
         text(footer, "Changes apply immediately", font=FONT_SMALL, color=DIM_COLOR).pack(side="left")
         self.kit.button(footer, "Close", "secondary", self.close, compact=True).pack(side="right")
-        stack = tk.Frame(body, bg=BG_COLOR)
-        stack.pack(fill="both", expand=True)
+        # The tabs sit in a canvas so a tab taller than the window scrolls.
+        # One canvas unit is one pixel, which suits trackpad deltas.
+        viewport = tk.Frame(body, bg=BG_COLOR)
+        viewport.pack(fill="both", expand=True)
+        self.scrollbar = ThinScrollbar(self.kit, viewport)
+        self.canvas = tk.Canvas(viewport, bg=BG_COLOR, highlightthickness=0, bd=0,
+                                yscrollincrement=1, yscrollcommand=self.scrollbar.set)
+        self.scrollbar.configure(command=self.canvas.yview)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        stack = self._stack = tk.Frame(self.canvas, bg=BG_COLOR)
+        self._stack_item = self.canvas.create_window(0, 0, window=stack, anchor="nw")
+        self._scrollable = False
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        stack.bind("<Configure>", lambda _e: self._sync_scroll())
+        top.bind("<MouseWheel>", self._on_wheel)
+        top.bind("<Button-4>", self._on_wheel)
+        top.bind("<Button-5>", self._on_wheel)
+        try:
+            top.bind("<TouchpadScroll>", self._on_touchpad)  # Tk 9: trackpads on macOS
+        except tk.TclError:
+            pass
 
         classes = _tab_classes()
         self.tabs = {key: classes[key](self, stack) for key, _title in TABS}
@@ -614,13 +633,15 @@ class SettingsWindow:
         fonts; macOS ones run larger and cut off the bottom of Usage. Capped
         to the screen, and the window stays resizable either way."""
         top = self.toplevel
+        top.update_idletasks()
+        chrome = top.winfo_reqheight() - self.canvas.winfo_reqheight()
         needed = 0
         # Frames only, not _show: that refreshes, and refreshing Accounts
         # starts a hook status query.
         for tab in self.tabs.values():
             tab.frame.pack(fill="both", expand=True)
             top.update_idletasks()
-            needed = max(needed, top.winfo_reqheight())
+            needed = max(needed, chrome + self._stack.winfo_reqheight())
             tab.frame.pack_forget()
         height = max(self.size[1], min(needed, top.winfo_screenheight() - self.kit.px(80)))
         self.size = (self.size[0], height)
@@ -639,7 +660,51 @@ class SettingsWindow:
                 tab.frame.pack(fill="both", expand=True)
             else:
                 tab.frame.pack_forget()
+        self.toplevel.update_idletasks()
+        self.canvas.yview_moveto(0)
+        self._sync_scroll()
         self.refresh()
+
+    # -- scrolling ---------------------------------------------------------
+
+    def _on_canvas_configure(self, event) -> None:
+        self.canvas.itemconfigure(self._stack_item, width=event.width)
+        self._sync_scroll(event.height)
+
+    def _sync_scroll(self, viewport: Optional[int] = None) -> None:
+        """Show the scrollbar only while the current tab is taller than the
+        visible area; otherwise hide it and pin the tab to the top."""
+        if viewport is None:
+            viewport = self.canvas.winfo_height()
+        content = self._stack.winfo_reqheight()
+        self._scrollable = content > viewport
+        self.canvas.configure(scrollregion=(0, 0, 0, max(content, viewport)))
+        if self._scrollable:
+            if not self.scrollbar.winfo_manager():
+                self.scrollbar.pack(side="right", fill="y", padx=(self.kit.px(4), 0), before=self.canvas)
+        else:
+            self.scrollbar.pack_forget()
+            self.canvas.yview_moveto(0)
+
+    def _on_wheel(self, event) -> None:
+        if not self._scrollable:
+            return
+        if event.num in (4, 5):  # X11 wheel buttons
+            notches = -1 if event.num == 4 else 1
+        elif event.delta:
+            # 120 a notch on Windows and Tk 9; smaller deltas still move.
+            notches = -round(event.delta / 120) or (-1 if event.delta > 0 else 1)
+        else:
+            return
+        self.canvas.yview_scroll(notches * self.kit.px(40), "units")
+
+    def _on_touchpad(self, event) -> None:
+        if not self._scrollable:
+            return
+        _dx, dy = (int(v) for v in self.toplevel.tk.splitlist(
+            self.toplevel.tk.call("tk::PreciseScrollDeltas", event.delta)))
+        if dy:
+            self.canvas.yview_scroll(-dy, "units")
 
     # -- panes -------------------------------------------------------------
 

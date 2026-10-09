@@ -492,3 +492,63 @@ def test_settings_window_opens_tall_enough_for_every_tab(harness):
         top.update_idletasks()
         needed = min(top.winfo_reqheight(), top.winfo_screenheight() - settings.kit.px(80))
         assert height >= needed, key
+
+
+class _Wheel:
+    def __init__(self, delta=0, num=0):
+        self.delta, self.num = delta, num
+
+
+def _resize(settings, height):
+    top = settings.toplevel
+    top.minsize(1, 1)
+    top.geometry(f"{settings.size[0]}x{height}")
+    top.update_idletasks()
+
+
+@pytest.mark.gui
+def test_a_tab_taller_than_the_window_gets_a_scrollbar(harness):
+    settings = _open(harness)
+    settings._show("usage")
+    _resize(settings, 300)
+    assert settings.scrollbar.winfo_manager() == "pack"
+
+
+@pytest.mark.gui
+def test_a_tab_that_fits_has_no_scrollbar(harness):
+    settings = _open(harness)
+    settings._show("usage")
+    _resize(settings, 300)
+    _resize(settings, 1400)
+    assert settings.scrollbar.winfo_manager() == ""
+
+
+@pytest.mark.gui
+def test_the_wheel_scrolls_a_tall_tab(harness):
+    settings = _open(harness)
+    settings._show("usage")
+    _resize(settings, 300)
+    settings._on_wheel(_Wheel(delta=-120))
+    settings.toplevel.update_idletasks()
+    assert settings.canvas.yview()[0] > 0
+    assert settings.toplevel.bind("<MouseWheel>")
+
+
+@pytest.mark.gui
+def test_the_wheel_does_nothing_when_the_tab_fits(harness):
+    settings = _open(harness)
+    settings._show("general")
+    settings._on_wheel(_Wheel(delta=-120))
+    settings.toplevel.update_idletasks()
+    assert settings.canvas.yview()[0] == 0
+
+
+@pytest.mark.gui
+def test_switching_tabs_scrolls_back_to_the_top(harness):
+    settings = _open(harness)
+    settings._show("usage")
+    _resize(settings, 300)
+    settings._on_wheel(_Wheel(delta=-120))
+    settings._show("general")
+    settings.toplevel.update_idletasks()
+    assert settings.canvas.yview()[0] == 0

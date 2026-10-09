@@ -318,6 +318,71 @@ class FlatButton(tk.Label):
         return self._command()
 
 
+class ThinScrollbar(tk.Canvas):
+    """A slim dark scrollbar. tk.Scrollbar is native on macOS and Windows and
+    brings a light track into the dark window. Speaks the Scrollbar protocol:
+    set(first, last) from the scrolled widget, and command("moveto", f) or
+    command("scroll", n, "pages") back to it."""
+
+    def __init__(self, kit: "Kit", parent, command: Optional[Callable[..., None]] = None):
+        self._px = kit.px
+        super().__init__(parent, width=kit.px(10), bg=BG_COLOR, highlightthickness=0, bd=0)
+        self._command = command
+        self._first, self._last = 0.0, 1.0
+        self._thumb = self.create_rectangle(0, 0, 0, 0, fill=BORDER, outline="")
+        self._grab_y: Optional[int] = None
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_motion)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_grab_y", None))
+        self.bind("<Enter>", lambda _e: self.itemconfigure(self._thumb, fill=MUTED))
+        self.bind("<Leave>", lambda _e: self.itemconfigure(self._thumb, fill=BORDER))
+
+    def configure(self, cnf=None, **kw):
+        if "command" in kw:
+            self._command = kw.pop("command")
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+    def set(self, first, last) -> None:
+        self._first, self._last = float(first), float(last)
+        self._draw()
+
+    def thumb_span(self, track: int) -> Tuple[int, int]:
+        return round(self._first * track), round(self._last * track)
+
+    def _track(self) -> int:
+        return max(self.winfo_height(), self.winfo_reqheight(), 1)
+
+    def _draw(self) -> None:
+        top, bottom = self.thumb_span(self._track())
+        inset = self._px(2)
+        self.coords(self._thumb, inset, top + inset, self.winfo_reqwidth() - inset, bottom - inset)
+
+    def drag(self, from_y: int, to_y: int, track: int) -> None:
+        if self._command is not None:
+            self._command("moveto", self._first + (to_y - from_y) / track)
+
+    def click(self, y: int, track: int) -> None:
+        top, bottom = self.thumb_span(track)
+        if self._command is not None and not top <= y <= bottom:
+            self._command("scroll", 1 if y > bottom else -1, "pages")
+
+    def _on_press(self, event) -> None:
+        top, bottom = self.thumb_span(self._track())
+        if top <= event.y <= bottom:
+            self._grab_y = event.y
+        else:
+            self.click(event.y, self._track())
+
+    def _on_motion(self, event) -> None:
+        if self._grab_y is None:
+            return
+        self.drag(self._grab_y, event.y, self._track())
+        self._grab_y = event.y
+
+
 class Kit:
     """Scale-aware factory for the Settings window's widgets."""
 

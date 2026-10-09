@@ -78,3 +78,33 @@ def test_other_platforms_keep_the_menubutton_dropdown(root):
 
     dropdown = Dropdown(Kit(platform="win32"), root, ["Orange"])
     assert dropdown.button.winfo_class() == "Menubutton"
+
+
+def test_scrollbar_thumb_tracks_the_visible_fraction(root):
+    from tokitty.settings_widgets import ThinScrollbar
+
+    bar = ThinScrollbar(Kit(), root)
+    bar.configure(height=200)
+    bar.set(0.25, 0.75)
+    top, bottom = bar.thumb_span(200)
+    assert (top, bottom) == (50, 150)
+
+
+def test_dragging_the_thumb_scrolls_by_the_same_fraction(root):
+    from tokitty.settings_widgets import ThinScrollbar
+
+    calls = []
+    bar = ThinScrollbar(Kit(), root, command=lambda *args: calls.append(args))
+    bar.set(0.0, 0.5)
+    bar.drag(from_y=10, to_y=60, track=200)
+    assert calls == [("moveto", 0.25)]
+
+
+def test_clicking_the_track_pages_toward_the_click(root):
+    from tokitty.settings_widgets import ThinScrollbar
+
+    calls = []
+    bar = ThinScrollbar(Kit(), root, command=lambda *args: calls.append(args))
+    bar.set(0.0, 0.5)
+    bar.click(y=180, track=200)
+    assert calls == [("scroll", 1, "pages")]
