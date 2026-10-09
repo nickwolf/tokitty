@@ -348,6 +348,23 @@ def test_skip_during_discovery_drops_the_result(rig):
     assert not (r.state_dir / "accounts.json").exists()
 
 
+@pytest.mark.parametrize("platform, note", [
+    ("darwin", "Checking this Mac"),
+    ("win32", "Checking this PC and WSL installs"),
+])
+def test_the_search_note_only_mentions_wsl_on_windows(rig, platform, note):
+    r = rig(platform=platform)
+    r.discover_gate = threading.Event()
+    r.walk.primary_button.invoke()
+    r.settle()
+    assert r.walk.candidates is None
+    assert note in r.texts()
+    if platform == "darwin":
+        assert not any("WSL" in t for t in r.texts())
+    r.discover_gate.set()
+    r.pump(lambda: r.walk.candidates is not None)
+
+
 def test_skip_on_accounts_before_the_button_writes_no_accounts(rig):
     r = rig()
     r.to_accounts()
@@ -401,7 +418,7 @@ def test_going_back_after_saving_never_saves_again(rig):
 
 
 def test_macos_single_read_only_row_writes_nothing(rig, tmp_path):
-    row = Candidate("claude", str(tmp_path / ".claude"), "This PC", True, read_only=True,
+    row = Candidate("claude", str(tmp_path / ".claude"), "This Mac", True, read_only=True,
                     detail="Signed in (Keychain)")
     r = rig(found=[row])
     r.to_accounts()

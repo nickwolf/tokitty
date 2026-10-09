@@ -113,6 +113,7 @@ class Walkthrough:
         self.root = root
         self.state_dir = Path(state_dir)
         self.kit = Kit(scale)
+        self.platform = platform
         self._running_distros = running_distros
         self._discover = discover or (lambda: first_run.discover_candidates(
             credentials_cache, platform=platform))
@@ -549,7 +550,7 @@ class Walkthrough:
             box = tk.Frame(holder, bg=BG_COLOR)
             box.pack(side="left")
             text(box, "Looking for Claude Code and Codex…", font=FONT_MEDIUM).pack(anchor="w")
-            text(box, "Checking this PC and WSL installs", color=DIM_COLOR,
+            text(box, first_run.searching_note(self.platform), color=DIM_COLOR,
                  font=FONT_SMALL).pack(anchor="w", pady=(px(3), 0))
             self._paint_spinner()
             return
