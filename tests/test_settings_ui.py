@@ -7,6 +7,7 @@ tk = pytest.importorskip("tkinter")
 
 from tokitty import settings_ui  # noqa: E402
 from tokitty.settings_ui import SettingsWindow  # noqa: E402
+from tokitty.settings_widgets import FlatButton  # noqa: E402
 from tokitty.ui import TokittyWindow  # noqa: E402
 
 
@@ -260,7 +261,7 @@ def test_look_randomize_targets_selected_pane(harness):
     settings.tabs["look"].frame.winfo_children()  # built
     # Randomize button lives in the picker row; drive it through the seam it calls.
     picker_row = settings.tabs["look"].pane_picker.frame.master
-    button = [w for w in picker_row.winfo_children() if isinstance(w, tk.Button)][0]
+    button = [w for w in picker_row.winfo_children() if isinstance(w, (tk.Button, FlatButton))][0]
     button.invoke()
     assert harness.calls[0] == ("randomize", 2)
 

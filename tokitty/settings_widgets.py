@@ -12,6 +12,7 @@ never write back.
 """
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -276,11 +277,44 @@ class Dropdown:
         return self.var.get()
 
 
+class FlatButton(tk.Label):
+    """A button drawn as a Label, for macOS: Aqua Tk renders tk.Button as a
+    native bezel and ignores bg, which puts the theme's light text on white.
+    Offers what callers use of tk.Button: text, state, and invoke()."""
+
+    def __init__(self, parent, *, text: str, command: Optional[Callable[[], None]], fg: str, bg: str,
+                 hover_fg: str, hover_bg: str, disabled: bool, **options):
+        super().__init__(parent, text=text, fg=fg, bg=bg, disabledforeground=fg,
+                         state="disabled" if disabled else "normal", **options)
+        self._command = command
+        self._colors = (fg, bg, hover_fg, hover_bg)
+        self.bind("<Enter>", lambda _e: self._hover(True))
+        self.bind("<Leave>", lambda _e: self._hover(False))
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def _hover(self, inside: bool) -> None:
+        if str(self.cget("state")) == "disabled":
+            return
+        fg, bg, hover_fg, hover_bg = self._colors
+        self.configure(fg=hover_fg if inside else fg, bg=hover_bg if inside else bg)
+
+    def _on_release(self, event) -> None:
+        # Like a real button, letting go outside it cancels the click.
+        if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
+            self.invoke()
+
+    def invoke(self):
+        if str(self.cget("state")) == "disabled" or self._command is None:
+            return None
+        return self._command()
+
+
 class Kit:
     """Scale-aware factory for the Settings window's widgets."""
 
-    def __init__(self, scale: float = 1.0):
+    def __init__(self, scale: float = 1.0, *, platform: str = sys.platform):
         self.scale = max(1.0, float(scale))
+        self.platform = platform
 
     def px(self, logical: float) -> int:
         return round(logical * self.scale)
@@ -303,7 +337,7 @@ class Kit:
 
     def button(self, parent, title: str, style: str = "secondary",
                command: Optional[Callable[[], None]] = None, *, compact: bool = False,
-               disabled: bool = False) -> tk.Button:
+               disabled: bool = False) -> tk.Widget:
         colors = {
             "primary": (ACCENT_FG, ACCENT_BG, "#ffd0c7"),
             "secondary": (FG_COLOR, SURFACE, "#ffffff"),
@@ -313,14 +347,23 @@ class Kit:
         fg, bg, hover_fg = colors[style]
         if disabled:
             fg, bg, hover_fg = ("#686872", "#292930", "#686872")
+        font = FONT_SMALL if compact else FONT_MEDIUM
+        padx = self.px(10 if compact else 13)
+        pady = self.px(5 if compact else 7)
+        hover_bg = SURFACE_HOVER if style == "secondary" else bg
+        cursor = "arrow" if disabled else "hand2"
+        if self.platform == "darwin":
+            return FlatButton(parent, text=title, command=command, fg=fg, bg=bg, hover_fg=hover_fg,
+                              hover_bg=hover_bg, disabled=disabled, font=font, padx=padx, pady=pady,
+                              cursor=cursor)
         return tk.Button(
             parent, text=title, command=None if disabled else command,
-            font=FONT_SMALL if compact else FONT_MEDIUM, fg=fg, bg=bg,
+            font=font, fg=fg, bg=bg,
             activeforeground=hover_fg,
-            activebackground=SURFACE_HOVER if style == "secondary" else bg,
+            activebackground=hover_bg,
             relief="flat", bd=0, highlightthickness=0,
-            padx=self.px(10 if compact else 13), pady=self.px(5 if compact else 7),
-            cursor="arrow" if disabled else "hand2",
+            padx=padx, pady=pady,
+            cursor=cursor,
             state="disabled" if disabled else "normal", disabledforeground=fg)
 
     def pill(self, parent, title: str, kind: str = "good") -> tk.Label:
