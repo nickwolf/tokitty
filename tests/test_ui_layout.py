@@ -1,6 +1,7 @@
 """Layout-constant tests that must not require a display. ui.py imports
 tkinter at module level, so only run what's importable headlessly."""
 import inspect
+import sys
 
 import pytest
 
@@ -747,5 +748,130 @@ def test_app_menu_settings_command_opens_settings_on_pane_zero():
             # What Aqua Tk calls for Tokitty ▸ Settings… and Cmd-comma.
             root.tk.call("::tk::mac::ShowPreferences")
             assert opened == [0]
+    finally:
+        root.destroy()
+
+
+_FROZEN_ABOUT_CHECK = """
+import sys, tempfile, tkinter as tk
+from pathlib import Path
+import AppKit
+from tokitty.ui import TokittyWindow
+
+root = tk.Tk()
+window = TokittyWindow(root, Path(tempfile.mkdtemp()), pane_count=1)
+window.register_about_panel(frozen=True)
+calls = []
+root.tk.call("trace", "add", "execution", "tkAboutDialog", "enter", root.register(lambda *_: calls.append(1)))
+root.tk.call("tkAboutDialog")
+root.update()
+panels = [w for w in AppKit.NSApp().windows() if w.className() == "NSPanel" and w.isVisible()]
+
+def texts(view):
+    out = [str(view.stringValue())] if view.isKindOfClass_(AppKit.NSTextField) else []
+    for sub in view.subviews():
+        out += texts(sub)
+    return out
+
+versions = [t for p in panels for t in texts(p.contentView()) if t.startswith("Version")]
+for panel in panels:
+    panel.orderOut_(None)
+print(versions)
+print(f"calls={len(calls)} panels={len(panels)}")
+"""
+
+
+@pytest.mark.gui
+def test_about_item_in_a_frozen_build_opens_the_native_panel_once():
+    # No stand-in for the native call: in Tk 9 ::tk::mac::standardAboutPanel
+    # sends orderFrontStandardAboutPanel:, which Tk routes back to
+    # tkAboutDialog, so calling it from the handler recursed and showed nothing.
+    # Its own process, since AppKit redraws windows left by earlier tests' Tk
+    # roots and crashes on them; the app only ever has one root.
+    if sys.platform != "darwin":
+        pytest.skip("Aqua only")
+    pytest.importorskip("AppKit")
+    import subprocess
+
+    result = subprocess.run([sys.executable, "-c", _FROZEN_ABOUT_CHECK],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr[-2000:]
+    lines = result.stdout.strip().splitlines()
+    assert lines[-1] == "calls=1 panels=1"
+    # Only the version, not "Version 0.6.0 (0.6.0)".
+    assert "(" not in lines[-2], lines[-2]
+
+
+@pytest.mark.gui
+def test_about_item_from_source_names_the_version(monkeypatch):
+    tk = pytest.importorskip("tkinter")
+    from tkinter import messagebox
+    from tokitty import settings_ui
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda title, message, **kw: shown.append((title, message)))
+    monkeypatch.setattr(settings_ui, "version_text", lambda: "v9.9.9")
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            window.register_about_panel(frozen=False)
+            root.tk.call("tkAboutDialog")
+            assert shown and shown[0][0] == "About Tokitty"
+            assert "v9.9.9" in shown[0][1]
+    finally:
+        root.destroy()
+
+
+class _Pointer:
+    def __init__(self, x_root, y_root):
+        self.x_root, self.y_root = x_root, y_root
+
+
+@pytest.mark.gui
+def test_motion_without_a_press_on_the_card_does_not_move_it():
+    # Dragging the native About panel by its title bar: Aqua Tk sees the
+    # press there, loses the release, and sends the card B1-Motion events.
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            moves = []
+            window._move_to = lambda x, y: moves.append((x, y))
+            window._on_drag_move(_Pointer(900, 700))
+            assert moves == []
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_a_drag_that_starts_on_the_card_still_moves_it_and_ends_on_release():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=1)
+            moves = []
+            window._move_to = lambda x, y: moves.append((x, y))
+            window._save_position = lambda: None
+            start = _Pointer(root.winfo_x() + 10, root.winfo_y() + 10)
+            window._on_drag_start(start)
+            window._on_drag_move(_Pointer(start.x_root + 40, start.y_root + 30))
+            assert moves == [(root.winfo_x() + 40, root.winfo_y() + 30)]
+            window._on_drag_end(_Pointer(0, 0))
+            window._on_drag_move(_Pointer(900, 700))
+            assert len(moves) == 1
     finally:
         root.destroy()

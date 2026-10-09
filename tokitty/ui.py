@@ -556,7 +556,9 @@ class TokittyWindow:
         self._card_w, self._pane_h = cell_size(scale)
         self._width, self._height, self._cols = grid_size(pane_count, scale)
         self._position_path = state_dir / POSITION_FILENAME
-        self._drag_offset = (0, 0)
+        # None unless a press on the card started a drag. Aqua Tk sends the
+        # card B1-Motion while the native About panel is dragged, with no press.
+        self._drag_offset: Optional[Tuple[int, int]] = None
         self._always_on_top_bool = True
         self._opacity = clamp_level(opacity)
         self._opacity_pending = False
@@ -809,9 +811,12 @@ class TokittyWindow:
             self.content.lift()
 
     def _on_drag_move(self, event: tk.Event) -> None:
+        if self._drag_offset is None:
+            return
         self._move_to(event.x_root - self._drag_offset[0], event.y_root - self._drag_offset[1])
 
     def _on_drag_end(self, _event: tk.Event) -> None:
+        self._drag_offset = None
         self._save_position()
 
     def _build_context_menu(self) -> None:
@@ -824,6 +829,32 @@ class TokittyWindow:
         the Settings window on pane 0. Aqua Tk shows that item only once
         this command exists; other platforms never call it."""
         self.root.createcommand("::tk::mac::ShowPreferences", lambda: self.open_settings(0))
+
+    def register_about_panel(self, frozen: bool) -> None:
+        """Answer Tokitty ▸ About Tokitty in the macOS app menu (#98). Aqua
+        Tk calls tkAboutDialog for it, which by default shows Tk's own
+        about box. A frozen build has a real Info.plist, so the native panel
+        shows its name, version and copyright; a source run would get
+        Python's, so it shows the version in a plain dialog instead."""
+        def show() -> None:
+            if frozen:
+                # Straight to AppKit: Tk 9's ::tk::mac::standardAboutPanel
+                # sends orderFrontStandardAboutPanel:, which Tk routes back
+                # here. pyobjc ships in the macOS build with pystray.
+                import AppKit
+
+                # An empty build version drops the "(0.6.0)" that would repeat the
+                # version, since CFBundleVersion matches it.
+                AppKit.NSApp().orderFrontStandardAboutPanelWithOptions_({"Version": ""})
+                return
+            from tkinter import messagebox
+
+            from tokitty.settings_ui import version_text
+
+            messagebox.showinfo("About Tokitty", f"Tokitty {version_text()}\nRunning from source.",
+                                parent=self.root)
+
+        self.root.createcommand("tkAboutDialog", show)
 
     def build_menu_model(self, pane_index: int) -> List[MenuItem]:
         """The single-source menu model for a given pane. Rendered here as
