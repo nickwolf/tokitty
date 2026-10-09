@@ -41,3 +41,9 @@ def test_property_inspector_saves_role_and_prompt_together():
     text = (PLUGIN / "pi.html").read_text(encoding="utf-8")
     assert "payload: { role: current, prompt: currentPrompt }" in text
     assert text.count("select.onchange = save;") == 2
+
+
+def test_plugin_replays_keys_when_a_new_tokitty_answers():
+    text = (PLUGIN / "index.html").read_text(encoding="utf-8")
+    assert "if (!connected || plan.boot !== boot) {" in text
+    assert "boot = plan.boot;" in text

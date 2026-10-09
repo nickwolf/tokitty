@@ -71,7 +71,8 @@ function onMessage(m) {
 let connected = false;
 
 // Tokitty may start after the deck did and miss every willAppear, so on
-// reconnect the visible keys are announced again.
+// reconnect, or when a new copy took the port over without a failed request
+// in between (an in-app update), the visible keys are announced again.
 function replay() {
   visible.forEach(function (key) {
     post(Object.assign({}, key.msg, { event: "willAppear" }));
@@ -84,13 +85,15 @@ function sleep(ms) {
 
 async function pollLoop() {
   let rev = -1;
+  let boot = null;
   for (;;) {
     try {
       const r = await fetch(BASE + "/v1/plan?rev=" + rev + "&t=" + TOKEN);
       if (!r.ok) throw new Error("status " + r.status);
       const plan = await r.json();
-      if (!connected) {
+      if (!connected || plan.boot !== boot) {
         connected = true;
+        boot = plan.boot;
         replay();
       }
       rev = plan.rev;
