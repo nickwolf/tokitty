@@ -696,3 +696,17 @@ def test_unscaled_grid_and_hit_test_are_unchanged():
     assert cell_size(1.0) == (CARD_WIDTH, PANE_HEIGHT)
     assert grid_size(5) == grid_size(5, 1.0) == (600, 384, 2)
     assert pane_index_at(350, 50, 5, 2) == pane_index_at(350, 50, 5, 2, 300, 128) == 1
+
+
+@pytest.mark.gui
+def test_source_run_dock_icon_is_the_app_icon():
+    tk = pytest.importorskip("tkinter")
+    pytest.importorskip("PIL")
+    from tokitty import app_icon
+
+    root = tk.Tk()
+    try:
+        photo = app_icon.photo(root, 256)
+        assert (photo.width(), photo.height()) == (256, 256)
+    finally:
+        root.destroy()

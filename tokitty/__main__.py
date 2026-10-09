@@ -515,6 +515,15 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     scale = dpi.init()
 
     root = tk.Tk()
+    if sys.platform == "darwin" and not getattr(sys, "frozen", False):
+        # A source run's Dock tile is otherwise the Python rocket. A frozen
+        # build takes its icon from Tokitty.app instead.
+        try:
+            from tokitty import app_icon
+
+            root.iconphoto(True, app_icon.photo(root))
+        except Exception:
+            pass
     if show_walkthrough:
         # The panes are built once from accounts.json, so the walkthrough
         # runs first, as a Toplevel of a withdrawn root. Nothing else starts

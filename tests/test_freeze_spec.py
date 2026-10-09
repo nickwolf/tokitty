@@ -43,3 +43,9 @@ def test_release_publish_names_the_repo():
     # The publish job has no checkout, so gh cannot infer the repo from a .git.
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert 'gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"' in workflow
+
+
+def test_spec_gives_the_mac_bundle_and_windows_exe_an_icon():
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    assert "icon=str(icns_path)" in spec
+    assert "icon=gui_icon" in spec
