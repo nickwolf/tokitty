@@ -255,8 +255,6 @@ class TestNormalBehavior:
 import hashlib  # noqa: E402
 import signal  # noqa: E402
 
-import pytest  # noqa: E402
-
 from tokitty import hook_writer as hw  # noqa: E402
 
 T0 = 1_000_000.0
