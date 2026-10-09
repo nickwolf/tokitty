@@ -699,6 +699,59 @@ def test_unscaled_grid_and_hit_test_are_unchanged():
     assert pane_index_at(350, 50, 5, 2) == pane_index_at(350, 50, 5, 2, 300, 128) == 1
 
 
+def test_context_menu_opens_on_right_click_only_off_macos():
+    from tokitty.ui import context_menu_sequences
+
+    assert context_menu_sequences("win32") == ["<Button-3>"]
+    assert context_menu_sequences("linux") == ["<Button-3>"]
+
+
+def test_context_menu_also_opens_on_control_click_and_button_2_on_macos():
+    from tokitty.ui import context_menu_sequences
+
+    # Aqua Tk has reported the right button as Button-2 or Button-3 depending
+    # on the version, and Control-click is the one-button way to right-click.
+    assert set(context_menu_sequences("darwin")) == {"<Button-2>", "<Button-3>", "<Control-Button-1>"}
+
+
+@pytest.mark.gui
+def test_every_context_menu_sequence_is_bound():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow, context_menu_sequences
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            TokittyWindow(root, Path(d), pane_count=1)
+            for sequence in context_menu_sequences():
+                assert root.bind_all(sequence), sequence
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
+def test_app_menu_settings_command_opens_settings_on_pane_zero():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import TokittyWindow
+    import tempfile
+    from pathlib import Path
+
+    root = tk.Tk()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            window = TokittyWindow(root, Path(d), pane_count=3)
+            opened = []
+            window.open_settings = opened.append
+            window.register_app_menu_settings()
+            # What Aqua Tk calls for Tokitty ▸ Settings… and Cmd-comma.
+            root.tk.call("::tk::mac::ShowPreferences")
+            assert opened == [0]
+    finally:
+        root.destroy()
+
+
 _FROZEN_ABOUT_CHECK = """
 import sys, tempfile, tkinter as tk
 from pathlib import Path

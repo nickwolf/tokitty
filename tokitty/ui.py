@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
@@ -70,6 +71,15 @@ USAGE_READOUT_ITEMS = [("cost", "Cost"), ("tokens", "Tokens")]
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800
+
+
+def context_menu_sequences(platform: str = sys.platform) -> List[str]:
+    """Events that open the context menu. On macOS Aqua Tk has reported the
+    right button as Button-2 or Button-3 depending on the version, and
+    Control-click is the one-button way to right-click."""
+    if platform == "darwin":
+        return ["<Button-2>", "<Button-3>", "<Control-Button-1>"]
+    return ["<Button-3>"]
 
 
 def cell_size(scale: float = 1.0) -> Tuple[int, int]:
@@ -811,7 +821,14 @@ class TokittyWindow:
 
     def _build_context_menu(self) -> None:
         self._rebuild_context_menu()
-        self.root.bind_all("<Button-3>", self._show_context_menu)
+        for sequence in context_menu_sequences():
+            self.root.bind_all(sequence, self._show_context_menu)
+
+    def register_app_menu_settings(self) -> None:
+        """Wire Tokitty ▸ Settings… (and Cmd-comma) in the macOS app menu to
+        the Settings window on pane 0. Aqua Tk shows that item only once
+        this command exists; other platforms never call it."""
+        self.root.createcommand("::tk::mac::ShowPreferences", lambda: self.open_settings(0))
 
     def register_about_panel(self, frozen: bool) -> None:
         """Answer Tokitty ▸ About Tokitty in the macOS app menu (#98). Aqua

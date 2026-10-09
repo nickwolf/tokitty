@@ -1009,6 +1009,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
 
     window.open_settings = lambda pane_index: SettingsWindow.open(window, pane_index)
     if sys.platform == "darwin":
+        window.register_app_menu_settings()
         window.register_about_panel(frozen=bool(getattr(sys, "frozen", False)))
 
     if settings.surprise_me:
