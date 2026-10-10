@@ -68,9 +68,9 @@ jobs:
         run: |
           exe=dist1/TokittyQtSpike.app/Contents/MacOS/TokittyQtSpike
           mkdir -p report/sf1 report/sf2
-          "$exe" --selftest --no-tray --pos 300,300 --out report/sf1 > report/sf1/stdout.txt 2>&1 || echo "rc=$?" >> report/sf1/stdout.txt
-          QT_SCALE_FACTOR=2 "$exe" --selftest --no-tray --pos 300,300 --out report/sf2 > report/sf2/stdout.txt 2>&1 || echo "rc=$?" >> report/sf2/stdout.txt
-          timeout 20 "$exe" --quit-after 8 > report/tray_run.txt 2>&1 || echo "rc=$?" >> report/tray_run.txt
+          "$exe" --selftest --no-tray --pos 40,80 --out report/sf1 > report/sf1/stdout.txt 2>&1 || echo "rc=$?" >> report/sf1/stdout.txt
+          QT_SCALE_FACTOR=2 "$exe" --selftest --no-tray --pos 30,60 --out report/sf2 > report/sf2/stdout.txt 2>&1 || echo "rc=$?" >> report/sf2/stdout.txt
+          "$exe" --quit-after 8 > report/tray_run.txt 2>&1 || echo "rc=$?" >> report/tray_run.txt
           cat report/sf1/stdout.txt | head -40
 
       - name: Frozen smoke run (Linux, xvfb)

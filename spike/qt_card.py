@@ -365,6 +365,12 @@ def compare(card: Card, source: str) -> dict:
     def shot() -> QImage:
         if source == "grab":
             return card.grab().toImage()
+        # macOS composites asynchronously, so give the last repaint time to
+        # reach the screen before capturing it. Windows doesn't need this.
+        end = time.time() + 0.3
+        while time.time() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
         scr = card.screen()
         geo = card.geometry()
         pm = scr.grabWindow(0, geo.x(), geo.y(), geo.width(), geo.height())
@@ -374,9 +380,6 @@ def compare(card: Card, source: str) -> dict:
     card.show_cat = False
     card.repaint()
     QApplication.processEvents()
-    if source == "screen":
-        time.sleep(0.15)
-        QApplication.processEvents()
     without = shot()
     card.show_cat = True
     card.repaint()

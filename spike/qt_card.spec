@@ -29,6 +29,7 @@ DROP = [
     "Qt6Svg", "Qt6VirtualKeyboard", "translations", "imageformats", "iconengines",
     "networkinformation", "tls", "qmltooling", "generic", "platforminputcontexts",
     "libQt6Pdf", "libQt6Qml", "libQt6Quick", "libQt6Network", "libQt6OpenGL", "libQt6Svg",
+    "lib/QtNetwork", "lib/QtDBus", "lib/QtSvg", "qdirect2d", "qoffscreen", "qminimal",
 ]
 
 a = Analysis(
