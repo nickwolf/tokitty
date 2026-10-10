@@ -354,6 +354,7 @@ def region_bytes(img: QImage, x: int, y: int, w: int, h: int) -> bytes:
 def compare(card: Card, source: str) -> dict:
     """Compare the cat as drawn against raster_rgba, opaque cells only, plus the
     transparent cells against the same scene with the cat hidden."""
+    card.anim.stop()  # the reference frame must still be on screen at capture time
     dpr = card.dpr()
     frame = card.frames[card.frame_i]
     w, h, ref = raster_rgba(frame, card.palette_, cell_for(dpr))
@@ -384,6 +385,7 @@ def compare(card: Card, source: str) -> dict:
     card.show_cat = True
     card.repaint()
     QApplication.processEvents()
+    card.anim.start(FRAME_INTERVAL_MS)
 
     got = region_bytes(with_cat, ox, oy, w, h)
     bg = region_bytes(without, ox, oy, w, h)
