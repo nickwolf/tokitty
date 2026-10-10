@@ -1,0 +1,84 @@
+# Temporary, spike branch only: frozen-size and smoke run of spike/qt_card.py
+# on macOS and Linux for the PySide6 go/no-go (#28). Not for main.
+name: spike-qt
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-arm64
+          - os: macos-15-intel
+            target: macos-x86_64
+          - os: ubuntu-22.04
+            target: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install PySide6-Essentials pyinstaller
+
+      - name: Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libegl1
+
+      - name: Build untrimmed and trimmed
+        run: |
+          SPIKE_TRIM=0 python -m PyInstaller spike/qt_card.spec --noconfirm --distpath dist0 --workpath work0
+          SPIKE_TRIM=1 python -m PyInstaller spike/qt_card.spec --noconfirm --distpath dist1 --workpath work1
+
+      - name: Archive like a release
+        run: |
+          mkdir -p report
+          for t in 0 1; do
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              ditto -c -k --keepParent dist$t/TokittyQtSpike.app spike-trim$t-${{ matrix.target }}.zip
+              f=spike-trim$t-${{ matrix.target }}.zip
+            else
+              tar -czf spike-trim$t-${{ matrix.target }}.tar.gz -C dist$t tokitty-qt-spike
+              f=spike-trim$t-${{ matrix.target }}.tar.gz
+            fi
+            echo "$(wc -c < $f | tr -d ' ') $f" | tee -a report/sizes.txt
+          done
+
+      - name: Bundle layout (Qt as separate libraries)
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then root=dist1/TokittyQtSpike.app; else root=dist1/tokitty-qt-spike; fi
+          find "$root" -type f -size +200k -exec ls -l {} + | awk '{print $5, $9}' | sort -rn | tee report/layout.txt
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            plutil -p "$root/Contents/Info.plist" | tee report/info_plist.txt
+            otool -L "$root/Contents/Frameworks/PySide6/QtWidgets.abi3.so" | tee report/otool_qtwidgets.txt || true
+          fi
+
+      - name: Frozen self-test (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          exe=dist1/TokittyQtSpike.app/Contents/MacOS/TokittyQtSpike
+          mkdir -p report/sf1 report/sf2
+          "$exe" --selftest --no-tray --pos 300,300 --out report/sf1 > report/sf1/stdout.txt 2>&1 || echo "rc=$?" >> report/sf1/stdout.txt
+          QT_SCALE_FACTOR=2 "$exe" --selftest --no-tray --pos 300,300 --out report/sf2 > report/sf2/stdout.txt 2>&1 || echo "rc=$?" >> report/sf2/stdout.txt
+          timeout 20 "$exe" --quit-after 8 > report/tray_run.txt 2>&1 || echo "rc=$?" >> report/tray_run.txt
+          cat report/sf1/stdout.txt | head -40
+
+      - name: Frozen smoke run (Linux, xvfb)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          mkdir -p report/sf1
+          xvfb-run -a dist1/tokitty-qt-spike/tokitty-qt-spike --selftest --no-tray --out report/sf1 > report/sf1/stdout.txt 2>&1 || echo "rc=$?" >> report/sf1/stdout.txt
+          head -40 report/sf1/stdout.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spike-report-${{ matrix.target }}
+          path: report
