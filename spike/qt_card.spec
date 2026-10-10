@@ -23,13 +23,14 @@ QT_EXCLUDES = [
 ]
 # Shipped files to drop by name fragment: software OpenGL fallback, Qt
 # translations, and plugins the spike doesn't load. Keep platforms (the
-# window system), styles, and the platform theme plugins.
+# window system), styles, and the platform theme plugins. QtDBus stays:
+# QtGui links it on macOS and the xcb plugin links it on Linux.
 DROP = [
     "opengl32sw", "d3dcompiler", "Qt6Pdf", "Qt6Qml", "Qt6Quick", "Qt6Network", "Qt6OpenGL",
     "Qt6Svg", "Qt6VirtualKeyboard", "translations", "imageformats", "iconengines",
     "networkinformation", "tls", "qmltooling", "generic", "platforminputcontexts",
     "libQt6Pdf", "libQt6Qml", "libQt6Quick", "libQt6Network", "libQt6OpenGL", "libQt6Svg",
-    "lib/QtNetwork", "lib/QtDBus", "lib/QtSvg", "qdirect2d", "qoffscreen", "qminimal",
+    "lib/QtNetwork", "lib/QtSvg", "qdirect2d", "qoffscreen", "qminimal",
 ]
 
 a = Analysis(
