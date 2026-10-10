@@ -2,7 +2,7 @@
 
 Issue: [#109](https://github.com/nickwolf/tokitty/issues/109), the spike for [#28](https://github.com/nickwolf/tokitty/issues/28). Brief: `docs/superpowers/handoffs/2026-10-09-pyside6-spike-brief.md`.
 
-Status: Windows gates measured on Cucumber on 2026-10-10. macOS and Linux builds measured on GitHub runners the same day. The checks that need a real Mac are in the checklist at the end and have not been run yet. The go/no-go is Nick's.
+Status: Windows gates measured on Cucumber on 2026-10-10, at 100% and at real 150% display scaling. macOS and Linux builds measured on GitHub runners the same day. The checks that need a real Mac are in the checklist at the end and have not been run yet. The go/no-go is Nick's.
 
 Everything here lives on the `spike/pyside6` branch only. Nothing merges.
 
@@ -20,10 +20,10 @@ Versions: PySide6-Essentials 6.12.0 (Qt 6.12.0), PyInstaller 6.22.3, Windows Pyt
 
 | # | Gate | Windows | macOS | Result |
 |---|------|---------|-------|--------|
-| 1 | Pixel identity | 0 mismatched pixels at 100% (real) and at 125, 150, 175, 200% (simulated), both `grab()` and screen capture, all four spots, both walk directions | 0 mismatched pixels on both runner types at dpr 1 and simulated dpr 2, `grab()` and screen capture, frozen build | Pass on Windows. Real 150% and real Retina still to confirm |
+| 1 | Pixel identity | 0 mismatched pixels at 100% and 150% (real) and at 125, 150, 175, 200% (simulated), both `grab()` and screen capture, all four spots, both walk directions | 0 mismatched pixels on both runner types at dpr 1 and simulated dpr 2, `grab()` and screen capture, frozen build | Pass on Windows. Real Retina still to confirm |
 | 2 | Click-through on the empty margin | Margin and transparent sprite cells pass through. Cat, bars, card at 100/50/20% hit tokitty. A 0% card passes through | Nick's checklist | Pass on Windows |
 | 3 | Focus and stacking | Clicks and drags leave the foreground window alone. Stays above an active normal window | Nick's checklist | Pass on Windows |
-| 4 | Drag and placement | Moves exactly as far as the mouse at 100% and simulated 150% | Nick's checklist | Partial. No mixed-DPI pair on this machine |
+| 4 | Drag and placement | Moves exactly as far as the mouse at 100% and at 150%, real and simulated | Nick's checklist | Partial. No mixed-DPI pair on this machine |
 | 5 | Text | Screenshots below | Screenshots below (runner) | Nick's call |
 | 6 | macOS menu bar | Tray available, starts with no crash | Frozen `LSUIElement` build starts with the tray available and no crash on the runners. Seeing the icon needs a real Mac | Nick's checklist |
 | 7 | CPU | Spike idle 0.086% of one core, walking 2.212%. tkinter 1.135% | Nick's checklist | Pass |
@@ -38,7 +38,7 @@ Windows, real 100% (the only monitor here is a 2560x1440 at 100%): 10 comparison
 
 Windows, simulated 125, 150, 175 and 200% with `QT_SCALE_FACTOR`: 0 mismatches in all 40 comparisons. One run at 125% showed 2,663 changed pixels in transparent cells of the screen capture in the "beside" spot and none in opaque cells. Three reruns gave 0, so I put that down to something changing on screen behind the margin during the capture.
 
-`QT_SCALE_FACTOR` exercises the same device-pixel-ratio path as a real 150% monitor inside Qt, but it is not the same as Windows telling the process its monitor is at 144 dpi. A real 150% run is in the checklist below. It takes two minutes: set Windows display scaling to 150%, run `--selftest`, set it back.
+`QT_SCALE_FACTOR` exercises the same device-pixel-ratio path as a real 150% monitor inside Qt, but it is not the same as Windows telling the process its monitor is at 144 dpi. So I also switched the display to 150% for real (`DisplayConfigSetDeviceInfo`, the call the Settings app uses), ran `--selftest` from source and from the frozen build, and set it back to 100%. Qt reported the screen as 1707x960 at dpr 1.5 and `GetDpiForWindow` returned 144. Both runs: 10 comparisons, 12,240 opaque pixels each at cell size 6, 0 mismatches in opaque cells, 0 in transparent cells, and the exact RGBA block check in the "beside" spot passed.
 
 macOS, frozen trimmed build on GitHub's `macos-15` (arm64, "Apple Virtual" 1024x768 display) and `macos-15-intel` ("Built-in Display" 1920x1080) runners: 0 mismatches in all 10 comparisons at dpr 1, and 0 in all 10 at dpr 2 simulated with `QT_SCALE_FACTOR=2` (cell size 8). Neither runner has a Retina panel, so a real Retina run is in the checklist.
 
@@ -57,7 +57,7 @@ Measured with `WindowFromPoint`, resolved through `GetAncestor(GA_ROOT)` and com
 | Bar fill | true | true | true | true | true |
 | Opaque cat pixel | true | true | true | true | true |
 
-With the cat beside the card, an opaque cat pixel hits tokitty, and a transparent cell inside the cat's bounding box resolves to the terminal window underneath. With the cat on the top edge, its opaque pixels hit tokitty. The same table came out identical at simulated 150%.
+With the cat beside the card, an opaque cat pixel hits tokitty, and a transparent cell inside the cat's bounding box resolves to the terminal window underneath. With the cat on the top edge, its opaque pixels hit tokitty. The same table came out identical at simulated 150% and at real 150%.
 
 At exactly 0% the card is click-through, like the margin. Only painted pixels catch clicks: the bars, the cat, and the glyphs themselves. A pixel inside a letter of "SESSION" (alpha 255) hits tokitty, and the gap two pixels away (alpha 0) does not. So an invisible card can be dragged only by the cat or a bar, and right-clicked only there too.
 
@@ -77,13 +77,13 @@ The probe sends real clicks with `SetCursorPos` and `mouse_event`, only to pixel
 - Right click: while the `QMenu` is open, the menu popup is the foreground window. When it closes, the terminal is in the foreground again without anything restoring it. I didn't measure the Tk menu for comparison.
 - With a normal window covering the widget and activated: the cat still hits tokitty (stays on top), the margin hits the normal window, and clicking the cat leaves the normal window in the foreground.
 
-Results were identical at simulated 150%.
+Results were identical at simulated 150% and at real 150%.
 
 macOS Spaces and full-screen behaviour can only be checked on a real Mac. If the widget disappears when switching Spaces, the fix is `NSWindow.collectionBehavior` (`canJoinAllSpaces`, `fullScreenAuxiliary`), which Qt does not expose. That would mean `pyobjc` or a few lines of native code through `ctypes` and the Objective-C runtime, and it is a dependency decision for Nick. The spike also sets `WA_MacAlwaysShowToolWindow`, because a `Qt.Tool` window on macOS otherwise hides whenever the app is not active. That is from Qt's documentation and has not been tested on a Mac yet.
 
 ## 4. Drag and placement
 
-Drag is a plain `move()` on mouse move, the same approach as the Tk widget. It moved by exactly the mouse delta at 100% and at simulated 150%.
+Drag is a plain `move()` on mouse move, the same approach as the Tk widget. It moved by exactly the mouse delta at 100%, at simulated 150% and at real 150%.
 
 Not tested: a mixed-DPI pair of monitors, because this machine has one. The spike rebuilds the cat image when the device pixel ratio changes (the image cache is keyed on it), so the cat should stay crisp after crossing, but that is untested. Checklist item.
 
@@ -200,7 +200,7 @@ On Windows every gate that can be measured on this machine passed. The cat is by
 1. Size. Releases get roughly 62% bigger on Windows and 70 to 74% bigger on macOS if Pillow stays, or 32% and 47 to 50% if the port also replaces Pillow with `QImage`/`QPainter`. Every update pays it. I'd plan on dropping Pillow as part of #114 and #115.
 2. The Mac checklist below, especially Spaces and full-screen (item 7). If the widget can't stay visible across Spaces without `NSWindow.collectionBehavior`, the port needs `pyobjc` or a small `ctypes` call into the Objective-C runtime, and that is a dependency call for Nick.
 
-Still open and worth doing before a go is final: a real 150% Windows run of `--selftest` and a mixed-DPI drag, neither of which this machine can do as configured.
+Still open and worth doing before a go is final: a mixed-DPI drag, which needs a second monitor at a different scale.
 
 ## Mac checklist for Nick
 
