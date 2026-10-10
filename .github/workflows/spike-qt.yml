@@ -52,6 +52,9 @@ jobs:
             fi
             echo "$(wc -c < $f | tr -d ' ') $f" | tee -a report/sizes.txt
           done
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            python -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); print(sum(i.compress_size for i in z.infolist() if 'pyside6' in i.filename.lower() or 'shiboken6' in i.filename.lower()), 'qt+shiboken compressed in', sys.argv[1])" spike-trim1-${{ matrix.target }}.zip | tee -a report/sizes.txt
+          fi
 
       - name: Bundle layout (Qt as separate libraries)
         run: |
