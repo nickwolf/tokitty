@@ -2,8 +2,11 @@
 # on macOS and Linux for the PySide6 go/no-go (#28). Not for main.
 name: spike-qt
 
+# workflow_dispatch only works for workflows present on the default branch,
+# so this runs on pushes to the spike branch instead.
 on:
-  workflow_dispatch:
+  push:
+    branches: [spike/pyside6]
 
 jobs:
   build:
