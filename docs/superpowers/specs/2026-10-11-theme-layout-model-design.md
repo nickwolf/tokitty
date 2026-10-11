@@ -10,16 +10,17 @@ One plain-Python description of how the widget looks and where everything on it 
 
 ## Decided (owner, 2026-10-11)
 
-1. **Global theme, per-account accents.** Card style, opacity, bar style, which text shows, layout and the cat's home spot are one theme for the whole widget. Per-account look stays in `customization.json` exactly as today: coat colourway and pattern, `coat_base`/`coat_shade`, `card_bg`, `bar_fill`, label. This is the split the code already has (opacity global in `settings.py:47`, colours per account in `customize.py:31`).
+1. **Global theme, per-account accents.** Card style, opacity, bar style, which text shows and layout are one theme for the whole widget. Per-account look stays in `customization.json`: coat colourway and pattern, `coat_base`/`coat_shade`, `card_bg`, `bar_fill`, label, plus the cat's home spot from decision 5. This is the split the code already has (opacity global in `settings.py:47`, colours per account in `customize.py:31`).
 2. **The lowest opacity is invisible but still clickable.** A 0% card paints at alpha 1/255. It looks the same as true 0% and still catches drags and right-clicks across the whole card. The spike measured exactly this on Windows (findings, section 2). There is no "click-through at 0%" option.
 3. **Model only.** The Tk widget keeps its constants. Nothing in `ui.py` reads the model in #110; the Qt widget in #111 is its first consumer.
 4. **No settings UI in #110.** The theme is editable by hand until #112 builds the editors once, in Qt.
+5. **Cats can sit on either side of the card, independently per account** (Nick, later the same day), and may scratch the side of the card, which is a new animation. So the cat's home spot is per account, not part of the global theme, and there are two side spots instead of one `beside`. With cards stacked in one column, each cat can pick its own side, which is what makes several accounts interesting to watch rather than a column of identical cats.
 
 ## Scope and non-goals
 
-In scope: `tokitty/theme.py` (data model, defaults, validation, card and window geometry, spots), its own `theme.json`, the function that combines the theme with one account's `Customization` into what a pane is painted with, and tests that run on all three CI OSes.
+In scope: `tokitty/theme.py` (data model, defaults, validation, card and window geometry, spots), its own `theme.json`, an optional `cat_home` per account in `customization.json`, the function that combines the theme with one account's `Customization` into what a pane is painted with, and tests that run on all three CI OSes.
 
-Not in scope: any painting, any Qt or Tk import, settings UI, input handling (wheel steps, menus), the wandering state machine (#22 owns timing, direction and z-order; this model says where the cat may be), the macOS `setMask()` call itself (#111; the model supplies the region), per-pane card size, fonts beyond size and weight, the duplicated palette in `settings_widgets.py:21-29`.
+Not in scope: any painting, any Qt or Tk import, settings UI, input handling (wheel steps, menus), the scratching frames themselves (art, #116), the wandering state machine (#22 owns timing, direction, z-order and when a cat scratches; this model says where the cat may be and which way it faces), the macOS `setMask()` call itself (#111; the model supplies the region), per-pane card size, fonts beyond size and weight, the duplicated palette in `settings_widgets.py:21-29`.
 
 ## Where it lives
 
@@ -27,7 +28,7 @@ Not in scope: any painting, any Qt or Tk import, settings UI, input handling (wh
 
 The theme is stored in its own file, `theme.json`, in the same state directory as `settings.json` and `customization.json` (`paths.py`). The first draft nested it inside `settings.json`, which had two problems Codex found. `save_settings` (`settings.py:347-351`) writes `json.dumps(asdict(settings))`, and `asdict` keeps a `frozenset` as a `frozenset`, which `json.dumps` rejects, so every settings save would have needed a special case. And a downgraded build drops unknown `settings.json` keys on its next unrelated save, so a hand-edited theme would be silently lost and come back as defaults after an upgrade. A separate file is never touched by older builds, and `settings.py` does not change at all.
 
-`customization.json` does not change either: same loader, same keys, same file. That is the simplest way to keep existing files loading.
+`customization.json` gains one optional per-account key, `cat_home`, a spot name, defaulting to `inside`. `Customization` gets the matching field and `load_customization` validates it like the other fields (an unknown spot falls back to `inside`). Every existing key and the loader's behaviour for them stay as they are, so existing files load unchanged and simply have every cat at home inside. A downgraded build drops `cat_home` on its next customization save and the cat goes back inside, which costs nothing worth protecting with a separate file.
 
 `load_theme(state_dir) -> Theme` and `save_theme(state_dir, theme)` follow `customize.py`'s pattern: a missing or unparseable file gives the default theme, and saves are atomic through a temp file and `os.replace` (`customize.py:487-492`).
 
@@ -70,7 +71,6 @@ class Theme:
     card: CardStyle
     bars: BarStyle
     text: TextStyle
-    cat_home: str = "inside"        # a Spot name, see below
 ```
 
 Card width and height are constants (`CARD_WIDTH = 300`, `CARD_HEIGHT = 128`, from `ui.py:33-34`), not theme fields. The issue does not ask for card size, and a resizable card is the main way a layout ends up with the stats column or the status line outside the card.
@@ -132,7 +132,14 @@ A `Spot` names a place for the cat relative to one card, using the spike's vocab
 
 - `inside`: (8, 12). The cat canvas sits at (8, 8) and is 112 square (`ui.py:287-290`); `sprite_bounds` centres the 104-high sprite in it with a 4 px y offset (`ui.py:124-140`). The first draft said (8, 8), which is the canvas, not the sprite.
 - `on_top`: (8, -104). Same x as `inside`, so stepping out of the card is a straight move up; feet on the card's top edge.
-- `beside`: (304, 24). Outside the right edge with a 4 px gap, bottom-aligned with the card.
+- `beside_left`: (-112, 24). Outside the left edge, flush, bottom-aligned with the card.
+- `beside_right`: (300, 24). Outside the right edge, flush, bottom-aligned with the card.
+
+The side spots are flush with the card edge rather than gapped. The sitting frames already leave a column of empty cells at the sprite's edge (`sprites.py:241`), so a sitting cat shows a 4 px gap anyway, and the scratching frames from #116 can put the paws in the column that touches the card.
+
+`placement(spot) -> Placement(origin, mirrored)`. A cat beside the card faces it: `beside_left` is drawn as the art is drawn, `beside_right` mirrored. That assumes the side-on art faces right, which is how #116 describes it ("left-facing frames come from mirroring"); if the first scratching frames come out facing the other way, the two flags swap and nothing else changes. `inside` and `on_top` are not mirrored; #22 mirrors a walking cat itself, as the spike did.
+
+Scratching is a pose, not a spot. The model's part is only that a cat at a side spot touches the card and faces it. #116 draws the frames, and #22 decides when a cat at a side spot scratches. `SCRATCH_SPOTS = {beside_left, beside_right}` names where the pose is valid, so #22 does not hardcode it.
 
 `top_edge_track(theme) -> Track` gives #22 the walkable segment: y = -104, x from 0 to `CARD_WIDTH - 112` = 188, in card coordinates. `on_top` lies on it. The track is not a `Spot` and cannot be a `cat_home`.
 
@@ -142,13 +149,18 @@ A `Spot` names a place for the cat relative to one card, using the spike's vocab
 
 The spike had one card. Today panes sit in a grid with no gap (`ui.py:86-100`, `cols = ceil(N/4)`, `rows = ceil(N/cols)`, row-major, so the last row can be ragged). A cat above a second-row card would sit on the first-row card's content.
 
-Rule: the outside spots are only reachable from panes on the matching outer edge. `on_top` and the top-edge track are reachable from first-row panes, `beside` from panes whose right neighbour is empty: the last column, plus the last pane of a ragged last row. A pane whose `cat_home` is unreachable resolves to `inside` (and so to `beside_cat`). The alternative, a gap between panes wide enough for a cat, makes a two-account widget about 1.5 times as large to hold space that is empty most of the time.
+Rule: an outside spot is reachable only from a pane on the matching outer edge. `on_top` and the top-edge track are reachable from first-row panes. `beside_left` is reachable from the first column. `beside_right` is reachable from panes whose right neighbour is empty: the last column, plus the last pane of a ragged last row. A pane whose `cat_home` is unreachable resolves to `inside` (and so to `beside_cat`).
+
+With up to 4 accounts the grid is one column, so every pane is in both the first and the last column, and each cat can use either side regardless of the others: one cat on the left of the top card, the next on the right of the card below, a third at home inside. Only `on_top` is limited to the top card. From 5 accounts the grid has two or more columns and the sides belong to the outer columns only.
+
+The alternative, a gap between panes wide enough for a cat, makes a two-account widget about 1.5 times as large to hold space that is empty most of the time.
 
 ## Window geometry
 
-`layout_window(theme, pane_count) -> WindowLayout` is computed once for a theme and pane count, never per frame, so the window never resizes while a cat wanders. It returns:
+`layout_window(theme, homes) -> WindowLayout` takes every pane's resolved home spot in pane order and is computed once per change of theme, pane count or homes, never per frame, so the window never resizes while a cat wanders. It returns:
 
-- `margins` (left, top, right, bottom): the transparent space needed around the whole grid so every reachable spot of every pane fits, each rounded up to a multiple of 4 (findings, section 1). With only `inside` reachable all four are zero and the window is exactly the grid. With `on_top` reachable, top is 104; with `beside` reachable, right is 116 (the 4 px gap plus 112). The spike's 16/112/128/16 had extra padding on every side; the model uses the exact need.
+- `margins` (left, top, right, bottom): the transparent space needed around the whole grid so every spot any pane can reach fits, each rounded up to a multiple of 4 (findings, section 1). With only `inside` reachable all four are zero and the window is exactly the grid. With `on_top` reachable, top is 104; with `beside_left` or `beside_right`, that side is 112. The spike's 16/112/128/16 had extra padding on every side; the model uses the exact need.
+- What "reachable" means for the margins is a choice between two window sizes. Sizing for the homes only gives the smallest window, but then #22 can only move a cat to an outside spot that some pane already calls home. Sizing for everything reachable gives #22 the whole range at the cost of a window up to 300 + 224 = 524 px wide for one column. The model takes a `wander` flag: off sizes for homes, on sizes for reachability. #22 turns it on.
 - `size`: grid plus margins.
 - `pane_origins`: each pane's top-left in window coordinates. A spot origin plus its pane's origin is the cat's window position.
 
@@ -165,6 +177,7 @@ Rule: the outside spots are only reachable from panes on the matching outer edge
 - opacity: 100 if accented, else `theme.card.opacity`
 - the account's `bar_fill` override, passed through to `bar_fill`
 - the sprite palette from the existing `customize.effective_palette`
+- the resolved home spot: the account's `cat_home` if reachable for this pane, else `inside`
 
 This is the only place theme and customization meet, so precedence is defined once.
 
@@ -172,7 +185,7 @@ This is the only place theme and customization meet, so precedence is defined on
 
 Same contract as `load_settings` and `load_customization`: a hand-edited file degrades, it never crashes the widget.
 
-Field level: each field is validated on its own, and an invalid value falls back to that field's default, leaving the rest of the theme intact. Colours must match `#rrggbb` (`customize.py:34`). Integers out of range are rejected rather than clamped, so a typo falls back to the default instead of to an extreme. Booleans are rejected where an integer is expected (`True` is an `int` in Python; `settings.py:104` already guards this for opacity). Opacity must be a multiple of 10. Enum strings outside their set fall back. `show` must be a list of strings; unknown names are dropped and the known ones kept. `cat_home` must be one of the three spots. Unknown keys are dropped. A file whose top level is not an object gives the default theme with migrated opacity.
+Field level: each field is validated on its own, and an invalid value falls back to that field's default, leaving the rest of the theme intact. Colours must match `#rrggbb` (`customize.py:34`). Integers out of range are rejected rather than clamped, so a typo falls back to the default instead of to an extreme. Booleans are rejected where an integer is expected (`True` is an `int` in Python; `settings.py:104` already guards this for opacity). Opacity must be a multiple of 10. Enum strings outside their set fall back. `show` must be a list of strings; unknown names are dropped and the known ones kept. `cat_home` in `customization.json` must be one of the four spots. Unknown keys are dropped. A file whose top level is not an object gives the default theme with migrated opacity.
 
 Relationship level, after the field pass: if `mid_at >= high_at`, both thresholds revert to 50 and 80. The geometry relationships Codex raised (card size, bar height against card height, the inside cat fitting the card) cannot go wrong any more, because card size is fixed and the bar height range is the one the layout test proves fits.
 
@@ -189,17 +202,18 @@ All in `tests/test_theme.py`, none marked `gui`, so they run on Linux, macOS and
 - Save and load round trip, including `show`.
 - `layout_card` defaults match today's coordinates for `"limits"` and `"models"`. The exhaustive walk over layout, bar height, view and shown elements: every rectangle inside the card, no overlaps. Hiding `section_labels` collapses the gap. `full_width` with an `inside` resolved spot falls back to `beside_cat`.
 - `bar_fill` precedence: override, ramp, neutral when `ramp_pct` is `None`.
-- Spot origins, the track's endpoints, `reachable_spots` for 1, 2, 3, 4, 5 and 8 panes including ragged last rows.
-- `layout_window` margins for each reachable combination, all multiples of 4, zero for `inside` alone; pane origins; `hit_region` leaving out empty grid cells.
+- Spot origins and mirroring for all four spots, the track's endpoints, `reachable_spots` for 1, 2, 3, 4, 5 and 8 panes including ragged last rows. With 2 to 4 panes, both sides reachable from every pane and `on_top` only from the first.
+- `layout_window` margins for homes-only and `wander` sizing, all multiples of 4, zero for `inside` alone; a left home moves every pane origin right by 112; pane origins; `hit_region` leaving out empty grid cells.
+- `cat_home` in `customization.json`: absent gives `inside`, unknown spot gives `inside`, a file without it loads exactly as before, and save and load round trip it. These go in `tests/test_customize.py`.
 - `snap` at dpr 1, 1.25, 1.5, 1.75 and 2 lands on whole device pixels; `cell_size` gives 4, 5, 6, 7, 8.
 - `resolve_pane_style` precedence for background, foreground and opacity: theme only, account override, accent over both.
 - The import-isolation test described under "Where it lives".
-- Existing tests keep passing with no change, since `settings.py` and `customize.py` are untouched.
+- Existing tests keep passing with no change. `settings.py` is untouched, and `customize.py` only gains the optional `cat_home`.
 
 ## Open questions
 
-1. Outside spots in a multi-pane grid: edge-only reachability, as proposed under "Several accounts", or a gap between panes.
-2. `cat_home` is global under decision 1, so with two accounts both cats share a home (where the edge rule allows). Per-account homes would let one cat sit on top while the other stays inside. This would refine decision 1 rather than reopen it, and is cheap to add later as an optional key in `customization.json`.
+1. When the cat's home is a side spot, should the window grow on that side (the card moves on screen by 112 px when a left home is first set), or should the card stay put and the window extend outward? The model returns pane origins either way; #111 decides whether to shift the window's screen position to compensate, and should, so the card does not jump.
+2. Scratching needs its frames added to #116's scope (it lists lying on top, the jump, and walking, not scratching).
 
 ## Review (Codex, 2026-10-11)
 
