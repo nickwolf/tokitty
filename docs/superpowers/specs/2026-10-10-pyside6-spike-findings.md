@@ -2,7 +2,7 @@
 
 Issue: [#109](https://github.com/nickwolf/tokitty/issues/109), the spike for [#28](https://github.com/nickwolf/tokitty/issues/28). Brief: `docs/superpowers/handoffs/2026-10-09-pyside6-spike-brief.md`.
 
-Status: Windows gates measured on Cucumber on 2026-10-10, at 100% and at real 150% display scaling. macOS and Linux builds measured on GitHub runners the same day. The Mac checklist was run on a real Mac on 2026-10-11, see "macOS results" at the end. The go/no-go is Nick's.
+Status: Windows gates measured on Cucumber on 2026-10-10, at 100% and at real 150% display scaling. macOS and Linux builds measured on GitHub runners the same day. The Mac checklist was run on a real Mac on 2026-10-11, see "macOS results" at the end. Decision on 2026-10-11: go.
 
 Everything here lives on the `spike/pyside6` branch only. Nothing merges.
 
@@ -182,25 +182,26 @@ The brief asked for its own claims to be treated as hypotheses. These turned out
 - On Windows a venv's `python.exe` is a launcher that starts the real interpreter as a child process, so the PID a shell sees is not the process doing the work. Measure the PID the script reports from `os.getpid()`.
 - A 33 ms `QTimer` does not give 30 fps unless it is a `PreciseTimer`.
 
-## Changes to the #28 sub-issues if this is a go
+## Changes to the #28 sub-issues
 
 - #110/#111: draw the lowest opacity at alpha 1/255 rather than 0, or decide on purpose that 0% is click-through and lean on the tray. Snap every sprite position to whole device pixels and keep window margins at multiples of 4. Pre-render each frame at `round(SCALE * dpr)` and key the cache on the device pixel ratio. Use `Qt.PreciseTimer` for anything animating faster than about 15 fps.
-- #111: consider the text halo as a theme option, or switch it on automatically below some opacity (gate 5).
-- #114: `QSystemTrayIcon` works on Windows and starts without crashing on macOS from a frozen `LSUIElement` bundle, pending Nick's check that the icon and menu really appear. pystray can go.
-- #115: the size growth is the biggest cost found. Windows is about +62% with Pillow kept, about +32% if Pillow is replaced by `QImage`/`QPainter`. Add the licence files listed above. Trim in the spec by file name, because PyInstaller's PySide6 hook collects QtNetwork, QtDBus and QtSvg frameworks on macOS even when they are never imported.
-- #117: add a real 150% Windows run and a real Retina run of `--selftest` to the gate. Screen-capture comparisons have to wait for the compositor on macOS.
-- New, if Spaces or full-screen fails on the Mac: `NSWindow.collectionBehavior` through `pyobjc` or `ctypes`. That needs Nick's decision on the dependency.
+- #111: on macOS, per-pixel alpha does not give click-through, so set a `setMask()` from the card and the cat (ideally the cat image's alpha through `QImage.createAlphaMask()`), updated when the cat moves, and leave a 0% card out of it unless "Keep 0% card clickable" is on. Add a small macOS-only native helper that calls `_setPreventsActivation:YES` (guarded by `respondsToSelector:`, falling back to today's behaviour) and sets `collectionBehavior` to `canJoinAllSpaces | fullScreenAuxiliary`. The focus half is proven through `ctypes`; the Spaces half is untried.
+- #111: consider the text halo as a theme option, or switch it on automatically below some opacity. On the Mac the halo helps the labels and percentages at low opacity but hurts the small reset text, so it may need to skip that line (gate 5).
+- #114: `QSystemTrayIcon` works on Windows and on a real Mac from a frozen `LSUIElement` bundle (icon, menu and Quit all checked). pystray can go. That also takes `pyobjc` out of the macOS build, since pystray is what pulls it in today (`tokitty/ui.py` imports `AppKit` for the About panel only because it's already there). The native helper should use `ctypes`, which the focus run proved, rather than keep `pyobjc` for one call.
+- #115: the size growth is the biggest cost found. Windows is about +62% with Pillow kept, about +32% if Pillow is replaced by `QImage`/`QPainter`, and macOS about +70 to 74% or +47 to 50%. Plan on replacing Pillow. Add the licence files listed above. Trim in the spec by file name, because PyInstaller's PySide6 hook collects QtNetwork, QtDBus and QtSvg frameworks on macOS even when they are never imported, and keep QtDBus, which QtGui links on macOS and the xcb plugin links on Linux.
+- #117: add `--selftest`-style pixel checks at real 150% on Windows and on a Retina Mac. Screen-capture comparisons have to wait for the compositor on macOS. Add the macOS click-through, focus and Spaces checks, the focus fix in the frozen `LSUIElement` build with real typing, and a mixed-DPI drag, none of which have been run yet.
 
-## Recommendation
+## Decision
 
-Go, once the size and the Mac checklist are settled.
+Go, decided by Nick on 2026-10-11.
 
-On Windows every gate that can be measured on this machine passed. The cat is byte-identical to `raster_rgba` at every scale tried, the empty margin and transparent sprite cells click through while everything painted catches the mouse, focus stays with the terminal, and the widget stays on top. It idles at 0.086% of one core against 1.135% for today's tkinter widget, and walking at 30 fps costs 2.212%. The macOS runners agree on pixel identity, and Qt's tray starts there from a frozen `LSUIElement` bundle without the main-thread conflict that cost the menu-bar icon in #45.
+On Windows every gate that can be measured on one monitor passed, at 100% and at real 150%: the cat is byte-identical to `raster_rgba`, the empty margin and transparent sprite cells click through, focus stays with the terminal, the widget stays on top, and it idles at 0.086% of one core against 1.135% for today's tkinter widget. On a real Mac the cat is byte-identical at Retina, the menu-bar icon and `LSUIElement` work, and it idles at 0.283% against 0.983% for tkinter. The three macOS failures each have a fix: `setMask()` for click-through inside Qt, `_setPreventsActivation:` through `ctypes` for focus (proven), and `collectionBehavior` through the same helper for Spaces (public API, untried).
 
-1. Size. Releases get roughly 62% bigger on Windows and 70 to 74% bigger on macOS if Pillow stays, or 32% and 47 to 50% if the port also replaces Pillow with `QImage`/`QPainter`. Every update pays it. I'd plan on dropping Pillow as part of #114 and #115.
-2. The Mac checklist below, especially Spaces and full-screen (item 7). If the widget can't stay visible across Spaces without `NSWindow.collectionBehavior`, the port needs `pyobjc` or a small `ctypes` call into the Objective-C runtime, and that is a dependency call for Nick.
+The costs taken on with the go:
 
-Still open and worth doing before a go is final: a mixed-DPI drag, which needs a second monitor at a different scale.
+1. Size. Roughly +32% on Windows and +47 to 50% on macOS with Pillow replaced, more if it stays. Every update pays it.
+2. A private AppKit method for macOS focus, guarded so a future macOS that drops it falls back to today's behaviour instead of breaking.
+3. Walking at 30 fps costs 7.211% of one core on the Mac (2.212% on Windows). Idle is what runs most of the time, but the walk rate may want tuning.
 
 ## Mac checklist for Nick
 
@@ -314,7 +315,7 @@ Leaving the go/no-go to Nick. These results do change the macOS picture from the
 
 1. Click-through fails on macOS as built. `setMask()` fixes it inside Qt, so it adds work to #110/#111 and needs no dependency.
 2. Focus fails on macOS. Clicking the widget steals keyboard focus from the terminal. A `ctypes` call to the private `_setPreventsActivation:` fixed it in the follow-up run with no new package, at the cost of relying on undocumented AppKit.
-3. Spaces and full screen fail, as predicted. So a Mac port that behaves like the Windows one needs native calls for two separate things. The focus run shows `ctypes` can do it without `pyobjc`, which shrinks the dependency question to whether a private method is acceptable.
+3. Spaces and full screen fail, as predicted. So a Mac port that behaves like the Windows one needs native calls for two separate things. The focus run shows `ctypes` can do it without `pyobjc`. Today's macOS build already ships `pyobjc` (pystray pulls it in), but the port drops pystray, so `ctypes` avoids keeping it for one helper. The real question is whether a private method is acceptable.
 4. Walking at 30 fps costs 7.211% of one core on this Mac, against 2.212% on Windows. Idle stays low at 0.283%, against 0.983% for today's tkinter widget.
 
 Pixel identity on real Retina, the menu-bar icon and `LSUIElement` all passed. Still untried on the Mac: `collectionBehavior` through `ctypes` for Spaces, the focus fix in the frozen `LSUIElement` build with real typing, and a mixed-DPI drag.
