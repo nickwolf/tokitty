@@ -421,6 +421,36 @@ def test_unkeyed_canvas_still_follows_the_card_colour():
 
 
 @pytest.mark.gui
+def test_render_skips_background_writes_when_the_colour_is_unchanged():
+    tk = pytest.importorskip("tkinter")
+    from tokitty.ui import ACCENT_BG, Pane
+
+    root = tk.Tk()
+    try:
+        pane = Pane(tk.Frame(root))
+        pane.render(**_render_kwargs())
+        writes = []
+        real_configure = pane.canvas.configure
+        pane.canvas.configure = lambda **kw: (writes.append(kw), real_configure(**kw))
+
+        # Same colour on the next tick: a Tk configure repaints even when the
+        # value is unchanged, which is what held the idle window at ~11% (#119).
+        pane.render(**_render_kwargs())
+        assert writes == []
+
+        pane.render(**_render_kwargs(accent=True))
+        assert writes == [{"bg": ACCENT_BG}]
+        assert str(pane.session_label.cget("bg")) == ACCENT_BG
+
+        pane.render(**_render_kwargs())
+        pane.set_appearance(card_bg="#123456")
+        assert str(pane.canvas.cget("bg")) == "#123456"
+        assert str(pane.session_label.cget("bg")) == "#123456"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.gui
 def test_one_accented_pane_holds_the_window_opaque():
     tk = pytest.importorskip("tkinter")
     from tokitty.ui import TokittyWindow
