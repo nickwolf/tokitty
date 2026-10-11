@@ -109,7 +109,7 @@ Hiding an element removes it from the layout output instead of leaving a hole. H
 
 `shape="rounded"` means a pill, radius `height / 2`, for track and fill alike.
 
-`bar_fill(theme, pct, ramp_pct, override) -> str` replaces both `display.bar_color` and the per-model branch at `ui.py:396-403`, in the same order: the account's `bar_fill`, if set, wins; otherwise the threshold ramp applies when `ramp_pct` is not `None`; otherwise `neutral`. The limits view passes its own percentage as `ramp_pct`. The models view passes the budget percentage, or `None` for share-of-total, which has no cap to be near.
+`bar_fill(theme, ramp_pct, override) -> str` replaces both `display.bar_color` and the per-model branch at `ui.py:396-403`, in the same order: the account's `bar_fill`, if set, wins; otherwise the threshold ramp applies when `ramp_pct` is not `None`; otherwise `neutral`. The limits view passes its own percentage as `ramp_pct`. The models view passes the budget percentage, or `None` for share-of-total, which has no cap to be near.
 
 Layouts:
 

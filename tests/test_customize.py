@@ -154,3 +154,36 @@ def test_rename_account_creates_entry_when_slug_absent(tmp_path):
     result = load_customization(tmp_path)
     assert result["acct-v1-new"].label == "Work"
     assert result["acct-v1-new"].colorway == "orange"
+
+
+def test_cat_home_defaults_inside_when_absent(tmp_path):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"colorway": "gray", "pattern": "solid", "label": "x"}}', encoding="utf-8")
+    got = load_customization(tmp_path)["default"]
+    assert got.cat_home == "inside"
+    assert (got.colorway, got.pattern, got.label) == ("gray", "solid", "x")
+
+
+def test_cat_home_unknown_spot_falls_back(tmp_path):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"cat_home": "on_the_moon"}}', encoding="utf-8")
+    assert load_customization(tmp_path)["default"].cat_home == "inside"
+
+
+def test_cat_home_non_string_falls_back(tmp_path):
+    (tmp_path / "customization.json").write_text(
+        '{"a": {"cat_home": 3}, "b": {"cat_home": ["on_top"]}, "c": {"cat_home": null}}',
+        encoding="utf-8")
+    got = load_customization(tmp_path)
+    assert {k: v.cat_home for k, v in got.items()} == {"a": "inside", "b": "inside", "c": "inside"}
+
+
+def test_cat_home_roundtrip(tmp_path):
+    data = {
+        "a": Customization(cat_home="beside_left"),
+        "b": Customization(cat_home="on_top"),
+        "c": Customization(cat_home="beside_right"),
+        "d": Customization(),
+    }
+    save_customization(tmp_path, data)
+    assert load_customization(tmp_path) == data
