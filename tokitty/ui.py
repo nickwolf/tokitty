@@ -180,6 +180,8 @@ class Pane:
         self._colorway = colorway if colorway is not None else "orange"
         self._pattern = pattern if pattern is not None else "tabby"
         self._view_mode = "limits"
+        # The background _apply_bg last wrote; None until the first render.
+        self._applied_bg = None
         # Set by TokittyWindow so window alpha can be recomputed once per
         # event loop pass, after every pane has rendered.
         self.on_accent_changed = None
@@ -222,7 +224,20 @@ class Pane:
         if pattern is not None:
             self._pattern = pattern
 
-        bg = ACCENT_BG if self._accent else self._card_bg
+        self._apply_bg(ACCENT_BG if self._accent else self._card_bg, force=True)
+
+    def _apply_bg(self, bg: str, force: bool = False) -> None:
+        """Set the pane background, skipping the writes when it is unchanged.
+
+        render() runs every UI_REFRESH_MS for every pane, and a Tk configure
+        redraws the widget even when the value is the same. Repainting the
+        cat canvas and every label twice a second held a three-pane window at
+        about 7% of a core on Windows, against 3% for the animation alone
+        (#119).
+        """
+        if bg == self._applied_bg and not force:
+            return
+        self._applied_bg = bg
         self.parent.configure(bg=bg)
         self.canvas.configure(bg=self._canvas_bg(bg))
         for widget in self._all_text_widgets():
@@ -412,11 +427,7 @@ class Pane:
         self._accent = accent
         self._apply_view("models")
 
-        bg = ACCENT_BG if accent else self._card_bg
-        self.parent.configure(bg=bg)
-        self.canvas.configure(bg=self._canvas_bg(bg))
-        for label in self._all_text_widgets():
-            label.configure(bg=bg)
+        self._apply_bg(ACCENT_BG if accent else self._card_bg)
 
         fg = DIM_COLOR if dimmed else (ACCENT_FG if accent else FG_COLOR)
         rows = usage_view.rows
@@ -464,11 +475,7 @@ class Pane:
         self._last_session_pct_px = self._px(BAR_WIDTH) * min(session_pct, 100) / 100
         self._last_weekly_pct_px = self._px(BAR_WIDTH) * min(weekly_pct, 100) / 100
 
-        bg = ACCENT_BG if accent else self._card_bg
-        self.parent.configure(bg=bg)
-        self.canvas.configure(bg=self._canvas_bg(bg))
-        for label in self._all_text_widgets():
-            label.configure(bg=bg)
+        self._apply_bg(ACCENT_BG if accent else self._card_bg)
 
         fg = DIM_COLOR if dimmed else (ACCENT_FG if accent else FG_COLOR)
         self.session_label.configure(fg=fg)
