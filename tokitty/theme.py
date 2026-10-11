@@ -21,7 +21,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import FrozenSet, Optional
+from typing import FrozenSet, Mapping, Optional
 
 THEME_FILENAME = "theme.json"
 _SETTINGS_FILENAME = "settings.json"  # read raw for the opacity migration only
@@ -245,3 +245,136 @@ def save_theme(state_dir, theme: Theme) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+# --- card layout ----------------------------------------------------------
+
+# Geometry copied from ui.py (STATS_X, BAR_WIDTH, MODEL_ROW_Y,
+# MODEL_BAR_OFFSET). The step constants below are chosen so the default
+# theme reproduces today's Tk coordinates exactly.
+STATS_X = 132
+STATS_W = 158
+FULL_X = 8
+FULL_W = 284
+CAT_AREA = (8, 8, 112, 112)
+FIRST_ROW_Y = 12            # top of the limits stack
+MODELS_FIRST_ROW_Y = 20
+LABEL_H = 16                # nominal height of a 9pt label
+SMALL_H = 14                # nominal height of an 8pt line
+LABEL_STEP = 18             # label top to bar top, and line top to next row
+LINE_GAP = 4                # bar bottom to the reset line
+MODEL_NAME_STEP = 14        # name top to bar top (MODEL_BAR_OFFSET)
+MODEL_ROW_GAP = 6           # bar bottom to the next row
+MODEL_STATUS_GAP = 10       # last bar bottom to the status line
+PERCENT_W = 40              # nominal width of the "42%" run
+VALUE_W = 60                # nominal width of a per-model value
+ACCOUNT_LABEL_RECT = (194, 4, 100, SMALL_H)  # right edge at 294, as ui.py
+
+
+@dataclass(frozen=True)
+class Rect:
+    x: int
+    y: int
+    w: int
+    h: int
+
+    @property
+    def right(self) -> int:
+        return self.x + self.w
+
+    @property
+    def bottom(self) -> int:
+        return self.y + self.h
+
+    def intersects(self, other: "Rect") -> bool:
+        """True when the interiors overlap; rects that only touch do not."""
+        return (self.x < other.right and other.x < self.right
+                and self.y < other.bottom and other.y < self.bottom)
+
+    def contains(self, other: "Rect") -> bool:
+        return (self.x <= other.x and self.y <= other.y
+                and other.right <= self.right and other.bottom <= self.bottom)
+
+
+@dataclass(frozen=True)
+class CardLayout:
+    """Named rectangles in card coordinates. Absent elements have no entry.
+
+    rects holds the leaf elements, which never overlap each other (except
+    account_label, drawn over the corner as in Tk). lines holds the full row
+    behind each percent/reset pair ("session", "weekly") and overlaps its
+    two runs by design.
+    """
+    layout: str                 # resolved: "beside_cat" or "full_width"
+    rects: Mapping[str, Rect]
+    lines: Mapping[str, Rect]
+
+    def __getitem__(self, name: str) -> Rect:
+        return self.rects[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.rects
+
+    def get(self, name: str) -> Optional[Rect]:
+        return self.rects.get(name)
+
+
+def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
+    """Place every shown element of one card. Pure; run once per change.
+
+    view and pane_spot come from code, not user files, so a bad one is a
+    programmer error. Hidden elements are absent and the rows below them
+    move up; a taller bar pushes later rows down.
+    """
+    if view not in VIEWS:
+        raise ValueError(f"unknown view {view!r}")
+    if pane_spot not in SPOTS:
+        raise ValueError(f"unknown spot {pane_spot!r}")
+    # full_width has no cat area, so it only holds when the cat is outside.
+    wide = theme.bars.layout == "full_width" and pane_spot != "inside"
+    x, w = (FULL_X, FULL_W) if wide else (STATS_X, STATS_W)
+    show = theme.text.show
+    bar_h = theme.bars.height
+
+    rects = {}
+    lines = {}
+    if not wide:
+        rects["cat_area"] = Rect(*CAT_AREA)
+
+    if view == "limits":
+        y = FIRST_ROW_Y
+        for name in ("session", "weekly"):
+            if "section_labels" in show:
+                rects[f"{name}_label"] = Rect(x, y, w, LABEL_H)
+                y += LABEL_STEP
+            rects[f"{name}_bar"] = Rect(x, y, w, bar_h)
+            y += bar_h + LINE_GAP
+            # With both runs hidden the line and its step go too, so the
+            # next row sits one gap below the bar.
+            if "percent" in show or "reset" in show:
+                run_x = x
+                if "percent" in show:
+                    rects[f"{name}_percent"] = Rect(run_x, y, PERCENT_W, SMALL_H)
+                    run_x += PERCENT_W
+                if "reset" in show:
+                    rects[f"{name}_reset"] = Rect(run_x, y, x + w - run_x, SMALL_H)
+                lines[name] = Rect(x, y, w, SMALL_H)
+                y += LABEL_STEP
+    else:
+        y = MODELS_FIRST_ROW_Y
+        value_x = FULL_X + FULL_W - VALUE_W  # right-aligned at CARD_WIDTH - 8
+        for i in range(3):
+            if "model_rows" in show:
+                rects[f"model_name_{i}"] = Rect(x, y, value_x - x, SMALL_H)
+                rects[f"model_value_{i}"] = Rect(value_x, y, VALUE_W, SMALL_H)
+                y += MODEL_NAME_STEP
+            rects[f"model_bar_{i}"] = Rect(x, y, w, bar_h)
+            y += bar_h + MODEL_ROW_GAP
+        # y is one row gap below the last bar; status sits MODEL_STATUS_GAP below it
+        y += MODEL_STATUS_GAP - MODEL_ROW_GAP
+
+    if "status" in show:
+        rects["status"] = Rect(x, y, w, SMALL_H)
+    if "account_label" in show:
+        rects["account_label"] = Rect(*ACCOUNT_LABEL_RECT)
+    return CardLayout("full_width" if wide else "beside_cat", rects, lines)

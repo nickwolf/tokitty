@@ -269,3 +269,140 @@ def test_defaults_match_tk_constants():
     # thresholds: drive display.bar_color across the boundaries
     for p in (0, 49.9, 50, 79.9, 80, 100):
         assert bar_fill(t, p, None) == display.bar_color(p)
+
+
+# --- card layout ---
+
+from itertools import combinations  # noqa: E402
+
+from tokitty.theme import CARD_HEIGHT, CARD_WIDTH, Rect, layout_card  # noqa: E402
+
+
+def _xywh(layout, name):
+    r = layout[name]
+    return (r.x, r.y, r.w, r.h)
+
+
+def test_rect_geometry():
+    a = Rect(0, 0, 10, 10)
+    assert (a.right, a.bottom) == (10, 10)
+    assert a.intersects(Rect(5, 5, 10, 10))
+    assert not a.intersects(Rect(10, 0, 5, 5))  # touching edges only
+    assert a.contains(Rect(2, 2, 8, 8)) and not a.contains(Rect(2, 2, 9, 8))
+
+
+def test_limits_defaults_match_tk():
+    lay = layout_card(Theme(), "limits", "inside")
+    assert lay.layout == "beside_cat"
+    assert _xywh(lay, "cat_area") == (8, 8, 112, 112)
+    assert [lay[n].y for n in ("session_label", "session_bar", "session_percent",
+                               "weekly_label", "weekly_bar", "weekly_percent",
+                               "status")] == [12, 30, 42, 60, 78, 90, 108]
+    assert lay["session_bar"].x == 132 and lay["session_bar"].w == 158
+    assert lay["session_bar"].h == 8
+    assert lay["session_percent"].x == 132
+    assert lay["session_reset"].x == lay["session_percent"].right
+    assert lay["session_reset"].right == 290
+    assert lay.lines["weekly"] == Rect(132, 90, 158, 14)
+    assert _xywh(lay, "account_label")[:2] == (194, 4)
+    assert lay["account_label"].right == 294
+
+
+def test_models_defaults_match_tk():
+    lay = layout_card(Theme(), "models", "inside")
+    assert [lay[f"model_name_{i}"].y for i in range(3)] == [20, 48, 76]
+    assert [lay[f"model_bar_{i}"].y for i in range(3)] == [34, 62, 90]
+    assert all(lay[f"model_name_{i}"].x == 132 for i in range(3))
+    assert all(lay[f"model_value_{i}"].right == CARD_WIDTH - 8 for i in range(3))
+    assert all(lay[f"model_bar_{i}"].w == 158 and lay[f"model_bar_{i}"].h == 8
+               for i in range(3))
+    assert lay["status"].y == 108
+
+
+def test_taller_bar_pushes_rows_down():
+    th = Theme(bars=BarStyle(height=10))
+    lay = layout_card(th, "limits", "inside")
+    assert lay["session_bar"].y == 30 and lay["session_bar"].h == 10
+    assert lay["session_percent"].y == 44
+    assert lay["weekly_label"].y == 62
+    assert lay["status"].y == 112
+    mod = layout_card(th, "models", "inside")
+    assert [mod[f"model_name_{i}"].y for i in range(3)] == [20, 50, 80]
+
+
+def test_hiding_section_labels_collapses_the_step():
+    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"section_labels"}))
+    lay = layout_card(th, "limits", "inside")
+    assert "session_label" not in lay and "weekly_label" not in lay
+    assert lay["session_bar"].y == 12
+    assert lay["weekly_bar"].y == 42
+    assert lay["status"].y == 72
+
+
+def test_percent_hidden_reset_takes_line_start():
+    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent"}))
+    lay = layout_card(th, "limits", "inside")
+    assert "session_percent" not in lay
+    assert lay["session_reset"] == Rect(132, 42, 158, 14)
+
+
+def test_both_runs_hidden_drops_line_and_step():
+    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent", "reset"}))
+    lay = layout_card(th, "limits", "inside")
+    assert not lay.lines
+    assert lay["weekly_label"].y == 30 + 8 + 4
+
+
+def test_hidden_status_and_account_label_absent():
+    th = Theme(text=TextStyle(show=frozenset()))
+    lay = layout_card(th, "limits", "inside")
+    assert "status" not in lay and "account_label" not in lay
+
+
+def test_models_hidden_names_drop_name_and_value():
+    th = Theme(text=TextStyle(show=frozenset({"status"})))
+    lay = layout_card(th, "models", "inside")
+    assert "model_name_0" not in lay and "model_value_0" not in lay
+    assert lay["model_bar_0"].y == 20
+
+
+def test_full_width_needs_outside_spot():
+    th = Theme(bars=BarStyle(layout="full_width"))
+    wide = layout_card(th, "limits", "on_top")
+    assert wide.layout == "full_width" and "cat_area" not in wide
+    assert (wide["session_bar"].x, wide["session_bar"].w) == (8, 284)
+    back = layout_card(th, "limits", "inside")
+    assert back.layout == "beside_cat" and "cat_area" in back
+    assert back["session_bar"].x == 132
+
+
+@pytest.mark.parametrize("view,spot", [("per_model", "inside"), ("limits", "nowhere")])
+def test_layout_card_rejects_bad_args(view, spot):
+    with pytest.raises(ValueError):
+        layout_card(Theme(), view, spot)
+
+
+def _subsets(items):
+    for n in range(len(items) + 1):
+        for combo in combinations(items, n):
+            yield frozenset(combo)
+
+
+@pytest.mark.parametrize("view", T.VIEWS)
+@pytest.mark.parametrize("layout,spot", [("beside_cat", "inside"),
+                                         ("full_width", "on_top"),
+                                         ("full_width", "inside")])
+def test_every_combination_fits_and_does_not_overlap(view, layout, spot):
+    card = Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
+    for height in range(4, 11):
+        for show in _subsets(T.TEXT_ELEMENTS):
+            th = Theme(bars=BarStyle(layout=layout, height=height),
+                       text=TextStyle(show=show))
+            lay = layout_card(th, view, spot)
+            where = (view, layout, spot, height, sorted(show))
+            for name, r in lay.rects.items():
+                assert card.contains(r), (name, where)
+            solid = [(n, r) for n, r in lay.rects.items() if n != "account_label"]
+            for i, (n1, r1) in enumerate(solid):
+                for n2, r2 in solid[i + 1:]:
+                    assert not r1.intersects(r2), (n1, n2, where)
