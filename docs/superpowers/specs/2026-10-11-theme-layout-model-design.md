@@ -143,7 +143,7 @@ Scratching is a pose, not a spot. The model's part is only that a cat at a side 
 
 `top_edge_track(theme) -> Track` gives #22 the walkable segment: y = -104, x from 0 to `CARD_WIDTH - 112` = 188, in card coordinates. `on_top` lies on it. The track is not a `Spot` and cannot be a `cat_home`.
 
-`reachable_spots(theme, pane_index, pane_count) -> frozenset` is the set #22 may move a pane's cat between, after the multi-pane rule below and the `full_width` rule above.
+`reachable_spots(theme, cat_home, pane_index, pane_count) -> frozenset` is the set #22 may move a pane's cat between, after the multi-pane rule below and the `full_width` rule above.
 
 ### Several accounts
 
@@ -157,7 +157,7 @@ The alternative, a gap between panes wide enough for a cat, makes a two-account 
 
 ## Window geometry
 
-`layout_window(theme, homes) -> WindowLayout` takes every pane's resolved home spot in pane order and is computed once per change of theme, pane count or homes, never per frame, so the window never resizes while a cat wanders. It returns:
+`layout_window(homes, wander=False) -> WindowLayout` takes every pane's resolved home spot in pane order and is computed once per change of pane count or homes, never per frame, so the window never resizes while a cat wanders. It returns:
 
 - `margins` (left, top, right, bottom): the transparent space needed around the whole grid so every spot any pane can reach fits, each rounded up to a multiple of 4 (findings, section 1). With only `inside` reachable all four are zero and the window is exactly the grid. With `on_top` reachable, top is 104; with `beside_left` or `beside_right`, that side is 112. The spike's 16/112/128/16 had extra padding on every side; the model uses the exact need.
 - What "reachable" means for the margins is a choice between two window sizes. Sizing for the homes only gives the smallest window, but then #22 can only move a cat to an outside spot that some pane already calls home. Sizing for everything reachable gives #22 the whole range at the cost of a window up to 300 + 224 = 524 px wide for one column. The model takes a `wander` flag: off sizes for homes, on sizes for reachability. #22 turns it on.

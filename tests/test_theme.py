@@ -406,3 +406,249 @@ def test_every_combination_fits_and_does_not_overlap(view, layout, spot):
             for i, (n1, r1) in enumerate(solid):
                 for n2, r2 in solid[i + 1:]:
                     assert not r1.intersects(r2), (n1, n2, where)
+
+
+# --- spots, window geometry, pane style ---
+
+from tokitty.customize import Customization, effective_palette  # noqa: E402
+from tokitty.theme import (  # noqa: E402
+    SCRATCH_SPOTS, SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
+    hit_region, layout_window, placement, reachable_spots, resolve_home,
+    resolve_pane_style, snap, top_edge_track,
+)
+
+FULL = Theme(bars=BarStyle(layout="full_width"))
+
+
+def test_sprite_size():
+    assert (SPRITE_W, SPRITE_H) == (112, 104)
+
+
+def test_placements():
+    assert placement("inside") == Placement((8, 12), False)
+    assert placement("on_top") == Placement((8, -104), False)
+    assert placement("beside_left") == Placement((-112, 24), False)
+    assert placement("beside_right") == Placement((300, 24), True)
+    assert SCRATCH_SPOTS == {"beside_left", "beside_right"}
+    assert set(T.SPOTS) == {"inside", "on_top", "beside_left", "beside_right"}
+
+
+def test_top_edge_track():
+    t = top_edge_track()
+    assert t == Track(y=-104, x_min=0, x_max=188)
+    assert t.x_min <= placement("on_top").origin[0] <= t.x_max
+    assert placement("on_top").origin[1] == t.y
+
+
+@pytest.mark.parametrize("n,shape", [(1, (1, 1)), (4, (1, 4)), (5, (2, 3)), (8, (2, 4)),
+                                     (9, (3, 3)), (12, (3, 4))])
+def test_grid_shape(n, shape):
+    assert grid_shape(n) == shape
+
+
+@pytest.mark.parametrize("n", [0, -1])
+def test_grid_shape_rejects_empty(n):
+    with pytest.raises(ValueError):
+        grid_shape(n)
+
+
+def _outside(n, i):
+    return reachable_spots(Theme(), "inside", i, n) - {"inside"}
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 4])
+def test_single_column_both_sides_everywhere(n):
+    for i in range(n):
+        assert {"beside_left", "beside_right"} <= _outside(n, i)
+        assert ("on_top" in _outside(n, i)) == (i == 0)
+
+
+def test_reachable_includes_inside_by_default():
+    assert all("inside" in reachable_spots(Theme(), "inside", i, 5) for i in range(5))
+
+
+def test_five_panes_two_columns_ragged():
+    # 2 cols x 3 rows: indices 0 1 / 2 3 / 4 .
+    assert _outside(5, 0) == {"on_top", "beside_left"}
+    assert _outside(5, 1) == {"on_top", "beside_right"}
+    assert _outside(5, 2) == {"beside_left"}
+    assert _outside(5, 3) == {"beside_right"}
+    # the ragged last pane has no right neighbour
+    assert _outside(5, 4) == {"beside_left", "beside_right"}
+
+
+def test_eight_panes_two_full_columns():
+    assert _outside(8, 0) == {"on_top", "beside_left"}
+    assert _outside(8, 7) == {"beside_right"}
+    assert _outside(8, 2) == {"beside_left"}
+
+
+def test_nine_panes_middle_column_has_no_sides():
+    # 3 cols x 3 rows
+    assert _outside(9, 4) == frozenset()
+    assert _outside(9, 8) == {"beside_right"}
+
+
+def test_full_width_inside_keeps_inside():
+    assert "inside" in reachable_spots(FULL, "inside", 0, 1)
+
+
+def test_full_width_outside_home_drops_inside():
+    r = reachable_spots(FULL, "on_top", 0, 1)
+    assert "inside" not in r and "on_top" in r
+
+
+def test_full_width_unreachable_home_keeps_inside():
+    # on_top is not reachable from pane 1, so it resolves to inside
+    assert "inside" in reachable_spots(FULL, "on_top", 1, 3)
+
+
+def test_beside_cat_always_includes_inside():
+    for home in T.SPOTS:
+        assert "inside" in reachable_spots(Theme(), home, 0, 1)
+
+
+def test_resolve_home_fallback():
+    assert resolve_home("beside_left", 0, 3) == "beside_left"
+    assert resolve_home("beside_right", 2, 3) == "beside_right"
+    assert resolve_home("on_top", 0, 3) == "on_top"
+    assert resolve_home("on_top", 1, 3) == "inside"
+    assert resolve_home("beside_left", 1, 5) == "inside"
+    assert resolve_home("beside_right", 4, 5) == "beside_right"
+    assert resolve_home("inside", 0, 1) == "inside"
+    assert resolve_home("garbage", 0, 1) == "inside"
+
+
+def test_resolve_home_agrees_with_reachable():
+    for n in (1, 2, 5, 8, 9):
+        for i in range(n):
+            for spot in T.SPOTS:
+                if spot != "inside" and resolve_home(spot, i, n) == spot:
+                    assert spot in reachable_spots(Theme(), "inside", i, n)
+
+
+def test_window_all_inside_is_just_the_grid():
+    w = layout_window(["inside"] * 3)
+    assert w.margins == (0, 0, 0, 0)
+    assert w.size == (300, 384)
+    assert w.pane_origins == ((0, 0), (0, 128), (0, 256))
+
+
+def test_window_margins_homes_only():
+    w = layout_window(["beside_left", "inside", "beside_right"])
+    assert w.margins == (112, 0, 112, 0)
+    assert w.size == (524, 384)
+    w = layout_window(["on_top", "inside"])
+    assert w.margins == (0, 104, 0, 0)
+    assert w.size == (300, 104 + 256)
+
+
+def test_window_margins_wander_sizes_for_reachable():
+    w = layout_window(["inside", "inside"], wander=True)
+    assert w.margins == (112, 104, 112, 0)
+    assert all(m % 4 == 0 for m in w.margins)
+    assert w.size == (524, 104 + 256)
+    # a middle column cannot reach the sides, so only the top margin appears
+    w = layout_window(["inside"] * 9, wander=True)
+    assert w.margins == (112, 104, 112, 0)
+
+
+def test_window_left_home_shifts_every_origin():
+    base = layout_window(["inside"] * 5)
+    left = layout_window(["beside_left"] + ["inside"] * 4)
+    assert [(x - 112, y) for x, y in left.pane_origins] == list(base.pane_origins)
+
+
+def test_window_origins_two_columns():
+    w = layout_window(["on_top"] + ["inside"] * 4)
+    assert w.pane_origins == ((0, 104), (300, 104), (0, 232), (300, 232), (0, 360))
+    assert w.size == (600, 104 + 384)
+
+
+def test_round_up4():
+    assert [T._round_up4(v) for v in (0, 1, 4, 5, 104, 105)] == [0, 4, 4, 8, 104, 108]
+
+
+def test_hit_region_leaves_out_empty_cell():
+    w = layout_window(["inside"] * 5)
+    cat = Rect(10, 20, 112, 104)
+    region = hit_region(w, [cat])
+    cards = [r for r in region if r != cat]
+    assert len(cards) == 5 and cat in region
+    assert Rect(300, 256, 300, 128) not in region  # the empty sixth cell
+    assert Rect(0, 256, 300, 128) in region
+
+
+@pytest.mark.parametrize("dpr", [1, 1.25, 1.5, 1.75, 2])
+def test_snap_lands_on_device_pixels(dpr):
+    for v in (0, 8.3, 12.5, 100.01, 187.9):
+        device = snap(v, dpr) * dpr
+        assert abs(device - round(device)) < 1e-9
+
+
+def test_snap_values():
+    assert snap(8.3, 1) == 8
+    assert snap(10.0, 1.5) == 10.0
+    assert snap(10.1, 1.5) == pytest.approx(10.0)
+
+
+def test_cell_size():
+    assert [cell_size(d) for d in (1, 1.25, 1.5, 1.75, 2)] == [4, 5, 6, 7, 8]
+
+
+def test_pane_style_theme_only():
+    th = Theme()
+    ps = resolve_pane_style(th, Customization(), False, 0, 1)
+    assert (ps.background, ps.foreground, ps.dim) == ("#1c1c22", "#f0f0f0", "#8a8a92")
+    assert ps.opacity == 100 and ps.bar_fill_override is None and ps.home == "inside"
+    assert ps.palette == effective_palette(Customization())
+
+
+def test_pane_style_account_override():
+    th = Theme(card=CardStyle(opacity=70))
+    cust = Customization(colorway="gray", overrides={"card_bg": "#112233", "bar_fill": "#445566",
+                                                    "coat_base": "#010101"},
+                         cat_home="beside_left")
+    ps = resolve_pane_style(th, cust, False, 0, 2)
+    assert ps.background == "#112233" and ps.opacity == 70
+    assert ps.bar_fill_override == "#445566"
+    assert ps.palette == effective_palette(cust) and ps.palette["o"] == "#010101"
+    assert ps.home == "beside_left"
+
+
+def test_pane_style_accent_wins():
+    th = Theme(card=CardStyle(opacity=30))
+    cust = Customization(overrides={"card_bg": "#112233"})
+    ps = resolve_pane_style(th, cust, True, 0, 1)
+    assert (ps.background, ps.foreground, ps.opacity) == (T.ACCENT_BG, T.ACCENT_FG, 100)
+    assert ps.dim == th.text.dim
+
+
+def test_pane_style_unreachable_home_falls_back():
+    cust = Customization(cat_home="on_top")
+    assert resolve_pane_style(Theme(), cust, False, 1, 3).home == "inside"
+
+
+@pytest.mark.gui
+def test_spots_and_grid_match_tk():
+    pytest.importorskip("tkinter")
+    from tokitty import ui
+
+    xs, ys = ui.sprite_bounds(28, 26, 1)
+    assert (xs[0], ys[0]) == (0, 4)
+    assert placement("inside").origin == (8 + xs[0], 8 + ys[0])
+    assert (xs[-1] - xs[0], ys[-1] - ys[0]) == (SPRITE_W, SPRITE_H)
+    for n in range(1, 13):
+        assert grid_shape(n)[0] == ui.grid_size(n)[2]
+        assert grid_shape(n)[1] * 128 == ui.grid_size(n)[1]
+
+
+def test_layout_window_ragged_row_beside_right_needs_no_margin():
+    # 5 panes = 2 cols x 3 rows; pane 4 sits alone in the last row, so its
+    # right side is the empty cell next to it.
+    homes = ["inside"] * 4 + ["beside_right"]
+    win = T.layout_window(homes)
+    assert win.margins == (0, 0, 0, 0)
+    assert win.size == (2 * T.CARD_WIDTH, 3 * T.CARD_HEIGHT)
+    homes = ["inside", "beside_right", "inside", "inside", "inside"]
+    assert T.layout_window(homes).margins[2] == 112

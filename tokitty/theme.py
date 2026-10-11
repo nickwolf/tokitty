@@ -6,7 +6,7 @@ bar_fill, cat_home) stay in customization.json. Every default equals what
 the Tk widget draws today; the colours are copied here as literals, not
 imported, because ui.py needs tkinter and this module must not.
 
-Imports are limited to the standard library so the module loads on every
+Imports are limited to the standard library and tokitty.sprites (also GUI-free) so the module loads on every
 CI OS with tkinter and PySide6 absent. A test enforces that.
 
 A hand-edited theme.json degrades, it never crashes: each field is checked
@@ -17,11 +17,14 @@ instead of on an extreme.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import FrozenSet, Mapping, Optional
+from typing import FrozenSet, Mapping, Optional, Sequence, Tuple
+
+from tokitty import sprites
 
 THEME_FILENAME = "theme.json"
 _SETTINGS_FILENAME = "settings.json"  # read raw for the opacity migration only
@@ -378,3 +381,195 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
     if "account_label" in show:
         rects["account_label"] = Rect(*ACCOUNT_LABEL_RECT)
     return CardLayout("full_width" if wide else "beside_cat", rects, lines)
+
+
+# --- cat spots ------------------------------------------------------------
+
+# One sprite frame in logical px: template cells times sprites.SCALE.
+SPRITE_W = len(sprites.SITTING_TEMPLATE[0]) * sprites.SCALE
+SPRITE_H = len(sprites.SITTING_TEMPLATE) * sprites.SCALE
+
+
+@dataclass(frozen=True)
+class Placement:
+    origin: Tuple[int, int]     # the sprite's top-left in card coordinates
+    mirrored: bool              # draw the art flipped (a cat facing the card)
+
+
+@dataclass(frozen=True)
+class Track:
+    """A walkable horizontal segment in card coordinates."""
+    y: int
+    x_min: int
+    x_max: int
+
+
+# inside: the cat canvas is at (8, 8) and sprite_bounds centres the 104-high
+# sprite in it with a 4 px y offset. Side spots are flush with the card edge
+# and bottom-aligned with it. The side-on art is assumed to face right, so
+# beside_right is the mirrored one; swap the flags if #116 draws it the other way.
+_PLACEMENTS = {
+    "inside": Placement((8, 12), False),
+    "on_top": Placement((8, -SPRITE_H), False),
+    "beside_left": Placement((-SPRITE_W, CARD_HEIGHT - SPRITE_H), False),
+    "beside_right": Placement((CARD_WIDTH, CARD_HEIGHT - SPRITE_H), True),
+}
+
+# Where the scratching pose is valid: the cat touches the card and faces it.
+SCRATCH_SPOTS = frozenset({"beside_left", "beside_right"})
+
+
+def placement(spot: str) -> Placement:
+    return _PLACEMENTS[spot]
+
+
+def top_edge_track() -> Track:
+    """The cat's walkable segment along the card's top edge. on_top lies on it."""
+    return Track(y=-SPRITE_H, x_min=0, x_max=CARD_WIDTH - SPRITE_W)
+
+
+# --- several accounts -----------------------------------------------------
+
+_MAX_ROWS = 4  # matches ui.grid_size
+
+
+def grid_shape(pane_count: int) -> Tuple[int, int]:
+    """(cols, rows), filled row-major and capped at 4 rows, as ui.grid_size."""
+    if pane_count < 1:
+        raise ValueError("pane_count must be at least 1")
+    cols = math.ceil(pane_count / _MAX_ROWS)
+    return cols, math.ceil(pane_count / cols)
+
+
+def _outside_reachable(pane_index: int, pane_count: int) -> FrozenSet[str]:
+    """Outside spots a pane can use given only where it sits in the grid: a
+    spot is reachable from a pane on the matching outer edge."""
+    cols, _rows = grid_shape(pane_count)
+    row, col = divmod(pane_index, cols)
+    spots = set()
+    if row == 0:
+        spots.add("on_top")
+    if col == 0:
+        spots.add("beside_left")
+    if col == cols - 1 or pane_index + 1 >= pane_count:
+        spots.add("beside_right")  # no right neighbour
+    return frozenset(spots)
+
+
+def resolve_home(cat_home: str, pane_index: int, pane_count: int) -> str:
+    """The account's cat_home if that outside spot is reachable from this
+    pane, else "inside". Independent of the theme, so it never disagrees
+    with layout_card, which falls back to beside_cat for an inside home."""
+    if cat_home in _outside_reachable(pane_index, pane_count):
+        return cat_home
+    return "inside"
+
+
+def reachable_spots(theme: Theme, cat_home: str, pane_index: int,
+                    pane_count: int) -> FrozenSet[str]:
+    """Spots #22 may move this pane's cat between. Layout keys on the
+    resolved home: a full_width pane whose home is outside has no room for
+    the cat in the card, so inside is left out. Any other pane (beside_cat,
+    or full_width with an inside or unreachable home, which layout_card
+    renders as beside_cat) can always go home."""
+    outside = _outside_reachable(pane_index, pane_count)
+    if (theme.bars.layout == "full_width"
+            and resolve_home(cat_home, pane_index, pane_count) != "inside"):
+        return outside
+    return outside | {"inside"}
+
+
+# --- window geometry ------------------------------------------------------
+
+@dataclass(frozen=True)
+class WindowLayout:
+    margins: Tuple[int, int, int, int]   # left, top, right, bottom
+    size: Tuple[int, int]
+    pane_origins: Tuple[Tuple[int, int], ...]
+
+
+def _round_up4(value: int) -> int:
+    return -(-value // 4) * 4
+
+
+def layout_window(homes: Sequence[str], wander: bool = False) -> WindowLayout:
+    """Window size, margins and pane origins. Compute on a change of theme,
+    pane count or homes, never per frame, so the window never resizes while
+    a cat wanders. homes is every pane's resolved home spot in pane order.
+    wander=False sizes the margins for the homes only; wander=True for every
+    spot any pane can reach, so #22 can use the whole range."""
+    count = len(homes)
+    cols, rows = grid_shape(count)
+    used = set()
+    for i, home in enumerate(homes):
+        spots = {home} | (_outside_reachable(i, count) if wander else set())
+        if "beside_right" in spots and i % cols != cols - 1:
+            # last pane of a ragged row: its right side is an empty grid
+            # cell, already inside the window
+            spots.discard("beside_right")
+        used |= spots
+    left = _round_up4(SPRITE_W) if "beside_left" in used else 0
+    top = _round_up4(SPRITE_H) if "on_top" in used else 0
+    right = _round_up4(SPRITE_W) if "beside_right" in used else 0
+    margins = (left, top, right, 0)  # no spot reaches below the card
+    origins = tuple(
+        (left + (i % cols) * CARD_WIDTH, top + (i // cols) * CARD_HEIGHT)
+        for i in range(count)
+    )
+    size = (left + cols * CARD_WIDTH + right, top + rows * CARD_HEIGHT)
+    return WindowLayout(margins, size, origins)
+
+
+def hit_region(window: WindowLayout, cat_rects: Sequence[Rect]) -> list:
+    """Rects, in window coordinates, that should catch clicks: every pane's
+    card (at every opacity) plus the given cat rects. Empty cells of a
+    ragged last row are left out."""
+    cards = [Rect(x, y, CARD_WIDTH, CARD_HEIGHT) for x, y in window.pane_origins]
+    return cards + list(cat_rects)
+
+
+def snap(value: float, dpr: float) -> float:
+    """Round to a whole device pixel."""
+    return round(value * dpr) / dpr
+
+
+def cell_size(dpr: float) -> int:
+    """Device pixels per sprite cell, the frame cache key."""
+    return round(sprites.SCALE * dpr)
+
+
+# --- combining theme and account -----------------------------------------
+
+@dataclass(frozen=True)
+class PaneStyle:
+    background: str
+    foreground: str
+    dim: str
+    opacity: int
+    bar_fill_override: Optional[str]
+    palette: Mapping[str, str]
+    home: str
+
+
+def resolve_pane_style(theme: Theme, customization, has_accent: bool,
+                       pane_index: int, pane_count: int) -> PaneStyle:
+    """The one place theme and account meet, so precedence is defined once:
+    accent over the account override over the theme."""
+    # customize imports this module, so import it here to avoid a cycle.
+    from tokitty.customize import effective_palette
+
+    overrides = customization.overrides
+    if has_accent:
+        background, foreground, opacity = ACCENT_BG, ACCENT_FG, 100
+    else:
+        background = overrides.get("card_bg") or theme.card.background
+        foreground, opacity = theme.text.foreground, theme.card.opacity
+    return PaneStyle(
+        background=background,
+        foreground=foreground,
+        dim=theme.text.dim,
+        opacity=opacity,
+        bar_fill_override=overrides.get("bar_fill"),
+        palette=effective_palette(customization),
+        home=resolve_home(customization.cat_home, pane_index, pane_count),
+    )
