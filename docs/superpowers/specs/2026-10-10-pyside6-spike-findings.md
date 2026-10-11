@@ -2,7 +2,7 @@
 
 Issue: [#109](https://github.com/nickwolf/tokitty/issues/109), the spike for [#28](https://github.com/nickwolf/tokitty/issues/28). Brief: `docs/superpowers/handoffs/2026-10-09-pyside6-spike-brief.md`.
 
-Status: Windows gates measured on Cucumber on 2026-10-10, at 100% and at real 150% display scaling. macOS and Linux builds measured on GitHub runners the same day. The checks that need a real Mac are in the checklist at the end and have not been run yet. The go/no-go is Nick's.
+Status: Windows gates measured on Cucumber on 2026-10-10, at 100% and at real 150% display scaling. macOS and Linux builds measured on GitHub runners the same day. The Mac checklist was run on a real Mac on 2026-10-11, see "macOS results" at the end. The go/no-go is Nick's.
 
 Everything here lives on the `spike/pyside6` branch only. Nothing merges.
 
@@ -20,13 +20,13 @@ Versions: PySide6-Essentials 6.12.0 (Qt 6.12.0), PyInstaller 6.22.3, Windows Pyt
 
 | # | Gate | Windows | macOS | Result |
 |---|------|---------|-------|--------|
-| 1 | Pixel identity | 0 mismatched pixels at 100% and 150% (real) and at 125, 150, 175, 200% (simulated), both `grab()` and screen capture, all four spots, both walk directions | 0 mismatched pixels on both runner types at dpr 1 and simulated dpr 2, `grab()` and screen capture, frozen build | Pass on Windows. Real Retina still to confirm |
-| 2 | Click-through on the empty margin | Margin and transparent sprite cells pass through. Cat, bars, card at 100/50/20% hit tokitty. A 0% card passes through | Nick's checklist | Pass on Windows |
-| 3 | Focus and stacking | Clicks and drags leave the foreground window alone. Stays above an active normal window | Nick's checklist | Pass on Windows |
-| 4 | Drag and placement | Moves exactly as far as the mouse at 100% and at 150%, real and simulated | Nick's checklist | Partial. No mixed-DPI pair on this machine |
-| 5 | Text | Screenshots below | Screenshots below (runner) | Nick's call |
-| 6 | macOS menu bar | Tray available, starts with no crash | Frozen `LSUIElement` build starts with the tray available and no crash on the runners. Seeing the icon needs a real Mac | Nick's checklist |
-| 7 | CPU | Spike idle 0.086% of one core, walking 2.212%. tkinter 1.135% | Nick's checklist | Pass |
+| 1 | Pixel identity | 0 mismatched pixels at 100% and 150% (real) and at 125, 150, 175, 200% (simulated), both `grab()` and screen capture, all four spots, both walk directions | 0 mismatched pixels on both runner types at dpr 1 and simulated dpr 2, `grab()` and screen capture, frozen build. Real Retina (dpr 2, cell 8): 0 mismatches in all 10 comparisons | Pass |
+| 2 | Click-through on the empty margin | Margin and transparent sprite cells pass through. Cat, bars, card at 100/50/20% hit tokitty. A 0% card passes through | Fails. The whole 444x256 window catches clicks, margin and 0% card included. `setMask()` fixes the margin | Pass on Windows. Fail on macOS as built, fixable in Qt |
+| 3 | Focus and stacking | Clicks and drags leave the foreground window alone. Stays above an active normal window | Stays on top of an active window. Clicking the cat makes the spike the frontmost app and Terminal loses keystrokes, frozen `LSUIElement` build too. Stays on its own Space and is hidden by full-screen apps | Pass on Windows. Fail on macOS |
+| 4 | Drag and placement | Moves exactly as far as the mouse at 100% and at 150%, real and simulated | Drag works on the Retina display. No second monitor attached | Partial. No mixed-DPI pair on either machine |
+| 5 | Text | Screenshots below | Screenshots below (runner and real Retina). Nick: the halo is needed for the labels and percentages, and makes the small reset text harder to read | Nick's call |
+| 6 | macOS menu bar | Tray available, starts with no crash | Frozen `LSUIElement` build starts with the tray available and no crash on the runners. On a real Mac: `ApplicationType` is `UIElement`, no Dock icon, menu-bar icon present, its menu opens and Quit exits cleanly | Pass |
+| 7 | CPU | Spike idle 0.086% of one core, walking 2.212%. tkinter 1.135% | Spike idle 0.283%, walking 7.211% at Retina. Installed v0.6.0 3.282% | Pass on Windows. macOS walking is higher, see macOS results |
 | 8 | Frozen size | Spike 23,840,377 bytes. Estimated real port about 36.3 MB | arm64 spike 22,988,015, x86_64 25,267,338. Estimated real port 32.3 MB and 35.2 MB | Bigger. See the section |
 | 9 | Licence | Qt ships as separate DLLs | Qt ships as separate frameworks | Pass, with notices to add |
 
@@ -223,3 +223,79 @@ python3 -m venv .venv && .venv/bin/pip install PySide6-Essentials
 9. Build the bundle with `.venv/bin/pip install pyinstaller && .venv/bin/python -m PyInstaller spike/qt_card.spec --noconfirm` and open `dist/TokittyQtSpike.app`. It has `LSUIElement` set. Check: no Dock icon, no app menu at the top of the screen, menu-bar item still there. For the comparison, build again with `SPIKE_LSUIELEMENT=0` in front of the same command, which should show both.
 10. Activity Monitor, CPU column, for about a minute: once with the cat inside the card, once with Cat position, walk. Note both figures, and the same for the current Tokitty if it's running.
 11. Card opacity at 100, 50, 20 and 0% over a light window and over a dark one, with and without "Text halo". Screenshots, or just your opinion.
+
+## macOS results
+
+Run on 2026-10-11 on a MacBook Air (Mac17,3, Apple M5, 10 cores, 16 GB), macOS 26.6.2 (25G83), built-in Liquid Retina display at 2560x1664, which Qt reports as 1710x1112 at dpr 2.0. No external monitor was attached. Python 3.13.14 in a separate venv with PySide6-Essentials 6.12.0 and PyInstaller 6.22.3, the same versions as the Windows run.
+
+Nick's installed Tokitty v0.6.0 has an orange cat too, and early on he clicked it by mistake while testing the spike. The from-source runs below therefore use the spike with a gray tabby palette, swapped in by a wrapper script outside the repo that replaces `get_palette` and changes nothing else. For the frozen-build checks Nick's installed Tokitty was quit, so the orange spike cat was the only cat on screen.
+
+| # | Item | Result | Detail |
+|---|------|--------|--------|
+| 1 | Card appears and animates | Pass | Gray cat, frame change about every 0.8 s. From source a Dock icon and a "Python" app menu appear, as expected |
+| 2 | Retina crispness and `--selftest` | Pass | Nick: crisp square pixels. Self-test: 10 of 10 comparisons with 0 mismatches, details below |
+| 3 | Click-through on the empty margin | Fail | A click on the empty strip above the card does not reach Finder, and a right-click there opens the spike menu. The cat, bars and card all catch clicks |
+| 4 | 0% card, then "Keep 0% card clickable" | Fail | The 0% card catches clicks with the toggle off and on, same cause as item 3 |
+| 5 | Focus stays with Terminal | Fail | Clicking the cat makes the spike the frontmost app, from source and from the frozen `LSUIElement` build. Keystrokes stop reaching Terminal |
+| 6 | Stays above an active window | Pass | The widget stays above another app's active window |
+| 7 | Spaces and full screen | Fail | The widget stays on the Space it was opened on and does not follow to another Space. It is not visible over a full-screen app |
+| 8 | Menu-bar icon | Pass | Icon appears in the menu bar, its menu opens, Quit exits cleanly, no crash report |
+| 9 | `LSUIElement` | Pass | Default build: `LSUIElement => true` in the plist, `ApplicationType` `UIElement`, no Dock icon, menu-bar icon present. `SPIKE_LSUIELEMENT=0` build: no `LSUIElement` key, `ApplicationType` `Foreground` |
+| 10 | CPU | Measured | Spike idle 0.283% of one core, walking 7.211%. Installed Tokitty v0.6.0 3.282%. Details below |
+| 11 | Text at 100, 50, 20, 0% | Nick's call | Nick: the halo is needed for "SESSION", "WEEK" and the percentages to read at low opacity, but the small "resets in..." text is harder to read with the halo and fine without it |
+| Gate 4 | Mixed-DPI drag | Not run | No second monitor attached |
+
+### Pixel identity on real Retina
+
+`.venv/bin/python spike/qt_card.py --selftest --out spike/out/mac`, from source. Qt reported one screen, "Built-in Retina Display", geometry 0,0 1710x1112, dpr 2.0. Every comparison used cell size 8 and a 888x512 device-pixel image, with 21,760 opaque pixels per comparison.
+
+| Spot | Mirrored | Cat device origin | `grab()` opaque / transparent mismatches | Screen opaque / transparent mismatches | Exact RGBA block |
+|------|----------|-------------------|------------------------------------------|----------------------------------------|------------------|
+| inside | no | 52, 248 | 0 / 0 | 0 / 0 | n/a |
+| on_top | no | 80, 24 | 0 / 0 | 0 / 0 | n/a |
+| beside | no | 648, 272 | 0 / 0 | 0 / 0 | true (`grab()`) |
+| walk | no | 152, 24 | 0 / 0 | 0 / 0 | n/a |
+| walk | yes | 152, 24 | 0 / 0 | 0 / 0 | n/a |
+
+macOS did not ask for Screen Recording permission and the screen half still passed. macOS lets an app capture its own windows without that permission, which is enough for the cat's rectangle. The compositor timing problem from section 1 did not show up.
+
+The text screenshots from the same run, at device resolution, top row as drawn today, bottom row with the halo:
+
+![macOS Retina text at 100, 50, 20, 0 percent, without and with halo](pyside6-spike/text_darwin_retina_compare.png)
+
+### Click-through (items 3 and 4)
+
+On macOS the per-pixel alpha that gives click-through on Windows does nothing. The whole 444x256 window catches the mouse, and Qt delivers the events (a right-click on the empty margin opens the spike's menu). So the margin, transparent sprite cells and a 0% card all block whatever is underneath.
+
+As an experiment outside the spike, a wrapper called `QWidget.setMask()` with the card rectangle plus the cat's bounding rectangle, updated after each paint when the cat moves. With that mask a click on the empty margin reached Finder, and Nick saw no clipping of the card's rounded corners or of the cat. So the fix is in Qt and needs no new dependency. The port would build the mask on macOS only. A rectangle mask still catches clicks on transparent cells inside the cat's box and just outside the card's rounded corners; a mask built from the cat image's alpha (`QImage.createAlphaMask()`) would match Windows more closely. A 0% card would have to be left out of the mask to keep the Windows behaviour, and put back when "Keep 0% card clickable" is on. Changing the mask 30 times a second while walking was not measured for CPU.
+
+### Focus (item 5)
+
+`WindowDoesNotAcceptFocus` keeps the window from becoming key, but macOS still activates the whole app on a click. A background logger polled `lsappinfo front` every 0.2 s during the frozen-build test. Each click on the cat switched the frontmost app from Terminal to TokittyQtSpike (15:11:01, 15:11:06, 15:11:12), and it went back to Terminal only when Nick clicked into Terminal again. `LSUIElement` hides the Dock icon and app menu but does not stop the activation. The usual fix is a non-activating panel (`NSWindowStyleMaskNonactivatingPanel` on the `NSPanel` Qt creates for a `Qt.Tool` window), which Qt does not expose. That needs the same `pyobjc` or `ctypes` call into the Objective-C runtime as Spaces. Not tried here.
+
+### Spaces and full screen (item 7)
+
+The widget stays on the Space it opened on and is not visible over a full-screen app. As section 3 predicted, `WA_MacAlwaysShowToolWindow` is not enough. The fix is `NSWindow.collectionBehavior` with `canJoinAllSpaces` and `fullScreenAuxiliary`, which Qt does not expose. So the port needs `pyobjc` or a small `ctypes` call into the Objective-C runtime, and that is Nick's dependency decision. One native helper could set the collection behaviour and the non-activating style together.
+
+### CPU (item 10)
+
+Each figure is the change in `ps -o time=` for the PID over 60 seconds, as a percentage of one core, after a 5 second warmup, from source with `--no-tray`. The PID the script printed matched the measured process, because a macOS venv's `python` is a symlink and not a launcher. The spike's own `--cpu 60` was run right after as a cross-check.
+
+| Process | `ps` CPU over 60 s | Percent of one core | `--cpu 60` cross-check | RSS |
+|---------|--------------------|---------------------|------------------------|-----|
+| Spike, cat inside the card | 0.17 s over 60.03 s | 0.283% | 0.326% (0.195 s), 1.3 paints/s | 112,752 KB |
+| Spike, cat walking | 4.33 s over 60.04 s | 7.211% | 7.119% (4.272 s), 31.4 paints/s | 115,248 KB |
+| Installed Tokitty v0.6.0, Nick's live instance | 1.97 s over 60.03 s | 3.282% | n/a | 138,464 KB |
+
+The installed Tokitty ran alongside the idle spike measurement. Like the Windows v0.5.0 figure it is not like for like (real polling, live accounts). No from-source tkinter baseline was measured on the Mac. Walking costs about 3.3 times the Windows figure (2.212%). Each frame paints 4 times as many device pixels at dpr 2, which accounts for some of that, but nothing here separates the causes.
+
+### What this changes
+
+Leaving the go/no-go to Nick. These results do change the macOS picture from the earlier recommendation, which expected only Spaces to be at risk:
+
+1. Click-through fails on macOS as built. `setMask()` fixes it inside Qt, so it adds work to #110/#111 and needs no dependency.
+2. Focus fails on macOS. Clicking the widget steals keyboard focus from the terminal. The likely fix needs the same native call as Spaces.
+3. Spaces and full screen fail, as predicted. So a Mac port that behaves like the Windows one needs `pyobjc` or `ctypes` for two separate things, and that decision now covers focus as well.
+4. Walking at 30 fps costs 7.211% of one core on this Mac, against 2.212% on Windows. Idle stays low at 0.283%.
+
+Pixel identity on real Retina, the menu-bar icon and `LSUIElement` all passed. Before the CPU or focus results are final, a from-source tkinter baseline on the Mac and a test of the non-activating panel through `ctypes` would be the next two runs.
