@@ -26,7 +26,7 @@ Versions: PySide6-Essentials 6.12.0 (Qt 6.12.0), PyInstaller 6.22.3, Windows Pyt
 | 4 | Drag and placement | Moves exactly as far as the mouse at 100% and at 150%, real and simulated | Drag works on the Retina display. No second monitor attached | Partial. No mixed-DPI pair on either machine |
 | 5 | Text | Screenshots below | Screenshots below (runner and real Retina). Nick: the halo is needed for the labels and percentages, and makes the small reset text harder to read | Nick's call |
 | 6 | macOS menu bar | Tray available, starts with no crash | Frozen `LSUIElement` build starts with the tray available and no crash on the runners. On a real Mac: `ApplicationType` is `UIElement`, no Dock icon, menu-bar icon present, its menu opens and Quit exits cleanly | Pass |
-| 7 | CPU | Spike idle 0.086% of one core, walking 2.212%. tkinter 1.135% | Spike idle 0.283%, walking 7.211% at Retina. Installed v0.6.0 3.282% | Pass on Windows. macOS walking is higher, see macOS results |
+| 7 | CPU | Spike idle 0.086% of one core, walking 2.212%. tkinter 1.135% | Spike idle 0.283%, walking 7.211% at Retina. tkinter 0.983% | Pass. Spike idle is below tkinter on both. macOS walking is higher, see macOS results |
 | 8 | Frozen size | Spike 23,840,377 bytes. Estimated real port about 36.3 MB | arm64 spike 22,988,015, x86_64 25,267,338. Estimated real port 32.3 MB and 35.2 MB | Bigger. See the section |
 | 9 | Licence | Qt ships as separate DLLs | Qt ships as separate frameworks | Pass, with notices to add |
 
@@ -236,12 +236,12 @@ Nick's installed Tokitty v0.6.0 has an orange cat too, and early on he clicked i
 | 2 | Retina crispness and `--selftest` | Pass | Nick: crisp square pixels. Self-test: 10 of 10 comparisons with 0 mismatches, details below |
 | 3 | Click-through on the empty margin | Fail | A click on the empty strip above the card does not reach Finder, and a right-click there opens the spike menu. The cat, bars and card all catch clicks |
 | 4 | 0% card, then "Keep 0% card clickable" | Fail | The 0% card catches clicks with the toggle off and on, same cause as item 3 |
-| 5 | Focus stays with Terminal | Fail | Clicking the cat makes the spike the frontmost app, from source and from the frozen `LSUIElement` build. Keystrokes stop reaching Terminal |
+| 5 | Focus stays with Terminal | Fail | Clicking the cat makes the spike the frontmost app, from source and from the frozen `LSUIElement` build. Keystrokes stop reaching Terminal. A `ctypes` call to `_setPreventsActivation:` fixed it in a follow-up run |
 | 6 | Stays above an active window | Pass | The widget stays above another app's active window |
 | 7 | Spaces and full screen | Fail | The widget stays on the Space it was opened on and does not follow to another Space. It is not visible over a full-screen app |
 | 8 | Menu-bar icon | Pass | Icon appears in the menu bar, its menu opens, Quit exits cleanly, no crash report |
 | 9 | `LSUIElement` | Pass | Default build: `LSUIElement => true` in the plist, `ApplicationType` `UIElement`, no Dock icon, menu-bar icon present. `SPIKE_LSUIELEMENT=0` build: no `LSUIElement` key, `ApplicationType` `Foreground` |
-| 10 | CPU | Measured | Spike idle 0.283% of one core, walking 7.211%. Installed Tokitty v0.6.0 3.282%. Details below |
+| 10 | CPU | Measured | Spike idle 0.283% of one core, walking 7.211%. tkinter v0.6.0 from source 0.983%. Installed Tokitty v0.6.0 3.282%. Details below |
 | 11 | Text at 100, 50, 20, 0% | Nick's call | Nick: the halo is needed for "SESSION", "WEEK" and the percentages to read at low opacity, but the small "resets in..." text is harder to read with the halo and fine without it |
 | Gate 4 | Mixed-DPI drag | Not run | No second monitor attached |
 
@@ -271,11 +271,24 @@ As an experiment outside the spike, a wrapper called `QWidget.setMask()` with th
 
 ### Focus (item 5)
 
-`WindowDoesNotAcceptFocus` keeps the window from becoming key, but macOS still activates the whole app on a click. A background logger polled `lsappinfo front` every 0.2 s during the frozen-build test. Each click on the cat switched the frontmost app from Terminal to TokittyQtSpike (15:11:01, 15:11:06, 15:11:12), and it went back to Terminal only when Nick clicked into Terminal again. `LSUIElement` hides the Dock icon and app menu but does not stop the activation. The usual fix is a non-activating panel (`NSWindowStyleMaskNonactivatingPanel` on the `NSPanel` Qt creates for a `Qt.Tool` window), which Qt does not expose. That needs the same `pyobjc` or `ctypes` call into the Objective-C runtime as Spaces. Not tried here.
+`WindowDoesNotAcceptFocus` keeps the window from becoming key, but macOS still activates the whole app on a click. A background logger polled `lsappinfo front` every 0.2 s during the frozen-build test. Each click on the cat switched the frontmost app from Terminal to TokittyQtSpike (15:11:01, 15:11:06, 15:11:12), and it went back to Terminal only when Nick clicked into Terminal again. `LSUIElement` hides the Dock icon and app menu but does not stop the activation.
+
+Follow-up run the same day, without Nick at the keyboard. A wrapper outside the repo reached the spike's `NSWindow` through `ctypes` and `objc_msgSend` (`winId()` is the `NSView`, `[view window]` is the window, class `QNSPanel`, `styleMask` 14, `canBecomeKeyWindow` false). A harness activated Terminal, posted a synthetic left click on the cat with `CGEventPost`, then a 40x20 drag in 20 steps, and read `lsappinfo front` 1 s after each. The spike ran from source, so it is a normal `Foreground` app, which is the harder case for activation than the `LSUIElement` bundle.
+
+| Variant | Click: frontmost before, after | Drag: frontmost before, after | Spike got both presses | Drag moved the widget |
+|---------|-------------------------------|-------------------------------|------------------------|-----------------------|
+| As built, run 1 | Terminal, python | Terminal, python | yes | not logged |
+| As built, run 2 | Terminal, python | Terminal, python | yes | 600,280 to 640,300 |
+| `NSWindowStyleMaskNonactivatingPanel` added (`styleMask` 14 to 142) | Terminal, python | Terminal, python | yes | not logged |
+| `_setPreventsActivation:YES` only | Terminal, Terminal | Terminal, Terminal | yes | 600,280 to 640,300 |
+| Both, run 1 | Terminal, Terminal | Terminal, Terminal | yes | not logged |
+| Both, runs 2 and 3 | Terminal, Terminal | Terminal, Terminal | yes | 600,280 to 640,300 |
+
+The public style flag does nothing when it is set after Qt has created the window, which is the only point at which Python can reach it. The private `_setPreventsActivation:` is what stops the activation, and it is enough on its own. The click and the drag still reach the widget, and the drag moves it by exactly the mouse delta. So focus is fixable with `ctypes` and no new dependency, but through an undocumented AppKit method that Apple could change or remove in a later macOS. The port should check `respondsToSelector:` first, as the wrapper did, and fall back to today's behaviour. Not yet tried with the frozen `LSUIElement` build or typed keystrokes; the frontmost app stands in for where keystrokes go.
 
 ### Spaces and full screen (item 7)
 
-The widget stays on the Space it opened on and is not visible over a full-screen app. As section 3 predicted, `WA_MacAlwaysShowToolWindow` is not enough. The fix is `NSWindow.collectionBehavior` with `canJoinAllSpaces` and `fullScreenAuxiliary`, which Qt does not expose. So the port needs `pyobjc` or a small `ctypes` call into the Objective-C runtime, and that is Nick's dependency decision. One native helper could set the collection behaviour and the non-activating style together.
+The widget stays on the Space it opened on and is not visible over a full-screen app. As section 3 predicted, `WA_MacAlwaysShowToolWindow` is not enough. The fix is `NSWindow.collectionBehavior` with `canJoinAllSpaces` and `fullScreenAuxiliary`, which Qt does not expose. So the port needs `pyobjc` or a small `ctypes` call into the Objective-C runtime, and that is Nick's dependency decision. The focus follow-up shows that the `ctypes` route reaches Qt's window without any new package, so one small helper could set the collection behaviour and prevent activation together. The collection behaviour itself was not tried.
 
 ### CPU (item 10)
 
@@ -286,16 +299,22 @@ Each figure is the change in `ps -o time=` for the PID over 60 seconds, as a per
 | Spike, cat inside the card | 0.17 s over 60.03 s | 0.283% | 0.326% (0.195 s), 1.3 paints/s | 112,752 KB |
 | Spike, cat walking | 4.33 s over 60.04 s | 7.211% | 7.119% (4.272 s), 31.4 paints/s | 115,248 KB |
 | Installed Tokitty v0.6.0, Nick's live instance | 1.97 s over 60.03 s | 3.282% | n/a | 138,464 KB |
+| tkinter v0.6.0 from source, `TOKITTY_DEBUG_STATE=content`, run 1 | 0.59 s over 60.04 s | 0.983% | n/a | 150,224 KB |
+| Same process, run 2 | 0.56 s over 60.04 s | 0.933% | n/a | 152,464 KB |
 
-The installed Tokitty ran alongside the idle spike measurement. Like the Windows v0.5.0 figure it is not like for like (real polling, live accounts). No from-source tkinter baseline was measured on the Mac. Walking costs about 3.3 times the Windows figure (2.212%). Each frame paints 4 times as many device pixels at dpr 2, which accounts for some of that, but nothing here separates the causes.
+The installed Tokitty ran alongside the idle spike measurement. Like the Windows v0.5.0 figure it is not like for like (real polling, live accounts).
+
+The tkinter baseline was measured in a follow-up run, set up like the Windows one: the `tokitty/` code on this branch (identical to v0.6.0) from source in a Python 3.13.14 venv with Tk 9.0, Pillow 12.3.0 and pystray, debug state `content`, one pane, no polling. macOS has no environment variable for the state directory, so `HOME` pointed at a scratch directory and the run had its own lock and settings while Nick's instance kept running. Two back-to-back 60 s windows on the same process gave 0.983% and 0.933%.
+
+At idle the spike (0.283%, 0.326% cross-check) uses about a third of what tkinter does, the same direction as on Windows (0.086% against 1.135%). Walking has no tkinter equivalent. It costs about 3.3 times the Windows figure (2.212%). Each frame paints 4 times as many device pixels at dpr 2, which accounts for some of that, but nothing here separates the causes.
 
 ### What this changes
 
 Leaving the go/no-go to Nick. These results do change the macOS picture from the earlier recommendation, which expected only Spaces to be at risk:
 
 1. Click-through fails on macOS as built. `setMask()` fixes it inside Qt, so it adds work to #110/#111 and needs no dependency.
-2. Focus fails on macOS. Clicking the widget steals keyboard focus from the terminal. The likely fix needs the same native call as Spaces.
-3. Spaces and full screen fail, as predicted. So a Mac port that behaves like the Windows one needs `pyobjc` or `ctypes` for two separate things, and that decision now covers focus as well.
-4. Walking at 30 fps costs 7.211% of one core on this Mac, against 2.212% on Windows. Idle stays low at 0.283%.
+2. Focus fails on macOS. Clicking the widget steals keyboard focus from the terminal. A `ctypes` call to the private `_setPreventsActivation:` fixed it in the follow-up run with no new package, at the cost of relying on undocumented AppKit.
+3. Spaces and full screen fail, as predicted. So a Mac port that behaves like the Windows one needs native calls for two separate things. The focus run shows `ctypes` can do it without `pyobjc`, which shrinks the dependency question to whether a private method is acceptable.
+4. Walking at 30 fps costs 7.211% of one core on this Mac, against 2.212% on Windows. Idle stays low at 0.283%, against 0.983% for today's tkinter widget.
 
-Pixel identity on real Retina, the menu-bar icon and `LSUIElement` all passed. Before the CPU or focus results are final, a from-source tkinter baseline on the Mac and a test of the non-activating panel through `ctypes` would be the next two runs.
+Pixel identity on real Retina, the menu-bar icon and `LSUIElement` all passed. Still untried on the Mac: `collectionBehavior` through `ctypes` for Spaces, the focus fix in the frozen `LSUIElement` build with real typing, and a mixed-DPI drag.
