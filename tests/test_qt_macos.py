@@ -56,6 +56,23 @@ def test_collection_behavior_ors_into_the_current_value():
     assert fake.calls[-1][2] == (1 << 4) | 1 | (1 << 8)
 
 
+def test_collection_behavior_drops_what_qt_set_for_a_tool_window():
+    """Qt gives a Qt.Tool window MoveToActiveSpace | FullScreenAuxiliary.
+    AppKit raises an uncatchable NSException, killing the process, if
+    MoveToActiveSpace is left beside CanJoinAllSpaces."""
+    fake = FakeObjC(current=(1 << 1) | (1 << 8))
+    run(fake)
+    assert fake.calls[-1][2] == (1 << 0) | (1 << 8)
+
+
+def test_collection_behavior_drops_the_other_full_screen_roles():
+    """FullScreenPrimary (what Qt sets without Qt.Tool) and FullScreenNone
+    are exclusive with FullScreenAuxiliary the same way."""
+    fake = FakeObjC(current=(1 << 4) | (1 << 7) | (1 << 9))
+    run(fake)
+    assert fake.calls[-1][2] == (1 << 4) | (1 << 0) | (1 << 8)
+
+
 def test_prevent_activation_is_skipped_when_the_selector_is_gone():
     fake = FakeObjC(responds=False)
     assert run(fake) == ["collection_behavior"]

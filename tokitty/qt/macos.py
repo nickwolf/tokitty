@@ -4,7 +4,7 @@ Objective-C runtime (no pyobjc).
 From the widget's winId(), which is an NSView, it reaches the NSWindow and
 then makes two changes: stop a click from activating the app (the private
 _setPreventsActivation:, proven in the #109 spike) and let the window join
-every Space and sit over full-screen apps (collectionBehavior, untried). Each
+every Space and sit over full-screen apps (collectionBehavior). Each
 step is isolated, so a failure prints one line and the other still runs.
 Nothing here imports PySide6; the caller checks the Qt platform is cocoa.
 """
@@ -16,8 +16,16 @@ import sys
 from typing import List, Optional
 
 CAN_JOIN_ALL_SPACES = 1 << 0
+MOVE_TO_ACTIVE_SPACE = 1 << 1
+FULL_SCREEN_PRIMARY = 1 << 7
 FULL_SCREEN_AUXILIARY = 1 << 8
+FULL_SCREEN_NONE = 1 << 9
 COLLECTION_BEHAVIOR = CAN_JOIN_ALL_SPACES | FULL_SCREEN_AUXILIARY
+# AppKit raises an NSException, which aborts the process, when a window has
+# two of these: MoveToActiveSpace with CanJoinAllSpaces, or two full-screen
+# roles. Qt sets MoveToActiveSpace | FullScreenAuxiliary on a Qt.Tool window
+# and FullScreenPrimary on others, so these come off before ours go on.
+CONFLICTING_BEHAVIOR = MOVE_TO_ACTIVE_SPACE | FULL_SCREEN_PRIMARY | FULL_SCREEN_NONE
 
 STEP_PREVENT_ACTIVATION = "prevent_activation"
 STEP_COLLECTION_BEHAVIOR = "collection_behavior"
@@ -93,10 +101,10 @@ def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform
     except Exception as exc:
         _warn(f"_setPreventsActivation: failed: {exc}")
     try:
-        # OR into what Qt set rather than replacing it.
+        # Keep what Qt set, apart from the bits ours conflict with.
         current = objc.send_ulong(window, objc.sel("collectionBehavior"))
         objc.send_void_ulong(window, objc.sel("setCollectionBehavior:"),
-                             current | COLLECTION_BEHAVIOR)
+                             (current & ~CONFLICTING_BEHAVIOR) | COLLECTION_BEHAVIOR)
         done.append(STEP_COLLECTION_BEHAVIOR)
     except Exception as exc:
         _warn(f"setCollectionBehavior: failed: {exc}")
