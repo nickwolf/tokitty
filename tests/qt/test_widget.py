@@ -161,10 +161,12 @@ def test_accented_pane_is_opaque_beside_a_translucent_one(qapp):
 
 # ---- repaint --------------------------------------------------------------
 
-def test_render_repaints_the_percentage_text(qapp):
+def test_render_repaints_the_session_row(qapp):
+    # The bar's fill, not the percentage text: Windows' offscreen platform
+    # has no fonts to draw with, and the fill width changes either way.
     widget = make(qapp)
     layout = T.layout_card(T.Theme(), "limits", "inside")
-    r = layout["session_percent"]
+    r = layout["session_bar"]
     box = (r.x, r.y, r.w, r.h)
 
     def crop():

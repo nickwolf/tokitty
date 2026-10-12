@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tokitty.accounts import Account
+from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
 from tokitty.api import UsageSnapshot
 from tokitty.app_core import PaneUpdate, build_units, make_onboarder, step_unit
@@ -343,7 +344,15 @@ class _Probe:
 
 
 class _NoCredentials:
+    # WslCredentialsCache's contract with no WSL install found. Windows
+    # resolvers call single(), which raises rather than returning nothing.
     def all_matches(self):
+        return []
+
+    def single(self):
+        raise CredentialsError("no WSL credentials")
+
+    def claude_dirs(self):
         return []
 
 
@@ -396,7 +405,7 @@ def test_build_units_one_account(tmp_path):
 
     assert [u["key"] for u in units] == ["acct-v1-a"]
     assert units[0]["account"] is account
-    assert units[0]["sessions_dir"] == str(tmp_path / "a") + "/tokitty/sessions"
+    assert units[0]["sessions_dir"] == str(tmp_path / "a" / "tokitty" / "sessions")
     assert set(load_customization(tmp_path)) == {"acct-v1-a"}
 
 
