@@ -60,7 +60,7 @@ On macOS, Qt mode creates a parentless `QMenuBar`, held for the life of the appl
 
 ## Cat spots, revised (Nick, 2026-10-12)
 
-#110 gave each account four homes: `inside`, `on_top`, `beside_left` and `beside_right`. Seen as a dropdown, `beside_left` is the cat's current position with a gap added: under the default `beside_cat` bar layout the card keeps its empty cat area (x 8 to 120, the stats start at x=132, `theme.py:258`), so a cat outside the left edge sits about 120 px from the text it belongs to, and `beside_right` leaves the same empty patch on the card's other side. Nick's call: Left is today's inside position, Right is its mirror inside the card, and no cat sits outside a side edge. On top stays.
+#110 gave each account four homes: `inside`, `on_top`, `beside_left` and `beside_right`. Seen as a dropdown, `beside_left` is the cat's current position with a gap added: under the default `beside_cat` bar layout the card keeps its empty cat area (x 8 to 120, the stats start at x=132, `theme.py:258`), so a cat outside the left edge sits about 120 px from the text it belongs to, and `beside_right` leaves the same empty patch on the card's other side. Nick's call: Left is today's inside position, Right is its mirror inside the card, and no cat sits outside a side edge. On top stays. A redesign where the card shrinks to the bars and the cat always lives outside it was considered and goes to #139 (v0.8.0), since it changes the widget's look and #112 is a port.
 
 Changes to `theme.py` (toolkit-free, so in slice 1):
 
@@ -69,7 +69,7 @@ Changes to `theme.py` (toolkit-free, so in slice 1):
 - `placement("inside_right")` is `Placement((CARD_WIDTH - 8 - SPRITE_W, 12), True)`, (180, 12), mirrored so the cat faces the stats as it does on the left. The cat tags are placed relative to the placement origin (`qt/widget.py:396-399`), which lands on the mirrored cat area at x=180, so they move with the cat.
 - `full_width` stays honoured only when the cat is outside the card, which is now `on_top` alone: `layout_card`'s `pane_spot != "inside"` test (`theme.py:337`) becomes `pane_spot == "on_top"`, or `inside_right` would lose its cat area.
 - Reachability: `inside` and `inside_right` are reachable from every pane; `on_top` from first-row panes, as before. `layout_window` never needs side margins, so a home change only ever moves the window vertically.
-- `SCRATCH_SPOTS` goes, since no spot puts the cat against a card's outer edge. #124 (scratching art) and #22 (wandering) were written for the side spots and need their descriptions updated; that is a note on each issue, not a change in this one.
+- `SCRATCH_SPOTS` becomes `{inside, inside_right}`: the cat scratches the near edge of the stats column from inside the card (the cat area ends at x=120 and the stats start at x=132, mirrored for Right), not the card's outer edge (Nick, 2026-10-12). #124 draws the frames and #22 decides when; their issue text still describes outside side spots and needs a note.
 
 The Qt widget paints from `layout_card` and `placement`, so it follows without new drawing code; the parts that assume the account label is right-aligned (`_text_rect(..., right=True)`, `qt/widget.py:59`) take the alignment from the layout instead. Tests pin the mirrored rectangles against the `inside` ones for both views, the placement, the `full_width` rule for `inside_right`, and zero side margins for any mix of homes.
 
