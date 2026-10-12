@@ -23,6 +23,7 @@ _MODULES = (
     # already toolkit-free
     "tokitty.theme",
     "tokitty.app_core",
+    "tokitty.app_controls",
     "tokitty.first_run",
     "tokitty.streamdock.gui_state",
     "tokitty.streamdock.wiring",
