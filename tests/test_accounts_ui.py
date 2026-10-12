@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from tokitty import accounts_logic
 from tokitty.accounts import Account
 from tokitty.accounts_ui import (
     build_discovered_path_specs,
@@ -65,7 +66,6 @@ def _run_and_wait_for_mutation(
 
 def test_mutation_completion_is_polled_only_from_the_tk_thread(tmp_path, monkeypatch):
     """A filesystem worker must never call any Tk API, including after()."""
-    from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
 
     main_thread_id = threading.get_ident()
@@ -88,7 +88,7 @@ def test_mutation_completion_is_polled_only_from_the_tk_thread(tmp_path, monkeyp
         message = "installed"
 
     monkeypatch.setattr(
-        accounts_ui,
+        accounts_logic,
         "apply_account_mutation",
         lambda *args, **kwargs: Success(),
     )
@@ -316,10 +316,9 @@ def test_accounts_manager_open_is_singleton_per_root(tmp_path):
 @pytest.mark.gui
 def test_discovered_match_renders_clickable_add_row(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
-    from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
 
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "no-codex"))
 
     root = tk.Tk()
     try:
@@ -601,9 +600,9 @@ def test_mutation_guard_survives_close_and_reopen(tmp_path, monkeypatch):
         assert release_mutation.wait(timeout=5.0)
         return Success()
 
-    monkeypatch.setattr(accounts_ui, "apply_account_mutation", blocking_mutation)
+    monkeypatch.setattr(accounts_logic, "apply_account_mutation", blocking_mutation)
     monkeypatch.setattr(
-        accounts_ui,
+        accounts_logic,
         "retry_pending_hook_op",
         lambda state_dir: retry_calls.append(state_dir),
     )
@@ -834,12 +833,11 @@ def test_init_retries_pending_hook_op_off_the_tk_thread(tmp_path, monkeypatch):
     by joining that thread -- same join-based technique the add/remove
     tests above use via _run_and_wait_for_mutation."""
     tk = pytest.importorskip("tkinter")
-    from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
 
     call_order = []
     monkeypatch.setattr(
-        accounts_ui, "retry_pending_hook_op",
+        accounts_logic, "retry_pending_hook_op",
         lambda state_dir: call_order.append(("retry", state_dir)),
     )
     real_refresh_rows = AccountsManager._refresh_rows
@@ -984,7 +982,7 @@ def _spy_on_hooks(monkeypatch, accounts_ui):
             *args, install_fn=spy, uninstall_fn=spy, **kwargs
         )
 
-    monkeypatch.setattr(accounts_ui, "apply_account_mutation", mutation)
+    monkeypatch.setattr(accounts_logic, "apply_account_mutation", mutation)
     return hook_calls
 
 
@@ -1009,13 +1007,13 @@ def test_discover_local_codex_home(tmp_path, monkeypatch):
     from tokitty import accounts_ui
 
     home = _codex_home(tmp_path)
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(home))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(home))
     assert accounts_ui.discover_local_codex_home([]) == str(home)
     assert accounts_ui.discover_local_codex_home(
         [Account(name="c", config_dir=str(home), provider="codex")]
     ) is None
 
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "missing"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "missing"))
     assert accounts_ui.discover_local_codex_home([]) is None
 
 
@@ -1041,7 +1039,7 @@ def test_adding_and_removing_a_codex_account_runs_the_hook_ops(tmp_path, monkeyp
     claude_dir.mkdir()
     save_accounts(tmp_path, [Account(name="acct-claude", config_dir=str(claude_dir))])
     home = _codex_home(tmp_path)
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "no-codex"))
     hook_calls = _spy_on_hooks(monkeypatch, accounts_ui)
     prompts = []
     monkeypatch.setattr(
@@ -1085,7 +1083,7 @@ def test_adding_a_claude_account_still_installs_hooks(tmp_path, monkeypatch):
     config_dir = tmp_path / "claude"
     config_dir.mkdir()
     (config_dir / ".credentials.json").write_text(_VALID_CREDENTIALS, encoding="utf-8")
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "no-codex"))
     hook_calls = _spy_on_hooks(monkeypatch, accounts_ui)
     prompts = []
     monkeypatch.setattr(
@@ -1115,7 +1113,7 @@ def test_discovered_codex_home_adds_as_codex(tmp_path, monkeypatch):
     claude_dir.mkdir()
     save_accounts(tmp_path, [Account(name="acct-claude", config_dir=str(claude_dir))])
     home = _codex_home(tmp_path)
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(home))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(home))
     hook_calls = _spy_on_hooks(monkeypatch, accounts_ui)
 
     root = tk.Tk()
@@ -1154,7 +1152,6 @@ def test_discovered_codex_home_adds_as_codex(tmp_path, monkeypatch):
 @pytest.mark.gui
 def test_codex_row_shows_codex_facts(tmp_path, monkeypatch):
     tk = pytest.importorskip("tkinter")
-    from tokitty import accounts_ui
     from tokitty.accounts_ui import AccountsManager
     from tokitty.accounts import save_accounts
 
@@ -1163,7 +1160,7 @@ def test_codex_row_shows_codex_facts(tmp_path, monkeypatch):
         Account(name="acct-claude", config_dir=str(tmp_path / "claude")),
         Account(name="acct-codex", config_dir=str(home), provider="codex"),
     ])
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(home))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(home))
 
     root = tk.Tk()
     try:
@@ -1188,7 +1185,7 @@ def test_codex_wsl_path_is_validated_off_the_tk_thread(tmp_path, monkeypatch):
     from tokitty.accounts_ui import AccountsManager
     from tokitty.manual_path import PathValidationResult
 
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "no-codex"))
     main_thread = threading.get_ident()
     validated_on = []
 
@@ -1196,7 +1193,7 @@ def test_codex_wsl_path_is_validated_off_the_tk_thread(tmp_path, monkeypatch):
         validated_on.append(threading.get_ident())
         return PathValidationResult(ok=False, error="No sessions folder found")
 
-    monkeypatch.setattr(accounts_ui, "validate_account_path", fake_validate)
+    monkeypatch.setattr(accounts_logic, "validate_account_path", fake_validate)
     errors = []
     monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
     monkeypatch.setattr(
@@ -1272,7 +1269,7 @@ def test_add_rechecks_duplicates_after_slow_validation(tmp_path, monkeypatch):
         ])
         return PathValidationResult(ok=True, config_dir=unc)
 
-    monkeypatch.setattr(accounts_ui, "validate_account_path", validate_while_another_dialog_adds)
+    monkeypatch.setattr(accounts_logic, "validate_account_path", validate_while_another_dialog_adds)
     errors = []
     monkeypatch.setattr(accounts_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
     monkeypatch.setattr(accounts_ui.simpledialog, "askstring", lambda *a, **k: unc)
@@ -1386,7 +1383,7 @@ def test_codex_add_shows_the_approval_note_and_the_row_text(tmp_path, monkeypatc
     claude_dir.mkdir()
     save_accounts(tmp_path, [Account(name="acct-claude", config_dir=str(claude_dir))])
     home = _codex_home(tmp_path)
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(tmp_path / "no-codex"))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(tmp_path / "no-codex"))
     # Codex has no activity capability until a later task.
     monkeypatch.setattr(hooks_install, "provider_has_hooks", lambda kind: True)
     infos, warnings = [], []

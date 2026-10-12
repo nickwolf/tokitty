@@ -661,3 +661,70 @@ def test_full_width_inside_right_keeps_its_cat_area():
     assert lay.layout == "beside_cat" and "cat_area" in lay
     assert lay == layout_card(Theme(), "limits", "inside_right")
     assert layout_card(FULL, "limits", "on_top").layout == "full_width"
+
+
+# --- theme_from_dict / theme_to_dict / rejected_fields --------------------
+
+def test_theme_dict_round_trip():
+    t = Theme(
+        card=T.CardStyle(background="#101010", opacity=40, radius=6, border_width=2),
+        bars=T.BarStyle(shape="rounded", height=6, mid_at=30, high_at=70),
+        text=T.TextStyle(show=frozenset({"percent", "status"}), halo="on", halo_below=30),
+    )
+    raw = T.theme_to_dict(t)
+    assert raw["text"]["show"] == ["percent", "status"]
+    assert T.theme_from_dict(raw, Theme()) == t
+    assert T.rejected_fields(raw, Theme()) == set()
+
+
+def test_theme_to_dict_matches_what_save_writes(tmp_path):
+    t = Theme(text=T.TextStyle(show=frozenset({"reset", "percent"})))
+    T.save_theme(tmp_path, t)
+    assert json.loads((tmp_path / T.THEME_FILENAME).read_text(encoding="utf-8")) == T.theme_to_dict(t)
+
+
+def test_one_bad_field_falls_back_alone_and_is_reported():
+    fallback = Theme(card=T.CardStyle(radius=4))
+    raw = T.theme_to_dict(Theme(card=T.CardStyle(radius=99, border_width=3)))
+    assert T.theme_from_dict(raw, fallback).card == T.CardStyle(radius=4, border_width=3)
+    assert T.rejected_fields(raw, fallback) == {"card.radius"}
+
+
+def test_bool_and_off_step_opacity_are_rejected():
+    for bad in (True, 55, "50", None, 110):
+        raw = {"card": {"opacity": bad}}
+        assert T.theme_from_dict(raw, Theme(card=T.CardStyle(opacity=70))).card.opacity == 70
+        assert T.rejected_fields(raw, Theme()) == {"card.opacity"}
+
+
+def test_missing_fields_fall_back_without_being_rejected():
+    fallback = Theme(card=T.CardStyle(radius=4))
+    assert T.theme_from_dict({}, fallback) == fallback
+    assert T.rejected_fields({"card": {}}, fallback) == set()
+
+
+def test_inverted_thresholds_are_reported_on_both_fields():
+    raw = {"bars": {"mid_at": 90, "high_at": 40}}
+    bars = T.theme_from_dict(raw, Theme(bars=T.BarStyle(mid_at=20, high_at=60))).bars
+    assert (bars.mid_at, bars.high_at) == (20, 60)
+    assert T.rejected_fields(raw, Theme()) == {"bars.mid_at", "bars.high_at"}
+    assert T.rejected_fields({"bars": {"mid_at": 50, "high_at": 50}}, Theme()) == {
+        "bars.mid_at", "bars.high_at"}
+
+
+def test_unknown_show_names_are_dropped_but_not_rejected():
+    raw = {"text": {"show": ["percent", "nope", 3]}}
+    assert T.theme_from_dict(raw, Theme()).text.show == frozenset({"percent"})
+    assert T.rejected_fields(raw, Theme()) == set()
+
+
+def test_non_list_show_and_non_dict_section_are_rejected():
+    raw = {"text": {"show": "percent"}, "card": [1]}
+    t = T.theme_from_dict(raw, Theme())
+    assert t.text.show == Theme().text.show and t.card == T.CardStyle()
+    assert T.rejected_fields(raw, Theme()) == {"text.show", "card"}
+
+
+def test_theme_from_dict_ignores_a_non_dict():
+    assert T.theme_from_dict(None, Theme()) == Theme()
+    assert T.rejected_fields([], Theme()) == set()

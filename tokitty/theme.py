@@ -22,7 +22,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import FrozenSet, Mapping, Optional, Sequence, Tuple
+from typing import FrozenSet, Mapping, Optional, Sequence, Set, Tuple
 
 from tokitty import sprites
 
@@ -137,6 +137,9 @@ def bar_fill(theme: Theme, ramp_pct: Optional[float], override: Optional[str]) -
 
 # --- validation -----------------------------------------------------------
 
+_REJECT = object()  # a value the field's check refused, as opposed to one that is absent
+
+
 def _hex(value, default: str) -> str:
     if isinstance(value, str) and _HEX_RE.fullmatch(value):
         return value
@@ -161,47 +164,113 @@ def _section(raw, key: str) -> dict:
     return sub if isinstance(sub, dict) else {}
 
 
-def _clean_card(raw: dict, d: CardStyle) -> CardStyle:
+class _Picker:
+    """Reads one section's fields through the checks above, noting each
+    present-but-refused key as "section.key" in `bad`. A missing key falls
+    back silently: only a value someone supplied can be rejected."""
+
+    def __init__(self, raw: dict, section: str, bad: set) -> None:
+        self._raw, self._section, self._bad = raw, section, bad
+
+    def _pick(self, key: str, default, check):
+        value = check(self._raw.get(key), _REJECT)
+        if value is _REJECT:
+            if key in self._raw:
+                self._bad.add(f"{self._section}.{key}")
+            return default
+        return value
+
+    def hex(self, key: str, default: str) -> str:
+        return self._pick(key, default, _hex)
+
+    def int(self, key: str, lo: int, hi: int, default: int, step: int = 1) -> int:
+        return self._pick(key, default, lambda v, d: _int(v, lo, hi, d, step))
+
+    def enum(self, key: str, allowed, default: str) -> str:
+        return self._pick(key, default, lambda v, d: _enum(v, allowed, d))
+
+
+def _clean_card(raw: dict, d: CardStyle, bad: Optional[set] = None) -> CardStyle:
+    pick = _Picker(raw, "card", set() if bad is None else bad)
     return CardStyle(
-        background=_hex(raw.get("background"), d.background),
-        opacity=_int(raw.get("opacity"), 0, 100, d.opacity, step=10),
-        radius=_int(raw.get("radius"), 0, 16, d.radius),
-        border_width=_int(raw.get("border_width"), 0, 3, d.border_width),
-        border_color=_hex(raw.get("border_color"), d.border_color),
+        background=pick.hex("background", d.background),
+        opacity=pick.int("opacity", 0, 100, d.opacity, step=10),
+        radius=pick.int("radius", 0, 16, d.radius),
+        border_width=pick.int("border_width", 0, 3, d.border_width),
+        border_color=pick.hex("border_color", d.border_color),
     )
 
 
-def _clean_bars(raw: dict, d: BarStyle) -> BarStyle:
+def _clean_bars(raw: dict, d: BarStyle, bad: Optional[set] = None) -> BarStyle:
+    bad = set() if bad is None else bad
+    pick = _Picker(raw, "bars", bad)
     bars = BarStyle(
-        layout=_enum(raw.get("layout"), ("beside_cat", "full_width"), d.layout),
-        shape=_enum(raw.get("shape"), ("flat", "rounded"), d.shape),
-        height=_int(raw.get("height"), 4, 10, d.height),
-        track=_hex(raw.get("track"), d.track),
-        low=_hex(raw.get("low"), d.low),
-        mid=_hex(raw.get("mid"), d.mid),
-        high=_hex(raw.get("high"), d.high),
-        neutral=_hex(raw.get("neutral"), d.neutral),
-        mid_at=_int(raw.get("mid_at"), 0, 100, d.mid_at),
-        high_at=_int(raw.get("high_at"), 0, 100, d.high_at),
+        layout=pick.enum("layout", ("beside_cat", "full_width"), d.layout),
+        shape=pick.enum("shape", ("flat", "rounded"), d.shape),
+        height=pick.int("height", 4, 10, d.height),
+        track=pick.hex("track", d.track),
+        low=pick.hex("low", d.low),
+        mid=pick.hex("mid", d.mid),
+        high=pick.hex("high", d.high),
+        neutral=pick.hex("neutral", d.neutral),
+        mid_at=pick.int("mid_at", 0, 100, d.mid_at),
+        high_at=pick.int("high_at", 0, 100, d.high_at),
     )
     if bars.mid_at >= bars.high_at:
+        bad.update(("bars.mid_at", "bars.high_at"))
         bars = replace(bars, mid_at=d.mid_at, high_at=d.high_at)
     return bars
 
 
-def _clean_text(raw: dict, d: TextStyle) -> TextStyle:
+def _clean_text(raw: dict, d: TextStyle, bad: Optional[set] = None) -> TextStyle:
+    bad = set() if bad is None else bad
+    pick = _Picker(raw, "text", bad)
     show = raw.get("show")
     if isinstance(show, list):
+        # Unknown names are dropped without being reported: the Theme tab
+        # only offers TEXT_ELEMENTS, so only a hand-edited file has them.
         shown = frozenset(n for n in show if isinstance(n, str) and n in TEXT_ELEMENTS)
     else:
+        if "show" in raw:
+            bad.add("text.show")
         shown = d.show
     return TextStyle(
-        foreground=_hex(raw.get("foreground"), d.foreground),
-        dim=_hex(raw.get("dim"), d.dim),
+        foreground=pick.hex("foreground", d.foreground),
+        dim=pick.hex("dim", d.dim),
         show=shown,
-        halo=_enum(raw.get("halo"), ("off", "auto", "on"), d.halo),
-        halo_below=_int(raw.get("halo_below"), 0, 100, d.halo_below),
+        halo=pick.enum("halo", ("off", "auto", "on"), d.halo),
+        halo_below=pick.int("halo_below", 0, 100, d.halo_below),
     )
+
+
+def _validate(raw, fallback: Theme) -> Tuple[Theme, set]:
+    data = raw if isinstance(raw, dict) else {}
+    bad: set = set()
+    for name in ("card", "bars", "text"):
+        if name in data and not isinstance(data[name], dict):
+            bad.add(name)
+    theme = Theme(
+        card=_clean_card(_section(data, "card"), fallback.card, bad),
+        bars=_clean_bars(_section(data, "bars"), fallback.bars, bad),
+        text=_clean_text(_section(data, "text"), fallback.text, bad),
+    )
+    return theme, bad
+
+
+def theme_from_dict(raw, fallback: Theme) -> Theme:
+    """Validate a plain dict shaped like theme.json, with no file read and
+    no opacity migration. Each field that fails its check takes `fallback`'s
+    value; a mid_at at or above high_at resets both."""
+    return _validate(raw, fallback)[0]
+
+
+def rejected_fields(raw, fallback: Theme) -> Set[str]:
+    """The "section.field" names theme_from_dict would replace with
+    `fallback`'s value because a value was supplied and refused. An absent
+    field is not rejected, and neither is an unknown name inside
+    text.show. An inverted mid_at/high_at reports both; a section that is
+    not a dict reports the section name."""
+    return _validate(raw, fallback)[1]
 
 
 def _migrated_opacity(state_dir: Path) -> int:
@@ -234,17 +303,19 @@ def load_theme(state_dir) -> Theme:
         return _default_theme(state_dir)
     if not isinstance(data, dict):
         return _default_theme(state_dir)
-    return Theme(
-        card=_clean_card(_section(data, "card"), CardStyle()),
-        bars=_clean_bars(_section(data, "bars"), BarStyle()),
-        text=_clean_text(_section(data, "text"), TextStyle()),
-    )
+    return theme_from_dict(data, Theme())
+
+
+def theme_to_dict(theme: Theme) -> dict:
+    """The shape theme.json holds: nested dicts, show as a sorted list."""
+    payload = asdict(theme)
+    payload["text"]["show"] = sorted(theme.text.show)  # json.dumps rejects a frozenset
+    return payload
 
 
 def save_theme(state_dir, theme: Theme) -> None:
     path = Path(state_dir) / THEME_FILENAME
-    payload = asdict(theme)
-    payload["text"]["show"] = sorted(theme.text.show)  # json.dumps rejects a frozenset
+    payload = theme_to_dict(theme)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)

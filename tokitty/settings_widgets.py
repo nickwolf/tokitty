@@ -17,40 +17,33 @@ import tkinter as tk
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from tokitty.sprites import PALETTE, get_frames, resolve_palette
-
-BG_COLOR = "#1c1c22"
-FG_COLOR = "#f0f0f0"
-DIM_COLOR = "#8a8a92"
-BAR_BG = "#333340"
-ACCENT_BG = "#3a1620"
-ACCENT_FG = "#ffb4a8"
-RAIL = "#17171c"
-SURFACE = "#25252d"
-SURFACE_HOVER = "#303039"
-BORDER = "#393943"
-MUTED = "#aaaab2"
-GOOD = "#a9d7bb"
-WARN = "#e5c78d"
-BAD = "#f3a1a9"
-BLUE = "#9fbedd"
-
-FONT_FAMILY = "Segoe UI"
-FONT_BODY = (FONT_FAMILY, 9)
-FONT_MEDIUM = (FONT_FAMILY, 9, "bold")
-FONT_SMALL = (FONT_FAMILY, 8)
-FONT_TITLE = (FONT_FAMILY, 17, "bold")
-FONT_SECTION = (FONT_FAMILY, 9, "bold")
-FONT_MONO = ("Consolas", 8)
-
-BASE_WIDTH, BASE_HEIGHT = 640, 540
-
-_PILL_COLORS = {
-    "good": (GOOD, "#24372f"),
-    "warn": (WARN, "#393128"),
-    "bad": (BAD, "#3c272e"),
-    "neutral": (MUTED, "#34343d"),
-    "blue": (BLUE, "#293442"),
-}
+from tokitty.settings_style import (  # noqa: F401  (re-exported)
+    ACCENT_BG,
+    ACCENT_FG,
+    BAD,
+    BAR_BG,
+    BASE_HEIGHT,
+    BASE_WIDTH,
+    BG_COLOR,
+    BLUE,
+    BORDER,
+    DIM_COLOR,
+    FG_COLOR,
+    FONT_BODY,
+    FONT_FAMILY,
+    FONT_MEDIUM,
+    FONT_MONO,
+    FONT_SECTION,
+    FONT_SMALL,
+    FONT_TITLE,
+    GOOD,
+    MUTED,
+    RAIL,
+    SURFACE,
+    SURFACE_HOVER,
+    WARN,
+    _PILL_COLORS,
+)
 
 
 def text(parent, value, *, color=FG_COLOR, font=FONT_BODY, bg=None, **kwargs) -> tk.Label:

@@ -12,7 +12,7 @@ import pytest
 tk = pytest.importorskip("tkinter")
 
 from test_settings_ui import Harness  # noqa: E402
-from tokitty import hook_guard, settings_accounts, settings_ui  # noqa: E402
+from tokitty import accounts_rows, hook_guard, settings_accounts, settings_ui  # noqa: E402
 from tokitty.hooks_install import HookOperationResult, HookStatus  # noqa: E402
 from tokitty.settings_ui import SettingsWindow  # noqa: E402
 from tokitty.settings_widgets import _PILL_COLORS  # noqa: E402
@@ -92,7 +92,7 @@ def fake_status(monkeypatch):
         calls.append((config_dir, provider, threading.current_thread(), distro_running))
         return STATUSES[config_dir]
 
-    monkeypatch.setattr(settings_accounts, "hook_status_for_dir", fake)
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir", fake)
     return calls
 
 
@@ -154,13 +154,13 @@ def test_checking_pills_while_pending(harness, monkeypatch, fake_status):
     _settings, tab = open_tab(harness)
     pump(harness, settled(tab))
     gate = threading.Event()
-    original = settings_accounts.hook_status_for_dir
+    original = accounts_rows.hook_status_for_dir
 
     def slow(*args, **kwargs):
         gate.wait(5)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(settings_accounts, "hook_status_for_dir", slow)
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir", slow)
     tab.refresh()
     assert {r.pill.cget("text") for r in tab.rows} == {"Checking…"}
     assert not any(enabled(r.install) or enabled(r.remove) for r in tab.rows)
@@ -182,7 +182,7 @@ def test_distro_probe_is_passed_through_and_matches_case_insensitively(harness, 
 @pytest.mark.gui
 def test_no_accounts_file_shows_default_row_resolved_on_a_worker(harness, monkeypatch, fake_status):
     seen = []
-    monkeypatch.setattr(settings_accounts, "_default_config_dir",
+    monkeypatch.setattr(accounts_rows, "_default_config_dir",
                         lambda: seen.append(threading.current_thread()) or "/c/none")
     _settings, tab = open_tab(harness)
     pump(harness, settled(tab))
@@ -249,7 +249,7 @@ def test_install_and_remove_run_under_the_guard_off_thread_then_requery(harness,
         STATUSES["/c/none"] = HookStatus("installed")
         return HookOperationResult(True, "ok")
 
-    monkeypatch.setattr(settings_accounts, "apply_hook_operation", fake_apply)
+    monkeypatch.setattr(accounts_rows, "apply_hook_operation", fake_apply)
     monkeypatch.setitem(STATUSES, "/c/none", HookStatus("not_installed"))
     _settings, tab = open_tab(harness)
     pump(harness, settled(tab))
@@ -267,7 +267,7 @@ def test_op_for_an_account_removed_meanwhile_does_not_run(harness, monkeypatch, 
     state_dir = harness.window.state_dir
     write_accounts(state_dir, ("fresh", "/c/none", "claude"), ("personal", "/c/personal", "claude"))
     ran = []
-    monkeypatch.setattr(settings_accounts, "apply_hook_operation", lambda *a: ran.append(a))
+    monkeypatch.setattr(accounts_rows, "apply_hook_operation", lambda *a: ran.append(a))
     _settings, tab = open_tab(harness)
     pump(harness, settled(tab))
     row = by_name(tab)["fresh"]
@@ -299,7 +299,7 @@ def test_blocked_by_banner_and_finish_it(harness, monkeypatch, fake_status):
     state_dir = harness.window.state_dir
     write_accounts(state_dir, ("fresh", "/c/none", "claude"), ("work", "/c/work", "codex"))
     monkeypatch.setattr(
-        settings_accounts, "apply_hook_operation",
+        accounts_rows, "apply_hook_operation",
         lambda sd, d, p, op: HookOperationResult(False, "Finish the pending change for /c/work first.",
                                                  blocked_by="/c/work"))
     finished = []
@@ -308,7 +308,7 @@ def test_blocked_by_banner_and_finish_it(harness, monkeypatch, fake_status):
         finished.append((threading.current_thread(), hook_guard.held(sd)))
         return HookOperationResult(True, "done")
 
-    monkeypatch.setattr(settings_accounts, "retry_pending_hook_op", fake_retry)
+    monkeypatch.setattr(accounts_rows, "retry_pending_hook_op", fake_retry)
     _settings, tab = open_tab(harness)
     pump(harness, settled(tab))
     by_name(tab)["fresh"].install.invoke()
@@ -355,7 +355,7 @@ def test_results_after_close_are_ignored_and_poll_cancelled(harness, monkeypatch
         done.set()
         return HookStatus("installed")
 
-    monkeypatch.setattr(settings_accounts, "hook_status_for_dir", slow)
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir", slow)
     settings, tab = open_tab(harness)
     applied = []
     tab._on_result = lambda *a: applied.append(a)

@@ -25,10 +25,10 @@ def _packaged_prices_only(monkeypatch, tmp_path_factory):
 def _no_real_codex_home(monkeypatch, tmp_path_factory):
     """Keep the Accounts dialog's Codex discovery off the developer's own
     ~/.codex. Tests that exercise discovery patch it back themselves."""
-    from tokitty import accounts_ui
+    from tokitty import accounts_logic
 
     missing = tmp_path_factory.mktemp("no-codex-home") / ".codex"
-    monkeypatch.setattr(accounts_ui, "default_codex_home", lambda: str(missing))
+    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(missing))
     from tokitty import first_run
 
     monkeypatch.setattr(first_run, "default_codex_home", lambda: str(missing))
