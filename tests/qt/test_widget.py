@@ -221,3 +221,16 @@ def test_halo_draws_outline_pixels(qapp):
         return w.grab().toImage().copy(r.x - 2, r.y - 2, r.w + 4, r.h + 4)
 
     assert crop(off) != crop(on)
+
+
+def test_tags_sit_on_the_cards_outer_side(qapp):
+    widget = make(qapp, 2, homes=["inside", "inside_right"])
+    left_box, _tool, left_side = widget.tag_boxes(0, "inside")
+    right_box, _tool, right_side = widget.tag_boxes(1, "inside_right")
+    assert left_side == Qt.AlignmentFlag.AlignLeft
+    assert right_side == Qt.AlignmentFlag.AlignRight
+    # Left cat: inset from the card's left edge. Right cat: inset from its right edge.
+    assert left_box.left() == 8 + 6
+    oy = widget.window_layout.pane_origins[1][1]
+    assert right_box.right() == T.CARD_WIDTH - 8 - 6
+    assert right_box.top() == oy + 8
