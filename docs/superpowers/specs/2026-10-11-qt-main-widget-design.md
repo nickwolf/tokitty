@@ -146,11 +146,11 @@ Manual, before the PR merges: on Windows (Cucumber, 100%, and 150% set for real 
 4. macOS helper and mask, its tests. Depends on 2; can run beside 3.
 5. `run_qt` and the flag: lock, settings, theme, units, discovery, the tick and animation timers, debug states, shutdown. Depends on 1 to 4.
 
-## Open questions
+## Follow-ups (settled with Nick, 2026-10-11)
 
-1. **Who flips the default and deletes the Tk code?** No issue owns it. It removes `ui.py`, the #37 parts of `transparency.py`, `dpi.init`'s system-aware mode, the `gui`-marked Tk tests and the flag, and has to come after #112, #113 and #114 and before #117. #115 is close (it already touches dependencies and the frozen self-check in `frozen.py:66-83`), but it is already the largest remaining item. Suggest a new v0.7.0 issue, "Make the Qt widget the default and remove tkinter".
-2. **The Stream Dock in Qt mode.** The deck runtime itself is toolkit-free, and `DeckStarter` already takes `after` and `cancel` as callables (`__main__.py:1131-1136`), but `InWindowViews` (`streamdock/window.py:58`) opens Tk `Toplevel`s and `pane_anchor` (`__main__.py:1120-1122`) reads Tk geometry. #112 names the presets window and nothing names the in-window views. Suggest adding them to #112's scope, so Qt mode gains the whole Stream Dock at once.
-3. **The macOS About panel** (`ui.py:840-864`) imports `AppKit`, which comes from `pyobjc`, which comes from pystray. Once #114 drops pystray it needs a Qt version, probably `QMessageBox.about` from the tray menu. Suggest noting it on #114.
+1. **Who flips the default and deletes the Tk code?** No issue owns it. It removes `ui.py`, the #37 parts of `transparency.py`, `dpi.init`'s system-aware mode, the `gui`-marked Tk tests and the flag, and has to come after #112, #113 and #114 and before #117. #115 is close (it already touches dependencies and the frozen self-check in `frozen.py:66-83`), but it is already the largest remaining item. Filed as [#142](https://github.com/nickwolf/tokitty/issues/142), after #115 and before #117 on the board.
+2. **The Stream Dock in Qt mode.** The deck runtime itself is toolkit-free, and `DeckStarter` already takes `after` and `cancel` as callables (`__main__.py:1131-1136`), but `InWindowViews` (`streamdock/window.py:58`) opens Tk `Toplevel`s and `pane_anchor` (`__main__.py:1120-1122`) reads Tk geometry. #112 names the presets window and nothing names the in-window views. Added to #112's scope, so Qt mode gains the whole Stream Dock at once.
+3. **The macOS About panel** (`ui.py:840-864`) imports `AppKit`, which comes from `pyobjc`, which comes from pystray. Once #114 drops pystray it needs a Qt version, probably `QMessageBox.about` from the tray menu. Noted on #114.
 
 ## Review (Codex, 2026-10-11)
 
