@@ -484,6 +484,12 @@ class TokittyQtWidget(QWidget):
             return None
         menu = QMenu(self)
         render_menu(menu, self.build_menu_model(pane_index), self._after_menu_action)
+        if sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa":
+            # Each menu and submenu is its own native window, and clicking
+            # an item in one activated the app, taking focus from whatever
+            # the user was typing in, unless the helper ran on it too.
+            for each in [menu, *menu.findChildren(QMenu)]:
+                each.aboutToShow.connect(lambda each=each: macos.apply(int(each.winId())))
         return menu
 
     def _popup(self, menu: QMenu, global_pos) -> None:
