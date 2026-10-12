@@ -10,6 +10,7 @@ dependencies = ["pystray", "Pillow>=10.1"]
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff==0.15.22"]
 streamdock = ["comtypes; sys_platform == 'win32'"]
+qt = ["PySide6-Essentials==6.12.0"]
 packaging = ["pyinstaller==6.22.3", "pyinstaller-hooks-contrib==2026.7"]
 
 [project.scripts]
@@ -34,8 +35,13 @@ tokitty = [
 [tool.pytest.ini_options]
 # The `gui` marker guards tests that need a real Tk display (run under xvfb in
 # CI). Deselected by default so `pytest` stays headless-green everywhere.
-markers = ["gui: requires a live Tk display (run via `xvfb-run -a pytest -m gui`)"]
-addopts = "-m 'not gui'"
+# The `qt` marker guards tests that need PySide6 (the `qt` extra), run with
+# QT_QPA_PLATFORM=offscreen in the `qt` CI job.
+markers = [
+    "gui: requires a live Tk display (run via `xvfb-run -a pytest -m gui`)",
+    "qt: requires PySide6 (run via `QT_QPA_PLATFORM=offscreen pytest -m qt`)",
+]
+addopts = "-m 'not gui and not qt'"
 
 [tool.ruff]
 target-version = "py310"
