@@ -2296,3 +2296,342 @@ def test_native_credentials_keep_the_unit_loop_off_the_walkthrough_sweep(tmp_pat
     # the walkthrough listed while the limits come from this PC.
     assert ("walkthrough closed", None) in events
     assert sessions == [(None, None)]
+
+
+# --- the tick loop's per-unit behaviour, pinned before it moves out of run_gui ---
+#
+# These drive run_gui through real Tk events and let tick run once. Every
+# input is fed by patching methods on the classes themselves (Poller,
+# ActivityWatcher, UsageWatcher, Notifier, TrayManager) and on library
+# modules, never by patching a name on tokitty.__main__, so they keep working
+# unchanged wherever the loop body lives.
+
+_TICK_RESETS = datetime(2030, 1, 2, 15, 0, tzinfo=timezone.utc)
+_TICK_WEEKLY_RESETS = datetime(2030, 1, 6, 15, 0, tzinfo=timezone.utc)
+
+
+def _tick_snapshot(session_pct=40.0, weekly_pct=20.0):
+    return UsageSnapshot(
+        session_pct=session_pct, session_resets_at=_TICK_RESETS,
+        weekly_pct=weekly_pct, weekly_resets_at=_TICK_WEEKLY_RESETS, limits=[],
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+def _tick_poll(status="ok", snapshot=None, fetched_at=None):
+    return PollResult(
+        status=status, snapshot=snapshot, message=None,
+        fetched_at=fetched_at or datetime.now(timezone.utc),
+    )
+
+
+def _tick_breakdown(status="ok"):
+    from tokitty.usage_scan import ModelUsage, UsageBreakdown
+
+    return UsageBreakdown(
+        status=status, window="7d", window_start=datetime.now(timezone.utc) - timedelta(days=7),
+        models=(ModelUsage("claude-opus-5", 100, 50, 0, 0, 0, 3.0),),
+        total_cost_usd=3.0, total_tokens=150,
+    )
+
+
+def _run_one_tick(tmp_path, monkeypatch, *, poll=None, breakdown=None, activity=None,
+                  last_good=None, settings_kw=None):
+    """Run run_gui until its first tick has finished. Returns the ordered
+    events (onboarding, note, ntfy, render calls), the unit afterwards and the
+    settings left on disk."""
+    tk = pytest.importorskip("tkinter")
+    import tkinter.messagebox as messagebox_module
+
+    from tokitty import ui
+    from tokitty import usage_notes
+    from tokitty.activity_watcher import ActivityWatcher
+    from tokitty.ntfy import Notifier
+    from tokitty.poller import Poller
+    from tokitty.settings import Settings, load_settings, save_settings
+    from tokitty.streamdock.wiring import DeckStarter
+    from tokitty.tray import TrayManager
+    from tokitty.usage_watcher import UsageWatcher
+
+    events = []
+    ticks = []
+    held = {}
+    main_module = _setup_run_gui(tmp_path, monkeypatch, tk, until=lambda: bool(ticks))
+    save_settings(tmp_path, Settings(tray_enabled=False, surprise_me=False, **(settings_kw or {})))
+    monkeypatch.setattr(messagebox_module, "showwarning", lambda *a, **k: None)
+
+    def get_poll(self):
+        # Roots left alive by earlier tests share this thread's Tcl event
+        # queue, so their ticks run inside this test's pump. Only this run's
+        # poller gets the fixed result and counts; the others see "no result
+        # yet", which makes their tick a no-op.
+        if self is not held["units"][0]["poller"]:
+            return None
+        ticks.append(1)
+        return poll
+
+    monkeypatch.setattr(Poller, "get_latest", get_poll)
+    monkeypatch.setattr(Poller, "start", lambda self: None)
+    monkeypatch.setattr(ActivityWatcher, "get_latest", lambda self: activity)
+    monkeypatch.setattr(ActivityWatcher, "start", lambda self: None)
+    monkeypatch.setattr(UsageWatcher, "get_latest", lambda self: breakdown)
+    monkeypatch.setattr(UsageWatcher, "start", lambda self: None)
+    monkeypatch.setattr(TrayManager, "refresh", lambda self: events.append(("tray_refresh",)))
+    monkeypatch.setattr(
+        usage_notes, "write_usage_file",
+        lambda tokitty_dir, fetched_at, alerts: events.append(("note_write", fetched_at, alerts)),
+    )
+    monkeypatch.setattr(usage_notes, "remove_usage_file", lambda tokitty_dir: events.append(("note_remove",)))
+    monkeypatch.setattr(
+        Notifier, "check", lambda self, key, label, alerts, cfg: events.append(("ntfy", key, label, alerts, cfg))
+    )
+
+    # The deck is the one place that is handed the live units list.
+    real_init = DeckStarter.__init__
+
+    def capturing_init(self, settings, units, *args, **kwargs):
+        held["units"] = units
+        if last_good is not None:
+            units[0]["last_good"] = last_good
+        real_init(self, settings, units, *args, **kwargs)
+
+    monkeypatch.setattr(DeckStarter, "__init__", capturing_init)
+
+    real_window = ui.TokittyWindow
+
+    class RecordingWindow(real_window):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            for pane in self.panes:
+                pane.render = lambda **kw: events.append(("render", kw))
+                pane.render_usage = lambda **kw: events.append(("render_usage", kw))
+
+    monkeypatch.setattr(ui, "TokittyWindow", RecordingWindow)
+
+    assert main_module.run_gui() == 0
+    assert len(held["units"]) == 1
+    return events, held["units"][0], load_settings(tmp_path)
+
+
+@pytest.mark.gui
+def test_tick_limits_ok_renders_the_display_and_tracks_state(tmp_path, monkeypatch):
+    from tokitty.display import format_reset_day, format_reset_time
+
+    poll = _tick_poll(snapshot=_tick_snapshot())
+    events, unit, _ = _run_one_tick(tmp_path, monkeypatch, poll=poll)
+
+    note_alerts = [e for e in events if e[0] == "note_write"]
+    assert [e[0] for e in events] == ["note_write", "render"]
+    assert note_alerts[0][1] == poll.snapshot.fetched_at
+    assert note_alerts[0][2] == []
+    assert events[1][1] == {
+        "state": "content",
+        "session_pct": 40.0,
+        "weekly_pct": 20.0,
+        "session_reset_text": format_reset_time(_TICK_RESETS),
+        "weekly_reset_text": format_reset_day(_TICK_WEEKLY_RESETS),
+        "driving_tag": "5h",
+        "credits_text": None,
+        "stale_text": None,
+        "hint_text": None,
+        "dimmed": False,
+        "projection_text": None,
+        "tool_label": "",
+        "accent": False,
+    }
+    assert unit["last_good"] is poll
+    assert [s.fetched_at for s in unit["burn"].samples] == [poll.snapshot.fetched_at]
+    assert unit["deck_usage"] == (40.0, 20.0, False)
+
+
+@pytest.mark.gui
+def test_tick_models_view_renders_usage_and_leaves_limits_alone(tmp_path, monkeypatch):
+    from tokitty.usage_display import build_view
+
+    poll = _tick_poll(snapshot=_tick_snapshot(session_pct=10.0, weekly_pct=5.0))
+    breakdown = _tick_breakdown()
+    events, unit, _ = _run_one_tick(
+        tmp_path, monkeypatch, poll=poll, breakdown=breakdown,
+        settings_kw={"view_mode": "models"},
+    )
+
+    assert [e[0] for e in events] == ["note_write", "render_usage"]
+    assert events[1][1] == {
+        "state": "content",
+        "usage_view": build_view(breakdown, "cost", None),
+        "driving_tag": "",
+        "tool_label": "",
+        "accent": False,
+    }
+    # The limits-side bookkeeping still runs in the models view.
+    assert unit["last_good"] is poll
+    assert len(unit["burn"].samples) == 1
+    assert unit["deck_usage"] == (10.0, 5.0, False)
+
+
+@pytest.mark.gui
+def test_tick_stale_token_without_history_shows_the_confused_hint(tmp_path, monkeypatch):
+    poll = _tick_poll(status="stale_token")
+    events, unit, _ = _run_one_tick(tmp_path, monkeypatch, poll=poll)
+
+    renders = [e[1] for e in events if e[0] == "render"]
+    # No snapshot on the poll, so there is nothing to publish.
+    assert [e[0] for e in events] == ["render"]
+    assert renders[0] == {
+        "state": "confused",
+        "session_pct": 0.0,
+        "weekly_pct": 0.0,
+        "session_reset_text": "—",
+        "weekly_reset_text": "—",
+        "driving_tag": "",
+        "credits_text": None,
+        "hint_text": "token stale, open Claude Code",
+        "dimmed": True,
+        "stale_text": None,
+        "projection_text": None,
+        "tool_label": "",
+        "accent": False,
+    }
+    assert unit["last_good"] is None
+    assert unit["burn"].samples == []
+    assert unit["deck_usage"] == (0.0, 0.0, True)
+
+
+@pytest.mark.gui
+def test_tick_stale_token_with_a_last_good_sleeps_on_the_cached_numbers(tmp_path, monkeypatch):
+    from tokitty.display import format_reset_day, format_reset_time
+
+    seen = datetime(2026, 7, 3, 9, 30, tzinfo=timezone.utc)
+    last_good = _tick_poll(snapshot=_tick_snapshot(session_pct=55.0, weekly_pct=30.0), fetched_at=seen)
+    poll = _tick_poll(status="stale_token")
+    events, unit, _ = _run_one_tick(tmp_path, monkeypatch, poll=poll, last_good=last_good)
+
+    renders = [e[1] for e in events if e[0] == "render"]
+    assert len(renders) == 1
+    assert renders[0] == {
+        "state": "sleeping",
+        "session_pct": 55.0,
+        "weekly_pct": 30.0,
+        "session_reset_text": format_reset_time(_TICK_RESETS),
+        "weekly_reset_text": format_reset_day(_TICK_WEEKLY_RESETS),
+        "driving_tag": "5h",
+        "credits_text": None,
+        "hint_text": "last seen " + seen.astimezone().strftime("%H:%M"),
+        "dimmed": True,
+        "stale_text": None,
+        "projection_text": None,
+        "tool_label": "",
+        "accent": False,
+    }
+    # A failed poll never replaces the last good one and adds no burn sample.
+    assert unit["last_good"] is last_good
+    assert unit["burn"].samples == []
+    assert unit["deck_usage"] == (55.0, 30.0, True)
+
+
+@pytest.mark.gui
+def test_tick_api_error_with_a_last_good_keeps_the_numbers_undimmed(tmp_path, monkeypatch):
+    from tokitty.display import format_reset_day, format_reset_time
+
+    last_good = _tick_poll(snapshot=_tick_snapshot(session_pct=55.0, weekly_pct=30.0))
+    poll = _tick_poll(status="api_error")
+    events, unit, _ = _run_one_tick(tmp_path, monkeypatch, poll=poll, last_good=last_good)
+
+    renders = [e[1] for e in events if e[0] == "render"]
+    assert len(renders) == 1
+    assert renders[0] == {
+        "state": "interested",
+        "session_pct": 55.0,
+        "weekly_pct": 30.0,
+        "session_reset_text": format_reset_time(_TICK_RESETS),
+        "weekly_reset_text": format_reset_day(_TICK_WEEKLY_RESETS),
+        "driving_tag": "5h",
+        "credits_text": None,
+        "hint_text": None,
+        "dimmed": False,
+        "stale_text": None,
+        "projection_text": None,
+        "tool_label": "",
+        "accent": False,
+    }
+    assert unit["last_good"] is last_good
+    assert unit["deck_usage"] == (55.0, 30.0, False)
+
+
+@pytest.mark.gui
+def test_tick_accented_pose_comes_from_a_permission_prompt(tmp_path, monkeypatch):
+    from tokitty.activity import ActivityView
+
+    poll = _tick_poll(snapshot=_tick_snapshot())
+    events, unit, _ = _run_one_tick(
+        tmp_path, monkeypatch, poll=poll, activity=ActivityView(state="permission", tool_label="Bash"),
+    )
+
+    renders = [e[1] for e in events if e[0] == "render"]
+    assert len(renders) == 1
+    assert renders[0]["state"] == "permission"
+    assert renders[0]["tool_label"] == ""
+    assert renders[0]["accent"] is True
+    assert renders[0]["session_pct"] == 40.0
+
+
+@pytest.mark.gui
+def test_tick_working_pose_carries_the_tool_label(tmp_path, monkeypatch):
+    from tokitty.activity import ActivityView
+
+    poll = _tick_poll(snapshot=_tick_snapshot())
+    events, _, _ = _run_one_tick(
+        tmp_path, monkeypatch, poll=poll, activity=ActivityView(state="working", tool_label="Edit"),
+    )
+
+    renders = [e[1] for e in events if e[0] == "render"]
+    assert renders[0]["state"] == "working"
+    assert renders[0]["tool_label"] == "Edit"
+    assert renders[0]["accent"] is False
+
+
+@pytest.mark.gui
+def test_tick_with_no_poll_result_yet_renders_nothing(tmp_path, monkeypatch):
+    events, unit, _ = _run_one_tick(
+        tmp_path, monkeypatch, poll=None, settings_kw={"usage_notes_enabled": False},
+    )
+
+    # The notes step still runs ahead of the early exit; nothing is drawn.
+    assert events == [("note_remove",)]
+    assert unit["last_good"] is None
+    assert unit["burn"].samples == []
+    assert "deck_usage" not in unit
+
+
+@pytest.mark.gui
+def test_tick_runs_onboarding_then_notes_then_ntfy_then_render(tmp_path, monkeypatch):
+    poll = _tick_poll(status="credentials_unreachable")
+    breakdown = _tick_breakdown()
+    events, unit, saved = _run_one_tick(
+        tmp_path, monkeypatch, poll=poll, breakdown=breakdown,
+        settings_kw={"ntfy_enabled": True, "ntfy_topic": "cats", "usage_notes_enabled": False},
+    )
+
+    # No snapshot, so the ntfy step has nothing to send; the API-key user
+    # lands in the models view once, and the pane is drawn by the models path.
+    assert [e[0] for e in events] == ["tray_refresh", "note_remove", "render_usage"]
+    assert saved.view_mode == "models"
+    assert saved.onboarding_version == 1
+    assert events[2][1]["state"] == "content"
+    assert unit["last_good"] is None
+
+
+@pytest.mark.gui
+def test_tick_publishes_notes_and_ntfy_alerts_in_order(tmp_path, monkeypatch):
+    from tokitty.settings import DEFAULT_NTFY_URL
+
+    poll = _tick_poll(snapshot=_tick_snapshot(session_pct=95.0, weekly_pct=20.0))
+    events, _, _ = _run_one_tick(
+        tmp_path, monkeypatch, poll=poll,
+        settings_kw={"ntfy_enabled": True, "ntfy_topic": "cats", "ntfy_token": "tok"},
+    )
+
+    assert [e[0] for e in events] == ["note_write", "ntfy", "render"]
+    alerts = events[0][2]
+    assert [a["kind"] for a in alerts] == ["session"]
+    assert events[1][1:] == ("default", "Claude", alerts, (DEFAULT_NTFY_URL, "cats", "tok"))
