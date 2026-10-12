@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -228,12 +229,95 @@ def test_always_on_top_toggle_reshows_and_runs_the_hook(qapp):
     widget._after_native_window = lambda: hooks.append(1)
     assert widget.always_on_top
     widget.show()
+    hooks.clear()
     widget.set_always_on_top(False)
     assert not widget.always_on_top
     assert not (widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
     assert widget.isVisible()
+    assert hooks
+    hooks.clear()
     widget.set_always_on_top(True)
     assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     assert widget.isVisible()
-    assert hooks == [1, 1]
+    assert hooks
+    widget.hide()
+
+
+# ---- mask and the macOS helper ---------------------------------------------
+
+def expected_mask(widget):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QRegion
+
+    region = QRegion()
+    for r in T.hit_region(widget.window_layout, widget.cat_rects()):
+        region = region.united(QRegion(QRect(r.x, r.y, r.w, r.h)))
+    return region
+
+
+def test_mask_is_the_cards_plus_the_cat_rects(qapp):
+    widget = make(2, homes=["beside_left", "inside"])
+    widget.show()
+    mask = widget.mask()
+    assert mask == expected_mask(widget)
+    (x0, y0), (x1, y1) = widget.window_layout.pane_origins
+    assert mask.contains(QPoint(x0 + 150, y0 + 5)) and mask.contains(QPoint(x1 + 150, y1 + 5))
+    cat = widget.cat_rects()[0]
+    assert mask.contains(QPoint(cat.x + 3, cat.y + 3))
+    assert not mask.contains(QPoint(1, 1))  # empty margin above the side cat
+    widget.hide()
+
+
+def test_mask_excludes_an_empty_ragged_row_cell(qapp):
+    widget = make(5)
+    widget.show()
+    # 5 panes make 2 columns by 3 rows; the sixth cell is empty
+    assert not widget.mask().contains(QPoint(300 + 150, 2 * 128 + 60))
+    assert widget.mask().contains(QPoint(150, 2 * 128 + 60))
+    widget.hide()
+
+
+def test_mask_follows_rebuild_layout(qapp):
+    widget = make()
+    widget.show()
+    before = widget.mask().boundingRect()
+    widget.rebuild_layout(["beside_left"])
+    assert widget.mask() == expected_mask(widget)
+    assert widget.mask().boundingRect().width() > before.width()
+    assert widget.mask().boundingRect().width() == widget.width()
+    widget.hide()
+
+
+def test_mask_is_set_after_the_first_show_and_each_recreate(qapp):
+    widget = make()
+    widget.show()
+    assert not widget.mask().isEmpty()
+    widget.clearMask()
+    widget.set_always_on_top(False)
+    assert widget.mask() == expected_mask(widget)
+    widget.hide()
+
+
+def test_macos_helper_is_not_called_off_cocoa(qapp, monkeypatch):
+    from tokitty.qt import widget as widget_mod
+
+    calls = []
+    monkeypatch.setattr(widget_mod.macos, "apply", lambda win_id: calls.append(win_id))
+    monkeypatch.setattr(widget_mod, "sys", SimpleNamespace(platform="darwin"))
+    widget = make()
+    widget.show()  # platform plugin is offscreen, not cocoa
+    assert calls == []
+    widget.hide()
+
+
+def test_macos_helper_runs_on_darwin_under_cocoa(qapp, monkeypatch):
+    from tokitty.qt import widget as widget_mod
+
+    calls = []
+    monkeypatch.setattr(widget_mod.macos, "apply", lambda win_id: calls.append(win_id))
+    monkeypatch.setattr(widget_mod, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(widget_mod.QGuiApplication, "platformName", staticmethod(lambda: "cocoa"))
+    widget = make()
+    widget.show()
+    assert calls == [int(widget.winId())]
     widget.hide()

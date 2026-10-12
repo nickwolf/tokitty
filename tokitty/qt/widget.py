@@ -3,21 +3,21 @@ holds every pane and paints them from the #110 model in tokitty.theme.
 
 Geometry, colours, the cat's spot and the pixel rules all come from
 theme.py; this module only turns them into QPainter calls. Input, the
-and the macOS helper are other slices.
+
 """
 from __future__ import annotations
 
 import sys
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QRegion
 from PySide6.QtWidgets import QMenu, QWidget
 
 from tokitty import theme as T
 from tokitty.customize import Customization
 from tokitty.menu import MenuItem
-from tokitty.qt import position
+from tokitty.qt import macos, position
 from tokitty.qt.menu import render_menu
 from tokitty.qt.pane import QtPane, fit_tag
 from tokitty.sprite_raster import raster_rgba
@@ -69,6 +69,7 @@ class TokittyQtWidget(QWidget):
         self.on_menu_action_done: Optional[Callable[[], None]] = None
         self._always_on_top = True  # starts on, never persisted
         self._drag: Optional[Tuple[int, int]] = None
+        self._native_done = False  # _after_native_window ran for this native window
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -114,6 +115,7 @@ class TokittyQtWidget(QWidget):
         dy = self.window_layout.margins[1] - old.margins[1]
         if dx or dy:
             self.move(self.x() - dx, self.y() - dy)
+        self._update_mask()
         self.update()
 
     def grid_size(self) -> Tuple[int, int]:
@@ -163,6 +165,9 @@ class TokittyQtWidget(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._watch_screen()
+        if not self._native_done:
+            self._native_done = True
+            self._after_native_window()
 
     def event(self, event) -> bool:
         kind = event.type()
@@ -171,6 +176,7 @@ class TokittyQtWidget(QWidget):
         elif kind == QEvent.Type.WinIdChange:
             # The always-in-front toggle recreates the native window.
             self._watched = None
+            self._native_done = False
             self._watch_screen()
         return super().event(event)
 
@@ -485,4 +491,28 @@ class TokittyQtWidget(QWidget):
         self._after_native_window()
 
     def _after_native_window(self) -> None:
-        """Hook for work that needs the native window (macOS helper, mask)."""
+        """Everything that needs the native window: the macOS helper (only
+        under the cocoa platform plugin, so offscreen runs skip it), then the
+        click mask. Runs after the first show and after every recreate."""
+        if (sys.platform == "darwin" and self.windowHandle() is not None
+                and QGuiApplication.platformName() == "cocoa"):
+            macos.apply(int(self.winId()))
+        self._update_mask()
+
+    def cat_rects(self) -> List[T.Rect]:
+        """Each cat's sprite rectangle in window coordinates."""
+        rects = []
+        for i in range(len(self.panes)):
+            x, y = self.cat_origin(i)
+            rects.append(T.Rect(round(x), round(y), T.SPRITE_W, T.SPRITE_H))
+        return rects
+
+    def _update_mask(self) -> None:
+        """Limit clicks to the cards and the cats. Windows and Linux already
+        pass clicks through transparent pixels, but macOS catches every click
+        in the window rectangle, so the mask does it there; it costs nothing
+        elsewhere. A rectangle per cat still catches its transparent cells."""
+        region = QRegion()
+        for r in T.hit_region(self.window_layout, self.cat_rects()):
+            region = region.united(QRegion(QRect(r.x, r.y, r.w, r.h)))
+        self.setMask(region)
