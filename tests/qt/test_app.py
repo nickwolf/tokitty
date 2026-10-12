@@ -53,6 +53,24 @@ def test_debug_accounts_launch_builds_two_panes_and_writes_only_the_lock(qapp, s
     assert [p.name for p in state_dir.iterdir()] == ["tokitty.lock"]
 
 
+
+def test_debug_launch_has_a_menu_to_exit_by(qapp, state_dir, monkeypatch):
+    # The Tk debug window has a menu; without one a frameless Qt window
+    # cannot be closed short of killing the process.
+    from tokitty.qt.widget import TokittyQtWidget
+
+    monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
+    shown = []
+    real_show = TokittyQtWidget.show
+    monkeypatch.setattr(TokittyQtWidget, "show", lambda self: shown.append(self) or real_show(self))
+
+    assert run_for(qapp, 100) == 0
+
+    labels = [item.label for item in shown[0].build_menu_model(0)]
+    assert "Always in front" in labels
+    assert labels[-1] == "Exit"
+
+
 @pytest.fixture
 def fake_workers(monkeypatch):
     """Class-level fakes: the first poll result is published straight away and

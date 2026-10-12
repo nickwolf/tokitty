@@ -89,7 +89,20 @@ def _run_locked(state_dir) -> int:
         # Nothing below this branch runs: no migration, units, discovery or
         # workers, so a debug launch writes nothing but the lock file.
         count = 2 if debug_accounts == "2" else 1
-        widget = TokittyQtWidget(loaded_theme, [Customization() for _ in range(count)], count)
+        from tokitty.menu import build_menu
+
+        def debug_menu(_pane_index: int):
+            # Nothing to refresh and no settings to write, but Tk's debug
+            # window has a menu, and Exit is the way out of a frameless window.
+            return build_menu(
+                on_refresh=lambda: None,
+                always_on_top=lambda: widget.always_on_top,
+                on_toggle_always_on_top=lambda: widget.set_always_on_top(not widget.always_on_top),
+                on_quit=app.quit,
+            )
+
+        widget = TokittyQtWidget(loaded_theme, [Customization() for _ in range(count)], count,
+                                 build_menu_model=debug_menu)
         fake = dict(
             state=debug_state or "content", session_pct=37.0, weekly_pct=62.0,
             session_reset_text="resets 9pm", weekly_reset_text="resets Fri",
