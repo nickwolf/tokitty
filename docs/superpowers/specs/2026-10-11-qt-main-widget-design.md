@@ -2,7 +2,7 @@
 
 Issue: [#111](https://github.com/nickwolf/tokitty/issues/111), milestone v0.7.0 "Qt widget". Builds on the theme and layout model from [#110](https://github.com/nickwolf/tokitty/issues/110) (`tokitty/theme.py`, spec `2026-10-11-theme-layout-model-design.md`) and the go decision from the [#109](https://github.com/nickwolf/tokitty/issues/109) spike (`2026-10-10-pyside6-spike-findings.md`, cited below as "findings"). Siblings that stay out of this issue: #112 (settings, accounts, first-run), #113 (updater UI), #114 (tray), #115 (packaging), #116 (new poses), #117 (release gate), #128 (reference-image CI), #22 (wandering).
 
-Status: draft, 2026-10-11. Two decisions taken by Nick the same day, listed below. Not yet reviewed.
+Status: draft, 2026-10-11. Two decisions taken by Nick the same day, listed below. A Codex review (gpt-6-sol, high) the same day found ten defects and three factual errors; all are folded in, and the review section at the end lists what changed.
 
 ## Goal
 
@@ -37,23 +37,25 @@ Qt mode ignores `--after-update` and `--apply-update`: with either present, `mai
 
 `run_gui` is one 897-line function (`__main__.py:446-1342`). The parts the Qt path needs and that touch no toolkit move into `tokitty/app_core.py`, and `run_gui` calls them in place of the inline code. The Tk path's behaviour does not change; the existing tests are what prove that.
 
-- `build_units(...)`: the provider pass and the unit loop (`__main__.py:769-824`) without the pane. It returns the units with their pollers, watchers, usage watchers, customization and initial label, and saves `customization.json` as it does today. `run_gui` then applies each unit's customization and label to its Tk pane, which is the two lines it has now (`__main__.py:809-810`).
+- `build_units(...)`: the provider pass and the unit loop (`__main__.py:769-824`) without the pane. It returns the units with their pollers, watchers, usage watchers, customization and initial label, and saves `customization.json` as it does today. Each caller then sets `unit["pane"]` to its own pane and applies the customization and label (`__main__.py:809-810`) before wiring any callback, because the Tk callbacks read `unit["pane"]` (customization changes at `__main__.py:837`, onboarding at `__main__.py:1098`, the Stream Dock anchor at `__main__.py:1120-1122`).
 - `step_unit(unit, usage_state, notifier, customization_store, notes_removed, now) -> Optional[PaneUpdate]`: the body of the loop in `tick` (`__main__.py:1254-1282`), from `get_latest()` to `last_good`, without the final `render` call. It returns `PaneUpdate(kind, kwargs)`, where `kind` is `"limits"` or `"models"` and `kwargs` are exactly the keyword arguments `Pane.render` or `Pane.render_usage` receive today. `maybe_onboard` moves with it and takes the tray refresh as a callback, since Qt mode has no tray.
-- `run_discovery` (`__main__.py:606-718`) and its `discovery_lock`/`discovery_result` pair become a small class with a `start()` and a `take_hook_warnings()`. Both paths start it and poll it from their own tick. The rule in the comment at `__main__.py:594-601` (the thread never calls into the UI toolkit) is unchanged and now applies to both toolkits.
+- `run_discovery` (`__main__.py:606-718`) and its `discovery_lock`/`discovery_result` pair become a small class with a `start()` and a `take_hook_warnings()`. Both paths start it and poll it from their own tick. The rule in the comment at `__main__.py:594-601` (the thread never calls into the UI toolkit) is unchanged and now applies to both toolkits. Qt shows the warnings as Tk does (`__main__.py:1234-1252`): one `QMessageBox.warning`, deferred with `QTimer.singleShot(0, ...)` so the modal box never holds up the tick.
 
-`tick` in `run_gui` keeps everything Tk-specific (the update controller, the Stream Dock, `root.after`) and calls `step_unit` for each unit. A test feeds the same unit state to `step_unit` and to the pre-refactor code path captured as a fixture, and asserts the `PaneUpdate` matches the arguments the Tk pane would have received.
+`tick` in `run_gui` keeps everything Tk-specific (the update controller, the Stream Dock, `root.after`) and calls `step_unit` for each unit. The parity tests cover more than the returned arguments. For the same inputs, the old loop body (kept as a test fixture) and `step_unit` must leave identical unit state (`last_good`, `burn`, `deck_usage`), make the same `maybe_onboard`, usage-note and ntfy calls in the same order, and produce the same render arguments.
 
 ## Absent in Qt mode
 
 Until the issue in brackets lands, Qt mode has no walkthrough (#112), Settings (#112), accounts manager (#112), Stream Dock presets (#112), update check, install or hand-off (#113), tray icon (#114), About panel on macOS (#114, see Open questions), or Stream Dock at all (see Open questions). The menu leaves their items out. `menu.build_menu` already omits Settings and the update item when their callbacks are `None` (`menu.py`), so nothing new is needed for that.
 
-First run: `run_qt` calls `first_run.classify` with `excluded=True`, the same path debug launches take, so a fresh state directory neither shows the walkthrough nor gets marked as having seen it. The next Tk launch still shows it.
+First run: `run_qt` calls `first_run.classify` with `excluded=False` and ignores the result, so a fresh state directory is marked `pending` (`first_run.py:121-124`) before `build_units` writes `customization.json`. Qt mode then starts with one default pane, and the next Tk launch shows the walkthrough because the marker says it is pending. Passing `excluded=True` instead would leave the directory unmarked but no longer fresh, and Tk would skip the walkthrough for good. Debug launches still pass `excluded=True`, as they do in Tk.
+
+The credentials hint (`__main__.py:258-262`) tells the user to open Settings, which Qt mode lacks. It stays as it is: Qt mode is a source-only developer mode until #112, and the way to Settings is a launch without the flag.
 
 `TOKITTY_DEBUG_STATE` and `TOKITTY_DEBUG_ACCOUNTS=2` work in Qt mode as they do in Tk (`__main__.py:723-735`). They are what the manual checks and the screenshots use.
 
 ## Window
 
-`tokitty/qt/widget.py`, one `QWidget` for every pane, with the spike's flags (findings, section 3): `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus | NoDropShadowWindowHint`, plus `WA_TranslucentBackground` and `WA_ShowWithoutActivating`. On Windows `Tool` gives `WS_EX_TOOLWINDOW`, so there is no taskbar button and no equivalent of `_keep_off_taskbar` (`ui.py:776-790`) is needed. There is no colour key and no second window, so `KEY_COLOR`, `avoid_key`, `set_content_owner` and the keyed split in `Pane` have no Qt counterpart. They stay in place for the Tk path.
+`tokitty/qt/widget.py`, one `QWidget` for every pane, with the spike's flags (findings, section 3): `FramelessWindowHint | WindowStaysOnTopHint | Tool | WindowDoesNotAcceptFocus | NoDropShadowWindowHint`, plus `WA_TranslucentBackground`, `WA_ShowWithoutActivating` and `WA_MacAlwaysShowToolWindow` (`spike/qt_card.py:118`). Without the last, Qt hides a `Tool` window on macOS whenever its app is not active, which with the focus fix below is all the time. On Windows `Tool` gives `WS_EX_TOOLWINDOW`, so there is no taskbar button and no equivalent of `_keep_off_taskbar` (`ui.py:776-790`) is needed. There is no colour key and no second window, so `KEY_COLOR`, `avoid_key`, `set_content_owner` and the keyed split in `Pane` have no Qt counterpart. They stay in place for the Tk path.
 
 `dpi.init()` is not called in Qt mode, and the spike never called it. It sets system DPI awareness (`dpi.py:9-17`), while Qt sets per-monitor awareness itself when `QApplication` is created. With `dpi.init()` first, Qt's call fails (Windows allows one change per process) and the process stays system-aware, so a second monitor at a different scale gets Windows' bitmap stretching instead of Qt's own per-monitor rendering. Qt works in logical pixels, the unit the #110 model uses, and the widget reads `devicePixelRatioF()` for anything drawn at device resolution.
 
@@ -67,16 +69,16 @@ Each pane is a `QtPane`: a plain object with the Tk pane's public surface (`rend
 
 Per pane, in order:
 
-1. Style from `theme.resolve_pane_style(theme, customization, has_accent, pane_index, pane_count)`: background, foreground, dim, opacity, bar fill override, palette, resolved home.
+1. Style from `theme.resolve_pane_style(theme, customization, has_accent, pane_index, pane_count)`: background, foreground, dim, opacity, bar fill override, palette, resolved home. When the last `render` or `render_usage` had `dimmed=True` (a stale token, an error), text uses the dim colour instead of the foreground, as Tk does (`ui.py:432`, `ui.py:480`). `resolve_pane_style` has no `dimmed` input, so the pane applies it.
 2. Card: the card rectangle filled with the background at `theme.card_alpha(opacity)`, so 0% paints at alpha 1/255 and stays clickable (#110 decision 2). Corner radius and border from `CardStyle`.
 3. Rectangles from `theme.layout_card(theme, view, home)`. Bars as track then fill, flat or pill per `BarStyle.shape`, fill colour from `theme.bar_fill`. Text in each named rectangle, with the font sizes and weights from the `theme.py` constants. Family is Segoe UI on Windows as today and the platform default elsewhere.
 4. Halo where `theme.halo_applies(element)` and `theme.halo_active(text_style, opacity)`: the text drawn once in a dark colour at the eight one-pixel offsets, then in its own colour on top, as the spike did. The default theme has the halo off, which is what Tk draws.
-5. Cat: `raster_rgba(frame, palette, theme.cell_size(dpr))` wrapped in a `QImage` (`Format_RGBA8888`) with `setDevicePixelRatio(dpr)`, drawn at `theme.snap()` of the pane origin plus `theme.placement(home).origin`, mirrored when the placement says so. Images are cached on (state, frame index, palette, cell size, mirrored), and the cache is dropped when the device pixel ratio changes (the window's screen changes, or the screen's scale does). Qt never scales the image, which is what made the spike byte-identical (findings, section 1).
-6. Cat tags (driving and tool, `ui.py:525-548`) over the cat area, in the rectangles `layout_card` gives them. Tk draws a `BG_COLOR` chip under each tag only on the keyed window (`ui.py:543-550`); Qt draws the tag as the non-keyed Tk path does.
+5. Cat: `raster_rgba(frame, palette, theme.cell_size(dpr))` wrapped in a `QImage` (`Format_RGBA8888`) with `setDevicePixelRatio(dpr)`, drawn at the pane origin plus `theme.placement(home).origin`, each coordinate passed through `theme.snap(value, dpr)`, mirrored when the placement says so. Images are cached on (state, frame index, palette signature, cell size, mirrored), where the signature is the sorted tuple of the palette's (character, colour) pairs, since `effective_palette` returns a `dict` (`customize.py:143`) and cannot be a key itself, and the cache is dropped when the device pixel ratio changes (the window's screen changes, or the screen's scale does). Qt never scales the image, which is what made the spike byte-identical (findings, section 1).
+6. Cat tags (driving and tool, `ui.py:525-548`) over the cat area. `layout_card` gives only `cat_area`, not the tags (`theme.py:342-344`), so the tags go at the offsets `ui.py` uses, relative to `cat_area`. Tk draws a `BG_COLOR` chip under each tag only on the keyed window (`ui.py:543-550`); Qt draws the tag as the non-keyed Tk path does.
 
 The accent forces 100% opacity on the accented pane only, a deliberate change from Tk, where it makes the whole window opaque (#110 spec, "Opacity"). The two views and the per-model rows come from `layout_card` for `"limits"` and `"models"`.
 
-Pixel identity with today's Tk cat: Tk draws one rectangle per sprite cell with boundaries from `sprite_bounds` (`ui.py:124-141`), `round(i * SCALE * scale)`. Where `SCALE * scale` is a whole number (100, 125, 150, 175 and 200%) those cells are all exactly `round(SCALE * scale)` wide, so Tk and `raster_rgba` produce the same pixels. At other scales, such as a custom 110%, Tk stretches the sprite with uneven cells and Qt draws even cells of `round(SCALE * dpr)`, so the Qt cat is crisp but up to half a cell per sprite pixel off the Tk size. That is accepted: `theme.cell_size` already fixes the rule, and #128 pins it with reference images.
+Pixel identity with today's Tk cat: Tk draws one rectangle per sprite cell with boundaries from `sprite_bounds` (`ui.py:124-141`), `round(i * SCALE * scale)`. Where `SCALE * scale` is a whole number (100, 125, 150, 175 and 200%) those cells are all exactly `round(SCALE * scale)` wide, so Tk and `raster_rgba` produce the same pixels. At other scales, such as a custom 110%, Tk stretches the sprite with uneven cells and Qt draws even cells of `round(SCALE * dpr)`, so the Qt cat is crisp but a different size: at 110% Tk's sprite is `round(28 * 4 * 1.1)` = 123 device pixels wide (`ui.py:139`) and Qt's is 28 cells of `cell_size(1.1)` = 4, 112 pixels, 11 narrower. That is accepted: `theme.cell_size` already fixes the rule, and #128 pins it with reference images.
 
 Animation: one `QTimer` at 800 ms (`FRAME_INTERVAL_MS`, `ui.py:73`) calls `draw_next_frame` on every pane and repaints. Nothing in #111 animates faster than about 15 fps, so the timer stays coarse; `Qt.PreciseTimer` is #22's when walking arrives (findings, section 7).
 
@@ -94,7 +96,7 @@ Hit testing: on Windows, per-pixel alpha already does it (findings, section 2). 
 
 `position.json` keeps its shape and path, with one change of meaning. Tk saves the root window's top-left (`ui.py:1002-1008`) in the coordinates of a system-DPI-aware process (`dpi.py`), which on Windows are physical pixels. Qt's coordinates are logical, so at 150% the same numbers point somewhere else. And the Qt window's top-left is not the grid's when margins are non-zero.
 
-So Qt mode saves `{"x": ..., "y": ..., "unit": "logical"}`, where x and y are the top-left of the first card, not of the window. On load, a file with `"unit": "logical"` is used as is. A file without `unit` was written by Tk: on Windows and Linux its x and y are divided by the primary screen's device pixel ratio, which is the scale a system-aware Tk process's coordinates were in (on Linux, where Qt usually reports a ratio of 1, that changes nothing). On macOS they are used as is, because Tk there already reports points, the same unit as Qt. The window is then placed so the first card lands there, which with margins puts the window's own top-left up and left of it.
+So Qt mode saves `{"x": ..., "y": ..., "unit": "logical"}`, where x and y are the top-left of the first card, not of the window. On load, a file with `"unit": "logical"` is used as is. A file without `unit` was written by Tk. On macOS its x and y are used as is, because Tk there reports points, the same unit as Qt. On Windows the conversion is per monitor, not one division of the whole point: Qt keeps each screen's top-left at its native position and scales only within the screen, so dividing everything by the primary's ratio puts a point on a secondary monitor into the gap between screens. With a 2560 px primary at 150% and a 100% monitor starting at physical x=2560, a saved x=2700 divided by 1.5 is 1800, which is on no screen at all, and the fallback would move the card to the primary. So the loader finds the screen whose native geometry contains the saved point, and converts relative to that screen: `screen.x + (x - screen_native.x) / ratio`, with the ratio a system-aware process used for its coordinates (the primary's). `QScreen.geometry()` and `devicePixelRatio()` give what that needs. On Linux the ratio is normally 1 and the same rule changes nothing. Tests cover mixed-DPI pairs in both orders and a point on no screen. The window is then placed so the first card lands there, which with margins puts the window's own top-left up and left of it.
 
 Clamping uses the grid's rectangle, not the window's, so a transparent margin may sit off screen but no card can. The work area comes from `QGuiApplication.screenAt()` and `availableGeometry()`, with the primary screen as the fallback, through the existing `geometry.clamp_to_area` and `geometry.default_position`. `monitors.py` is Windows-only and works in physical pixels, so Qt mode does not use it.
 
@@ -113,7 +115,7 @@ Running from source, macOS shows a Dock icon and a Python app menu for Qt mode, 
 
 ## Tests
 
-Two kinds. The `qt` marker, like `gui`, is excluded by `addopts` so a plain `pytest` stays headless and needs no PySide6.
+Two kinds. A new `qt` marker is registered in `pyproject.toml` and `addopts` changes from `-m 'not gui'` (`pyproject.toml:38`) to `-m 'not gui and not qt'`, so a plain `pytest` stays headless and needs no PySide6. The new CI job selects `-m qt` explicitly.
 
 Unmarked, run everywhere in the existing matrix:
 
@@ -126,7 +128,7 @@ Unmarked, run everywhere in the existing matrix:
 Marked `qt`, run in a new CI job on `ubuntu-latest`, `macos-latest` and `windows-latest` with Python 3.14, `pip install -e ".[dev,qt]"`, and `QT_QPA_PLATFORM=offscreen`:
 
 - The window: size and pane origins equal `layout_window` for 1, 2, 4, 5 and 8 panes, and for a pane with a side home.
-- The cat: `grab()` of each pane's sprite rectangle equals `raster_rgba` byte for byte at dpr 1, for every state's first frame and two coats, including a mirrored placement. Dpr 2 runs the same check in a subprocess with `QT_SCALE_FACTOR=2`, since a process gets one `QApplication`.
+- The cat, by the spike's method (`compare()` in `spike/qt_card.py`): in `grab()` of each pane's sprite rectangle, every opaque cell equals `raster_rgba` (mirrored for a mirrored placement), and every transparent cell equals a second grab with the cat hidden, which shows the card behind it. A whole-block equality only holds over the empty margin, so it is checked for a side home only. Every state's first frame and two coats, at dpr 1. Dpr 2 runs the same check in a subprocess with `QT_SCALE_FACTOR=2`, since a process gets one `QApplication`.
 - The card: at 0% a pixel in the empty card area has alpha 1; an accented pane is opaque while its neighbour is at the theme's opacity.
 - The menu: the rendered `QMenu` for the Qt-mode model has the expected labels, the current view checked, Always in front reflecting the setting; triggering an action runs it.
 - Drag: synthesized press, move and release (`QTest`) move the window by the delta and write `position.json` with `"unit": "logical"`.
@@ -134,7 +136,7 @@ Marked `qt`, run in a new CI job on `ubuntu-latest`, `macos-latest` and `windows
 
 The Linux job may need `libegl1` and `libxkbcommon0` from apt for the offscreen plugin to load; the first CI run settles that and the workflow installs whatever it asks for. Existing tests keep passing unchanged, apart from imports that move with the core extraction. The `gui`-marked theme defaults test stays: the #110 spec says it goes with the Tk code "in #111", but under decision 1 the Tk code goes in the later default-switch step.
 
-Manual, before the PR merges: on Windows (Cucumber, 100%, and 150% set for real as in the spike), from source with `TOKITTY_QT=1`, one and two panes: the card looks like the Tk card side by side, drag, right-click, every menu item, position restored after a restart and after a switch from Tk mode, click-through on the margin with a side home set by hand. On Nick's Mac: focus stays with Terminal while dragging, the widget follows across Spaces and shows over a full-screen app, the empty margin passes clicks to Finder.
+Manual, before the PR merges: on Windows (Cucumber, 100%, and 150% set for real as in the spike), from source with `TOKITTY_QT=1`, one and two panes: the card looks like the Tk card, compared as screenshots taken one after the other with the same debug state (both modes take the same single-instance lock, `lock.py:25`, so they cannot run at once), drag, right-click, every menu item, position restored after a restart and after a switch from Tk mode, click-through on the margin with a side home set by hand. On Nick's Mac: focus stays with Terminal while dragging, the widget follows across Spaces and shows over a full-screen app, the empty margin passes clicks to Finder.
 
 ## Slices
 
@@ -149,3 +151,20 @@ Manual, before the PR merges: on Windows (Cucumber, 100%, and 150% set for real 
 1. **Who flips the default and deletes the Tk code?** No issue owns it. It removes `ui.py`, the #37 parts of `transparency.py`, `dpi.init`'s system-aware mode, the `gui`-marked Tk tests and the flag, and has to come after #112, #113 and #114 and before #117. #115 is close (it already touches dependencies and the frozen self-check in `frozen.py:66-83`), but it is already the largest remaining item. Suggest a new v0.7.0 issue, "Make the Qt widget the default and remove tkinter".
 2. **The Stream Dock in Qt mode.** The deck runtime itself is toolkit-free, and `DeckStarter` already takes `after` and `cancel` as callables (`__main__.py:1131-1136`), but `InWindowViews` (`streamdock/window.py:58`) opens Tk `Toplevel`s and `pane_anchor` (`__main__.py:1120-1122`) reads Tk geometry. #112 names the presets window and nothing names the in-window views. Suggest adding them to #112's scope, so Qt mode gains the whole Stream Dock at once.
 3. **The macOS About panel** (`ui.py:840-864`) imports `AppKit`, which comes from `pyobjc`, which comes from pystray. Once #114 drops pystray it needs a Qt version, probably `QMessageBox.about` from the tray menu. Suggest noting it on #114.
+
+## Review (Codex, 2026-10-11)
+
+gpt-6-sol at high effort, read-only, briefed cold. Every claim was checked against the code before changing anything here; all held. What changed:
+
+1. First run: Qt mode marks a fresh state directory `pending` instead of passing `excluded=True`, which would have left it unmarked but no longer fresh, so Tk would never have shown the walkthrough.
+2. `WA_MacAlwaysShowToolWindow` added. The spike set it and the first draft dropped it; without it a `Tool` window hides on macOS whenever the app is inactive.
+3. Position migration converts per monitor. One division by the primary's ratio puts a point on a secondary Windows monitor into the gap between screens.
+4. The image cache keys on a palette signature, since the palette is a `dict`.
+5. `addopts` gains `not qt`; the first draft assumed it already excluded the new marker.
+6. `build_units` callers re-attach their pane before wiring callbacks, and the parity tests check unit state and side effects, not only render arguments.
+7. Dimmed text (stale token, errors) restored; `resolve_pane_style` has no `dimmed` input.
+8. The cat test uses the spike's opaque and transparent cell method, since an inside cat's transparent cells show the card.
+9. Hook warnings in Qt mode get a deferred `QMessageBox`, and the Settings hint is called out as a known gap.
+10. The manual Tk and Qt comparison uses sequential screenshots, because both modes take the same lock.
+
+Factual corrections taken: `snap` takes `(value, dpr)`, `layout_card` returns no tag rectangles, and the 110% size difference is 11 px on the whole sprite, not half a cell per pixel.
