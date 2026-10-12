@@ -1331,6 +1331,19 @@ def test_main_dispatches_self_check(monkeypatch):
     assert calls == ["self-check"]
 
 
+def test_main_applies_the_ca_bundle_fallback_before_dispatching(monkeypatch):
+    """The fallback has to run before any HTTPS request, so before every
+    command main() dispatches, --self-check and --check-for-update included."""
+    from tokitty import __main__ as main_module
+
+    calls = []
+    monkeypatch.setattr("tokitty.tls.use_system_ca_bundle", lambda: calls.append("tls"))
+    monkeypatch.setattr("tokitty.updater.check_for_update_cli", lambda: calls.append("check") or 0)
+
+    assert main_module.main(["--check-for-update"]) == 0
+    assert calls == ["tls", "check"]
+
+
 def test_main_dispatches_check_for_update(monkeypatch):
     from tokitty import __main__ as main_module
 

@@ -453,6 +453,11 @@ class TokittyQtWidget(QWidget):
                                   primary.devicePixelRatio(), sys.platform)
         x, y = position.place(saved, self.grid_size(), self.window_layout.margins,
                               self._area_at(saved))
+        if sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa":
+            # Moved before its native window exists, a frameless window
+            # lands 20 points higher on its first show, and the next drag
+            # saves that, so the widget crept up on every launch.
+            self.winId()
         self.move(x, y)
 
     def save_position(self) -> None:
@@ -486,6 +491,12 @@ class TokittyQtWidget(QWidget):
             return None
         menu = QMenu(self)
         render_menu(menu, self.build_menu_model(pane_index), self._after_menu_action)
+        if sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa":
+            # Each menu and submenu is its own native window, and clicking
+            # an item in one activated the app, taking focus from whatever
+            # the user was typing in, unless the helper ran on it too.
+            for each in [menu, *menu.findChildren(QMenu)]:
+                each.aboutToShow.connect(lambda each=each: macos.apply(int(each.winId())))
         return menu
 
     def _popup(self, menu: QMenu, global_pos) -> None:

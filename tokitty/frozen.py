@@ -124,6 +124,21 @@ def _check_hook_runner():
     return path
 
 
+def _check_tls():
+    """A default context with no trusted roots fails every HTTPS request,
+    which is what a frozen Mac build did when its OpenSSL's compiled-in
+    cert path was missing (tokitty.tls)."""
+    import ssl
+
+    paths = ssl.get_default_verify_paths()
+    count = ssl.create_default_context().cert_store_stats()["x509_ca"]
+    # A cert directory loads lazily, so it shows no roots until a handshake.
+    if count == 0 and not paths.capath:
+        raise ValueError(f"no trusted CA certificates (OpenSSL looked for {paths.openssl_cafile})")
+    source = os.environ.get(paths.openssl_cafile_env) or paths.cafile or paths.capath or "system store"
+    return f"{count} CA certificates from {source}"
+
+
 def env_names(environ=None) -> list:
     """Sorted names of the environment variables the bootloader may have set."""
     environ = os.environ if environ is None else environ
@@ -143,6 +158,7 @@ def self_check() -> int:
         "pystray": _check(_check_pystray),
         "prices": _check(_check_prices),
         "hook_writer": _check(_check_hook_writer),
+        "tls": _check(_check_tls),
     }
     if getattr(sys, "frozen", False):
         checks["hook_runner"] = _check(_check_hook_runner)

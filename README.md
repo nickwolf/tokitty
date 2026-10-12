@@ -63,6 +63,8 @@ Tokitty keeps the copy it just replaced and deletes older copies it installed. O
 
 A run from source only reports updates, and its menu item opens the release page. The updater arrived in 0.2.2. Earlier releases have no `SHA256SUMS`, so getting onto 0.2.2 is a manual download, and updates from there on can come from the menu.
 
+Every macOS build through 0.6.1 carried an OpenSSL that looked for trusted certificates in a folder only the build machine had, so it couldn't reach GitHub or the usage endpoint at all: the update check says `CERTIFICATE_VERIFY_FAILED`. Those builds can't update themselves, so download 0.6.2 or later by hand. Until then, `launchctl setenv SSL_CERT_FILE /etc/ssl/cert.pem` followed by quitting and reopening Tokitty gets an old build working until the next restart.
+
 Each release has a `SHA256SUMS` file, and the updater refuses a download that doesn't match it. That catches a corrupted or tampered download. It does nothing about someone who can publish releases on the repo, and the builds are unsigned, so the trust is the same as downloading by hand.
 
 ### Rolling back

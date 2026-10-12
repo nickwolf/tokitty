@@ -583,6 +583,10 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
 
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    # Before anything opens an HTTPS connection, --self-check included.
+    from tokitty.tls import use_system_ca_bundle
+
+    use_system_ca_bundle()
     if "--self-check" in argv:
         from tokitty.frozen import self_check
 

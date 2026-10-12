@@ -122,6 +122,13 @@ jobs:
           if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
             args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
           fi
+          # The bundle's OpenSSL looks for trusted roots in this Python's
+          # etc/openssl, which a user's Mac doesn't have. Hide it so the
+          # self-check's tls check sees what users see.
+          openssl_dir="$(python -c 'import os, ssl; print(os.path.dirname(ssl.get_default_verify_paths().openssl_cafile))')"
+          sudo mv "$openssl_dir" "$openssl_dir.hidden"
+          trap 'sudo mv "$openssl_dir.hidden" "$openssl_dir"' EXIT
+          unset SSL_CERT_FILE SSL_CERT_DIR
           python freeze/verify_artifact.py "${args[@]}"
 
       - name: Verify artifact (Linux)
