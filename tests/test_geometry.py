@@ -45,7 +45,27 @@ def test_clamp_to_area_keeps_a_position_on_a_monitor_left_of_the_primary():
 
 def test_clamp_to_area_falls_back_inside_the_area_not_the_origin():
     area = (1920, 0, 1920 + 2560, 1400)
-    assert clamp_to_area(1920 + 2500, 100, 300, 256, area) == (1920 + 2560 - 300 - 24, 1400 - 256 - 24)
+    assert clamp_to_area(1920 + 2600, 100, 300, 256, area) == (1920 + 2560 - 300 - 24, 1400 - 256 - 24)
+
+
+def test_clamp_position_pulls_a_partly_off_card_back_inside():
+    # Still overlapping the screen means the user put it there: keep it as
+    # close as fits, rather than sending it to the default corner.
+    assert clamp_position(1800, 100, 300, 110, 1920, 1080) == (1620, 100)
+    assert clamp_position(-100, 100, 300, 110, 1920, 1080) == (0, 100)
+    assert clamp_position(100, 1000, 300, 110, 1920, 1080) == (100, 970)
+
+
+def test_clamp_to_area_keeps_a_card_saved_over_the_macos_dock():
+    # A Tk build let the card sit over the Dock; the work area stops above
+    # it. The position from the #117 run, on a 1710x1112 screen.
+    area = (0, 39, 1710, 1022)
+    assert clamp_to_area(47, 951, 300, 128, area) == (47, 1022 - 128)
+
+
+def test_clamp_position_resets_a_card_that_misses_the_screen_entirely():
+    assert clamp_position(-300, 100, 300, 110, 1920, 1080) == (1920 - 300 - 24, 1080 - 110 - 24)
+    assert clamp_position(100, 1080, 300, 110, 1920, 1080) == (1920 - 300 - 24, 1080 - 110 - 24)
 
 
 def test_clamp_to_area_honours_a_work_area_that_excludes_the_taskbar():
