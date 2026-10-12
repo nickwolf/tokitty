@@ -133,7 +133,7 @@ Manual, Windows (Cucumber, 100% and 150%), from source with `TOKITTY_QT=1` and a
 ## Open questions
 
 1. Should the Tk Look tab also get Cat sits? Tk ignores `cat_home`, so the control would do nothing visible there. Proposed: no.
-2. At 0% every card is invisible but still catches clicks, so a user who sets it and closes Settings has to remember where the widget was to right-click it. Should the Theme tab warn at 0%, or should 0% need a confirmation? Proposed: an inline hint under the opacity row only ("You'll need to right-click where the widget is to get back here"), no confirmation.
+2. At 0% every card is invisible but still catches clicks, so a user who sets it and closes Settings has to remember where the widget was to right-click it. Should the Theme tab warn at 0%, or should 0% need a confirmation? Decided (Nick, 2026-10-12): warn, with an inline hint under the opacity row while 0% is selected ("You'll need to right-click where the widget is to get back here"), no confirmation.
 
 ## Review (Codex, 2026-10-11)
 
