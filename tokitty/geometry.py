@@ -15,20 +15,19 @@ def clamp_position(x: int, y: int, width: int, height: int, screen_w: int, scree
     """Clamp a saved window position so the window stays fully on-screen.
 
     If the window doesn't fit at all (e.g. it's larger than the current
-    screen), anchor at the top-left. If a saved position is out of
-    bounds (e.g. a disconnected monitor), fall back to near the
+    screen), anchor at the top-left. A window that still overlaps the
+    screen is pulled just far enough to fit, so one saved over the Dock or
+    taskbar stays where the user put it. One that misses the screen
+    entirely (e.g. a disconnected monitor) falls back to near the
     bottom-right corner.
     """
     if width > screen_w or height > screen_h:
         return 0, 0
 
-    max_x = screen_w - width
-    max_y = screen_h - height
-
-    if x < 0 or x > max_x or y < 0 or y > max_y:
+    if x + width <= 0 or x >= screen_w or y + height <= 0 or y >= screen_h:
         return max(screen_w - width - MARGIN, 0), max(screen_h - height - MARGIN, 0)
 
-    return x, y
+    return min(max(x, 0), screen_w - width), min(max(y, 0), screen_h - height)
 
 
 def clamp_to_area(x: int, y: int, width: int, height: int, area: Area) -> Tuple[int, int]:
