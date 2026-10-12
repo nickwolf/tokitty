@@ -2,7 +2,7 @@
 
 Issue: [#111](https://github.com/nickwolf/tokitty/issues/111), milestone v0.7.0 "Qt widget". Builds on the theme and layout model from [#110](https://github.com/nickwolf/tokitty/issues/110) (`tokitty/theme.py`, spec `2026-10-11-theme-layout-model-design.md`) and the go decision from the [#109](https://github.com/nickwolf/tokitty/issues/109) spike (`2026-10-10-pyside6-spike-findings.md`, cited below as "findings"). Siblings that stay out of this issue: #112 (settings, accounts, first-run), #113 (updater UI), #114 (tray), #115 (packaging), #116 (new poses), #117 (release gate), #128 (reference-image CI), #22 (wandering).
 
-Status: draft, 2026-10-11. Two decisions taken by Nick the same day, listed below. A Codex review (gpt-6-sol, high) the same day found ten defects and three factual errors; all are folded in, and the review section at the end lists what changed.
+Status: draft, 2026-10-11. Two decisions taken by Nick the same day, listed below. A Codex review (gpt-6-sol, high) the same day found ten defects and three factual errors; all are folded in, and the review section at the end lists what changed. Implemented the same day (plan `docs/superpowers/plans/2026-10-11-qt-main-widget.md`). Checked on Windows at 100% against the Tk card (identical except the edge of the tag chip), at real 150% (every sprite cell a solid 6x6 block), and with real accounts; the Mac checks are still to do.
 
 ## Goal
 

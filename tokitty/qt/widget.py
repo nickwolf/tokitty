@@ -262,8 +262,12 @@ class TokittyQtWidget(QWidget):
             text = pane.status_text if pane._view_mode == "limits" else (
                 pane.usage_view.status_text if pane.usage_view is not None else "")
             rect = layout["status"]
-            # The status line wraps within the stats column, as Tk's does.
-            box = QRectF(rect.x + TK_LABEL_PAD_X, rect.y + TK_LABEL_PAD_Y, rect.w,
+            # Wraps at the card's right edge. Tk's wraplength is 160 px in its
+            # own font metrics, and on Windows its text reaches x=298, wider than
+            # the stats column; wrapping at the column put "Code" of "open
+            # Claude Code" on a second line below the card.
+            left = rect.x + TK_LABEL_PAD_X
+            box = QRectF(left, rect.y + TK_LABEL_PAD_Y, T.CARD_WIDTH - left,
                          T.CARD_HEIGHT - rect.y - TK_LABEL_PAD_Y)
             p.setFont(self._font_set()[2])
             p.setPen(dim)
