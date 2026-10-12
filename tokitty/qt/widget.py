@@ -3,19 +3,22 @@ holds every pane and paints them from the #110 model in tokitty.theme.
 
 Geometry, colours, the cat's spot and the pixel rules all come from
 theme.py; this module only turns them into QPainter calls. Input, the
-menu, position handling and the macOS helper are other slices.
+and the macOS helper are other slices.
 """
 from __future__ import annotations
 
 import sys
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen
+from PySide6.QtWidgets import QMenu, QWidget
 
 from tokitty import theme as T
 from tokitty.customize import Customization
+from tokitty.menu import MenuItem
+from tokitty.qt import position
+from tokitty.qt.menu import render_menu
 from tokitty.qt.pane import QtPane, fit_tag
 from tokitty.sprite_raster import raster_rgba
 from tokitty.usage_display import ROW_SLOTS
@@ -32,6 +35,16 @@ _LEFT_VCENTER = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 _RIGHT_VCENTER = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
 
+def is_context_press(button, modifiers, platform: str = sys.platform) -> bool:
+    """A press that opens the menu: the right button, or on macOS a left
+    press with the Control key, which Qt reports as MetaModifier there
+    (Command is ControlModifier)."""
+    if button == Qt.MouseButton.RightButton:
+        return True
+    return (platform == "darwin" and button == Qt.MouseButton.LeftButton
+            and bool(modifiers & Qt.KeyboardModifier.MetaModifier))
+
+
 def _qrect(r: T.Rect) -> QRectF:
     return QRectF(r.x, r.y, r.w, r.h)
 
@@ -43,11 +56,19 @@ def palette_signature(palette: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
 
 class TokittyQtWidget(QWidget):
     def __init__(self, theme: T.Theme, customizations: Sequence[Customization],
-                 pane_count: int, *, parent=None):
+                 pane_count: int, *, parent=None, position_path=None,
+                 build_menu_model: Optional[Callable[[int], List[MenuItem]]] = None):
         super().__init__(parent)
         if len(customizations) != pane_count:
             raise ValueError("need one customization per pane")
         self.theme = theme
+        self.position_path = position_path
+        # The owner's model factory; called with the clicked pane on every open.
+        self.build_menu_model = build_menu_model
+        # Called after a menu action ran (the Tk notify_state_changed slot).
+        self.on_menu_action_done: Optional[Callable[[], None]] = None
+        self._always_on_top = True  # starts on, never persisted
+        self._drag: Optional[Tuple[int, int]] = None
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -94,6 +115,16 @@ class TokittyQtWidget(QWidget):
         if dx or dy:
             self.move(self.x() - dx, self.y() - dy)
         self.update()
+
+    def grid_size(self) -> Tuple[int, int]:
+        """The cards' bounding size: the window minus its margins."""
+        left, top, right, bottom = self.window_layout.margins
+        w, h = self.window_layout.size
+        return w - left - right, h - top - bottom
+
+    def first_card_pos(self) -> Tuple[int, int]:
+        """Where the first card is on screen (window position plus margins)."""
+        return self.x() + self.window_layout.margins[0], self.y() + self.window_layout.margins[1]
 
     def cat_origin(self, index: int) -> Tuple[float, float]:
         """The sprite's top-left in window coordinates, snapped to a whole
@@ -349,3 +380,109 @@ class TokittyQtWidget(QWidget):
             self._text(p, QColor(style.foreground), box,
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                        fit_tag(pane._tool_label))
+
+    # ---- position -------------------------------------------------------
+
+    def _screens(self) -> List[position.ScreenInfo]:
+        out = []
+        for screen in QGuiApplication.screens():
+            g, ratio = screen.geometry(), screen.devicePixelRatio()
+            out.append(position.ScreenInfo(
+                (g.x(), g.y(), round(g.width() * ratio), round(g.height() * ratio)),
+                (g.x(), g.y(), g.width(), g.height()), ratio))
+        return out
+
+    def _area_at(self, point: Optional[Tuple[int, int]]):
+        screen = QGuiApplication.screenAt(QPoint(*point)) if point else None
+        screen = screen or QGuiApplication.primaryScreen()
+        a = screen.availableGeometry()
+        return a.x(), a.y(), a.x() + a.width(), a.y() + a.height()
+
+    def restore_position(self) -> None:
+        """Place the first card at its saved spot. The owner calls this
+        before the first show()."""
+        saved = None
+        if self.position_path is not None:
+            primary = QGuiApplication.primaryScreen()
+            saved = position.load(self.position_path, self._screens(),
+                                  primary.devicePixelRatio(), sys.platform)
+        x, y = position.place(saved, self.grid_size(), self.window_layout.margins,
+                              self._area_at(saved))
+        self.move(x, y)
+
+    def save_position(self) -> None:
+        if self.position_path is not None:
+            position.save(self.position_path, *self.first_card_pos())
+
+    # ---- input ----------------------------------------------------------
+
+    def pane_index_at(self, x: float, y: float) -> int:
+        """The pane whose card holds the window point; 0 outside every card."""
+        for i, (ox, oy) in enumerate(self.window_layout.pane_origins):
+            if ox <= x < ox + T.CARD_WIDTH and oy <= y < oy + T.CARD_HEIGHT:
+                return i
+        return 0
+
+    def _after_menu_action(self, action):
+        if action is None:
+            return None
+
+        def run() -> None:
+            action()
+            if self.on_menu_action_done is not None:
+                self.on_menu_action_done()
+
+        return run
+
+    def context_menu(self, pane_index: int) -> Optional[QMenu]:
+        """A fresh menu from the owner's model, rebuilt on every open so it
+        reads live state."""
+        if self.build_menu_model is None:
+            return None
+        menu = QMenu(self)
+        render_menu(menu, self.build_menu_model(pane_index), self._after_menu_action)
+        return menu
+
+    def _popup(self, menu: QMenu, global_pos) -> None:
+        menu.exec(global_pos)
+
+    def mousePressEvent(self, event) -> None:
+        if is_context_press(event.button(), event.modifiers()):
+            pos = event.position()
+            menu = self.context_menu(self.pane_index_at(pos.x(), pos.y()))
+            if menu is not None:
+                self._popup(menu, event.globalPosition().toPoint())
+        elif event.button() == Qt.MouseButton.LeftButton:
+            # Global coordinates: the press can land anywhere in the window.
+            g = event.globalPosition().toPoint()
+            self._drag = (g.x() - self.x(), g.y() - self.y())
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            g = event.globalPosition().toPoint()
+            self.move(g.x() - self._drag[0], g.y() - self._drag[1])
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._drag = None
+            self.save_position()
+
+    # ---- always in front ------------------------------------------------
+
+    @property
+    def always_on_top(self) -> bool:
+        return self._always_on_top
+
+    def set_always_on_top(self, on: bool) -> None:
+        """Toggling the hint makes Qt recreate the native window, which hides
+        it: show it again without activating, then redo whatever a new native
+        window needs. All three stay in this one method so none is forgotten."""
+        self._always_on_top = on
+        was_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
+        if was_visible:
+            self.show()  # WA_ShowWithoutActivating keeps focus where it was
+        self._after_native_window()
+
+    def _after_native_window(self) -> None:
+        """Hook for work that needs the native window (macOS helper, mask)."""
