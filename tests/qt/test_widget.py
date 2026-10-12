@@ -41,10 +41,10 @@ def test_window_matches_layout_window(qapp, count):
     assert len(widget.panes) == count
 
 
-def test_window_with_a_side_home(qapp):
-    widget = make(qapp, 2, homes=["beside_left", "inside"])
-    expected = T.layout_window(["beside_left", "inside"])
-    assert expected.margins[0] > 0
+def test_window_with_an_on_top_home(qapp):
+    widget = make(qapp, 2, homes=["on_top", "inside"])
+    expected = T.layout_window(["on_top", "inside"])
+    assert expected.margins[1] > 0
     assert (widget.width(), widget.height()) == expected.size
     assert widget.window_layout.pane_origins == expected.pane_origins
 
@@ -71,11 +71,11 @@ def test_flags_and_attributes(qapp):
 def test_rebuild_layout_moves_by_the_margin_change(qapp):
     widget = make(qapp)
     widget.move(500, 400)
-    widget.rebuild_layout(["beside_left"])
-    left = T.layout_window(["beside_left"]).margins[0]
-    assert left > 0
-    assert (widget.x(), widget.y()) == (500 - left, 400)
-    assert widget.size().width() == T.layout_window(["beside_left"]).size[0]
+    widget.rebuild_layout(["on_top"])
+    top = T.layout_window(["on_top"]).margins[1]
+    assert top > 0
+    assert (widget.x(), widget.y()) == (500, 400 - top)
+    assert widget.size().height() == T.layout_window(["on_top"]).size[1]
     widget.rebuild_layout(["inside"])
     assert (widget.x(), widget.y()) == (500, 400)
     with pytest.raises(ValueError):
@@ -111,7 +111,7 @@ def test_cat_pixels_dpr1(qapp):
     assert [r for r in results if r["bad_opaque"] or r["bad_clear"]] == []
     blocks = [r for r in results if r["block_equal"] is not None]
     assert blocks and all(r["block_equal"] for r in blocks)
-    assert {r["mirrored"] for r in blocks} == {False, True}
+    assert {r["mirrored"] for r in results} == {False, True}
 
 
 def test_cat_pixels_dpr2_in_a_subprocess(qapp):

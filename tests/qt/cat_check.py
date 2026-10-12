@@ -1,7 +1,7 @@
 """Pixel check of the cat, after the spike's compare(): in a grab of the
 widget every opaque sprite cell equals raster_rgba, every transparent cell
 equals the same grab with the cat left out (the card behind it), and over
-the empty margin of a side home the whole RGBA block matches.
+the empty margin above an on_top home the whole RGBA block matches.
 
 Importable by the tests and runnable as a script, which is how the dpr 2
 case gets its own process (a process has one QApplication, and
@@ -71,17 +71,17 @@ def check(widget: TokittyQtWidget, index: int = 0) -> dict:
         "home": home, "mirrored": mirrored, "dpr": dpr, "image_dpr": with_cat.devicePixelRatio(),
         "opaque": opaque, "bad_opaque": bad_opaque, "bad_clear": bad_clear,
         # Only an empty margin lets the whole block, clear cells included, match.
-        "block_equal": got == ref if home in ("beside_left", "beside_right") else None,
+        "block_equal": got == ref if home == "on_top" else None,
     }
 
 
 def run_all() -> list:
     results = []
     for colorway, pattern in COATS:
-        for home in ("inside", "on_top", "beside_left", "beside_right"):
+        for home in T.SPOTS:
             custom = Customization(colorway=colorway, pattern=pattern, cat_home=home)
             widget = TokittyQtWidget(T.Theme(), [custom], 1)
-            states = sprites.ALL_STATES if home == "inside" else sprites.ALL_STATES[:3]
+            states = sprites.ALL_STATES if home.startswith("inside") else sprites.ALL_STATES[:3]
             for state in states:
                 _render(widget.panes[0], state)
                 results.append(check(widget))

@@ -51,7 +51,7 @@ TEXT_ELEMENTS = (
 # The halo is only measured to help these two; the rest is for the Qt port to try.
 HALO_ELEMENTS = frozenset({"section_labels", "percent"})
 
-SPOTS = ("inside", "on_top", "beside_left", "beside_right")
+SPOTS = ("inside", "inside_right", "on_top")
 VIEWS = ("limits", "models")
 
 # Opacity levels the Tk build offers (transparency.py LEVELS), the only
@@ -272,6 +272,9 @@ MODEL_STATUS_GAP = 10       # last bar bottom to the status line
 PERCENT_W = 40              # nominal width of the "42%" run
 VALUE_W = 60                # nominal width of a per-model value
 ACCOUNT_LABEL_RECT = (194, 4, 100, SMALL_H)  # right edge at 294, as ui.py
+# inside_right: how far the stats block moves left so its left edge sits
+# where its old right gap was (CARD_WIDTH - STATS_X - STATS_W = 10).
+STATS_SHIFT_RIGHT = STATS_X - (CARD_WIDTH - STATS_X - STATS_W)
 
 
 @dataclass(frozen=True)
@@ -288,6 +291,9 @@ class Rect:
     @property
     def bottom(self) -> int:
         return self.y + self.h
+
+    def moved(self, dx: int) -> "Rect":
+        return Rect(self.x + dx, self.y, self.w, self.h)
 
     def intersects(self, other: "Rect") -> bool:
         """True when the interiors overlap; rects that only touch do not."""
@@ -334,7 +340,7 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
     if pane_spot not in SPOTS:
         raise ValueError(f"unknown spot {pane_spot!r}")
     # full_width has no cat area, so it only holds when the cat is outside.
-    wide = theme.bars.layout == "full_width" and pane_spot != "inside"
+    wide = theme.bars.layout == "full_width" and pane_spot == "on_top"
     x, w = (FULL_X, FULL_W) if wide else (STATS_X, STATS_W)
     show = theme.text.show
     bar_h = theme.bars.height
@@ -380,6 +386,12 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
         rects["status"] = Rect(x, y, w, SMALL_H)
     if "account_label" in show:
         rects["account_label"] = Rect(*ACCOUNT_LABEL_RECT)
+    if pane_spot == "inside_right":
+        # Swap the two columns as blocks: nothing inside the stats block is
+        # mirrored, so values stay right of their names.
+        rects = {name: rect.moved(-STATS_SHIFT_RIGHT) for name, rect in rects.items()}
+        lines = {name: rect.moved(-STATS_SHIFT_RIGHT) for name, rect in lines.items()}
+        rects["cat_area"] = Rect(CARD_WIDTH - CAT_AREA[0] - CAT_AREA[2], *CAT_AREA[1:])
     return CardLayout("full_width" if wide else "beside_cat", rects, lines)
 
 
@@ -405,18 +417,16 @@ class Track:
 
 
 # inside: the cat canvas is at (8, 8) and sprite_bounds centres the 104-high
-# sprite in it with a 4 px y offset. Side spots are flush with the card edge
-# and bottom-aligned with it. The side-on art is assumed to face right, so
-# beside_right is the mirrored one; swap the flags if #116 draws it the other way.
+# sprite in it with a 4 px y offset. inside_right is the same canvas on the
+# card's other side, mirrored so the cat faces the stats.
 _PLACEMENTS = {
     "inside": Placement((8, 12), False),
+    "inside_right": Placement((CARD_WIDTH - 8 - SPRITE_W, 12), True),
     "on_top": Placement((8, -SPRITE_H), False),
-    "beside_left": Placement((-SPRITE_W, CARD_HEIGHT - SPRITE_H), False),
-    "beside_right": Placement((CARD_WIDTH, CARD_HEIGHT - SPRITE_H), True),
 }
 
-# Where the scratching pose is valid: the cat touches the card and faces it.
-SCRATCH_SPOTS = frozenset({"beside_left", "beside_right"})
+# The cat scratches the near edge of the stats column from inside the card.
+SCRATCH_SPOTS = frozenset({"inside", "inside_right"})
 
 
 def placement(spot: str) -> Placement:
@@ -442,25 +452,17 @@ def grid_shape(pane_count: int) -> Tuple[int, int]:
 
 
 def _outside_reachable(pane_index: int, pane_count: int) -> FrozenSet[str]:
-    """Outside spots a pane can use given only where it sits in the grid: a
-    spot is reachable from a pane on the matching outer edge."""
+    """Outside spots a pane can use given only where it sits in the grid:
+    on_top from a first-row pane. Nothing sits beside a card."""
     cols, _rows = grid_shape(pane_count)
-    row, col = divmod(pane_index, cols)
-    spots = set()
-    if row == 0:
-        spots.add("on_top")
-    if col == 0:
-        spots.add("beside_left")
-    if col == cols - 1 or pane_index + 1 >= pane_count:
-        spots.add("beside_right")  # no right neighbour
-    return frozenset(spots)
+    return frozenset({"on_top"}) if pane_index < cols else frozenset()
 
 
 def resolve_home(cat_home: str, pane_index: int, pane_count: int) -> str:
-    """The account's cat_home if that outside spot is reachable from this
-    pane, else "inside". Independent of the theme, so it never disagrees
-    with layout_card, which falls back to beside_cat for an inside home."""
-    if cat_home in _outside_reachable(pane_index, pane_count):
+    """The account's cat_home if that spot is reachable from this pane, else
+    "inside". Independent of the theme, so it never disagrees with
+    layout_card, which falls back to beside_cat for an inside home."""
+    if cat_home == "inside_right" or cat_home in _outside_reachable(pane_index, pane_count):
         return cat_home
     return "inside"
 
@@ -468,15 +470,15 @@ def resolve_home(cat_home: str, pane_index: int, pane_count: int) -> str:
 def reachable_spots(theme: Theme, cat_home: str, pane_index: int,
                     pane_count: int) -> FrozenSet[str]:
     """Spots #22 may move this pane's cat between. Layout keys on the
-    resolved home: a full_width pane whose home is outside has no room for
-    the cat in the card, so inside is left out. Any other pane (beside_cat,
-    or full_width with an inside or unreachable home, which layout_card
-    renders as beside_cat) can always go home."""
+    resolved home: a full_width pane whose home is on_top has no cat area, so
+    neither inside spot is available. Any other pane (beside_cat, or
+    full_width with an inside home, which layout_card renders as beside_cat)
+    can always go home."""
     outside = _outside_reachable(pane_index, pane_count)
     if (theme.bars.layout == "full_width"
-            and resolve_home(cat_home, pane_index, pane_count) != "inside"):
+            and resolve_home(cat_home, pane_index, pane_count) == "on_top"):
         return outside
-    return outside | {"inside"}
+    return outside | {"inside", "inside_right"}
 
 
 # --- window geometry ------------------------------------------------------
@@ -502,21 +504,14 @@ def layout_window(homes: Sequence[str], wander: bool = False) -> WindowLayout:
     cols, rows = grid_shape(count)
     used = set()
     for i, home in enumerate(homes):
-        spots = {home} | (_outside_reachable(i, count) if wander else set())
-        if "beside_right" in spots and i % cols != cols - 1:
-            # last pane of a ragged row: its right side is an empty grid
-            # cell, already inside the window
-            spots.discard("beside_right")
-        used |= spots
-    left = _round_up4(SPRITE_W) if "beside_left" in used else 0
+        used |= {home} | (_outside_reachable(i, count) if wander else set())
     top = _round_up4(SPRITE_H) if "on_top" in used else 0
-    right = _round_up4(SPRITE_W) if "beside_right" in used else 0
-    margins = (left, top, right, 0)  # no spot reaches below the card
+    margins = (0, top, 0, 0)  # no spot reaches past the sides or below the card
     origins = tuple(
-        (left + (i % cols) * CARD_WIDTH, top + (i // cols) * CARD_HEIGHT)
+        ((i % cols) * CARD_WIDTH, top + (i // cols) * CARD_HEIGHT)
         for i in range(count)
     )
-    size = (left + cols * CARD_WIDTH + right, top + rows * CARD_HEIGHT)
+    size = (cols * CARD_WIDTH, top + rows * CARD_HEIGHT)
     return WindowLayout(margins, size, origins)
 
 
