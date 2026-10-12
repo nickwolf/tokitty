@@ -165,6 +165,18 @@ def test_self_check_fails_without_prices(monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["checks"]["prices"]["ok"] is False
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows loads its own store regardless")
+def test_self_check_fails_with_no_trusted_roots(monkeypatch, tmp_path, capsys):
+    """What a frozen Mac build saw before tokitty.tls: OpenSSL's compiled-in
+    cert file and directory both missing."""
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "missing"))
+    assert frozen.self_check() == 1
+    tls = json.loads(capsys.readouterr().out)["checks"]["tls"]
+    assert tls["ok"] is False
+    assert "no trusted CA certificates" in tls["detail"]
+
+
 def _point_state_dir_env_at(monkeypatch, tmp_path):
     """Point every OS's state-dir env var at tmp_path, so whichever one the
     host platform actually reads still resolves under the sandbox."""
