@@ -170,6 +170,14 @@ def test_cat_home_unknown_spot_falls_back(tmp_path):
     assert load_customization(tmp_path)["default"].cat_home == "inside"
 
 
+def test_cat_home_retired_side_spots_fall_back(tmp_path):
+    (tmp_path / "customization.json").write_text(
+        '{"a": {"cat_home": "beside_left"}, "b": {"cat_home": "beside_right"}}',
+        encoding="utf-8")
+    got = load_customization(tmp_path)
+    assert {k: v.cat_home for k, v in got.items()} == {"a": "inside", "b": "inside"}
+
+
 def test_cat_home_non_string_falls_back(tmp_path):
     (tmp_path / "customization.json").write_text(
         '{"a": {"cat_home": 3}, "b": {"cat_home": ["on_top"]}, "c": {"cat_home": null}}',
@@ -180,9 +188,9 @@ def test_cat_home_non_string_falls_back(tmp_path):
 
 def test_cat_home_roundtrip(tmp_path):
     data = {
-        "a": Customization(cat_home="beside_left"),
+        "a": Customization(cat_home="inside"),
         "b": Customization(cat_home="on_top"),
-        "c": Customization(cat_home="beside_right"),
+        "c": Customization(cat_home="inside_right"),
         "d": Customization(),
     }
     save_customization(tmp_path, data)

@@ -106,7 +106,7 @@ def make(count=1, homes=None, path=None, model=None):
 
 
 def test_pane_index_outside_every_card_is_zero(qapp):
-    widget = make(2, homes=["beside_left", "inside"])
+    widget = make(2, homes=["on_top", "inside"])
     x0, y0 = widget.window_layout.pane_origins[0]
     x1, y1 = widget.window_layout.pane_origins[1]
     assert widget.pane_index_at(x0 + 5, y0 + 5) == 0
@@ -160,38 +160,39 @@ def test_menu_action_done_hook_runs_after_the_action(qapp):
 
 def test_drag_moves_the_window_by_the_mouse_delta_and_saves_the_card(qapp, tmp_path):
     path = tmp_path / "position.json"
-    widget = make(homes=["beside_left"], path=path)
-    margin = widget.window_layout.margins[0]
+    widget = make(homes=["on_top"], path=path)
+    margin = widget.window_layout.margins[1]
     assert margin > 0
     widget.move(300, 200)
     widget.show()
-    QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=QPoint(200, 50))
-    QTest.mouseMove(widget, QPoint(230, 70))
+    QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=QPoint(200, margin + 50))
+    QTest.mouseMove(widget, QPoint(230, margin + 70))
     assert (widget.x(), widget.y()) == (330, 220)
     assert not path.exists()  # saved on release only
-    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, pos=QPoint(230, 70))
+    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton, pos=QPoint(230, margin + 70))
     saved = json.loads(path.read_text())
-    assert saved == {"x": 330 + margin, "y": 220, "unit": "logical"}
+    assert saved == {"x": 330, "y": 220 + margin, "unit": "logical"}
     # a move without a press does nothing
     QTest.mouseMove(widget, QPoint(10, 10))
     assert (widget.x(), widget.y()) == (330, 220)
     widget.hide()
 
 
-def test_restart_with_a_side_home_lands_the_card_in_the_same_place(qapp, tmp_path):
+def test_restart_with_an_on_top_home_lands_the_card_in_the_same_place(qapp, tmp_path):
     path = tmp_path / "position.json"
-    first = make(homes=["beside_left"], path=path)
+    first = make(homes=["on_top"], path=path)
     first.restore_position()
     first.show()
-    QTest.mousePress(first, Qt.MouseButton.LeftButton, pos=QPoint(200, 50))
-    QTest.mouseMove(first, QPoint(180, 40))
-    QTest.mouseRelease(first, Qt.MouseButton.LeftButton, pos=QPoint(180, 40))
+    top = first.window_layout.margins[1]
+    QTest.mousePress(first, Qt.MouseButton.LeftButton, pos=QPoint(200, top + 50))
+    QTest.mouseMove(first, QPoint(180, top + 40))
+    QTest.mouseRelease(first, Qt.MouseButton.LeftButton, pos=QPoint(180, top + 40))
     card = first.first_card_pos()
     first.hide()
 
-    second = make(homes=["beside_left"], path=path)
+    second = make(homes=["on_top"], path=path)
     second.restore_position()
-    assert second.window_layout.margins[0] > 0
+    assert second.window_layout.margins[1] > 0
     assert second.first_card_pos() == card
     assert (second.x(), second.y()) == (first.x(), first.y())
 
@@ -256,7 +257,7 @@ def expected_mask(widget):
 
 
 def test_mask_is_the_cards_plus_the_cat_rects(qapp):
-    widget = make(2, homes=["beside_left", "inside"])
+    widget = make(2, homes=["on_top", "inside"])
     widget.show()
     mask = widget.mask()
     assert mask == expected_mask(widget)
@@ -264,7 +265,7 @@ def test_mask_is_the_cards_plus_the_cat_rects(qapp):
     assert mask.contains(QPoint(x0 + 150, y0 + 5)) and mask.contains(QPoint(x1 + 150, y1 + 5))
     cat = widget.cat_rects()[0]
     assert mask.contains(QPoint(cat.x + 3, cat.y + 3))
-    assert not mask.contains(QPoint(1, 1))  # empty margin above the side cat
+    assert not mask.contains(QPoint(1, 1))  # empty margin beside the top cat
     widget.hide()
 
 
@@ -281,10 +282,10 @@ def test_mask_follows_rebuild_layout(qapp):
     widget = make()
     widget.show()
     before = widget.mask().boundingRect()
-    widget.rebuild_layout(["beside_left"])
+    widget.rebuild_layout(["on_top"])
     assert widget.mask() == expected_mask(widget)
-    assert widget.mask().boundingRect().width() > before.width()
-    assert widget.mask().boundingRect().width() == widget.width()
+    assert widget.mask().boundingRect().height() > before.height()
+    assert widget.mask().boundingRect().height() == widget.height()
     widget.hide()
 
 

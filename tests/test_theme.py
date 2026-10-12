@@ -234,7 +234,7 @@ def test_halo_active():
 
 
 def test_constants():
-    assert T.SPOTS == ("inside", "on_top", "beside_left", "beside_right")
+    assert T.SPOTS == ("inside", "inside_right", "on_top")
     assert T.VIEWS == ("limits", "models")
     assert len(T.TEXT_ELEMENTS) == 7
 
@@ -391,7 +391,9 @@ def _subsets(items):
 @pytest.mark.parametrize("view", T.VIEWS)
 @pytest.mark.parametrize("layout,spot", [("beside_cat", "inside"),
                                          ("full_width", "on_top"),
-                                         ("full_width", "inside")])
+                                         ("beside_cat", "inside_right"),
+                                         ("full_width", "inside"),
+                                         ("full_width", "inside_right")])
 def test_every_combination_fits_and_does_not_overlap(view, layout, spot):
     card = Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
     for height in range(4, 11):
@@ -410,6 +412,8 @@ def test_every_combination_fits_and_does_not_overlap(view, layout, spot):
 
 # --- spots, window geometry, pane style ---
 
+import itertools  # noqa: E402
+
 from tokitty.customize import Customization, effective_palette  # noqa: E402
 from tokitty.theme import (  # noqa: E402
     SCRATCH_SPOTS, SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
@@ -427,10 +431,9 @@ def test_sprite_size():
 def test_placements():
     assert placement("inside") == Placement((8, 12), False)
     assert placement("on_top") == Placement((8, -104), False)
-    assert placement("beside_left") == Placement((-112, 24), False)
-    assert placement("beside_right") == Placement((300, 24), True)
-    assert SCRATCH_SPOTS == {"beside_left", "beside_right"}
-    assert set(T.SPOTS) == {"inside", "on_top", "beside_left", "beside_right"}
+    assert placement("inside_right") == Placement((180, 12), True)
+    assert SCRATCH_SPOTS == {"inside", "inside_right"}
+    assert set(T.SPOTS) == {"inside", "inside_right", "on_top"}
 
 
 def test_top_edge_track():
@@ -453,49 +456,37 @@ def test_grid_shape_rejects_empty(n):
 
 
 def _outside(n, i):
-    return reachable_spots(Theme(), "inside", i, n) - {"inside"}
+    return reachable_spots(Theme(), "inside", i, n) - {"inside", "inside_right"}
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 4])
-def test_single_column_both_sides_everywhere(n):
+def test_single_column_on_top_only_from_first_row(n):
     for i in range(n):
-        assert {"beside_left", "beside_right"} <= _outside(n, i)
-        assert ("on_top" in _outside(n, i)) == (i == 0)
+        assert _outside(n, i) == ({"on_top"} if i == 0 else set())
 
 
-def test_reachable_includes_inside_by_default():
-    assert all("inside" in reachable_spots(Theme(), "inside", i, 5) for i in range(5))
+def test_reachable_includes_both_inside_spots_by_default():
+    for n in (1, 5, 9):
+        for i in range(n):
+            assert {"inside", "inside_right"} <= reachable_spots(Theme(), "inside", i, n)
 
 
-def test_five_panes_two_columns_ragged():
+def test_on_top_is_the_first_grid_row():
     # 2 cols x 3 rows: indices 0 1 / 2 3 / 4 .
-    assert _outside(5, 0) == {"on_top", "beside_left"}
-    assert _outside(5, 1) == {"on_top", "beside_right"}
-    assert _outside(5, 2) == {"beside_left"}
-    assert _outside(5, 3) == {"beside_right"}
-    # the ragged last pane has no right neighbour
-    assert _outside(5, 4) == {"beside_left", "beside_right"}
-
-
-def test_eight_panes_two_full_columns():
-    assert _outside(8, 0) == {"on_top", "beside_left"}
-    assert _outside(8, 7) == {"beside_right"}
-    assert _outside(8, 2) == {"beside_left"}
-
-
-def test_nine_panes_middle_column_has_no_sides():
+    assert [bool(_outside(5, i)) for i in range(5)] == [True, True, False, False, False]
+    assert [bool(_outside(8, i)) for i in range(8)] == [True, True] + [False] * 6
     # 3 cols x 3 rows
-    assert _outside(9, 4) == frozenset()
-    assert _outside(9, 8) == {"beside_right"}
+    assert [bool(_outside(9, i)) for i in range(9)] == [True] * 3 + [False] * 6
 
 
-def test_full_width_inside_keeps_inside():
-    assert "inside" in reachable_spots(FULL, "inside", 0, 1)
+def test_full_width_inside_keeps_inside_spots():
+    assert {"inside", "inside_right"} <= reachable_spots(FULL, "inside", 0, 1)
+    assert {"inside", "inside_right"} <= reachable_spots(FULL, "inside_right", 0, 1)
 
 
-def test_full_width_outside_home_drops_inside():
+def test_full_width_on_top_home_drops_inside_spots():
     r = reachable_spots(FULL, "on_top", 0, 1)
-    assert "inside" not in r and "on_top" in r
+    assert r == {"on_top"}
 
 
 def test_full_width_unreachable_home_keeps_inside():
@@ -509,13 +500,13 @@ def test_beside_cat_always_includes_inside():
 
 
 def test_resolve_home_fallback():
-    assert resolve_home("beside_left", 0, 3) == "beside_left"
-    assert resolve_home("beside_right", 2, 3) == "beside_right"
+    assert resolve_home("inside_right", 0, 3) == "inside_right"
+    assert resolve_home("inside_right", 2, 3) == "inside_right"
     assert resolve_home("on_top", 0, 3) == "on_top"
     assert resolve_home("on_top", 1, 3) == "inside"
-    assert resolve_home("beside_left", 1, 5) == "inside"
-    assert resolve_home("beside_right", 4, 5) == "beside_right"
+    assert resolve_home("on_top", 4, 5) == "inside"
     assert resolve_home("inside", 0, 1) == "inside"
+    assert resolve_home("beside_left", 0, 1) == "inside"
     assert resolve_home("garbage", 0, 1) == "inside"
 
 
@@ -535,9 +526,9 @@ def test_window_all_inside_is_just_the_grid():
 
 
 def test_window_margins_homes_only():
-    w = layout_window(["beside_left", "inside", "beside_right"])
-    assert w.margins == (112, 0, 112, 0)
-    assert w.size == (524, 384)
+    w = layout_window(["inside_right", "inside", "inside"])
+    assert w.margins == (0, 0, 0, 0)
+    assert w.size == (300, 384)
     w = layout_window(["on_top", "inside"])
     assert w.margins == (0, 104, 0, 0)
     assert w.size == (300, 104 + 256)
@@ -545,18 +536,20 @@ def test_window_margins_homes_only():
 
 def test_window_margins_wander_sizes_for_reachable():
     w = layout_window(["inside", "inside"], wander=True)
-    assert w.margins == (112, 104, 112, 0)
-    assert all(m % 4 == 0 for m in w.margins)
-    assert w.size == (524, 104 + 256)
-    # a middle column cannot reach the sides, so only the top margin appears
-    w = layout_window(["inside"] * 9, wander=True)
-    assert w.margins == (112, 104, 112, 0)
+    assert w.margins == (0, 104, 0, 0)
+    assert w.size == (300, 104 + 256)
+    # no pane in the first row, so nothing can reach the top
+    assert layout_window(["inside"] * 9, wander=True).margins == (0, 104, 0, 0)
 
 
-def test_window_left_home_shifts_every_origin():
-    base = layout_window(["inside"] * 5)
-    left = layout_window(["beside_left"] + ["inside"] * 4)
-    assert [(x - 112, y) for x, y in left.pane_origins] == list(base.pane_origins)
+@pytest.mark.parametrize("n", [1, 2, 5, 9])
+def test_window_never_has_side_margins(n):
+    for homes in itertools.product(T.SPOTS, repeat=min(n, 3)):
+        homes = list(homes) + ["inside"] * (n - len(homes))
+        for wander in (False, True):
+            m = layout_window(homes, wander).margins
+            assert m in ((0, 0, 0, 0), (0, 104, 0, 0)), (homes, wander)
+            assert (m[1] == 104) == ("on_top" in homes or wander)
 
 
 def test_window_origins_two_columns():
@@ -608,12 +601,12 @@ def test_pane_style_account_override():
     th = Theme(card=CardStyle(opacity=70))
     cust = Customization(colorway="gray", overrides={"card_bg": "#112233", "bar_fill": "#445566",
                                                     "coat_base": "#010101"},
-                         cat_home="beside_left")
+                         cat_home="inside_right")
     ps = resolve_pane_style(th, cust, False, 0, 2)
     assert ps.background == "#112233" and ps.opacity == 70
     assert ps.bar_fill_override == "#445566"
     assert ps.palette == effective_palette(cust) and ps.palette["o"] == "#010101"
-    assert ps.home == "beside_left"
+    assert ps.home == "inside_right"
 
 
 def test_pane_style_accent_wins():
@@ -643,12 +636,95 @@ def test_spots_and_grid_match_tk():
         assert grid_shape(n)[1] * 128 == ui.grid_size(n)[1]
 
 
-def test_layout_window_ragged_row_beside_right_needs_no_margin():
-    # 5 panes = 2 cols x 3 rows; pane 4 sits alone in the last row, so its
-    # right side is the empty cell next to it.
-    homes = ["inside"] * 4 + ["beside_right"]
-    win = T.layout_window(homes)
-    assert win.margins == (0, 0, 0, 0)
-    assert win.size == (2 * T.CARD_WIDTH, 3 * T.CARD_HEIGHT)
-    homes = ["inside", "beside_right", "inside", "inside", "inside"]
-    assert T.layout_window(homes).margins[2] == 112
+def _shifted(lay, dx):
+    return ({n: Rect(r.x + dx, r.y, r.w, r.h) for n, r in lay.rects.items()},
+            {n: Rect(r.x + dx, r.y, r.w, r.h) for n, r in lay.lines.items()})
+
+
+@pytest.mark.parametrize("view", T.VIEWS)
+@pytest.mark.parametrize("hidden", [(), ("percent", "reset"), ("section_labels", "status"),
+                                    ("model_rows", "account_label")])
+def test_inside_right_swaps_the_columns(view, hidden):
+    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - set(hidden)))
+    left = layout_card(th, view, "inside")
+    right = layout_card(th, view, "inside_right")
+    assert right.layout == "beside_cat"
+    assert right["cat_area"] == Rect(180, 8, 112, 112)
+    rects, lines = _shifted(left, -122)
+    rects["cat_area"] = right["cat_area"]
+    assert dict(right.rects) == rects
+    assert dict(right.lines) == lines
+
+
+def test_full_width_inside_right_keeps_its_cat_area():
+    lay = layout_card(FULL, "limits", "inside_right")
+    assert lay.layout == "beside_cat" and "cat_area" in lay
+    assert lay == layout_card(Theme(), "limits", "inside_right")
+    assert layout_card(FULL, "limits", "on_top").layout == "full_width"
+
+
+# --- theme_from_dict / theme_to_dict / rejected_fields --------------------
+
+def test_theme_dict_round_trip():
+    t = Theme(
+        card=T.CardStyle(background="#101010", opacity=40, radius=6, border_width=2),
+        bars=T.BarStyle(shape="rounded", height=6, mid_at=30, high_at=70),
+        text=T.TextStyle(show=frozenset({"percent", "status"}), halo="on", halo_below=30),
+    )
+    raw = T.theme_to_dict(t)
+    assert raw["text"]["show"] == ["percent", "status"]
+    assert T.theme_from_dict(raw, Theme()) == t
+    assert T.rejected_fields(raw, Theme()) == set()
+
+
+def test_theme_to_dict_matches_what_save_writes(tmp_path):
+    t = Theme(text=T.TextStyle(show=frozenset({"reset", "percent"})))
+    T.save_theme(tmp_path, t)
+    assert json.loads((tmp_path / T.THEME_FILENAME).read_text(encoding="utf-8")) == T.theme_to_dict(t)
+
+
+def test_one_bad_field_falls_back_alone_and_is_reported():
+    fallback = Theme(card=T.CardStyle(radius=4))
+    raw = T.theme_to_dict(Theme(card=T.CardStyle(radius=99, border_width=3)))
+    assert T.theme_from_dict(raw, fallback).card == T.CardStyle(radius=4, border_width=3)
+    assert T.rejected_fields(raw, fallback) == {"card.radius"}
+
+
+def test_bool_and_off_step_opacity_are_rejected():
+    for bad in (True, 55, "50", None, 110):
+        raw = {"card": {"opacity": bad}}
+        assert T.theme_from_dict(raw, Theme(card=T.CardStyle(opacity=70))).card.opacity == 70
+        assert T.rejected_fields(raw, Theme()) == {"card.opacity"}
+
+
+def test_missing_fields_fall_back_without_being_rejected():
+    fallback = Theme(card=T.CardStyle(radius=4))
+    assert T.theme_from_dict({}, fallback) == fallback
+    assert T.rejected_fields({"card": {}}, fallback) == set()
+
+
+def test_inverted_thresholds_are_reported_on_both_fields():
+    raw = {"bars": {"mid_at": 90, "high_at": 40}}
+    bars = T.theme_from_dict(raw, Theme(bars=T.BarStyle(mid_at=20, high_at=60))).bars
+    assert (bars.mid_at, bars.high_at) == (20, 60)
+    assert T.rejected_fields(raw, Theme()) == {"bars.mid_at", "bars.high_at"}
+    assert T.rejected_fields({"bars": {"mid_at": 50, "high_at": 50}}, Theme()) == {
+        "bars.mid_at", "bars.high_at"}
+
+
+def test_unknown_show_names_are_dropped_but_not_rejected():
+    raw = {"text": {"show": ["percent", "nope", 3]}}
+    assert T.theme_from_dict(raw, Theme()).text.show == frozenset({"percent"})
+    assert T.rejected_fields(raw, Theme()) == set()
+
+
+def test_non_list_show_and_non_dict_section_are_rejected():
+    raw = {"text": {"show": "percent"}, "card": [1]}
+    t = T.theme_from_dict(raw, Theme())
+    assert t.text.show == Theme().text.show and t.card == T.CardStyle()
+    assert T.rejected_fields(raw, Theme()) == {"text.show", "card"}
+
+
+def test_theme_from_dict_ignores_a_non_dict():
+    assert T.theme_from_dict(None, Theme()) == Theme()
+    assert T.rejected_fields([], Theme()) == set()

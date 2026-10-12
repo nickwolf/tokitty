@@ -393,21 +393,28 @@ class TokittyQtWidget(QWidget):
             return
         if not (pane._driving_tag or pane._tool_label):
             return
-        # Tags are relative to the cat's canvas, which follows an outside cat.
-        ox, oy = self.window_layout.pane_origins[index]
-        px, py = T.placement(home).origin
-        cx, cy = ox + px, oy + py - CAT_CANVAS_DY
+        driving, tool, side = self.tag_boxes(index, home)
         p.setFont(self._font_set()[2])
         if pane._driving_tag:
-            box = QRectF(cx + TAG_INSET, cy, CAT_CANVAS_SIZE - TAG_INSET,
-                         CAT_CANVAS_SIZE - TAG_INSET)
-            self._tag(p, box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+            self._tag(p, driving, side | Qt.AlignmentFlag.AlignBottom,
                       pane._driving_tag, QColor(style.dim), style)
         if pane._tool_label:
-            box = QRectF(cx + TAG_INSET, cy + TAG_INSET, CAT_CANVAS_SIZE - TAG_INSET,
-                         T.SMALL_H)
-            self._tag(p, box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            self._tag(p, tool, side | Qt.AlignmentFlag.AlignTop,
                       fit_tag(pane._tool_label), QColor(style.foreground), style)
+
+    def tag_boxes(self, index: int, home: str):
+        """(driving box, tool box, horizontal alignment) in window coordinates.
+        Tags are relative to the cat's canvas and sit on the card's outer
+        side, so a mirrored cat (inside_right) gets them on its right."""
+        ox, oy = self.window_layout.pane_origins[index]
+        placed = T.placement(home)
+        cx, cy = ox + placed.origin[0], oy + placed.origin[1] - CAT_CANVAS_DY
+        x = cx if placed.mirrored else cx + TAG_INSET
+        side = Qt.AlignmentFlag.AlignRight if placed.mirrored else Qt.AlignmentFlag.AlignLeft
+        width = CAT_CANVAS_SIZE - TAG_INSET
+        driving = QRectF(x, cy, width, CAT_CANVAS_SIZE - TAG_INSET)
+        tool = QRectF(x, cy + TAG_INSET, width, T.SMALL_H)
+        return driving, tool, side
 
     def _tag(self, p, box: QRectF, flags, text: str, color: QColor, style) -> None:
         # A chip in the card colour under the tag, as Tk draws on Windows, so

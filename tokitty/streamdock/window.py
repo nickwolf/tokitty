@@ -2,7 +2,8 @@
 
 Opened when the deck can not show the full request itself (tab not focused, or too
 few keys for the overlay). It shows the complete tool input, which is what makes
-Allow on the deck safe, and answers through the runtime. Tk thread only.
+Allow on the deck safe, and answers through the runtime. The bookkeeping here is
+toolkit-free; tk_view_factory builds the Tk windows. Tk thread only.
 """
 from __future__ import annotations
 
@@ -56,19 +57,24 @@ def nonces_to_close(open_nonces: Iterable[str], pending_nonces: Iterable[str]) -
 
 
 class InWindowViews:
-    """One Toplevel per nonce, closed when its request leaves pending."""
+    """One view per nonce, closed when its request leaves pending.
+
+    make_view(request, title, explain, anchor, on_answer, on_close) returns an object
+    with close(). on_answer(behavior) is for the buttons, on_close() for the window's
+    own close button.
+    """
 
     def __init__(
         self,
-        root: Any,
         runtime_fn: Callable[[], Any],
         name_fn: Callable[[int], str],
         anchor_fn: Callable[[int], Optional[tuple]],
+        make_view: Callable[..., Any],
     ) -> None:
-        self._root = root
         self._runtime_fn = runtime_fn
         self._name = name_fn
         self._anchor = anchor_fn
+        self._make_view = make_view
         self._open: dict = {}
 
     def open(self, request: PendingRequest, reason: str = "") -> None:
@@ -76,19 +82,71 @@ class InWindowViews:
         runtime = self._runtime_fn()
         if runtime is None or request.nonce in self._open:
             return
+        nonce = request.nonce
+
+        def on_answer(behavior: str) -> None:
+            runtime.decide_from_window(nonce, behavior)
+            self.close(nonce)
+
+        self._open[nonce] = self._make_view(
+            request,
+            title_text(self._name(request.account_index), request),
+            explain_text(reason, runtime.session_title(request), request),
+            self._anchor(request.account_index),
+            on_answer,
+            lambda: self.close(nonce),
+        )
+        runtime.in_window_opened(nonce)
+
+    def sync(self) -> None:
+        """Close the windows whose request is gone. Called from the Tk tick."""
+        runtime = self._runtime_fn()
+        if runtime is None:
+            return
+        for nonce in nonces_to_close(self._open, runtime.pending_nonces()):
+            self.close(nonce)
+
+    def close(self, nonce: str) -> None:
+        view = self._open.pop(nonce, None)
+        if view is None:
+            return
+        runtime = self._runtime_fn()
+        if runtime is not None:
+            runtime.in_window_closed(nonce)
+        try:
+            view.close()
+        except Exception:
+            pass
+
+    def close_all(self) -> None:
+        for nonce in list(self._open):
+            self.close(nonce)
+
+
+class _TkView:
+    def __init__(self, win: Any) -> None:
+        self._win = win
+
+    def close(self) -> None:
+        self._win.destroy()
+
+
+def tk_view_factory(root: Any) -> Callable[..., Any]:
+    """A make_view for InWindowViews that builds an always-on-top Toplevel."""
+
+    def make_view(request: PendingRequest, title: str, explain: str, anchor: Optional[tuple],
+                  on_answer: Callable[[str], None], on_close: Callable[[], None]) -> _TkView:
         import tkinter as tk
         from tkinter import ttk
 
-        win = tk.Toplevel(self._root)
-        win.title(title_text(self._name(request.account_index), request))
+        win = tk.Toplevel(root)
+        win.title(title)
         win.attributes("-topmost", True)
-        anchor = self._anchor(request.account_index)
         if anchor:
             win.geometry(f"+{anchor[0]}+{anchor[1]}")
-        win.protocol("WM_DELETE_WINDOW", lambda: self.close(request.nonce))
-        self._open[request.nonce] = win
+        win.protocol("WM_DELETE_WINDOW", on_close)
+        view = _TkView(win)
 
-        explain = explain_text(reason, runtime.session_title(request), request)
         ttk.Label(win, text=explain, wraplength=440, justify="left").pack(anchor="w", padx=8, pady=(8, 6))
         body = ttk.Frame(win)
         body.pack(fill="both", expand=True, padx=8)
@@ -102,38 +160,11 @@ class InWindowViews:
 
         buttons = ttk.Frame(win)
         buttons.pack(fill="x", padx=8, pady=8)
-
-        def answer(behavior: str) -> None:
-            runtime.decide_from_window(request.nonce, behavior)
-            self.close(request.nonce)
-
-        ttk.Button(buttons, text="Allow", command=lambda: answer("allow")).pack(side="left")
-        ttk.Button(buttons, text="Deny", command=lambda: answer("deny")).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Allow", command=lambda: on_answer("allow")).pack(side="left")
+        ttk.Button(buttons, text="Deny", command=lambda: on_answer("deny")).pack(side="left", padx=4)
         label = always_label(request)
         if label:
-            ttk.Button(buttons, text=label, command=lambda: answer("always")).pack(side="left")
-        runtime.in_window_opened(request.nonce)
+            ttk.Button(buttons, text=label, command=lambda: on_answer("always")).pack(side="left")
+        return view
 
-    def sync(self) -> None:
-        """Close the windows whose request is gone. Called from the Tk tick."""
-        runtime = self._runtime_fn()
-        if runtime is None:
-            return
-        for nonce in nonces_to_close(self._open, runtime.pending_nonces()):
-            self.close(nonce)
-
-    def close(self, nonce: str) -> None:
-        win = self._open.pop(nonce, None)
-        if win is None:
-            return
-        runtime = self._runtime_fn()
-        if runtime is not None:
-            runtime.in_window_closed(nonce)
-        try:
-            win.destroy()
-        except Exception:
-            pass
-
-    def close_all(self) -> None:
-        for nonce in list(self._open):
-            self.close(nonce)
+    return make_view

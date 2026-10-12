@@ -16,6 +16,7 @@ from tkinter import colorchooser
 from typing import Callable, Dict, List, Optional
 
 from tokitty import sprites
+from tokitty.app_version import version_text  # noqa: F401  (re-exported)
 from tokitty.settings_async import Mailbox, Poller, run_worker
 from tokitty.settings_widgets import (
     BAD, BASE_HEIGHT, BASE_WIDTH, BG_COLOR, BORDER, DIM_COLOR, GOOD,
@@ -51,19 +52,6 @@ _COLOR_ROWS = (
     ("Card background", "card_bg"),
     ("Bar fill", "bar_fill"),
 )
-
-
-def version_text() -> str:
-    """The running version for display, e.g. "v0.2.2"."""
-    try:
-        from tokitty.updater import running_version
-
-        version = running_version().version
-    except Exception:
-        return "dev"
-    if version[:1].isdigit():
-        return "v" + version
-    return version
 
 
 def _has_focus(widget) -> bool:
