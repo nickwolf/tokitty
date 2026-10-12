@@ -446,6 +446,11 @@ class TokittyQtWidget(QWidget):
                                   primary.devicePixelRatio(), sys.platform)
         x, y = position.place(saved, self.grid_size(), self.window_layout.margins,
                               self._area_at(saved))
+        if sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa":
+            # Moved before its native window exists, a frameless window
+            # lands 20 points higher on its first show, and the next drag
+            # saves that, so the widget crept up on every launch.
+            self.winId()
         self.move(x, y)
 
     def save_position(self) -> None:

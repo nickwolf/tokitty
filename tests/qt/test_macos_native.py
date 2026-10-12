@@ -45,3 +45,36 @@ def test_widget_shows_under_cocoa_and_joins_every_space():
     assert behavior & (1 << 0)  # CanJoinAllSpaces
     assert behavior & (1 << 8)  # FullScreenAuxiliary
     assert not behavior & (1 << 1)  # MoveToActiveSpace
+
+
+POSITION_SCRIPT = textwrap.dedent("""
+    import json, sys, tempfile
+    from pathlib import Path
+    from PySide6.QtWidgets import QApplication
+    from tokitty import theme
+    from tokitty.customize import Customization
+    from tokitty.qt.widget import TokittyQtWidget
+
+    app = QApplication([])
+    path = Path(tempfile.mkdtemp()) / "position.json"
+    path.write_text(json.dumps({"x": 400, "y": 300, "unit": "logical"}))
+    widget = TokittyQtWidget(theme.load_theme(tempfile.mkdtemp()), [Customization()], 1,
+                             position_path=path)
+    widget.restore_position()
+    widget.show()
+    for _ in range(10):
+        app.processEvents()
+    print(json.dumps(widget.first_card_pos()))
+""")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs AppKit")
+def test_restored_position_survives_the_first_show():
+    """Qt's cocoa plugin moved a frameless window 20 points up when it was
+    moved before its native window existed, and the next drag saved the
+    shifted spot, so the widget crept up a little on every launch."""
+    env = dict(os.environ, QT_QPA_PLATFORM="cocoa")
+    proc = subprocess.run([sys.executable, "-c", POSITION_SCRIPT], env=env, cwd=ROOT,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip().splitlines()[-1] == "[400, 300]"
