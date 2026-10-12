@@ -9,6 +9,7 @@ Override keys are a closed set:
   - "coat_shade" -> sprite char "O" (coat shading)
   - "card_bg"    -> consumed by the UI, not the sprite palette
   - "bar_fill"   -> consumed by the UI, not the sprite palette
+"cat_home" is the cat's resting spot (one of theme.SPOTS), default "inside".
 All override values must be "#rrggbb"; unknown keys and invalid hex
 values are silently dropped on load so a hand-edited file degrades
 gracefully instead of crashing the poller/UI.
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Dict
 
 from tokitty import sprites
+from tokitty.theme import SPOTS
 
 CUSTOMIZATION_FILENAME = "customization.json"
 
@@ -38,6 +40,7 @@ class Customization:
     pattern: str = "tabby"
     overrides: Dict[str, str] = field(default_factory=dict)
     label: str = ""
+    cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -91,11 +94,15 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         label = entry.get("label")
         if not isinstance(label, str):
             label = ""
+        cat_home = entry.get("cat_home")
+        if not (isinstance(cat_home, str) and cat_home in SPOTS):
+            cat_home = "inside"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
             overrides=_clean_overrides(entry.get("overrides")),
             label=label,
+            cat_home=cat_home,
         )
     return result
 
