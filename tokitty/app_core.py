@@ -48,6 +48,8 @@ from tokitty.usage_display import build_view
 from tokitty.usage_watcher import UsageWatcher
 from tokitty import sprites
 
+UI_REFRESH_MS = 500
+
 # Shown only once our own clock says a cached countdown should already
 # have hit zero and we still can't confirm it -- see _display_state_for.
 _STALE_HINTS = {
@@ -416,6 +418,35 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
     # look file, never accounts.json, so there is no credential-mode impact.
     save_customization(state_dir, customization_store)
     return units
+
+
+def make_usage_state(settings: Settings) -> dict:
+    """Plain-Python shadow state: menu.py's contract is that every getter is
+    read by pystray on its OWN thread, so none of these may ever become a
+    toolkit variable. UsageWatcher reads usage_state["window"] from its worker
+    thread for the same reason."""
+    return {
+        "view": settings.view_mode,
+        "window": settings.usage_window,
+        "readout": settings.usage_readout,
+        "budgets": settings.usage_budgets,
+        "onboarding": settings.onboarding_version,
+        "notes": (settings.usage_notes_enabled, settings.usage_note_session_pct,
+                  settings.usage_note_weekly_pct),
+        # (enabled, url, topic, token) for ntfy alerts.
+        "ntfy": (settings.ntfy_enabled, settings.ntfy_url, settings.ntfy_topic, settings.ntfy_token),
+    }
+
+
+def refresh_units(units: List[dict]) -> None:
+    """The "Refresh now" action."""
+    for unit in units:
+        # Clearing first means "Refresh now" is the recovery path after a
+        # denied Keychain prompt: grant access, click Refresh, done. No
+        # restart needed, which is what makes the sticky block safe.
+        unit["cred_loader"].clear_block()
+        unit["poller"].request_refresh()
+        unit["usage"].request_refresh()
 
 
 def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None]) -> Callable:

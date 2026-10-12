@@ -15,6 +15,7 @@ from tokitty.activity_watcher import ActivityWatcher
 # moved into app_core and are still imported from here by the tests.
 from tokitty.app_core import (  # noqa: F401
     _STALE_HINTS,
+    UI_REFRESH_MS,
     Discovery,
     _display_state_for,
     _next_last_good,
@@ -23,9 +24,11 @@ from tokitty.app_core import (  # noqa: F401
     initial_customization,
     initial_label,
     make_onboarder,
+    make_usage_state,
     provider_tag_kind,
     publish_ntfy,
     publish_usage_notes,
+    refresh_units,
     step_unit,
 )
 from tokitty.customize import (
@@ -64,7 +67,6 @@ from tokitty import sprites
 # run_gui() imports both lazily, only when the GUI path actually runs.
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
-UI_REFRESH_MS = 500
 # The ack waits for the window to be mapped, but not forever: a window manager
 # that never reports a map must not strand the handover.
 ACK_MAP_POLL_MS = 50
@@ -263,21 +265,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
     # walkthrough, which writes them.
     settings = load_settings(state_dir)
 
-    # Plain-Python shadow state: menu.py's contract is that every getter
-    # is read by pystray on its OWN thread, so none of these may ever
-    # become a Tk var. UsageWatcher reads usage_state["window"] from its
-    # worker thread for the same reason.
-    usage_state = {
-        "view": settings.view_mode,
-        "window": settings.usage_window,
-        "readout": settings.usage_readout,
-        "budgets": settings.usage_budgets,
-        "onboarding": settings.onboarding_version,
-        "notes": (settings.usage_notes_enabled, settings.usage_note_session_pct,
-                  settings.usage_note_weekly_pct),
-        # (enabled, url, topic, token) for ntfy alerts.
-        "ntfy": (settings.ntfy_enabled, settings.ntfy_url, settings.ntfy_topic, settings.ntfy_token),
-    }
+    usage_state = make_usage_state(settings)
     notifier = Notifier(state_dir)
 
     window = TokittyWindow(root, state_dir, pane_count=pane_count, opacity=settings.opacity, scale=scale)
@@ -353,13 +341,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         pane.set_appearance(label=unit["label"])
 
     def refresh_all():
-        for unit in units:
-            # Clearing first means "Refresh now" is the recovery path after a
-            # denied Keychain prompt: grant access, click Refresh, done. No
-            # restart needed, which is what makes the sticky block safe.
-            unit["cred_loader"].clear_block()
-            unit["poller"].request_refresh()
-            unit["usage"].request_refresh()
+        refresh_units(units)
 
     window.on_refresh_requested = refresh_all
 
@@ -872,6 +854,12 @@ def main(argv: Optional[list] = None) -> int:
         if not valid_token(token):
             print("tokitty: --after-update needs a token", file=sys.stderr)
             return 2
+    if os.environ.get("TOKITTY_QT") == "1" and "--after-update" not in argv and "--apply-update" not in argv:
+        # Source-only developer mode until #115; the update hand-offs keep
+        # the Tk path (#113).
+        from tokitty.qt.app import run_qt
+
+        return run_qt()
     if token or "--apply-update" in argv:
         return run_gui(after_update_token=token, apply_update="--apply-update" in argv)
     return run_gui()
