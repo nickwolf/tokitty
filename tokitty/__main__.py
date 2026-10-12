@@ -56,7 +56,7 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.ntfy import Notifier, send_test as ntfy_send_test
-from tokitty.streamdock.window import InWindowViews
+from tokitty.streamdock.window import InWindowViews, tk_view_factory
 from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, apply_idle_cap, gather_inputs
 from tokitty.randomize import random_look
 from tokitty import sprites
@@ -615,7 +615,7 @@ def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False
         account = units[index]["account"]
         return account.name if account else DEFAULT_NAME
 
-    deck_views = InWindowViews(root, lambda: deck.runtime, account_name, pane_anchor)
+    deck_views = InWindowViews(lambda: deck.runtime, account_name, pane_anchor, tk_view_factory(root))
     # A busy deck port is retried on the Tk thread for as long as an update's
     # handover can take, so a new copy launched by the updater still gets it.
     deck = DeckStarter(

@@ -27,6 +27,7 @@ _MODULES = (
     "tokitty.streamdock.gui_state",
     "tokitty.streamdock.wiring",
     "tokitty.streamdock.presets",
+    "tokitty.streamdock.window",
 )
 
 
