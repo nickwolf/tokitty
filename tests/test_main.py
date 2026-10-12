@@ -17,6 +17,7 @@ from tokitty.__main__ import (
     resolve_activity_sessions,
     resolve_projects_dir,
 )
+from tokitty import app_core
 from tokitty.accounts import Account
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.burn import BurnTracker
@@ -585,7 +586,7 @@ def test_run_gui_retries_pending_hook_op_at_startup(tmp_path, monkeypatch):
     monkeypatch.setattr(tk.Tk, "mainloop", lambda self: None)
 
     calls = []
-    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    monkeypatch.setattr(app_core, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
     spawned = _capture_spawned_threads(monkeypatch)
 
     result = main_module.run_gui()
@@ -615,7 +616,7 @@ def test_run_gui_debug_accounts_mode_skips_retry_and_discovery(tmp_path, monkeyp
     monkeypatch.setenv("TOKITTY_DEBUG_ACCOUNTS", "2")
 
     calls = []
-    monkeypatch.setattr(main_module, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
+    monkeypatch.setattr(app_core, "retry_pending_hook_op", lambda state_dir: calls.append(state_dir))
     spawned = _capture_spawned_threads(monkeypatch)
 
     result = main_module.run_gui()
@@ -643,7 +644,7 @@ def test_hook_warnings_reach_tick_even_when_discovery_finishes_before_mainloop(t
     warnings = []
     main_module = _setup_run_gui(tmp_path, monkeypatch, tk, until=lambda: bool(warnings))
     monkeypatch.setattr(
-        main_module, "retry_pending_hook_op",
+        app_core, "retry_pending_hook_op",
         lambda state_dir: hooks_install_module.ConfigDirResult(
             str(tmp_path / "a"), True, "installed", warning="retry warning"
         ),
@@ -702,7 +703,7 @@ def test_startup_hook_warnings_show_once_via_messagebox(tmp_path, monkeypatch):
     main_module = _setup_run_gui(tmp_path, monkeypatch, tk, until=lambda: bool(warnings))
 
     monkeypatch.setattr(
-        main_module, "retry_pending_hook_op",
+        app_core, "retry_pending_hook_op",
         lambda state_dir: hooks_install_module.ConfigDirResult(
             str(tmp_path / "a"), True, "installed", warning="retry warning"
         ),
@@ -834,7 +835,7 @@ def test_run_discovery_survives_retry_pending_hook_op_raising(tmp_path, monkeypa
     warnings = []
     main_module = _setup_run_gui(tmp_path, monkeypatch, tk, until=lambda: bool(warnings))
     monkeypatch.setattr(
-        main_module, "retry_pending_hook_op",
+        app_core, "retry_pending_hook_op",
         lambda state_dir: (_ for _ in ()).throw(OSError("disk on fire")),
     )
     monkeypatch.setattr(
@@ -1013,7 +1014,7 @@ def test_run_discovery_skips_wsl_scan_when_accounts_file_is_present(tmp_path, mo
         "tokitty.wsl_probe.find_all_wsl_credentials", lambda: scans.append(1) or []
     )
     monkeypatch.setattr(
-        main_module, "retry_pending_hook_op", lambda state_dir: retries.append(state_dir)
+        app_core, "retry_pending_hook_op", lambda state_dir: retries.append(state_dir)
     )
     spawned = _capture_spawned_threads(monkeypatch)
 
@@ -1076,7 +1077,7 @@ def test_run_discovery_skips_wsl_scan_when_native_credentials_exist(
         lambda *a, **k: distro_listings.append(1) or [],
     )
     monkeypatch.setattr(
-        main_module,
+        app_core,
         "retry_pending_hook_op",
         lambda state_dir: retries.append(state_dir),
     )
@@ -1120,6 +1121,7 @@ def test_run_gui_persists_migration_before_marking_it_complete(tmp_path, monkeyp
         return real_mark(state_dir, key)
 
     monkeypatch.setattr(main_module, "save_customization", recording_save)
+    monkeypatch.setattr(app_core, "save_customization", recording_save)
     monkeypatch.setattr(migration, "mark_customization_migration_complete", recording_mark)
 
     assert main_module.run_gui() == 0
@@ -1128,6 +1130,8 @@ def test_run_gui_persists_migration_before_marking_it_complete(tmp_path, monkeyp
         f"mark:{migration.CUSTOMIZATION_MIGRATION_KEY}",
         f"mark:{migration.LEGACY_ACCOUNT_LABELS_MIGRATION_KEY}",
     ]
+    # The unit-seed save (now in app_core.build_units) comes after the markers.
+    assert events[3:] == ["save"]
 
 
 @pytest.mark.gui
