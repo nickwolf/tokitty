@@ -29,6 +29,13 @@ CAT_CANVAS_SIZE = 112     # ui.CAT_CANVAS_SIZE
 CAT_CANVAS_DY = 4         # the sprite sits 4 px below its canvas origin (placement "inside")
 TAG_INSET = 6             # ui.py:525-529
 HALO_COLOR = QColor(0, 0, 0, 200)
+# A tk.Label draws its text inset by its border and padding, so the Tk card's
+# text sits this far in from the placed rect. Measured on Windows at 100%.
+TK_LABEL_PAD_X = 3
+TK_LABEL_PAD_Y = 2
+# The chip Tk draws under a cat tag on the keyed Windows canvas (ui.py:543-550).
+TAG_CHIP_PAD_X = 3
+TAG_CHIP_PAD_Y = 1
 _HALO_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1))
 
 _LEFT_VCENTER = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -47,6 +54,13 @@ def is_context_press(button, modifiers, platform: str = sys.platform) -> bool:
 
 def _qrect(r: T.Rect) -> QRectF:
     return QRectF(r.x, r.y, r.w, r.h)
+
+
+def _text_rect(r: T.Rect, right: bool = False) -> QRectF:
+    """A layout rect moved by Tk's label inset, so text lands where the Tk
+    card draws it. Right-aligned text moves left by the same amount."""
+    dx = -TK_LABEL_PAD_X if right else TK_LABEL_PAD_X
+    return QRectF(r.x + dx, r.y + TK_LABEL_PAD_Y, r.w, r.h)
 
 
 def palette_signature(palette: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
@@ -249,7 +263,8 @@ class TokittyQtWidget(QWidget):
                 pane.usage_view.status_text if pane.usage_view is not None else "")
             rect = layout["status"]
             # The status line wraps within the stats column, as Tk's does.
-            box = QRectF(rect.x, rect.y, rect.w, T.CARD_HEIGHT - rect.y)
+            box = QRectF(rect.x + TK_LABEL_PAD_X, rect.y + TK_LABEL_PAD_Y, rect.w,
+                         T.CARD_HEIGHT - rect.y - TK_LABEL_PAD_Y)
             p.setFont(self._font_set()[2])
             p.setPen(dim)
             p.drawText(box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
@@ -257,7 +272,7 @@ class TokittyQtWidget(QWidget):
         if "account_label" in layout and pane._label:
             p.setFont(self._font_set()[2])
             p.setPen(dim)
-            p.drawText(_qrect(layout["account_label"]), _RIGHT_VCENTER, pane._label)
+            p.drawText(_text_rect(layout["account_label"], right=True), _RIGHT_VCENTER, pane._label)
         p.restore()
 
         self._paint_cat(p, index, pane, palette, home, dpr)
@@ -324,19 +339,24 @@ class TokittyQtWidget(QWidget):
         for name, title, pct, reset in rows:
             if f"{name}_label" in layout:
                 p.setFont(label_font)
-                self._text(p, label_fg, _qrect(layout[f"{name}_label"]), _LEFT_VCENTER, title,
+                self._text(p, label_fg, _text_rect(layout[f"{name}_label"]), _LEFT_VCENTER, title,
                            halo and T.halo_applies("section_labels"))
             self._bar(p, layout[f"{name}_bar"], pct,
                       T.bar_fill(self.theme, pct, style.bar_fill_override))
             p.setFont(text_font)
+            reset_box = _text_rect(layout[f"{name}_reset"]) if f"{name}_reset" in layout else None
             if f"{name}_percent" in layout:
-                self._text(p, dim, _qrect(layout[f"{name}_percent"]), _LEFT_VCENTER,
-                           f"{pct:.0f}%", halo and T.halo_applies("percent"))
-            if f"{name}_reset" in layout:
-                # Tk shows "42% · resets ..." as one run; keep the dot when
-                # the percent is there to separate from.
-                lead = "· " if f"{name}_percent" in layout else ""
-                self._text(p, dim, _qrect(layout[f"{name}_reset"]), _LEFT_VCENTER, lead + reset)
+                percent = f"{pct:.0f}%"
+                box = _text_rect(layout[f"{name}_percent"])
+                self._text(p, dim, box, _LEFT_VCENTER, percent, halo and T.halo_applies("percent"))
+                if reset_box is not None:
+                    # Tk draws "42% · resets ..." as one run, so the reset text
+                    # starts right after the percent rather than at its own rect.
+                    start = box.left() + p.fontMetrics().horizontalAdvance(percent + " ")
+                    reset_box.setLeft(start)
+                    reset = "· " + reset
+            if reset_box is not None:
+                self._text(p, dim, reset_box, _LEFT_VCENTER, reset)
 
     def _paint_models(self, p, pane, layout, style, label_fg, dim) -> None:
         _label_font, model_font, text_font = self._font_set()
@@ -346,10 +366,10 @@ class TokittyQtWidget(QWidget):
             row = rows[i] if i < len(rows) else None
             if f"model_name_{i}" in layout and row is not None:
                 p.setFont(model_font)
-                self._text(p, label_fg, _qrect(layout[f"model_name_{i}"]), _LEFT_VCENTER,
+                self._text(p, label_fg, _text_rect(layout[f"model_name_{i}"]), _LEFT_VCENTER,
                            fit_tag(row.label, MODEL_NAME_MAX))
                 p.setFont(text_font)
-                self._text(p, dim, _qrect(layout[f"model_value_{i}"]), _RIGHT_VCENTER,
+                self._text(p, dim, _text_rect(layout[f"model_value_{i}"], right=True), _RIGHT_VCENTER,
                            row.value_text)
             # Like Tk, the track is always there; the fill only when there is a share.
             pct = row.bar_pct if row is not None else 0.0
@@ -377,15 +397,23 @@ class TokittyQtWidget(QWidget):
         if pane._driving_tag:
             box = QRectF(cx + TAG_INSET, cy, CAT_CANVAS_SIZE - TAG_INSET,
                          CAT_CANVAS_SIZE - TAG_INSET)
-            self._text(p, QColor(style.dim), box,
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
-                       pane._driving_tag)
+            self._tag(p, box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                      pane._driving_tag, QColor(style.dim), style)
         if pane._tool_label:
             box = QRectF(cx + TAG_INSET, cy + TAG_INSET, CAT_CANVAS_SIZE - TAG_INSET,
                          T.SMALL_H)
-            self._text(p, QColor(style.foreground), box,
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                       fit_tag(pane._tool_label))
+            self._tag(p, box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                      fit_tag(pane._tool_label), QColor(style.foreground), style)
+
+    def _tag(self, p, box: QRectF, flags, text: str, color: QColor, style) -> None:
+        # A chip in the card colour under the tag, as Tk draws on Windows, so
+        # the dim text stays legible over the cat's fur.
+        bounds = p.fontMetrics().boundingRect(box.toRect(), int(flags), text)
+        chip = QColor(style.background)
+        chip.setAlpha(T.card_alpha(style.opacity))
+        p.fillRect(QRectF(bounds).adjusted(-TAG_CHIP_PAD_X, -TAG_CHIP_PAD_Y,
+                                           TAG_CHIP_PAD_X, TAG_CHIP_PAD_Y), chip)
+        self._text(p, color, box, flags, text)
 
     # ---- position -------------------------------------------------------
 
