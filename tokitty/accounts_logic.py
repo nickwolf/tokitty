@@ -6,6 +6,7 @@ apply_account_mutation patch this module, where those names are looked up.
 """
 from __future__ import annotations
 
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,62 @@ def _parses_as_oauth_file(path: Path) -> bool:
         return _parses_as_oauth(path.read_text(encoding="utf-8"))
     except OSError:
         return False
+
+
+def local_codex_facts(config_dir: str):
+    """(has_rollouts,) for a Codex home, or None when answering would touch a
+    WSL UNC path from the GUI thread. Same rules as local_capabilities."""
+    if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
+        return None
+    try:
+        path = Path(config_dir)
+        for name in ("sessions", "archived_sessions"):
+            folder = path / name
+            if folder.is_dir() and next(folder.iterdir(), None) is not None:
+                return (True,)
+        return (False,)
+    except OSError:
+        return None
+
+
+def local_capabilities(config_dir: str):
+    """(has_credentials, has_transcripts) for a config dir, or None when
+    answering would need a subprocess.
+
+    Deliberately cheap and local-only. A WSL UNC path would need wsl.exe
+    calls, and this runs on the GUI thread while the window is being built.
+    Unknown is rendered as nothing rather than as a guess.
+    """
+    if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
+        return None
+    try:
+        path = Path(config_dir)
+        credentials = path / ".credentials.json"
+        has_credentials = credentials.is_file() and _parses_as_oauth_file(credentials)
+        return has_credentials, (path / "projects").is_dir()
+    except OSError:
+        return None
+
+
+def codex_hook_text(config_dir: str, state_dir: Path) -> Optional[str]:
+    """The approval line for a Codex row, or None when no hooks are installed
+    or the home is not read from here. Called only after _local_codex_facts
+    accepted the home, so a WSL UNC path on Windows never gets here."""
+    from tokitty import codex_trust
+
+    try:
+        status = codex_trust.codex_hook_status(config_dir, state_dir)
+        if status == codex_trust.APPROVED:
+            if codex_trust.codex_activity_hint(config_dir, state_dir):
+                return "hooks: approved, no activity from Codex hooks yet"
+            return "hooks: approved"
+    except OSError:
+        return None
+    if status == codex_trust.NEEDS_APPROVAL:
+        return "hooks: waiting for approval in Codex"
+    if status == codex_trust.UNREADABLE:
+        return "hooks: can't read Codex hook state"
+    return None
 
 
 def describe_capabilities(has_credentials: bool, has_transcripts: bool) -> Tuple[str, str]:

@@ -18,7 +18,6 @@ from tokitty.accounts import (
     AccountsLoadResult,
     backfill_identity_history,
     canonicalize_locator,
-    parse_wsl_unc,
     load_accounts_result,
     load_identity_history,
     save_identity_history,
@@ -28,9 +27,9 @@ from tokitty.accounts_logic import (  # noqa: F401  (re-exported)
     CODEX_KIND, DiscoveredPathSpec, RowSpec, _fallback_label,
     _needs_off_thread_validation, _parses_as_oauth_file, _run_mutation_off_thread,
     _run_retry_off_thread, _run_validation_off_thread, _same_dir,
-    build_discovered_path_specs, build_row_specs, describe_capabilities,
+    build_discovered_path_specs, build_row_specs, codex_hook_text, describe_capabilities,
     describe_codex_capabilities, discover_local_codex_home, reconcile_before_save,
-    validate_account_path,
+    local_capabilities, local_codex_facts, validate_account_path,
 )
 from tokitty.customize import (
     Customization,
@@ -454,63 +453,13 @@ class AccountsManager:
         frame.pack(fill="x", padx=8, pady=2)
 
     def _local_codex_facts(self, config_dir: str):
-        """(has_rollouts,) for a Codex home, or None when answering would
-        touch a WSL UNC path from the Tk thread. Same rules as
-        _local_capabilities."""
-        if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
-            return None
-        try:
-            path = Path(config_dir)
-            for name in ("sessions", "archived_sessions"):
-                folder = path / name
-                if folder.is_dir() and next(folder.iterdir(), None) is not None:
-                    return (True,)
-            return (False,)
-        except OSError:
-            return None
+        return local_codex_facts(config_dir)
 
     def _codex_hook_text(self, config_dir: str) -> Optional[str]:
-        """The approval line for a Codex row, or None when no hooks are
-        installed or the home is not read from here. Called only after
-        _local_codex_facts accepted the home, so a WSL UNC path on Windows
-        never gets here."""
-        from tokitty import codex_trust
-
-        try:
-            status = codex_trust.codex_hook_status(config_dir, self.state_dir)
-            if status == codex_trust.APPROVED:
-                if codex_trust.codex_activity_hint(config_dir, self.state_dir):
-                    return "hooks: approved, no activity from Codex hooks yet"
-                return "hooks: approved"
-        except OSError:
-            return None
-        if status == codex_trust.NEEDS_APPROVAL:
-            return "hooks: waiting for approval in Codex"
-        if status == codex_trust.UNREADABLE:
-            return "hooks: can't read Codex hook state"
-        return None
+        return codex_hook_text(config_dir, self.state_dir)
 
     def _local_capabilities(self, config_dir: str):
-        """(has_credentials, has_transcripts) for a config dir, or None
-        when answering would need a subprocess.
-
-        Deliberately cheap and local-only. A WSL UNC path would need
-        wsl.exe calls, and this runs on the Tk thread while the dialog is
-        being built -- the same freeze this file's own comments warn about
-        for the pending-hook retry. Unknown is rendered as nothing rather
-        than as a guess.
-        """
-        from tokitty.accounts import parse_wsl_unc
-
-        if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
-            return None
-        try:
-            path = Path(config_dir)
-            credentials = path / ".credentials.json"
-            has_credentials = credentials.is_file() and _parses_as_oauth_file(credentials)
-            return has_credentials, (path / "projects").is_dir()
-        except OSError:
-            return None
+        return local_capabilities(config_dir)
 
     def _render_capability_facts(self, frame, config_dir: str, provider: str = DEFAULT_PROVIDER) -> None:
         if provider == CODEX_KIND:

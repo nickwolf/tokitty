@@ -33,14 +33,14 @@ from tokitty.accounts import (
     canonicalize_locator,
     load_accounts_result,
     load_identity_history,
-    parse_wsl_unc,
     save_identity_history,
 )
 from tokitty.accounts_logic import (
-    CODEX_KIND, _needs_off_thread_validation, _parses_as_oauth_file, _run_mutation_off_thread,
+    CODEX_KIND, _needs_off_thread_validation, _run_mutation_off_thread,
     _run_retry_off_thread, _run_validation_off_thread, _same_dir, build_discovered_path_specs,
-    build_row_specs, describe_capabilities, describe_codex_capabilities,
-    discover_local_codex_home, reconcile_before_save, validate_account_path,
+    build_row_specs, codex_hook_text, describe_capabilities, describe_codex_capabilities,
+    discover_local_codex_home, local_capabilities, local_codex_facts, reconcile_before_save,
+    validate_account_path,
 )
 from tokitty.customize import (
     Customization,
@@ -81,70 +81,14 @@ def current() -> Optional["AccountsManager"]:
     return manager if manager is not None and not manager._closed else None
 
 
-def _local_codex_facts(config_dir: str):
-    """(has_rollouts,) for a Codex home, or None when answering would touch a
-    WSL UNC path from the GUI thread. Same rules as _local_capabilities."""
-    if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
-        return None
-    try:
-        path = Path(config_dir)
-        for name in ("sessions", "archived_sessions"):
-            folder = path / name
-            if folder.is_dir() and next(folder.iterdir(), None) is not None:
-                return (True,)
-        return (False,)
-    except OSError:
-        return None
-
-
-def _local_capabilities(config_dir: str):
-    """(has_credentials, has_transcripts) for a config dir, or None when
-    answering would need a subprocess.
-
-    Deliberately cheap and local-only. A WSL UNC path would need wsl.exe
-    calls, and this runs on the GUI thread while the window is being built.
-    Unknown is rendered as nothing rather than as a guess.
-    """
-    if parse_wsl_unc(config_dir) is not None and sys.platform == "win32":
-        return None
-    try:
-        path = Path(config_dir)
-        credentials = path / ".credentials.json"
-        has_credentials = credentials.is_file() and _parses_as_oauth_file(credentials)
-        return has_credentials, (path / "projects").is_dir()
-    except OSError:
-        return None
-
-
-def _codex_hook_text(config_dir: str, state_dir: Path) -> Optional[str]:
-    """The approval line for a Codex row, or None when no hooks are installed
-    or the home is not read from here. Called only after _local_codex_facts
-    accepted the home, so a WSL UNC path on Windows never gets here."""
-    from tokitty import codex_trust
-
-    try:
-        status = codex_trust.codex_hook_status(config_dir, state_dir)
-        if status == codex_trust.APPROVED:
-            if codex_trust.codex_activity_hint(config_dir, state_dir):
-                return "hooks: approved, no activity from Codex hooks yet"
-            return "hooks: approved"
-    except OSError:
-        return None
-    if status == codex_trust.NEEDS_APPROVAL:
-        return "hooks: waiting for approval in Codex"
-    if status == codex_trust.UNREADABLE:
-        return "hooks: can't read Codex hook state"
-    return None
-
-
 def capability_text(config_dir: str, provider: str, state_dir: Path) -> Optional[str]:
     """The facts line under an account row, or None when it cannot be told
     cheaply from here."""
     if provider == CODEX_KIND:
-        facts = _local_codex_facts(config_dir)
+        facts = local_codex_facts(config_dir)
         describe = describe_codex_capabilities
     elif provider == DEFAULT_PROVIDER:
-        facts = _local_capabilities(config_dir)
+        facts = local_capabilities(config_dir)
         describe = describe_capabilities
     else:
         facts = None
@@ -153,7 +97,7 @@ def capability_text(config_dir: str, provider: str, state_dir: Path) -> Optional
     first, local = describe(*facts)
     line = f"{first} · {local}"
     if provider == CODEX_KIND:
-        hooks = _codex_hook_text(config_dir, state_dir)
+        hooks = codex_hook_text(config_dir, state_dir)
         if hooks:
             line = f"{line} · {hooks}"
     if provider != DEFAULT_PROVIDER:
