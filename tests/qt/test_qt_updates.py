@@ -296,10 +296,19 @@ def test_hook_warnings_wait_while_the_update_host_is_hidden(
     from tokitty import update_controller
 
     monkeypatch.setattr(update_controller, "reclaim", lambda lock, state_dir, backend: None)
-    # Queued only once the app is hidden: a tick can run before the hook
-    # (during show on Windows and macOS), and would rightly take it then.
-    queued = []
-    monkeypatch.setattr(Discovery, "take_hook_warnings", lambda self: queued.pop(0) if queued else [])
+    # Queued only once the app is hidden, and only for this run's Discovery:
+    # an earlier test's run_qt can leave a live tick timer behind (seen on
+    # Windows CI), and its tick would take the warning through the class patch.
+    queued, created = [], []
+    real_init = Discovery.__init__
+
+    def init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(Discovery, "__init__", init)
+    monkeypatch.setattr(Discovery, "take_hook_warnings",
+                        lambda self: queued.pop(0) if queued and self is created[-1] else [])
     seen = {}
 
     def hook(widget):
