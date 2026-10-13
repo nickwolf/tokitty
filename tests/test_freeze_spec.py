@@ -318,3 +318,12 @@ def test_lgpl_packages_ship_as_replaceable_source():
     assert data.LGPL_SOURCE_PACKAGES == {"pystray": "py", "PySide6": "py", "shiboken6": "py"}
     spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
     assert "module_collection_mode=LGPL_SOURCE_PACKAGES" in spec
+
+
+def test_qt_notice_carries_the_icu_licence_of_the_bundled_version():
+    # The Linux wheel ships ICU 73.2; its notice comes from that release's
+    # icu4c/LICENSE, not from whatever ICU the build host has (#115).
+    notice = (Path(__file__).resolve().parent.parent / "freeze" / "licenses" / "Qt-NOTICE.txt").read_text(encoding="utf-8")
+    assert "ICU 73.2, icu4c/LICENSE at unicode-org/icu release-73-2" in notice
+    assert "UNICODE LICENSE V3" in notice.upper() or "UNICODE, INC. LICENSE AGREEMENT" in notice.upper()
+    assert "/usr/share/doc/" not in notice

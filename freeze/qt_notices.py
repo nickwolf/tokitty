@@ -1,7 +1,8 @@
 """Generates freeze/licenses/Qt-NOTICE.txt from the qt_attribution.json files
 of the qtbase source release the bundled Qt is built from (#115).
 
-    python -m freeze.qt_notices --qtbase <dir> --out freeze/licenses/Qt-NOTICE.txt
+    python -m freeze.qt_notices --qtbase <dir> --icu-licence <icu LICENSE> --icu-version 73.2 \
+        --out freeze/licenses/Qt-NOTICE.txt
 
 <dir> mirrors the qtbase tree at the tag matching the pinned PySide6 version:
 the qt_attribution.json files in their folders, the licence files they name
@@ -85,18 +86,15 @@ def licence_texts(entry: dict, qtbase: Path) -> List[Tuple[str, str]]:
     return out
 
 
-def icu_licence(copyright_glob: str = "/usr/share/doc/libicu*/copyright") -> Optional[Tuple[str, str]]:
-    """ICU's licence text from the Debian copyright file (its first stanza, the
-    one for ICU itself) and the path it came from."""
-    for path in sorted(glob.glob(copyright_glob)):
-        text = Path(path).read_text(encoding="utf-8")
-        stanza = text.split("\nFiles: debian/", 1)[0].split("\nLicense: MIT\n", 1)
-        if len(stanza) != 2:
-            continue
-        lines = [line[1:] if line.startswith(" ") else line for line in stanza[1].splitlines()]
-        body = "\n".join("" if line == "." else line for line in lines).strip()
-        return path, body
-    return None
+def icu_licence(path: Path, version: str) -> Tuple[str, str]:
+    """ICU's own LICENSE file for the version the Linux wheel ships (fetch it
+    from unicode-org/icu at release-<major>-<minor>, icu4c/LICENSE), verbatim,
+    with its third-party notices. Never the host's: the bundle's ICU is the
+    wheel's, not the build machine's."""
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if "UNICODE" not in text.upper() or "LICENSE" not in text.upper():
+        raise ValueError(f"{path} does not look like ICU's LICENSE file")
+    return f"ICU {version}, icu4c/LICENSE at unicode-org/icu release-{version.replace('.', '-')}", text
 
 
 def _wrap(items) -> str:
@@ -168,11 +166,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--qtbase", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--no-icu", action="store_true", help="leave out the Linux ICU licence")
+    parser.add_argument("--icu-licence", required=True, type=Path,
+                        help="icu4c/LICENSE of the ICU version the Linux wheel bundles")
+    parser.add_argument("--icu-version", required=True, help="that ICU version, e.g. 73.2")
     args = parser.parse_args(argv)
-    icu = None if args.no_icu else icu_licence()
-    if icu is None and not args.no_icu:
-        print("warning: no /usr/share/doc/libicu*/copyright found, ICU left out", file=sys.stderr)
+    icu = icu_licence(args.icu_licence, args.icu_version)
     text = build_notice(args.qtbase, qt_version(ROOT), icu)
     args.out.write_text(text.rstrip("\n") + "\n", encoding="utf-8", newline="\n")
     kept, dropped = classify(load_entries(args.qtbase))
