@@ -69,7 +69,7 @@ def test_minimum_size_and_growth_to_the_tallest_tab(make_world):
 
 def test_rail_switches_tabs(make_world):
     window = open_window(make_world())
-    assert list(window.tabs) == ["general", "look", "theme", "usage"]
+    assert list(window.tabs) == ["general", "look", "theme", "usage", "accounts"]
     window.rail.strips["usage"].clicked.emit("usage")
     assert window.current == "usage"
     assert not window.tabs["usage"].frame.isHidden()

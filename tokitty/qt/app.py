@@ -2,9 +2,9 @@
 
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that (tray, Stream Dock, update check, accounts manager,
-walkthrough) is absent here until its own issue (#112 to #114). PySide6 is
-imported inside run_qt, so importing this module never needs it.
+has beyond that (tray, Stream Dock, update check, walkthrough) is absent here
+until its own issue (#112 to #114). PySide6 is imported inside run_qt, so
+importing this module never needs it.
 """
 from __future__ import annotations
 
@@ -238,6 +238,13 @@ def _run_locked(state_dir) -> int:
             wsl_credentials=wsl_credentials,
         )
         discovery.start()
+
+        def open_accounts():
+            from tokitty.qt.accounts import AccountsManager
+
+            return AccountsManager.open(state_dir, discovery.wsl_matches(), host=host)
+
+        host.on_open_accounts = open_accounts
         maybe_onboard = make_onboarder(state_dir, usage_state, lambda: None)  # no tray to refresh
         notes_removed: set = set()
 

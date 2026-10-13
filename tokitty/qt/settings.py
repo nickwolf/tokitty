@@ -38,6 +38,7 @@ TABS = (
     ("look", "Look"),
     ("theme", "Theme"),
     ("usage", "Usage"),
+    ("accounts", "Accounts"),
 )
 
 _BUDGET_LABELS = {
@@ -710,12 +711,16 @@ class ThemeTab(_Tab):
 
 
 def _tab_classes() -> Dict[str, type]:
-    # Accounts and Stream Dock join this table (and TABS) in later slices.
+    # Stream Dock joins this table (and TABS) in a later slice. Imported here
+    # because the Accounts tab subclasses _Tab from this module.
+    from tokitty.qt.settings_accounts import AccountsTab
+
     return {
         "general": GeneralTab,
         "look": LookTab,
         "theme": ThemeTab,
         "usage": UsageTab,
+        "accounts": AccountsTab,
     }
 
 

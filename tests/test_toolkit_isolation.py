@@ -47,6 +47,7 @@ def test_imports_without_tkinter(module):
 
 
 _QT_MODULES = (
+    "tokitty.qt.accounts",
     "tokitty.qt.app",
     "tokitty.qt.host",
     "tokitty.qt.kit",
@@ -56,6 +57,7 @@ _QT_MODULES = (
     "tokitty.qt.poller",
     "tokitty.qt.position",
     "tokitty.qt.settings",
+    "tokitty.qt.settings_accounts",
     "tokitty.qt.widget",
 )
 

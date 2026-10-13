@@ -212,6 +212,36 @@ def test_the_menus_settings_item_opens_the_window_on_that_pane(qapp, state_dir, 
     assert found["window"] is not None and found["pane"] == 0 and found["parent"] is None
 
 
+def test_the_accounts_opener_passes_discovery_matches_to_the_manager(
+        qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.app_core import Discovery
+    from tokitty.qt import accounts as qt_accounts
+    from tokitty.qt import settings as qt_settings
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    monkeypatch.setattr(Discovery, "wsl_matches",
+                        lambda self: [("Ubuntu", "/home/u/.claude/.credentials.json")])
+    monkeypatch.setattr("tokitty.accounts_logic.retry_pending_hook_op", lambda state_dir: None)
+    seen = capture_widget(monkeypatch)
+    found = {}
+
+    def hook(widget):
+        settings_action(widget)()
+        host = qt_settings._instance.host
+        manager = host.on_open_accounts()
+        found["manager"] = manager
+        found["current"] = qt_accounts.current()
+        found["paths"] = [d.distro for d in manager._discovered_paths]
+        found["parent"] = manager.parent()
+        manager.close()
+        qt_settings._instance.close()
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["manager"] is found["current"] and found["parent"] is None
+    assert found["paths"] == ["Ubuntu"]
+
+
 def test_closing_settings_leaves_the_event_loop_running(qapp, state_dir, monkeypatch, fake_workers):
     from tokitty.qt import settings as qt_settings
     from tokitty.qt.app import run_qt
