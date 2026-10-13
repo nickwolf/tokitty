@@ -4,7 +4,7 @@
 Drives an old frozen copy (built with TOKITTY_BUILD_ID=v0.0.1) through its
 hidden --apply-update entry against a fake GitHub on 127.0.0.1, with the new
 release being the exact archive CI is about to upload (or, on a
-workflow_dispatch rehearsal, a v0.0.2 rebuild). Every child runs in a scratch
+workflow_dispatch rehearsal, a v99.0.0 rebuild). Every child runs in a scratch
 environment, so the state dir is under --work; it is read from the child's own
 --self-check report rather than recomputed.
 
@@ -178,7 +178,7 @@ def survivor_problems(kept: Sequence[Path], gone: Sequence[Path], exists: Callab
 def cleanup_seed(plat: str, base: Path, tag: str) -> dict:
     """The spec's cleanup seed set, laid out relative to `base` (the versions
     dir on Windows and Linux, the folder holding the app on macOS). Needs a tag
-    above v0.0.1, which every tag build and the v0.0.2 rehearsal are.
+    above v0.0.1, which every tag build and the v99.0.0 rehearsal are.
 
     `dirs` are plain folders to create, `links` are (link, target) pairs,
     `owned` is what update.json records, `kept` and `gone` are the expected
@@ -1162,7 +1162,7 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--work", required=True)
     parser.add_argument("--report", required=True)
-    parser.add_argument("--rehearsal", action="store_true", help="the new side is a v0.0.2 rebuild, not the release being published")
+    parser.add_argument("--rehearsal", action="store_true", help="the new side is a v99.0.0 rebuild, not the release being published")
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--only", default=None, help="comma-separated step names to run after prepare (debugging)")
     parser.add_argument("--old-tag", default=OLD_TAG, help="the build ID of --old-archive (default: %(default)s)")

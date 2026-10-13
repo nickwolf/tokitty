@@ -36,7 +36,49 @@ def test_release_build_installs_the_streamdock_extra():
     # Without comtypes in the build environment, the frozen Windows app has no
     # Stream Dock tab switching or Interrupt, and nothing fails to say so.
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert 'pip install -e ".[packaging,streamdock]"' in workflow
+    assert 'pip install -e ".[packaging,streamdock,qt]"' in workflow
+
+
+def _release_workflow():
+    return (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+
+def test_release_build_declares_both_toolkits_and_installs_the_xcb_libraries():
+    workflow = _release_workflow()
+    assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow
+    apt = next(line for line in workflow.splitlines() if "apt-get install" in line)
+    for package in ("xvfb", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
+        assert package in apt
+
+
+def test_release_verifies_the_declared_toolkits_on_every_platform():
+    assert _release_workflow().count("--expect-toolkits tk,qt") == 3
+
+
+def test_release_runs_the_qt_and_shipped_release_update_passes():
+    workflow = _release_workflow()
+    assert "name: Verify update (Qt)" in workflow
+    assert "--qt --only apply_update,no_ack_rollback" in workflow
+    assert "update-report-qt.json" in workflow
+    assert "name: Verify update from a shipped release" in workflow
+    assert "LEGACY_TAG: v0.6.2" in workflow
+    assert 'gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY"' in workflow
+    assert '--old-tag "$LEGACY_TAG"' in workflow
+    assert "update-report-legacy.json" in workflow
+
+
+def test_release_rehearsal_tag_sits_above_every_real_release():
+    workflow = _release_workflow()
+    assert 'echo "UPDATE_TAG=v99.0.0"' in workflow
+    assert "v0.0.2" not in workflow
+
+
+def test_release_trims_qt_unless_the_dispatch_input_says_otherwise():
+    workflow = _release_workflow()
+    assert workflow.count("TOKITTY_QT_TRIM") == 1
+    line = next(line for line in workflow.splitlines() if "TOKITTY_QT_TRIM" in line)
+    assert "inputs.trim" in line
+    assert "type: boolean" in workflow
 
 
 def test_release_publish_names_the_repo():
