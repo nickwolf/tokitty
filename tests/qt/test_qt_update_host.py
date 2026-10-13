@@ -11,11 +11,27 @@ pytestmark = pytest.mark.qt
 
 
 class FakeLock:
-    def __init__(self):
-        self.calls = []
+    def __init__(self, calls=None):
+        self.calls = [] if calls is None else calls
 
     def release(self):
         self.calls.append("release")
+
+
+class FakeTray:
+    """Records start, stop and refresh; `calls` can be shared with a lock."""
+
+    def __init__(self, calls=None):
+        self.calls = [] if calls is None else calls
+
+    def start(self):
+        self.calls.append("tray start")
+
+    def stop(self):
+        self.calls.append("tray stop")
+
+    def refresh(self):
+        self.calls.append("tray refresh")
 
 
 class FakeApp:
@@ -57,10 +73,13 @@ def setup(make_world, qapp):
         extra.append(w)
         return w
 
-    def build(quiet=False):
+    def build(quiet=False, tray_on=True):
         lock, app = FakeLock(), FakeApp()
-        host = QtUpdateHost(app, world.host, lock, world.state_dir, None, quiet=quiet)
+        host = QtUpdateHost(app, world.host, lock, world.state_dir, None, quiet=quiet,
+                            tray=world.tray, tray_enabled=lambda: tray_on)
         return host, lock, app
+
+    world.tray = FakeTray()
 
     world.window, world.build = window, build
     yield world
@@ -238,3 +257,38 @@ def test_when_shown_drops_what_it_held_once_finishing(setup, reclaimed, qapp):
     host.when_shown(lambda: ran.append(2))
     qapp.processEvents()
     assert ran == []
+
+
+def test_hide_stops_the_tray_before_the_lock_is_released(setup, reclaimed):
+    order = []
+    setup.tray = FakeTray(order)
+    host, lock, _ = setup.build()
+    lock.calls = order
+    host.hide()
+    assert order == ["tray stop", "release"]
+
+
+def test_restore_restarts_the_tray_when_enabled_and_always_refreshes(setup, reclaimed):
+    host, _, _ = setup.build(tray_on=True)
+    host.hide()
+    setup.tray.calls.clear()
+    host.restore()
+    assert setup.tray.calls == ["tray start", "tray refresh"]
+
+
+def test_restore_leaves_a_disabled_tray_stopped_but_still_refreshes(setup, reclaimed):
+    host, _, _ = setup.build(tray_on=False)
+    host.hide()
+    setup.tray.calls.clear()
+    host.restore()
+    assert setup.tray.calls == ["tray refresh"]
+
+
+def test_restore_that_fails_at_reclaim_leaves_the_tray_stopped(setup, reclaimed):
+    host, _, _ = setup.build()
+    host.hide()
+    setup.tray.calls.clear()
+    reclaimed.state["fail"] = True
+    with pytest.raises(LockAcquisitionError):
+        host.restore()
+    assert setup.tray.calls == []
