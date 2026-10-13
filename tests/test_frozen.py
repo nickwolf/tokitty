@@ -233,10 +233,16 @@ def test_fallback_state_dir_matches_paths_state_dir_path(monkeypatch, tmp_path):
 DEFAULT_KEYS = {"tkinter", "pil", "pystray", "prices", "hook_writer", "tls"}
 
 
-def _report(monkeypatch, capsys, toolkits=None, window=False, qt_blocked=False):
+def _report(monkeypatch, capsys, toolkits=None, window=False, qt_blocked=False, qt_mode=False):
     """Run self_check() under a declared toolkit list and return (exit code,
     report). The Tk and Qt window checks are stubbed so this stays headless;
-    the real ones are covered by the gui and qt suites."""
+    the real ones are covered by the gui and qt suites. qt_mode is a Qt-mode
+    launch (TOKITTY_QT=1), which a build that carries Tk needs for its Qt
+    checks to run (#115)."""
+    if qt_mode:
+        monkeypatch.setenv("TOKITTY_QT", "1")
+    else:
+        monkeypatch.delenv("TOKITTY_QT", raising=False)
     if toolkits is None:
         monkeypatch.delenv("TOKITTY_BUILD_TOOLKITS", raising=False)
     else:
@@ -306,16 +312,45 @@ def test_explicit_tk_declaration_matches_the_default(monkeypatch, capsys):
     assert "toolkits" not in report
 
 
-def test_tk_and_qt_adds_qt_and_qt_root_only_with_the_window_switch(monkeypatch, capsys):
+def test_tk_and_qt_without_a_qt_launch_has_exactly_the_default_keys(monkeypatch, capsys):
+    # #115: the shipped updaters run this report with the window switch on.
     code, report = _report(monkeypatch, capsys, toolkits="tk,qt")
+    assert code == 0
+    assert set(report["checks"]) == DEFAULT_KEYS
+    assert report["toolkits"] == ["qt", "tk"]
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True)
+    assert code == 0
+    assert set(report["checks"]) == DEFAULT_KEYS | {"tk_root"}
+    assert report["checks"]["tk_root"]["detail"] == "8.6.0"
+
+
+def test_tk_and_qt_passes_without_pyside6_when_not_a_qt_launch(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True, qt_blocked=True)
+    assert code == 0
+    assert set(report["checks"]) == DEFAULT_KEYS | {"tk_root"}
+    _judge(report)
+
+
+def test_tk_and_qt_adds_qt_and_qt_root_only_with_the_window_switch_in_a_qt_launch(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_mode=True)
     assert code == 0
     assert set(report["checks"]) == DEFAULT_KEYS | {"qt"}
     assert report["checks"]["qt"] == {"ok": True, "detail": "6.12.0"}
     assert report["toolkits"] == ["qt", "tk"]
-    _, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True)
+    _, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True, qt_mode=True)
     assert set(report["checks"]) == DEFAULT_KEYS | {"qt", "qt_root", "tk_root"}
     assert report["checks"]["tk_root"]["detail"] == "8.6.0"
     assert report["checks"]["qt_root"]["detail"] == "xcb"
+
+
+@pytest.mark.parametrize("value", ["0", "", "true"])
+def test_only_tokitty_qt_equal_one_counts_as_a_qt_launch(monkeypatch, capsys, value):
+    monkeypatch.setenv("TOKITTY_QT", value)
+    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "tk,qt")
+    monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
+    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    frozen.self_check()
+    assert "qt" not in json.loads(capsys.readouterr().out)["checks"]
 
 
 def test_qt_alone_drops_tkinter_and_tk_root_carries_the_qt_result(monkeypatch, capsys):
@@ -352,7 +387,7 @@ def test_qt_alone_passes_and_is_accepted_without_pystray_installed(monkeypatch, 
 
 
 def test_declared_qt_with_pyside6_blocked_fails_the_qt_check(monkeypatch, capsys):
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_blocked=True)
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_blocked=True, qt_mode=True)
     assert code == 1
     assert report["checks"]["qt"]["ok"] is False
     assert report["checks"]["tkinter"]["ok"] is True
@@ -365,9 +400,10 @@ def test_declared_qt_window_check_fails_with_pyside6_blocked(monkeypatch, capsys
     assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
 
 
+@pytest.mark.parametrize("qt_mode", [False, True])
 @pytest.mark.parametrize("toolkits", [None, "tk,qt", "qt"])
-def test_shipped_judge_accepts_each_passing_report(monkeypatch, capsys, toolkits):
-    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True)
+def test_shipped_judge_accepts_each_passing_report(monkeypatch, capsys, toolkits, qt_mode):
+    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_mode=qt_mode)
     assert code == 0
     _judge(report)
 
@@ -376,7 +412,61 @@ def test_shipped_judge_accepts_each_passing_report(monkeypatch, capsys, toolkits
 def test_shipped_judge_rejects_a_failed_qt_report(monkeypatch, capsys, toolkits):
     from tokitty.update_install import UpdateInstallError
 
-    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_blocked=True)
+    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_blocked=True, qt_mode=True)
     assert code == 1
     with pytest.raises(UpdateInstallError, match="failed its self-check"):
         _judge(report)
+
+
+# --- qt_platform_env (#115) -------------------------------------------------
+
+
+def _platform_env(environ, **kwargs):
+    kwargs.setdefault("frozen", True)
+    kwargs.setdefault("platform", "linux")
+    return frozen.qt_platform_env(environ, **kwargs)
+
+
+@pytest.mark.parametrize("value", ["wayland", "wayland-egl", "wayland;wayland-egl", "Wayland:foo=1", " wayland ; wayland-egl"])
+def test_a_wayland_only_value_becomes_xcb_in_a_frozen_linux_build(capsys, value):
+    environ = {"QT_QPA_PLATFORM": value, "DISPLAY": ":0"}
+    assert _platform_env(environ) == "xcb"
+    assert environ["QT_QPA_PLATFORM"] == "xcb"
+    err = capsys.readouterr().err
+    assert err == (
+        f"tokitty: QT_QPA_PLATFORM={value} needs the Wayland plugin, which this build leaves out; using xcb\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "environ, kwargs",
+    [
+        ({"QT_QPA_PLATFORM": "wayland"}, {}),
+        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ""}, {}),
+        ({"QT_QPA_PLATFORM": "wayland;xcb", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "xcb", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "", "DISPLAY": ":0"}, {}),
+        ({"DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"frozen": False}),
+        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "win32"}),
+        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "darwin"}),
+    ],
+)
+def test_qt_platform_env_changes_nothing_otherwise(capsys, environ, kwargs):
+    before = dict(environ)
+    assert _platform_env(environ, **kwargs) is None
+    assert environ == before
+    assert capsys.readouterr().err == ""
+
+
+def test_qt_platform_env_defaults_to_the_process(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "wayland")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert frozen.qt_platform_env() is None
+    assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert frozen.qt_platform_env() == "xcb"
+    assert os.environ["QT_QPA_PLATFORM"] == "xcb"

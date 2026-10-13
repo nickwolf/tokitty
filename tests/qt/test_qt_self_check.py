@@ -23,6 +23,13 @@ def test_check_qt_root_shows_a_window_and_names_the_platform(qapp):
     assert platform
 
 
+def test_check_qt_root_maps_the_platform_first(qapp, monkeypatch):
+    calls = []
+    monkeypatch.setattr(frozen, "qt_platform_env", lambda *a, **k: calls.append(1))
+    frozen._check_qt_root()
+    assert calls == [1]
+
+
 def test_self_check_passes_a_real_qt_declaration(qapp, monkeypatch, capsys):
     monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
     monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")

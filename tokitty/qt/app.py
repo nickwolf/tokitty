@@ -27,6 +27,8 @@ from tokitty.app_core import (
 from tokitty.usage_items import VIEW_MODE_ITEMS  # noqa: F401  (also read by the tests)
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
+DEBUG_NOTIFY_ENV = "TOKITTY_DEBUG_NOTIFY"
+DEBUG_NOTIFY_DELAY_MS = 5000
 AFTER_UPDATE_QT_FILE = "after-update-qt.json"
 POSITION_FILENAME = "position.json"  # ui.POSITION_FILENAME, which cannot be imported without Tk
 MISSING_PYSIDE6 = (
@@ -224,7 +226,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from tokitty import first_run, theme
+    from tokitty import first_run, frozen, theme
     from tokitty.accounts import env_conflict_warning, load_accounts, load_accounts_result
     from tokitty.customize import Customization, load_customization, save_customization
     from tokitty.settings import load_settings, update_settings
@@ -261,6 +263,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         excluded=debug or bool(after_update_token or apply_update),
     )
 
+    frozen.qt_platform_env()
     app = QApplication.instance() or QApplication([])
     # Quitting is always explicit (Exit, or the widget's closeEvent): the
     # widget is a Tool window that Qt does not count, so with the default on,
@@ -566,6 +569,9 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         timer.start(UI_REFRESH_MS)
         if tray.available and settings.tray_enabled:
             tray.start()
+        if os.environ.get(DEBUG_NOTIFY_ENV) == "1":
+            QTimer.singleShot(DEBUG_NOTIFY_DELAY_MS, lambda: tray.debug_notify(
+                "Tokitty", "Test notification (TOKITTY_DEBUG_NOTIFY)"))
         updates.startup(frozen=bool(getattr(sys, "frozen", False)))
         if after_update_token:
             # Inside the event loop and once the widget is exposed, so the

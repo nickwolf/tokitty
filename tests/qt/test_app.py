@@ -933,3 +933,46 @@ def test_a_failing_panel_prints_a_line_and_falls_back_to_the_box(qapp, monkeypat
     assert "tokitty: about panel: no panel" in capsys.readouterr().err
     assert len(shown) == 1 and shown[0][1] == "About Tokitty"
     assert shown[0][2].startswith("Tokitty ") and "Running from source" not in shown[0][2]
+
+
+# -- TOKITTY_DEBUG_NOTIFY and the platform mapping (#115) ----------------------
+
+def test_the_debug_notify_is_scheduled_only_with_the_variable(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import app
+    from tokitty.qt.tray import QtTray
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False))
+    sent = []
+    monkeypatch.setattr(QtTray, "debug_notify", lambda self, title, message: sent.append((title, message)))
+    monkeypatch.setattr(app, "DEBUG_NOTIFY_DELAY_MS", 50)
+
+    monkeypatch.delenv("TOKITTY_DEBUG_NOTIFY", raising=False)
+    assert run_for(qapp, 500) == 0
+    assert sent == []
+
+    monkeypatch.setenv("TOKITTY_DEBUG_NOTIFY", "1")
+    assert run_for(qapp, 500) == 0
+    assert sent == [("Tokitty", "Test notification (TOKITTY_DEBUG_NOTIFY)")]
+
+
+def test_the_debug_notify_is_not_scheduled_in_a_debug_state_launch(qapp, state_dir, monkeypatch):
+    from tokitty.qt import app
+    from tokitty.qt.tray import QtTray
+
+    sent = []
+    monkeypatch.setattr(QtTray, "debug_notify", lambda self, title, message: sent.append(1))
+    monkeypatch.setattr(app, "DEBUG_NOTIFY_DELAY_MS", 10)
+    monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
+    monkeypatch.setenv("TOKITTY_DEBUG_NOTIFY", "1")
+    assert run_for(qapp, 300) == 0
+    assert sent == []
+
+
+def test_run_qt_maps_the_platform_before_it_creates_the_application(qapp, state_dir, monkeypatch):
+    from tokitty import frozen
+
+    calls = []
+    monkeypatch.setattr(frozen, "qt_platform_env", lambda *a, **k: calls.append(1))
+    monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
+    assert run_for(qapp, 100) == 0
+    assert calls == [1]
