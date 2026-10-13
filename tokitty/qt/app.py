@@ -2,8 +2,8 @@
 
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that (tray, Stream Dock, update check) is absent here until its own
-issue (#112 to #114). PySide6 is imported inside run_qt, so
+has beyond that (tray, update check) is absent here until its own issue (#113,
+#114). PySide6 is imported inside run_qt, so
 importing this module never needs it.
 """
 from __future__ import annotations
@@ -62,6 +62,39 @@ def make_preferences_menu(open_settings):
     return menubar, menu, action
 
 
+def qt_timers(parent):
+    """The `after` and `cancel` callables DeckStarter takes, over single-shot
+    QTimers on the GUI thread. after(ms, fn) returns the timer; cancel stops
+    it. A timer deletes itself once it has fired."""
+    from PySide6.QtCore import QTimer
+
+    def after(ms, fn):
+        timer = QTimer(parent)
+        timer.setSingleShot(True)
+        timer.timeout.connect(fn)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(ms)
+        return timer
+
+    def cancel(timer):
+        try:
+            timer.stop()
+        except RuntimeError:  # already fired and deleted
+            pass
+
+    return after, cancel
+
+
+def run_guarded(label, fn) -> None:
+    """Run one shutdown step so its failure is reported, not raised: it must
+    neither hide the exception that is already unwinding nor skip the steps
+    after it."""
+    try:
+        fn()
+    except Exception as exc:
+        print(f"tokitty: shutdown: {label}: {exc}", file=sys.stderr)
+
+
 def run_walkthrough(state_dir, credentials_cache, distro_probe) -> None:
     """Show the first-run walkthrough and wait for it in a local event loop
     that its `closed` signal quits. The caller reloads accounts and settings
@@ -114,6 +147,14 @@ def _run_locked(state_dir) -> int:
     from tokitty.settings import load_settings
     from tokitty.app_controls import make_controls
     from tokitty.distro_probe import RunningDistroProbe
+    from tokitty.streamdock.gui_state import StreamdockHolder
+    from tokitty.streamdock.install import install_supported, refresh_streamdock_plugin
+    from tokitty.streamdock.wiring import (
+        BIND_MARGIN_S, DEFAULT_NAME, DeckStarter, apply_idle_cap, gather_inputs,
+    )
+    from tokitty.streamdock.window import InWindowViews
+    from tokitty import update_controller
+    from tokitty.qt.deck_views import qt_view_factory
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
     from tokitty.qt.widget import TokittyQtWidget
@@ -217,6 +258,10 @@ def _run_locked(state_dir) -> int:
 
     notifier = Notifier(state_dir)
     units: list = []
+    # Set below, once the panes exist. The finally releases whichever got that
+    # far, so a failure in setup still closes what was opened.
+    deck = None
+    deck_views = None
     try:
         units = build_units(
             accounts=accounts, state_dir=state_dir, customization_store=customization_store,
@@ -239,6 +284,9 @@ def _run_locked(state_dir) -> int:
             loaded_theme, [unit["custom"] for unit in units], len(units),
             position_path=state_dir / POSITION_FILENAME, build_menu_model=menu_model,
         )
+        def pane_label(i):
+            return widget.panes[i]._label if i < len(widget.panes) else None
+
         # Two phases: Controls needs host methods and the host needs Controls.
         host = QtHost(widget, state_dir)
         controls = make_controls(
@@ -246,8 +294,9 @@ def _run_locked(state_dir) -> int:
             apply_customization=apply_customization,
             on_layout_changed=host.on_layout_changed,
             distro_probe=distro_probe,
-            deck_fn=lambda: None,  # the Stream Dock arrives with its own slice
-            label_fn=lambda i: widget.panes[i]._label if i < len(widget.panes) else None,
+            # The deck is built below, once the panes exist.
+            deck_fn=lambda: deck,
+            label_fn=pane_label,
             warn=host.warn,
         )
         host.attach(controls)
@@ -263,6 +312,44 @@ def _run_locked(state_dir) -> int:
         preferences = None
         if sys.platform == "darwin":
             preferences = make_preferences_menu(lambda: SettingsWindow.open(host, 0))
+
+        def account_name(index: int) -> str:
+            account = units[index]["account"]
+            return account.name if account else DEFAULT_NAME
+
+        deck_views = InWindowViews(lambda: deck.runtime, account_name, widget.pane_anchor,
+                                   qt_view_factory())
+        # A busy deck port is retried on the GUI thread for as long as an
+        # update's handover can take, so a new copy launched by the updater
+        # still gets it.
+        deck_after, deck_cancel = qt_timers(widget)
+        deck = DeckStarter(
+            settings, units, distro_probe.get_running,
+            palette_fn=lambda i: units[i]["pane"].palette,
+            open_in_window=deck_views.open, after=deck_after, cancel=deck_cancel,
+            deadline_s=update_controller.ACK_TIMEOUT + BIND_MARGIN_S,
+        )
+        deck.begin()
+        refresh_streamdock_plugin(state_dir)
+
+        # The Settings tab updates this after an install or uninstall; the
+        # state is read from it, not from the startup `settings`.
+        streamdock_holder = StreamdockHolder(settings, state_dir, lambda: deck.runtime, deck=deck)
+        host.streamdock_state = streamdock_holder.state
+        host.streamdock_info = streamdock_holder.info
+        host.streamdock_install = streamdock_holder.install
+        host.streamdock_uninstall = streamdock_holder.uninstall
+        host.streamdock_install_supported = install_supported
+
+        def edit_streamdock_presets() -> None:
+            from tokitty.qt.presets import PresetsDialog
+
+            PresetsDialog.open(
+                state_dir, lambda: [u.get("account") for u in units], pane_label,
+                lambda presets: deck.set_presets(presets), host=host,
+            )
+
+        host.on_edit_streamdock_presets = edit_streamdock_presets
 
         discovery = Discovery(
             state_dir, accounts_state=load_accounts_result(state_dir).state,
@@ -299,6 +386,14 @@ def _run_locked(state_dir) -> int:
                     getattr(unit["pane"], "render" if update.kind == "limits" else "render_usage")(
                         **update.kwargs
                     )
+            streamdock = deck.runtime
+            if streamdock is not None:
+                try:
+                    streamdock.tick(*gather_inputs(units))
+                    apply_idle_cap(units, streamdock.connected)
+                    deck_views.sync()
+                except Exception as exc:
+                    print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
 
         for unit in units:
             unit["poller"].start()
@@ -314,6 +409,10 @@ def _run_locked(state_dir) -> int:
         del preferences  # alive until here
         return 0
     finally:
+        if deck_views is not None:
+            run_guarded("close deck views", deck_views.close_all)
+        if deck is not None:
+            run_guarded("stop deck", deck.stop)
         for unit in units:
             unit["poller"].stop()
             unit["watcher"].stop()

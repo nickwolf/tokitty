@@ -9,6 +9,7 @@ from tokitty.accounts import load_accounts
 from tokitty.api import UsageSnapshot
 from tokitty.customize import Customization
 from tokitty.poller import PollResult
+from tokitty.streamdock.pending import PendingRequest
 from tokitty.qt.pane import QtPane
 from tokitty.settings import Settings, load_settings, save_settings
 
@@ -565,3 +566,239 @@ def test_debug_launches_skip_it_even_when_forced(
 
     assert fake_walkthrough.instances == []
     assert [p.name for p in state_dir.iterdir()] == ["tokitty.lock"]
+
+
+# -- the Stream Dock in run_qt ------------------------------------------------
+
+
+class FakeDeckRuntime:
+    connected = True
+
+    def __init__(self, log, fail=False):
+        self.log = log
+        self.fail = fail
+
+    def tick(self, sessions, usage):
+        self.log.append(("deck.tick",))
+        if self.fail:
+            raise RuntimeError("tick boom")
+
+
+@pytest.fixture
+def fake_deck(monkeypatch, fake_workers):
+    """Stand-ins for DeckStarter and InWindowViews that log into the same list
+    as the workers, so the order of the finally shows."""
+    from types import SimpleNamespace
+
+    from tokitty.streamdock import wiring, window
+
+    log = fake_workers
+    seen = SimpleNamespace(log=log, decks=[], views=[], runtime=None, close_all_error=None,
+                           stop_error=None)
+
+    class FakeDeck:
+        state = "off"
+        port = 0
+        reason = ""
+
+        def __init__(self, settings, units, probe, **kw):
+            self.kw = kw
+            self.presets = []
+            seen.decks.append(self)
+
+        @property
+        def runtime(self):
+            return seen.runtime
+
+        def begin(self):
+            log.append(("deck.begin",))
+
+        def set_presets(self, presets):
+            self.presets.append(presets)
+
+        def set_hidden_accounts(self, names):
+            pass
+
+        def stop(self):
+            log.append(("deck.stop",))
+            if seen.stop_error:
+                raise seen.stop_error
+
+    class FakeViews:
+        def __init__(self, runtime_fn, name_fn, anchor_fn, make_view):
+            self.args = (runtime_fn, name_fn, anchor_fn, make_view)
+            seen.views.append(self)
+
+        def open(self, request, reason=""):
+            pass
+
+        def sync(self):
+            log.append(("views.sync",))
+
+        def close_all(self):
+            log.append(("views.close_all",))
+            if seen.close_all_error:
+                raise seen.close_all_error
+
+    monkeypatch.setattr(wiring, "DeckStarter", FakeDeck)
+    monkeypatch.setattr(window, "InWindowViews", FakeViews)
+    return seen
+
+
+def settled(log, *names):
+    return [entry for entry in log if entry[0] in names]
+
+
+def test_the_deck_is_built_with_qt_timers_and_the_widgets_anchor(
+        qapp, state_dir, monkeypatch, fake_deck):
+    from tokitty.streamdock.wiring import DEFAULT_NAME
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    found = {}
+
+    def hook(widget):
+        deck = fake_deck.decks[0]
+        after, cancel = deck.kw["after"], deck.kw["cancel"]
+        fired = []
+        timer = after(5, lambda: fired.append(1))
+        found["timer"] = isinstance(timer, QTimer) and timer.isSingleShot()
+        cancel(timer)
+        found["active"] = timer.isActive()
+        found["anchor"] = fake_deck.views[0].args[2] == widget.pane_anchor
+        found["open"] = deck.kw["open_in_window"] == fake_deck.views[0].open
+        found["name"] = fake_deck.views[0].args[1](0)
+        found["palette"] = deck.kw["palette_fn"](0) is widget.panes[0].palette
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found == {"timer": True, "active": False, "anchor": True, "open": True,
+                     "name": DEFAULT_NAME, "palette": True}
+    assert settled(fake_deck.log, "deck.begin")
+
+
+def test_the_view_factory_is_the_qt_one(qapp, state_dir, monkeypatch, fake_deck):
+    from tokitty.qt.deck_views import QtView
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    assert run_for(qapp, 200) == 0
+    make_view = fake_deck.views[0].args[3]
+    request = PendingRequest(nonce="n", session_id="s", tool_use_id="t", tool_name="Bash",
+                             tool_input={}, digest="d", preview="p", started=1.0)
+    view = make_view(request, "t", "e", None, lambda b: None, lambda: None)
+    assert isinstance(view, QtView)
+    view.close()
+
+
+def test_the_tick_drives_the_deck_and_syncs_the_views(qapp, state_dir, monkeypatch, fake_deck):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    fake_deck.runtime = FakeDeckRuntime(fake_deck.log)
+    assert run_for(qapp, 1500) == 0
+    ticks = settled(fake_deck.log, "deck.tick", "views.sync")
+    assert ("deck.tick",) in ticks and ("views.sync",) in ticks
+
+
+def test_a_failing_deck_tick_is_reported_and_the_loop_goes_on(
+        qapp, state_dir, monkeypatch, fake_deck, capsys):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    fake_deck.runtime = FakeDeckRuntime(fake_deck.log, fail=True)
+    assert run_for(qapp, 1500) == 0
+    assert "streamdock: tick: tick boom" in capsys.readouterr().err
+    assert len(settled(fake_deck.log, "deck.tick")) >= 2
+
+
+def test_the_presets_opener_is_wired_to_the_deck(qapp, state_dir, monkeypatch, fake_deck):
+    from tokitty.qt import presets as qt_presets
+    from tokitty.qt import settings as qt_settings
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    found = {}
+
+    def hook(widget):
+        settings_action(widget)()
+        host = qt_settings._instance.host
+        found["state"] = host.streamdock_state()
+        found["supported"] = host.streamdock_install_supported is not None
+        host.on_edit_streamdock_presets()
+        dialog = qt_presets._instance
+        found["host"] = dialog.host is host
+        dialog._on_saved(["saved"])
+        dialog.close()
+        qt_settings._instance.close()
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["state"] == "not_installed" and found["supported"] and found["host"]
+    assert fake_deck.decks[0].presets == [["saved"]]
+
+
+def test_the_finally_closes_the_views_then_stops_the_deck_then_the_workers(
+        qapp, state_dir, monkeypatch, fake_deck):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    assert run_for(qapp, 200) == 0
+    order = [e for e in fake_deck.log if e[0] in ("views.close_all", "deck.stop") or e[0] == "stop"]
+    assert order[:2] == [("views.close_all",), ("deck.stop",)]
+    assert ("stop", "Poller") in order[2:]
+
+
+def test_the_finally_runs_when_setup_raises_after_the_deck_exists(
+        qapp, state_dir, monkeypatch, fake_deck):
+    from tokitty.app_core import Discovery
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+
+    def boom(self, *a, **kw):
+        raise RuntimeError("setup boom")
+
+    monkeypatch.setattr(Discovery, "__init__", boom)
+    from tokitty.qt.app import run_qt
+
+    with pytest.raises(RuntimeError, match="setup boom"):
+        run_qt()
+    order = [e for e in fake_deck.log if e[0] in ("views.close_all", "deck.stop")]
+    assert order == [("views.close_all",), ("deck.stop",)]
+
+
+def test_the_finally_skips_the_deck_when_build_units_raises(
+        qapp, state_dir, monkeypatch, fake_deck):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+
+    def boom(**kw):
+        raise RuntimeError("build boom")
+
+    monkeypatch.setattr("tokitty.qt.app.build_units", boom)
+    from tokitty.qt.app import run_qt
+
+    with pytest.raises(RuntimeError, match="build boom"):
+        run_qt()
+    assert fake_deck.decks == [] and fake_deck.views == []
+    assert not settled(fake_deck.log, "views.close_all", "deck.stop")
+
+
+def test_a_failing_close_all_does_not_skip_the_deck_or_the_workers(
+        qapp, state_dir, monkeypatch, fake_deck, capsys):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    fake_deck.close_all_error = RuntimeError("views boom")
+    assert run_for(qapp, 200) == 0
+    assert ("deck.stop",) in fake_deck.log and ("stop", "Poller") in fake_deck.log
+    assert "close deck views: views boom" in capsys.readouterr().err
+
+
+def test_a_failing_deck_stop_does_not_skip_the_workers_or_hide_the_error(
+        qapp, state_dir, monkeypatch, fake_deck, capsys):
+    from tokitty.app_core import Discovery
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    fake_deck.stop_error = RuntimeError("stop boom")
+
+    def boom(self, *a, **kw):
+        raise RuntimeError("setup boom")
+
+    monkeypatch.setattr(Discovery, "__init__", boom)
+    from tokitty.qt.app import run_qt
+
+    with pytest.raises(RuntimeError, match="setup boom"):
+        run_qt()
+    assert ("stop", "Poller") in fake_deck.log
+    assert "stop deck: stop boom" in capsys.readouterr().err
