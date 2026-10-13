@@ -716,8 +716,8 @@ def by_name(tab):
 
 def test_the_accounts_tab_sits_after_usage(make_world):
     window = qs.SettingsWindow.open(make_world(1).host, 0)
-    assert list(window.tabs) == ["general", "look", "theme", "usage", "accounts"]
-    assert [key for key, _title in qs.TABS][-2:] == ["usage", "accounts"]
+    assert list(window.tabs) == ["general", "look", "theme", "usage", "accounts", "streamdock"]
+    assert [key for key, _title in qs.TABS][-3:-1] == ["usage", "accounts"]
 
 
 def test_rows_come_from_accounts_with_pills_and_buttons(make_world, fake_status):

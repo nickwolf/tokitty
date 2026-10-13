@@ -30,6 +30,13 @@ class QtHost:
         # Opened by slices 3 and 5; None hides the rows that need them.
         self.on_open_accounts: Optional[Callable[[], None]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
+        # The StreamdockHolder's methods, set by run_qt once the deck exists;
+        # None reads as "not installed" in the Stream Dock tab.
+        self.streamdock_state: Optional[Callable[[], str]] = None
+        self.streamdock_info: Optional[Callable[[], dict]] = None
+        self.streamdock_install: Optional[Callable] = None
+        self.streamdock_uninstall: Optional[Callable] = None
+        self.streamdock_install_supported: Optional[Callable[[], bool]] = None
         # Not available in Qt mode yet (#114, #113).
         self.on_toggle_tray = None
         self.tray_enabled = None
