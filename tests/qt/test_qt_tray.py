@@ -248,6 +248,45 @@ def test_actions_are_deferred_then_followed_by_on_action_done(qapp, tmp_path):
     assert order == ["action", "done"]
 
 
+def test_a_failed_toggle_leaves_the_check_marks_on_the_model(qapp, tmp_path, monkeypatch):
+    state = {"on": False, "view": "a"}
+
+    def fail():
+        raise RuntimeError("no")
+
+    items = [
+        MenuItem(label="Check", checkbox=lambda: state["on"], action=fail),
+        MenuItem(label="View", submenu=[
+            MenuItem(label="A", radio_selected=lambda: state["view"] == "a", action=fail),
+            MenuItem(label="B", radio_selected=lambda: state["view"] == "b", action=fail),
+        ]),
+    ]
+    # PySide reports an exception raised in a timer slot instead of raising it.
+    monkeypatch.setattr("sys.excepthook", lambda *a: None)
+    tray = make_tray(tmp_path, items)
+    tray.start()
+    menu = FakeIcon.instances[0].menu
+    check = menu.actions()[0]
+    radio_b = menu.actions()[1].menu().actions()[1]
+    check.trigger()
+    radio_b.trigger()
+    assert check.isChecked() and radio_b.isChecked()  # Qt toggled them on click
+    qapp.processEvents()
+    assert not check.isChecked()
+    assert not radio_b.isChecked()
+    assert menu.actions()[1].menu().actions()[0].isChecked()
+
+
+def test_an_action_that_leaves_the_model_alone_unticks_without_on_action_done(qapp, tmp_path):
+    items = [MenuItem(label="Check", checkbox=lambda: False, action=lambda: None)]
+    tray = make_tray(tmp_path, items)
+    tray.start()
+    check = FakeIcon.instances[0].menu.actions()[0]
+    check.trigger()
+    qapp.processEvents()
+    assert not check.isChecked()
+
+
 # ---- notify ----------------------------------------------------------------
 
 def test_notify_submits_when_shown_and_supported(qapp, tmp_path):

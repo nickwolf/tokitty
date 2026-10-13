@@ -74,7 +74,13 @@ class QtTray:
             return None
 
         def run() -> None:
-            action()
+            try:
+                action()
+            finally:
+                # Qt toggled a checkable item when it was clicked; put the
+                # marks back in line with the model even if the action raised
+                # or left it unchanged.
+                self.refresh()
             if self._on_action_done is not None:
                 self._on_action_done()
 
