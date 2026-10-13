@@ -58,6 +58,7 @@ _QT_MODULES = (
     "tokitty.qt.position",
     "tokitty.qt.settings",
     "tokitty.qt.settings_accounts",
+    "tokitty.qt.walkthrough",
     "tokitty.qt.widget",
 )
 
