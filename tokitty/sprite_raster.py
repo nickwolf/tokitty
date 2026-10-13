@@ -1,8 +1,8 @@
 """Shared sprite rasterizer: frame + palette -> pixel data.
 
-Lifted out of scripts/render_media.py so the shipped tray icon (tray.py)
+Lifted out of scripts/render_media.py so the shipped tray icon (tray_icon.py)
 and the README media build from the exact same pixels. render_media.py
-imports raster_frame; tray.py builds its RGBA icon from raster_rgba.
+imports raster_frame; tray_icon.py builds both trays' RGBA icon from raster_rgba.
 The package must not import from scripts/, so the tiny hex helper is
 duplicated here (identical to render_sheet._hex_to_rgb).
 """

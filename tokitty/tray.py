@@ -21,18 +21,13 @@ import threading
 from typing import Callable, List, Optional
 
 from tokitty.settings import update_settings
-
-TRAY_ICON_SCALE = 2  # 28x26 content sprite -> 56x52, padded to a 56x56 square
+from tokitty.tray_icon import TRAY_ICON_SCALE, tray_raster  # noqa: F401  (TRAY_ICON_SCALE re-exported)
 
 
 def _default_image_factory(colorway: str, pattern: str):
     from PIL import Image
 
-    from tokitty.sprite_raster import raster_rgba
-    from tokitty.sprites import get_frames, resolve_palette
-
-    frame = get_frames("content")[0]
-    width, height, raw = raster_rgba(frame, resolve_palette(colorway, pattern), TRAY_ICON_SCALE)
+    width, height, raw = tray_raster(colorway, pattern)
     sprite = Image.frombytes("RGBA", (width, height), raw)
     side = max(width, height)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))

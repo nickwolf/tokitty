@@ -1,0 +1,19 @@
+"""The tray icon's sprite choice, shared by the Tk and Qt trays.
+
+Toolkit-free: tray.py pads the raster into a PIL image, qt/tray.py into a
+QImage, and neither copies the frame, scale or palette decision.
+"""
+from __future__ import annotations
+
+from typing import Tuple
+
+from tokitty.sprite_raster import raster_rgba
+from tokitty.sprites import get_frames, resolve_palette
+
+TRAY_ICON_SCALE = 2  # 28x26 content sprite -> 56x52, padded to a 56x56 square
+
+
+def tray_raster(colorway: str, pattern: str) -> Tuple[int, int, bytes]:
+    """(width, height, RGBA bytes) of frame 0 of the content state."""
+    frame = get_frames("content")[0]
+    return raster_rgba(frame, resolve_palette(colorway, pattern), TRAY_ICON_SCALE)
