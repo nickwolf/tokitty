@@ -2,9 +2,10 @@
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 
 from tokitty.api import UsageSnapshot
+from tokitty.customize import Customization
 from tokitty.poller import PollResult
 from tokitty.qt.pane import QtPane
 from tokitty.settings import Settings, load_settings, save_settings
@@ -155,5 +156,153 @@ def test_view_menu_item_writes_the_setting(qapp, state_dir, monkeypatch, fake_wo
 
     assert run_for(qapp, 100) == 0
 
-    assert seen["labels"] == ["Refresh now", "View", "Always in front", "", "Exit"]
+    assert seen["labels"] == ["Refresh now", "View", "Always in front", "", "Settings…", "", "Exit"]
     assert load_settings(state_dir).view_mode == "models"
+
+
+def safety_net(qapp, ms=5000):
+    """A quit timer the test stops itself: a leftover singleShot would fire
+    inside a later test's event loop."""
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(qapp.quit)
+    timer.start(ms)
+    return timer
+
+
+def capture_widget(monkeypatch):
+    """Collect the widget run_qt builds, and run `hook(widget)` right after it shows."""
+    from tokitty.qt.widget import TokittyQtWidget
+
+    seen = {"widgets": [], "hook": None}
+    real_show = TokittyQtWidget.show
+
+    def show(self):
+        seen["widgets"].append(self)
+        real_show(self)
+        hook, seen["hook"] = seen["hook"], None  # one shot: a re-show must not rerun it
+        if hook is not None:
+            hook(self)
+
+    monkeypatch.setattr(TokittyQtWidget, "show", show)
+    return seen
+
+
+def settings_action(widget, pane_index=0):
+    return next(i for i in widget.build_menu_model(pane_index) if i.label == "Settings…").action
+
+
+def test_the_menus_settings_item_opens_the_window_on_that_pane(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import settings as qt_settings
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    found = {}
+
+    def hook(widget):
+        # a two-pane menu would pass 1; one pane here, so check the wiring and the window
+        settings_action(widget)()
+        found["window"] = qt_settings._instance
+        found["pane"] = qt_settings._instance.pane_index
+        found["parent"] = qt_settings._instance.parent()
+        qt_settings._instance.close()
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["window"] is not None and found["pane"] == 0 and found["parent"] is None
+
+
+def test_closing_settings_leaves_the_event_loop_running(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import settings as qt_settings
+    from tokitty.qt.app import run_qt
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    reached = {"after_close": False}
+
+    def hook(widget):
+        settings_action(widget)()
+        QTimer.singleShot(50, lambda: qt_settings._instance.close())
+
+        def after_close():
+            reached["after_close"] = True
+            qapp.quit()
+
+        QTimer.singleShot(400, after_close)
+
+    seen["hook"] = hook
+    net = safety_net(qapp)
+    assert run_qt() == 0
+    net.stop()
+    assert reached["after_close"], "closing Settings ended the event loop"
+    assert qapp.quitOnLastWindowClosed() is False
+
+
+def test_closing_the_widget_ends_the_run(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt.app import run_qt
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    seen["hook"] = lambda widget: QTimer.singleShot(50, widget.close)
+    net = safety_net(qapp)
+    start = datetime.now()
+    assert run_qt() == 0
+    net.stop()
+    assert (datetime.now() - start).total_seconds() < 4
+
+
+def test_the_menu_action_done_hook_refreshes_settings(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import settings as qt_settings
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    states = []
+
+    def hook(widget):
+        settings_action(widget)()
+        toggle = qt_settings._instance.tabs["general"].toggles["aot"]
+        states.append(toggle.get())
+        always = next(i for i in widget.build_menu_model(0) if i.label == "Always in front")
+        widget._after_menu_action(always.action)()
+        states.append(toggle.get())
+        states.append(bool(qt_settings._instance.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
+        qt_settings._instance.close()
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert states == [True, False, False]
+
+
+def test_surprise_me_randomizes_every_pane_at_startup(qapp, state_dir, monkeypatch, fake_workers):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=True, first_run="done"))
+    calls = []
+    from tokitty import app_controls
+
+    monkeypatch.setattr(app_controls, "random_look", lambda cws, pats: (calls.append(1), (cws[2], pats[2]))[1])
+    seen = capture_widget(monkeypatch)
+    assert run_for(qapp, 150) == 0
+    pane = seen["widgets"][0].panes[0]
+    assert calls and (pane._colorway, pane._pattern) != ("orange", "tabby")
+
+
+def test_apply_customization_clears_overrides_that_are_gone():
+    from tokitty.qt.app import apply_customization
+
+    pane = QtPane(Customization(overrides={"card_bg": "#112233", "bar_fill": "#445566"}))
+    apply_customization(pane, Customization(colorway="gray", overrides={}))
+    assert pane.customization.overrides == {}
+    assert pane._colorway == "gray"
+
+
+def test_the_preferences_action_has_the_preferences_role(qapp):
+    from PySide6.QtGui import QAction
+
+    from tokitty.qt.app import make_preferences_menu
+
+    opened = []
+    menubar, menu, action = make_preferences_menu(lambda: opened.append(1))
+    assert action.menuRole() == QAction.MenuRole.PreferencesRole
+    assert action in menu.actions() and menu.menuAction() in menubar.actions()
+    assert menubar.parent() is None
+    action.trigger()
+    assert opened == [1]
