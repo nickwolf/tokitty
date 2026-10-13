@@ -200,7 +200,9 @@ def test_a_malformed_accounts_file_shows_only_the_malformed_row(make_world, retr
 
 
 @pytest.mark.parametrize("content", ['{"accounts": []}', None])
-def test_an_empty_or_absent_accounts_file_renders_no_rows(make_world, retries, dialogs, content):
+def test_an_empty_or_absent_accounts_file_renders_no_rows(make_world, retries, dialogs, content, monkeypatch):
+    # Off macOS: there an absent file shows the Keychain row instead (tested below).
+    monkeypatch.setattr(qa, "sys", SimpleNamespace(platform="linux"))
     world = make_world(1)
     if content is not None:
         (world.state_dir / "accounts.json").write_text(content)
