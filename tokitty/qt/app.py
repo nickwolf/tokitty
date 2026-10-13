@@ -64,22 +64,49 @@ class AnnouncerTray:
         return self._tray.notify(title, message)
 
 
-def make_preferences_menu(open_settings):
-    """A parentless menu bar holding one Settings action with PreferencesRole.
-    On macOS Qt moves an action with that role out of its menu into the
-    application menu (Command-comma); the role only applies to an action in a
-    menu, not one on the bar itself. The caller keeps the returned objects
-    alive for the life of the app. Other platforms never call this."""
+def make_app_menu(open_settings, show_about):
+    """A parentless menu bar whose one menu holds Settings (PreferencesRole)
+    and About Tokitty (AboutRole). On macOS Qt moves an action with either
+    role out of its menu into the application menu (Settings gets
+    Command-comma); the role only applies to an action in a menu, not one on
+    the bar itself. The caller keeps the returned objects alive for the life
+    of the app. Other platforms never call this."""
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import QMenuBar
 
     menubar = QMenuBar()
     menu = menubar.addMenu("Tokitty")
-    action = QAction("Settings…", menu)
-    action.setMenuRole(QAction.MenuRole.PreferencesRole)
-    action.triggered.connect(lambda _checked=False: open_settings())
-    menu.addAction(action)
-    return menubar, menu, action
+    settings_action = QAction("Settings…", menu)
+    settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+    settings_action.triggered.connect(lambda _checked=False: open_settings())
+    menu.addAction(settings_action)
+    about_action = QAction("About Tokitty", menu)
+    about_action.setMenuRole(QAction.MenuRole.AboutRole)
+    about_action.triggered.connect(lambda _checked=False: show_about())
+    menu.addAction(about_action)
+    return menubar, menu, settings_action, about_action
+
+
+def show_about(frozen, parent, about_panel=None):
+    """Answer About Tokitty. A frozen build has a real Info.plist, so the
+    native panel shows its name, version and copyright; a source run would
+    get Python's, so it (and a failed panel) shows the version in a plain
+    box instead."""
+    from PySide6.QtWidgets import QMessageBox
+
+    if frozen:
+        try:
+            if about_panel is None:
+                from tokitty.qt import macos
+
+                about_panel = macos.show_about_panel
+            about_panel()
+            return
+        except Exception as exc:
+            print(f"tokitty: about panel: {exc}", file=sys.stderr)
+    from tokitty.app_version import version_text
+
+    QMessageBox.information(parent, "About Tokitty", f"Tokitty {version_text()}\nRunning from source.")
 
 
 def qt_timers(parent):
@@ -435,7 +462,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # Created before the first show and held until exec returns.
         preferences = None
         if sys.platform == "darwin":
-            preferences = make_preferences_menu(lambda: SettingsWindow.open(host, 0))
+            preferences = make_app_menu(
+                lambda: SettingsWindow.open(host, 0),
+                lambda: show_about(bool(getattr(sys, "frozen", False)), host.dialog_parent()),
+            )
 
         def account_name(index: int) -> str:
             account = units[index]["account"]

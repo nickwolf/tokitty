@@ -51,9 +51,17 @@ class ObjC:
         self._void_bool = ctypes.CFUNCTYPE(None, v, v, ctypes.c_bool)(address)
         self._ulong = ctypes.CFUNCTYPE(ctypes.c_ulong, v, v)(address)
         self._void_ulong = ctypes.CFUNCTYPE(None, v, v, ctypes.c_ulong)(address)
+        self._id_cstr = ctypes.CFUNCTYPE(v, v, v, ctypes.c_char_p)(address)
+        self._id_id_id = ctypes.CFUNCTYPE(v, v, v, v, v)(address)
+        self._void_id = ctypes.CFUNCTYPE(None, v, v, v)(address)
+        lib.objc_getClass.restype = v
+        lib.objc_getClass.argtypes = [ctypes.c_char_p]
 
     def sel(self, name: str):
         return self._lib.sel_registerName(name.encode())
+
+    def get_class(self, name: str):
+        return self._lib.objc_getClass(name.encode())
 
     def send_id(self, obj, sel):
         return self._id(obj, sel)
@@ -69,6 +77,15 @@ class ObjC:
 
     def send_void_ulong(self, obj, sel, value: int) -> None:
         self._void_ulong(obj, sel, value)
+
+    def send_id_cstr(self, obj, sel, value: bytes):
+        return self._id_cstr(obj, sel, value)
+
+    def send_id_id_id(self, obj, sel, a, b):
+        return self._id_id_id(obj, sel, a, b)
+
+    def send_void_id(self, obj, sel, a) -> None:
+        self._void_id(obj, sel, a)
 
 
 def _warn(message: str) -> None:
@@ -109,3 +126,28 @@ def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform
     except Exception as exc:
         _warn(f"setCollectionBehavior: failed: {exc}")
     return done
+
+
+def show_about_panel(objc: Optional[ObjC] = None) -> None:
+    """Show the standard About panel with an empty build version, so the
+    "(0.6.0)" that would repeat CFBundleVersion is dropped. No pyobjc: this
+    is plain libobjc through ctypes, where every call needs its exact
+    prototype (a default int return would truncate the pointers). GUI thread
+    only. Raises OSError on any null result so the caller can fall back."""
+    objc = objc or ObjC()
+
+    def need(value, what: str):
+        if not value:
+            raise OSError(f"{what} returned null")
+        return value
+
+    ns_string = need(objc.get_class("NSString"), "NSString class")
+    from_utf8 = objc.sel("stringWithUTF8String:")
+    key = need(objc.send_id_cstr(ns_string, from_utf8, b"Version"), "NSString key")
+    value = need(objc.send_id_cstr(ns_string, from_utf8, b""), "NSString value")
+    ns_dict = need(objc.get_class("NSDictionary"), "NSDictionary class")
+    options = need(objc.send_id_id_id(ns_dict, objc.sel("dictionaryWithObject:forKey:"), value, key),
+                   "NSDictionary")
+    ns_app = need(objc.get_class("NSApplication"), "NSApplication class")
+    app = need(objc.send_id(ns_app, objc.sel("sharedApplication")), "sharedApplication")
+    objc.send_void_id(app, objc.sel("orderFrontStandardAboutPanelWithOptions:"), options)
