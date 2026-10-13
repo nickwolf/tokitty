@@ -317,6 +317,39 @@ def test_hook_warnings_wait_while_the_update_host_is_hidden(
     assert seen["restored"] == [("warning", "Tokitty", "a hook warning")]
 
 
+def test_a_check_result_waits_while_the_update_host_is_hidden(
+        qapp, state_dir, fakes, monkeypatch, boxes):
+    """Staging can finish and hide the app in the same tick that delivers a
+    manual check: the result must not reopen the dialog over a handover."""
+    from tokitty import update_controller
+    from tokitty.qt.update_dialog import QtUpdateDialog
+
+    monkeypatch.setattr(update_controller, "reclaim", lambda lock, state_dir, backend: None)
+    offered = []
+    monkeypatch.setattr(QtUpdateDialog, "open", classmethod(
+        lambda cls, host, release, running, controller, open_url=None: offered.append(release)))
+    seen = {}
+
+    def hook(widget):
+        host, checker = host_of(fakes), fakes.checker()
+        update_host = fakes.updates().host
+        host.on_check_updates()
+        update_host.hide()
+        checker.waiters.pop()(CheckResult(RELEASE, newer=True))
+        host.on_check_updates()
+        checker.waiters.pop()(CheckResult(error="offline"))
+        settle(qapp)
+        seen["hidden"] = (list(offered), list(boxes))
+        update_host.restore()
+        settle(qapp)
+        seen["restored"] = (list(offered), list(boxes))
+        QTimer.singleShot(0, qapp.quit)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["hidden"] == ([], [])
+    assert seen["restored"] == ([RELEASE], [("critical", "Check for updates", "Couldn't check for updates: offline")])
+
+
 # ---- hand-offs --------------------------------------------------------------
 
 @pytest.mark.parametrize("outcome, code", [

@@ -207,7 +207,6 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     )
     from tokitty.streamdock.window import InWindowViews
     from tokitty import update_controller
-    from tokitty.__main__ import ACK_MAP_POLL_MS, ACK_MAP_TIMEOUT
     from tokitty.update_check import UpdateChecker, announcer
     from tokitty.update_flow import UpdateActions
     from tokitty.qt.deck_views import qt_view_factory
@@ -387,7 +386,9 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
         update_actions = UpdateActions(
             checker, updates,
-            defer=lambda fn: QTimer.singleShot(0, fn),
+            # Held while a handover has the app hidden, so a check result
+            # can't bring the dialog back over a copy that is handing over.
+            defer=lambda fn: QTimer.singleShot(0, lambda: update_host.when_shown(fn)),
             error=update_box(QMessageBox.critical),
             info=update_box(QMessageBox.information),
             offer=lambda release: QtUpdateDialog.open(host, release, updates.running.version, updates),
@@ -519,7 +520,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 handle = widget.windowHandle()
                 exposed = handle is not None and handle.isExposed()
                 waited = time.monotonic() - started
-                if not exposed and waited < ACK_MAP_TIMEOUT:
+                if not exposed and waited < update_controller.ACK_MAP_TIMEOUT:
                     return
                 ack_timer.stop()
                 from tokitty.update_swap import write_ack
@@ -540,7 +541,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                     print(f"tokitty: update: writing the ack: {exc}", file=sys.stderr)
 
             ack_timer.timeout.connect(send_ack)
-            ack_timer.start(ACK_MAP_POLL_MS)
+            ack_timer.start(update_controller.ACK_MAP_POLL_MS)
         if apply_update:
             def on_apply_done(result) -> None:
                 apply_exit["code"] = {"installed": 0, "rolled_back": 2}.get(result.outcome, 1)
