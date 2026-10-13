@@ -193,9 +193,16 @@ ABOUT_SCRIPT = textwrap.dedent("""
     from tokitty.qt import macos
 
     app = QApplication([])
-    QTimer.singleShot(0, macos.show_about_panel)
-    QTimer.singleShot(500, app.quit)
-    app.processEvents()
+
+    def show():
+        # Inside the event loop, as the app menu calls it; the marker proves
+        # the call returned rather than the script merely exiting.
+        macos.show_about_panel()
+        print("about panel shown", flush=True)
+        QTimer.singleShot(500, app.quit)
+
+    QTimer.singleShot(0, show)
+    QTimer.singleShot(10000, app.quit)  # a backstop if show never runs
     app.exec()
 """)
 
@@ -206,3 +213,4 @@ def test_the_real_about_panel_opens_without_aborting():
     proc = subprocess.run([sys.executable, "-c", ABOUT_SCRIPT], env=env, cwd=ROOT,
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-2000:]
+    assert "about panel shown" in proc.stdout, proc.stderr[-2000:]

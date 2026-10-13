@@ -90,8 +90,8 @@ def make_app_menu(open_settings, show_about):
 def show_about(frozen, parent, about_panel=None):
     """Answer About Tokitty. A frozen build has a real Info.plist, so the
     native panel shows its name, version and copyright; a source run would
-    get Python's, so it (and a failed panel) shows the version in a plain
-    box instead."""
+    get Python's, so it shows the version in a plain box instead. A frozen
+    build whose panel fails gets the box too, without the source line."""
     from PySide6.QtWidgets import QMessageBox
 
     if frozen:
@@ -106,7 +106,8 @@ def show_about(frozen, parent, about_panel=None):
             print(f"tokitty: about panel: {exc}", file=sys.stderr)
     from tokitty.app_version import version_text
 
-    QMessageBox.information(parent, "About Tokitty", f"Tokitty {version_text()}\nRunning from source.")
+    text = f"Tokitty {version_text()}" if frozen else f"Tokitty {version_text()}\nRunning from source."
+    QMessageBox.information(parent, "About Tokitty", text)
 
 
 def qt_timers(parent):

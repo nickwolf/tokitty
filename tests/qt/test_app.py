@@ -930,3 +930,4 @@ def test_a_failing_panel_prints_a_line_and_falls_back_to_the_box(qapp, monkeypat
     show_about(True, None, about_panel=broken)
     assert "tokitty: about panel: no panel" in capsys.readouterr().err
     assert len(shown) == 1 and shown[0][1] == "About Tokitty"
+    assert shown[0][2].startswith("Tokitty ") and "Running from source" not in shown[0][2]
