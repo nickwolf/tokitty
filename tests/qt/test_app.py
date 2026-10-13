@@ -724,7 +724,9 @@ def test_a_failing_deck_tick_is_reported_and_the_loop_goes_on(
         qapp, state_dir, monkeypatch, fake_deck, capsys):
     save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
     fake_deck.runtime = FakeDeckRuntime(fake_deck.log, fail=True)
-    assert run_for(qapp, 1500) == 0
+    # Setup counts against the window (the quit timer starts first), so leave
+    # room for two 500 ms ticks after a slow start on a CI runner.
+    assert run_for(qapp, 3000) == 0
     assert "streamdock: tick: tick boom" in capsys.readouterr().err
     assert len(settled(fake_deck.log, "deck.tick")) >= 2
 
