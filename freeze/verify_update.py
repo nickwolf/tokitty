@@ -599,6 +599,7 @@ class Scenario:
             self.old_app_dir = self.versions / self.old_tag / top_name(self.plat)
             self.new_app_dir = self.versions / ctx["tag"] / top_name(self.plat)
         self.state_dir: Optional[Path] = None
+        self.last_build_id: Optional[str] = None
 
     @property
     def old_gui(self) -> Path:
@@ -627,6 +628,7 @@ class Scenario:
         try:
             report = json.loads(proc.stdout.decode("utf-8").strip())
             state_dir = Path(report["state_dir"]).resolve()
+            self.last_build_id = report.get("build_id")
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"could not read state_dir from --self-check ({exc}): {tail(proc.stdout)} {tail(proc.stderr)}")
         if not _inside(state_dir, self.dir):
@@ -638,6 +640,9 @@ class Scenario:
     def prepare_old(self) -> "Scenario":
         self.unpack_old()
         self.read_state_dir(self.old_gui)
+        # --old-tag claims which updater this pass drives; hold the archive to it.
+        if self.last_build_id != self.old_tag:
+            raise RuntimeError(f"the old copy reports build {self.last_build_id}, not --old-tag {self.old_tag}")
         return self
 
     def update_json(self) -> dict:

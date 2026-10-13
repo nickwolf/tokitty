@@ -55,7 +55,7 @@ def linux(monkeypatch):
 
 
 def run_contents(app_dir, qt_version="6.12.0"):
-    return va.step_bundle_contents({"app_dir": app_dir, "repo_root": REPO, "qt_version": qt_version})
+    return va.step_bundle_contents({"app_dir": app_dir, "repo_root": REPO, "qt_version": qt_version, "toolkits": ["qt", "tk"]})
 
 
 def test_a_trimmed_linux_bundle_passes(tmp_path, linux):
@@ -233,7 +233,7 @@ def make_ctx(tmp_path, app, **kwargs):
     work.mkdir()
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
-    ctx = {"app_dir": app, "work": work, "env": env, "repo_root": REPO}
+    ctx = {"app_dir": app, "work": work, "env": env, "repo_root": REPO, "toolkits": ["qt", "tk"]}
     ctx["gui"] = app / "tokitty"
     ctx.update(kwargs)
     return ctx
@@ -308,3 +308,31 @@ def test_tk_without_qt_is_skipped_for_a_build_without_qt(tmp_path, linux):
 def test_the_new_steps_run_after_self_check():
     names = [name for name, _ in va.STEPS]
     assert names[names.index("self_check") + 1 : names.index("self_check") + 3] == ["bundle_contents", "tk_without_qt"]
+
+
+def test_self_check_fails_when_the_bundle_declares_other_toolkits(monkeypatch, tmp_path):
+    # Release CI passes --expect-toolkits tk,qt: a bundle built without the
+    # declaration would otherwise skip every Qt check and pass (#115).
+
+    report = {"checks": {"tkinter": {"ok": True, "detail": "8.6"}, "tk_root": {"ok": True, "detail": "8.6"}}, "state_dir": str(tmp_path)}
+    monkeypatch.setattr(va, "_self_check_report", lambda gui, env: (report, None))
+    ctx = {"env": {}, "gui": tmp_path / "gui", "expect_toolkits": ["qt", "tk"]}
+    result = va.step_self_check(ctx)
+    assert not result["ok"]
+    assert "expected ['qt', 'tk']" in result["detail"]
+
+
+def test_a_tk_only_bundle_skips_the_qt_contents(tmp_path):
+    # Without Qt in the declaration only the licences and pystray's sources are
+    # required; nothing PySide6-specific is (#115 review).
+    app = tmp_path / "tokitty"
+    internal = app / "_internal"
+    (internal / "pystray").mkdir(parents=True)
+    (internal / "pystray" / "__init__.py").write_text("", encoding="utf-8")
+    licenses = app / "licenses"
+    licenses.mkdir()
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt"):
+        (licenses / name).write_text("x", encoding="utf-8")
+    if sys.platform.startswith("linux"):
+        result = va.step_bundle_contents({"app_dir": app, "repo_root": REPO, "toolkits": ["tk"]})
+        assert result["ok"], result

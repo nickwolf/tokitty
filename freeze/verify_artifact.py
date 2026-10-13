@@ -356,6 +356,11 @@ def step_self_check(ctx):
     ctx["state_dir"] = Path(data["state_dir"])
     ctx["self_check_report"] = data
     ctx["toolkits"] = data.get("toolkits") or ["tk"]
+    expected = ctx.get("expect_toolkits")
+    if expected is not None and sorted(set(ctx["toolkits"])) != expected:
+        # The bundle's own declaration decides which checks run, so a build
+        # that left out TOKITTY_BUILD_TOOLKITS would skip every Qt check.
+        return {"ok": False, "detail": f"the bundle declares toolkits {ctx['toolkits']}, expected {expected}"}
     if "qt" not in ctx["toolkits"]:
         return {"ok": True, "detail": data}
 
@@ -365,6 +370,7 @@ def step_self_check(ctx):
     qt_env = dict(env)
     qt_env["TOKITTY_QT"] = "1"
     qt_env.pop("QT_QPA_PLATFORM", None)
+    qt_env.pop("WAYLAND_DISPLAY", None)
     qt_data, problem = _self_check_report(ctx["gui"], qt_env)
     if problem:
         return {"ok": False, "detail": f"Qt mode: {problem}"}
@@ -484,7 +490,10 @@ def step_bundle_contents(ctx):
     # pystray, PySide6 and shiboken6 are LGPL-3.0, so they ship as source files
     # a user can replace, not inside the PyInstaller archive.
     source_in = {}
+    qt_build = "qt" in (ctx.get("toolkits") or ["tk"])
     for rel in LGPL_SOURCE_FILES:
+        if not qt_build and not rel.startswith("pystray/"):
+            continue
         hits = [label for label, base in roots if (base / rel).is_file()]
         if hits:
             source_in[rel] = hits[0]
@@ -498,9 +507,10 @@ def step_bundle_contents(ctx):
         if stray:
             problems.append(f"the GTK 3 theme libraries are still in _internal: {stray}")
 
-    trim, info = trim_problems(bundle_data, roots, plat)
-    problems += trim
-    detail.update(info)
+    if qt_build:
+        trim, info = trim_problems(bundle_data, roots, plat)
+        problems += trim
+        detail.update(info)
 
     dangling = dangling_links(app_dir)
     if dangling:
@@ -1276,6 +1286,11 @@ def main() -> int:
         help="replaces --gate-ms with frozen_median_ms <= baseline_median_ms + this value",
     )
     parser.add_argument("--repo-root", default=None)
+    parser.add_argument(
+        "--expect-toolkits",
+        default=None,
+        help="comma list the bundle must declare (e.g. tk,qt); release CI passes it so a build cannot skip its Qt checks",
+    )
     args = parser.parse_args()
 
     app_dir = Path(args.app_dir).resolve()
@@ -1320,6 +1335,9 @@ def main() -> int:
         "repo_root": repo_root,
         "gate_ms": args.gate_ms,
         "overhead_gate_ms": args.overhead_gate_ms,
+        "expect_toolkits": (
+            sorted({t.strip() for t in args.expect_toolkits.split(",") if t.strip()}) if args.expect_toolkits else None
+        ),
     }
 
     report = {
