@@ -2,7 +2,7 @@
 
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that (tray, Stream Dock, update check, Settings, accounts manager,
+has beyond that (tray, Stream Dock, update check, accounts manager,
 walkthrough) is absent here until its own issue (#112 to #114). PySide6 is
 imported inside run_qt, so importing this module never needs it.
 """
@@ -22,14 +22,44 @@ from tokitty.app_core import (
     refresh_units,
     step_unit,
 )
+from tokitty.usage_items import VIEW_MODE_ITEMS  # noqa: F401  (also read by the tests)
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 POSITION_FILENAME = "position.json"  # ui.POSITION_FILENAME, which cannot be imported without Tk
-# ui.VIEW_MODE_ITEMS, for the same reason.
-VIEW_MODE_ITEMS = [("limits", "Limits"), ("models", "Per-model")]
 MISSING_PYSIDE6 = (
     'tokitty: TOKITTY_QT is set but PySide6 is not installed (pip install -e ".[qt]")'
 )
+
+
+def apply_customization(pane, custom) -> None:
+    """Restyle a pane from its customization, as run_gui's does minus the Tk
+    default card colour: an empty string means no override."""
+    from tokitty.customize import effective_palette
+
+    pane.set_appearance(
+        palette=effective_palette(custom),
+        card_bg=custom.overrides.get("card_bg", ""),
+        bar_fill=custom.overrides.get("bar_fill", ""),
+        colorway=custom.colorway, pattern=custom.pattern,
+    )
+
+
+def make_preferences_menu(open_settings):
+    """A parentless menu bar holding one Settings action with PreferencesRole.
+    On macOS Qt moves an action with that role out of its menu into the
+    application menu (Command-comma); the role only applies to an action in a
+    menu, not one on the bar itself. The caller keeps the returned objects
+    alive for the life of the app. Other platforms never call this."""
+    from PySide6.QtGui import QAction
+    from PySide6.QtWidgets import QMenuBar
+
+    menubar = QMenuBar()
+    menu = menubar.addMenu("Tokitty")
+    action = QAction("Settings…", menu)
+    action.setMenuRole(QAction.MenuRole.PreferencesRole)
+    action.triggered.connect(lambda _checked=False: open_settings())
+    menu.addAction(action)
+    return menubar, menu, action
 
 
 def run_qt() -> int:
@@ -62,7 +92,10 @@ def _run_locked(state_dir) -> int:
     from tokitty import first_run, theme
     from tokitty.accounts import env_conflict_warning, load_accounts, load_accounts_result
     from tokitty.customize import Customization, load_customization, save_customization
-    from tokitty.settings import load_settings, update_settings
+    from tokitty.settings import load_settings
+    from tokitty.app_controls import make_controls
+    from tokitty.qt.host import QtHost
+    from tokitty.qt.settings import SettingsWindow
     from tokitty.qt.widget import TokittyQtWidget
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
@@ -84,6 +117,10 @@ def _run_locked(state_dir) -> int:
     loaded_theme = theme.load_theme(state_dir)
 
     app = QApplication.instance() or QApplication([])
+    # Quitting is always explicit (Exit, or the widget's closeEvent): the
+    # widget is a Tool window that Qt does not count, so with the default on,
+    # closing Settings would end the application.
+    app.setQuitOnLastWindowClosed(False)
 
     if debug:
         # Nothing below this branch runs: no migration, units, discovery or
@@ -154,29 +191,46 @@ def _run_locked(state_dir) -> int:
             wsl_credentials=wsl_credentials, distro_probe=distro_probe, usage_state=usage_state,
         )
 
-        def set_view_mode(value: str) -> None:
-            usage_state["view"] = value
-            update_settings(state_dir, view_mode=value)
-
-        def menu_model(_pane_index: int):
+        def menu_model(pane_index: int):
             return build_menu(
                 on_refresh=lambda: refresh_units(units),
-                always_on_top=lambda: widget.always_on_top,
-                on_toggle_always_on_top=lambda: widget.set_always_on_top(not widget.always_on_top),
+                always_on_top=host.always_on_top,
+                on_toggle_always_on_top=host.toggle_always_on_top,
                 on_quit=app.quit,
+                on_open_settings=lambda: SettingsWindow.open(host, pane_index),
                 view_modes=VIEW_MODE_ITEMS,
                 current_view_mode=lambda: usage_state["view"],
-                on_view_mode=set_view_mode,
+                on_view_mode=lambda value: controls.on_view_mode(value),
             )
 
         widget = TokittyQtWidget(
             loaded_theme, [unit["custom"] for unit in units], len(units),
             position_path=state_dir / POSITION_FILENAME, build_menu_model=menu_model,
         )
+        # Two phases: Controls needs host methods and the host needs Controls.
+        host = QtHost(widget, state_dir)
+        controls = make_controls(
+            state_dir, units, usage_state, customization_store, settings,
+            apply_customization=apply_customization,
+            on_layout_changed=host.on_layout_changed,
+            distro_probe=distro_probe,
+            deck_fn=lambda: None,  # the Stream Dock arrives with its own slice
+            label_fn=lambda i: widget.panes[i]._label if i < len(widget.panes) else None,
+            warn=host.warn,
+        )
+        host.attach(controls)
+        widget.on_menu_action_done = host.notify_state_changed
         for unit, pane in zip(units, widget.panes):
             unit["pane"] = pane
             pane.set_appearance(label=unit["label"])
+        if settings.surprise_me:
+            for index in range(len(units)):
+                controls.on_customization_changed(index, "randomize", None)
         widget.restore_position()
+        # Created before the first show and held until exec returns.
+        preferences = None
+        if sys.platform == "darwin":
+            preferences = make_preferences_menu(lambda: SettingsWindow.open(host, 0))
 
         discovery = Discovery(
             state_dir, accounts_state=load_accounts_result(state_dir).state,
@@ -218,6 +272,7 @@ def _run_locked(state_dir) -> int:
         # native window exists.
         widget.show()
         app.exec()
+        del preferences  # alive until here
         return 0
     finally:
         for unit in units:

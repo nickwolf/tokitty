@@ -228,7 +228,7 @@ class Segmented(QFrame):
     """A row of mutually exclusive options."""
 
     def __init__(self, kit: "Kit", options: Sequence[Tuple[str, str]],
-                 on_change: Optional[Callable[[str], None]] = None):
+                 on_change: Optional[Callable[[str], None]] = None, *, compact: bool = False):
         super().__init__()
         _tagged(self, "segmented")
         self.value: Optional[str] = None
@@ -237,7 +237,7 @@ class Segmented(QFrame):
         row.setContentsMargins(1, 1, 1, 1)
         self.items: Dict[str, QPushButton] = {}
         for value, title in options:
-            item = _tagged(QPushButton(title), "segment", active=False)
+            item = _tagged(QPushButton(title), "segment", active=False, compact=compact)
             item.setCursor(Qt.CursorShape.PointingHandCursor)
             item.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             item.clicked.connect(lambda _checked=False, v=value: self._clicked(v))
@@ -330,7 +330,7 @@ class Spin(QSpinBox):
         self.setRange(lo, hi)
         self.setSingleStep(step)
         self.setSuffix(suffix)
-        self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._on_change = on_change
         self.valueChanged.connect(self._changed)
@@ -470,10 +470,12 @@ class Kit:
         self.add(parent, row)
         return row
 
-    def surface(self) -> QFrame:
-        """A raised card, with a vertical layout ready for rows."""
+    def surface(self, rows: bool = True) -> QFrame:
+        """A raised card. By default it has a vertical layout ready for rows;
+        pass rows=False to lay it out yourself."""
         frame = _tagged(QFrame(), "surface")
-        vbox(frame)
+        if rows:
+            vbox(frame)
         return frame
 
     def button(self, title: str, style: str = "secondary",
@@ -501,8 +503,9 @@ class Kit:
     def toggle(self, title: str, **kwargs) -> Toggle:
         return Toggle(self, title, **kwargs)
 
-    def segmented(self, options, on_change=None) -> Segmented:
-        return Segmented(self, options, on_change)
+    def segmented(self, options, on_change=None, *, compact: bool = False) -> Segmented:
+        """compact trims the padding, for a row with many short options."""
+        return Segmented(self, options, on_change, compact=compact)
 
     def dropdown(self, choices, **kwargs) -> Dropdown:
         return Dropdown(self, choices, **kwargs)
@@ -575,6 +578,7 @@ QLabel[kit="pill"] {{ padding: 3px 7px; font: {_css_font(FONT_SMALL)}; }}
 QFrame[kit="segmented"] {{ background: {BORDER}; }}
 QPushButton[kit="segment"] {{ border: none; padding: 7px 10px; background: {SURFACE};
     color: {MUTED}; font: {_css_font(FONT_SMALL)}; }}
+QPushButton[kit="segment"][compact="true"] {{ padding: 7px 4px; }}
 QPushButton[kit="segment"][active="true"] {{ background: {ACCENT_BG}; color: {ACCENT_FG}; }}
 QPushButton[kit="dropdown"] {{ border: 1px solid {BORDER}; padding: 6px 24px 6px 9px;
     text-align: left; background: {SURFACE}; color: {FG_COLOR}; font: {_css_font(FONT_BODY)}; }}
@@ -588,6 +592,8 @@ QFrame[kit="entry-holder"][error="true"] {{ background: {BAD}; }}
 QLineEdit[kit="entry"], QSpinBox[kit="spin"] {{ background: {SURFACE}; color: {FG_COLOR};
     border: none; padding: 6px 8px; font: {_css_font(FONT_BODY)};
     selection-background-color: {ACCENT_BG}; selection-color: {FG_COLOR}; }}
+/* Zero-width buttons: NoButtons plus a sheet collapses the edit to one pixel. */
+QSpinBox[kit="spin"]::up-button, QSpinBox[kit="spin"]::down-button {{ width: 0; border: none; }}
 QScrollBar[kit="thin"]:vertical {{ background: {BG_COLOR}; width: 10px; margin: 0; }}
 QScrollBar[kit="thin"]::handle:vertical {{ background: {BORDER}; margin: 2px; min-height: 20px; }}
 QScrollBar[kit="thin"]::handle:vertical:hover {{ background: {MUTED}; }}

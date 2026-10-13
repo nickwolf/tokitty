@@ -285,7 +285,11 @@ def test_closing_the_widget_quits_the_application(qapp):
     widget = make(qapp)
     widget.show()
     QTimer.singleShot(0, widget.close)
-    QTimer.singleShot(2000, qapp.quit)  # the safety net if close() does not quit
+    net = QTimer()
+    net.setSingleShot(True)
+    net.timeout.connect(qapp.quit)  # the safety net if close() does not quit
+    net.start(2000)
     start = time.monotonic()
     qapp.exec()
+    net.stop()
     assert time.monotonic() - start < 1.5

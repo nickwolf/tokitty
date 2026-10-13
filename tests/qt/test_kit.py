@@ -225,3 +225,10 @@ def test_surface_is_a_tagged_card(kit):
     card = kit.surface()
     assert card.property("kit") == "surface" and card.layout() is not None
     assert SURFACE in Kit.style_sheet()
+
+
+def test_compact_segmented_and_unlaid_surface(kit):
+    seg = kit.segmented([("a", "A")], compact=True)
+    assert seg.items["a"].property("compact") is True
+    assert kit.segmented([("a", "A")]).items["a"].property("compact") is False
+    assert kit.surface(rows=False).layout() is None
