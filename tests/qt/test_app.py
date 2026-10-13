@@ -2,8 +2,10 @@
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import QWidget
 
+from tokitty.accounts import load_accounts
 from tokitty.api import UsageSnapshot
 from tokitty.customize import Customization
 from tokitty.poller import PollResult
@@ -118,12 +120,6 @@ def test_normal_launch_renders_a_published_result_and_stops_the_workers(
     assert ("stop", "ActivityWatcher") in fake_workers
     assert ("stop", "UsageWatcher") in fake_workers
     assert (state_dir / "customization.json").exists()
-
-
-def test_normal_launch_on_a_fresh_dir_marks_the_walkthrough_pending(qapp, state_dir, fake_workers):
-    assert run_for(qapp, 100) == 0
-
-    assert load_settings(state_dir).first_run == "pending"
 
 
 def test_a_second_instance_is_refused(qapp, state_dir, fake_workers, capsys):
@@ -336,3 +332,236 @@ def test_the_preferences_action_has_the_preferences_role(qapp):
     assert menubar.parent() is None
     action.trigger()
     assert opened == [1]
+
+
+# -- the first-run walkthrough ------------------------------------------------
+
+
+class FakeWalkthrough(QWidget):
+    """Stands in for the real window: records what run_qt built it with and
+    what was running when it showed, then finishes from a timer, as a user
+    pressing Finish would after saving two accounts."""
+
+    closed = Signal()
+    instances = []
+    save_accounts_on_finish = True
+    when_shown = None  # called with the instance in show()
+
+    def __init__(self, state_dir, credentials_cache=None, running_distros=None):
+        super().__init__()
+        self.state_dir = state_dir
+        self.credentials_cache = credentials_cache
+        self.running_distros = running_distros
+        self.shown = False
+        FakeWalkthrough.instances.append(self)
+
+    def show(self):
+        self.shown = True
+        if FakeWalkthrough.when_shown is not None:
+            FakeWalkthrough.when_shown(self)
+        QTimer.singleShot(30, self.finish)
+
+    def finish(self):
+        from tokitty import first_run
+        from tokitty.accounts import Account, save_accounts
+
+        if FakeWalkthrough.save_accounts_on_finish:
+            save_accounts(self.state_dir, [
+                Account(name="one", config_dir=str(self.state_dir / "c1"), provider="claude"),
+                Account(name="two", config_dir=str(self.state_dir / "c2"), provider="claude"),
+            ])
+        first_run.mark_done(self.state_dir)
+        self.closed.emit()
+
+
+def fake_home(monkeypatch, tmp_path):
+    """An empty home outside the state dir (which is tmp_path), so no real
+    credentials are found and the state dir stays fresh."""
+    home = tmp_path.parent / (tmp_path.name + "_home")
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+@pytest.fixture
+def fake_walkthrough(monkeypatch, tmp_path):
+    from tokitty.qt import walkthrough as qt_walkthrough
+
+    FakeWalkthrough.instances = []
+    FakeWalkthrough.save_accounts_on_finish = True
+    FakeWalkthrough.when_shown = None
+    monkeypatch.setattr(qt_walkthrough, "Walkthrough", FakeWalkthrough)
+    FakeWalkthrough.home = fake_home(monkeypatch, tmp_path)
+    return FakeWalkthrough
+
+
+def quit_from_widget(monkeypatch, ms=100):
+    seen = capture_widget(monkeypatch)
+    seen["hook"] = lambda widget: QTimer.singleShot(ms, widget.close)
+    return seen
+
+
+def test_a_fresh_dir_shows_the_walkthrough_before_anything_starts(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    from tokitty import app_core
+    from tokitty.qt.widget import TokittyQtWidget
+
+    built = []
+    state_at_show = {}
+    real_build = app_core.build_units
+    monkeypatch.setattr("tokitty.qt.app.build_units", lambda **kw: built.append(1) or real_build(**kw))
+    real_init = TokittyQtWidget.__init__
+    monkeypatch.setattr(TokittyQtWidget, "__init__",
+                        lambda self, *a, **k: (built.append("widget"), real_init(self, *a, **k))[1])
+
+    def when_shown(walk):
+        # Nothing but the walkthrough exists yet: no units, widget, poller,
+        # watcher or discovery, and the marker says pending.
+        state_at_show["log"] = list(fake_workers)
+        state_at_show["built"] = list(built)
+        state_at_show["first_run"] = load_settings(state_dir).first_run
+        state_at_show["quit_policy"] = qapp.quitOnLastWindowClosed()
+
+    fake_walkthrough.when_shown = when_shown
+    seen = quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+
+    assert state_at_show == {"log": [], "built": [], "first_run": "pending", "quit_policy": False}
+    assert len(fake_walkthrough.instances) == 1 and fake_walkthrough.instances[0].shown
+    # The widget was built after it closed, from what it saved.
+    assert built == [1, "widget"]
+    assert len(seen["widgets"][0].panes) == 2
+    assert [a.name for a in load_accounts(state_dir)] == ["one", "two"]
+    assert load_settings(state_dir).first_run == "done"
+    assert ("start", "Poller") in fake_workers and ("start", "Discovery") in fake_workers
+
+
+def test_the_walkthrough_gets_the_state_dir_cache_and_distro_probe(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    walk = fake_walkthrough.instances[0]
+    assert walk.state_dir == state_dir
+    assert walk.credentials_cache._done is False  # enabled; no native credentials: swept as usual
+    assert walk.running_distros.__self__.__class__.__name__ == "RunningDistroProbe"
+
+
+def test_native_credentials_reset_the_cache_after_the_walkthrough(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    from tokitty.app_core import Discovery
+    from tokitty.wsl_probe import WslCredentialsCache
+
+    claude = fake_walkthrough.home / ".claude"
+    claude.mkdir()
+    (claude / ".credentials.json").write_text("{}", encoding="utf-8")
+    built = []
+    real_init = WslCredentialsCache.__init__
+    monkeypatch.setattr(WslCredentialsCache, "__init__",
+                        lambda self, enabled=True, **kw: (built.append(enabled), real_init(self, enabled=enabled, **kw))[1])
+    caches = []
+    real_discovery_init = Discovery.__init__
+    monkeypatch.setattr(Discovery, "__init__",
+                        lambda self, *a, **kw: (caches.append(kw["wsl_credentials"]), real_discovery_init(self, *a, **kw))[1])
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+
+    # Enabled for the walkthrough, which lists every install, then replaced by
+    # a disabled one for the rest of the launch.
+    assert built == [True, False]
+    assert fake_walkthrough.instances[0].credentials_cache._done is False  # enabled
+    assert caches and caches[0]._done is True  # disabled
+
+
+def test_closing_a_real_walkthrough_does_not_end_the_run(
+        qapp, state_dir, monkeypatch, fake_workers, tmp_path):
+    from tokitty.qt import walkthrough as qt_walkthrough
+
+    fake_home(monkeypatch, tmp_path)
+    real_show = qt_walkthrough.Walkthrough.show
+    monkeypatch.setattr(qt_walkthrough.Walkthrough, "show",
+                        lambda self: (real_show(self), QTimer.singleShot(30, self.skip))[0])
+    seen = quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    # Skip was the last window closing; the widget was still built and shown.
+    assert len(seen["widgets"]) == 1
+    assert load_settings(state_dir).first_run == "done"
+    assert not (state_dir / "accounts.json").exists()
+
+
+def test_an_existing_dir_never_shows_the_walkthrough(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    # A launch before this one left its files behind; first_run is unset.
+    (state_dir / "customization.json").write_text("{}", encoding="utf-8")
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert fake_walkthrough.instances == []
+    assert load_settings(state_dir).first_run == ""
+
+
+def test_a_finished_walkthrough_is_not_shown_again(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert fake_walkthrough.instances == []
+
+
+def test_a_killed_walkthrough_shows_again(qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="pending"))
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert len(fake_walkthrough.instances) == 1
+
+
+def test_the_force_variable_shows_it_on_an_existing_dir(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    monkeypatch.setenv("TOKITTY_FIRST_RUN", "1")
+    quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert len(fake_walkthrough.instances) == 1
+
+
+@pytest.mark.parametrize("name, value", [("TOKITTY_DEBUG_STATE", "content"), ("TOKITTY_DEBUG_ACCOUNTS", "2")])
+def test_debug_launches_skip_it_even_when_forced(
+        qapp, state_dir, monkeypatch, fake_walkthrough, name, value):
+    monkeypatch.setenv(name, value)
+    monkeypatch.setenv("TOKITTY_FIRST_RUN", "1")
+
+    assert run_for(qapp, 100) == 0
+
+    assert fake_walkthrough.instances == []
+    assert [p.name for p in state_dir.iterdir()] == ["tokitty.lock"]

@@ -2,8 +2,8 @@
 
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that (tray, Stream Dock, update check, walkthrough) is absent here
-until its own issue (#112 to #114). PySide6 is imported inside run_qt, so
+has beyond that (tray, Stream Dock, update check) is absent here until its own
+issue (#112 to #114). PySide6 is imported inside run_qt, so
 importing this module never needs it.
 """
 from __future__ import annotations
@@ -62,6 +62,25 @@ def make_preferences_menu(open_settings):
     return menubar, menu, action
 
 
+def run_walkthrough(state_dir, credentials_cache, distro_probe) -> None:
+    """Show the first-run walkthrough and wait for it in a local event loop
+    that its `closed` signal quits. The caller reloads accounts and settings
+    afterwards."""
+    from PySide6.QtCore import QEventLoop
+
+    from tokitty.qt.walkthrough import Walkthrough
+
+    walkthrough = Walkthrough(state_dir, credentials_cache, distro_probe.get_running)
+    loop = QEventLoop()
+    closed = []
+    walkthrough.closed.connect(lambda: (closed.append(True), loop.quit()))
+    walkthrough.show()
+    walkthrough.raise_()
+    walkthrough.activateWindow()
+    if not closed:
+        loop.exec()
+
+
 def run_qt() -> int:
     try:
         import PySide6  # noqa: F401
@@ -94,19 +113,48 @@ def _run_locked(state_dir) -> int:
     from tokitty.customize import Customization, load_customization, save_customization
     from tokitty.settings import load_settings
     from tokitty.app_controls import make_controls
+    from tokitty.distro_probe import RunningDistroProbe
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
     from tokitty.qt.widget import TokittyQtWidget
+    from tokitty.wsl_probe import WslCredentialsCache
 
     debug_state = os.environ.get(DEBUG_STATE_ENV)
     debug_accounts = os.environ.get("TOKITTY_DEBUG_ACCOUNTS")
     debug = bool(debug_state or debug_accounts == "2")
 
     # Under the lock and before anything else writes to the state dir, as in
-    # run_gui. The walkthrough is Tk's (#112), so the answer is ignored; what
-    # matters is that a fresh dir is marked pending, so the next Tk launch
-    # shows it. Debug launches mark nothing.
-    first_run.classify(state_dir, load_settings(state_dir), excluded=debug)
+    # run_gui. A fresh dir is marked pending here, so a walkthrough killed
+    # midway shows again. Debug launches mark nothing and never show it.
+    show = first_run.classify(state_dir, load_settings(state_dir), excluded=debug)
+
+    app = QApplication.instance() or QApplication([])
+    # Quitting is always explicit (Exit, or the widget's closeEvent): the
+    # widget is a Tool window that Qt does not count, so with the default on,
+    # closing Settings would end the application. Set before the walkthrough,
+    # whose close would otherwise be the last window closing.
+    app.setQuitOnLastWindowClosed(False)
+
+    # One wsl.exe credential sweep for the whole launch, shared by the
+    # walkthrough, discovery and the per-account resolvers, and disabled when
+    # credentials were already found natively (see run_gui for why). The
+    # walkthrough lists every install, so it needs the sweeps regardless.
+    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
+    home_relative_exists = (Path.home() / ".claude" / ".credentials.json").is_file()
+    wsl_credentials = WslCredentialsCache(enabled=show or not (env_override_set or home_relative_exists))
+    distro_probe = RunningDistroProbe()
+
+    if show:
+        # The panes are built once from accounts.json, so the walkthrough
+        # runs first. Nothing else starts until it closes: no pollers, units
+        # or discovery, which also keeps the hook guard free for its installs.
+        run_walkthrough(state_dir, wsl_credentials, distro_probe)
+        if env_override_set or home_relative_exists:
+            # The sweep was only for listing installs. With native credentials
+            # the rest of the launch keeps the usual guard, or a skipped
+            # walkthrough would read activity from a WSL install while the
+            # limits come from this PC.
+            wsl_credentials = WslCredentialsCache(enabled=False)
 
     accounts = load_accounts(state_dir)
     warning = env_conflict_warning(accounts)
@@ -115,12 +163,6 @@ def _run_locked(state_dir) -> int:
     settings = load_settings(state_dir)
     usage_state = make_usage_state(settings)
     loaded_theme = theme.load_theme(state_dir)
-
-    app = QApplication.instance() or QApplication([])
-    # Quitting is always explicit (Exit, or the widget's closeEvent): the
-    # widget is a Tool window that Qt does not count, so with the default on,
-    # closing Settings would end the application.
-    app.setQuitOnLastWindowClosed(False)
 
     if debug:
         # Nothing below this branch runs: no migration, units, discovery or
@@ -153,18 +195,8 @@ def _run_locked(state_dir) -> int:
         app.exec()
         return 0
 
-    from tokitty.distro_probe import RunningDistroProbe
     from tokitty.menu import build_menu
     from tokitty.ntfy import Notifier
-    from tokitty.wsl_probe import WslCredentialsCache
-
-    # One wsl.exe credential sweep for the whole launch, shared by discovery
-    # and the per-account resolvers, and disabled when credentials were
-    # already found natively (see run_gui for why).
-    env_override_set = bool(os.environ.get("TOKITTY_CREDENTIALS"))
-    home_relative_exists = (Path.home() / ".claude" / ".credentials.json").is_file()
-    wsl_credentials = WslCredentialsCache(enabled=not (env_override_set or home_relative_exists))
-    distro_probe = RunningDistroProbe()
 
     customization_store = load_customization(state_dir)
 
