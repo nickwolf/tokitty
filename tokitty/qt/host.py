@@ -6,8 +6,9 @@ builds (attach() copies them on under the same names, so tab code reads
 host.on_toggle_ntfy as Tk reads win.on_toggle_ntfy), and this class adds the
 few that touch the Qt widget: always in front, the theme, the colours a pane
 shows, the layout follow-up after a customization save, and the stacking of
-the windows it opened. The tray and update seams stay None until #114 and
-#113, which hides their rows exactly as the Tk tabs do.
+the windows it opened. The tray seams stay None until #114, and the update
+seams stay None until run_qt sets them (#113), which hides their rows exactly
+as the Tk tabs do.
 """
 from __future__ import annotations
 
@@ -37,13 +38,15 @@ class QtHost:
         self.streamdock_install: Optional[Callable] = None
         self.streamdock_uninstall: Optional[Callable] = None
         self.streamdock_install_supported: Optional[Callable[[], bool]] = None
-        # Not available in Qt mode yet (#114, #113).
+        # The tray is not available in Qt mode yet (#114). The update seams
+        # are set by run_qt (#113).
         self.on_toggle_tray = None
         self.tray_enabled = None
         self.update_check_enabled = None
         self.on_toggle_update_check = None
         self.on_check_updates = None
         self.update_available_label = None
+        self.on_install_update = None
         self._windows: List[QWidget] = []
 
     def attach(self, controls) -> None:
@@ -83,6 +86,13 @@ class QtHost:
     def forget_window(self, window: QWidget) -> None:
         if window in self._windows:
             self._windows.remove(window)
+
+    def is_registered(self, window: QWidget) -> bool:
+        return window in self._windows
+
+    def restack(self, window: QWidget) -> None:
+        """Re-apply the Always in front hint to a window, as register_window does."""
+        self._apply_stacking(window)
 
     def _apply_stacking(self, window: QWidget) -> None:
         on = self.widget.always_on_top

@@ -67,6 +67,8 @@ _QT_MODULES = (
     "tokitty.qt.settings",
     "tokitty.qt.settings_accounts",
     "tokitty.qt.settings_streamdock",
+    "tokitty.qt.update_dialog",
+    "tokitty.qt.update_host",
     "tokitty.qt.walkthrough",
     "tokitty.qt.widget",
 )
