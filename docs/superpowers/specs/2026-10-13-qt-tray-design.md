@@ -98,3 +98,9 @@ gpt-6-sol at high effort, read-only, against `qt-updater-113` with #113 slice 3 
 5. The About ctypes call needs exact prototypes (`objc_getClass` returns a pointer, not `int`), and a fake cannot catch a wrong one; Qt names the About item after the running bundle. Decision 8 now lists the prototypes, and the native call is run on the Mac in this issue.
 
 Judged sound: decision 7's stop-before-release and restart-after-reclaim order, and decision 10's self-check rule against the shipped judge.
+
+## Implementation reviews (Codex, 2026-10-13)
+
+Slice 1 (6165ae3): a checkable tray item kept the mark Qt gave it on click when its action raised or left the model alone (fixed in a080b1c: the tray re-reads its getters after every action), and `deleteLater` after `app.exec()` returns is never processed (fixed in slice 2: `aboutToQuit` stops the tray, the `finally` stays as the backstop).
+
+Slice 2 (07a457c): two findings kept as they are, because Tk behaves the same and decision 2 matches Tk. The Settings tray toggle reads a launch-time shadow while `QtUpdateHost.restore` reads `settings.json`, so the two can disagree if a replacement copy changed `tray_enabled` and then failed to take over (Tk: `__main__.py:381-389` against `TkHost.restore`). A tray whose `start()` fails after the probe passed keeps its Settings row, which then cannot bring an icon back (Tk: `TrayManager.start`). Both are worth revisiting in #142, when only one toolkit is left to change.
