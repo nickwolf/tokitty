@@ -27,6 +27,9 @@ FONT_MONO = ("Consolas", 8)
 
 BASE_WIDTH, BASE_HEIGHT = 640, 540
 
+# The Stream Dock tab's installer log background.
+LOG_BG = "#15151a"
+
 _PILL_COLORS = {
     "good": (GOOD, "#24372f"),
     "warn": (WARN, "#393128"),

@@ -13,35 +13,14 @@ import tkinter as tk
 from typing import List, Optional, Tuple
 
 from tokitty.settings_async import Mailbox, Poller, run_worker
+from tokitty.settings_style import LOG_BG
 from tokitty.settings_ui import _Tab
 from tokitty.settings_widgets import (
     BAD, DIM_COLOR, FONT_MONO, FONT_SMALL, GOOD, MUTED, SURFACE, text,
 )
-
-LOG_BG = "#15151a"
-MAX_LOG_LINES = 8
-
-# state -> (pill label, pill kind, detail line)
-STATE_INFO = {
-    "not_installed": ("Not installed", "neutral",
-                      "Install the plugin to put your sessions on a Stream Dock."),
-    "not_connected": ("Installed, not connected", "warn",
-                      "Start VSD Craft and check that the Tokitty plugin is loaded."),
-    "connected": ("Connected", "good", "Stream Dock is ready to show live sessions."),
-    "restart_to_connect": ("Restart tokitty to finish", "warn",
-                           "Plugin installed. Restart tokitty, then restart VSD Craft."),
-    "restart_to_finish_removal": ("Restart tokitty to finish", "warn",
-                                  "Plugin removed. Restart tokitty to stop its Stream Dock connection."),
-    # Details with {port} and {reason} are formatted from window.streamdock_info().
-    "starting": ("Starting", "warn",
-                 "Waiting for port {port}. An older copy of tokitty may still be closing."),
-    "failed": ("Couldn't start", "bad",
-               "Couldn't listen on port {port}: {reason}. Restart tokitty to try again."),
-}
-UNSUPPORTED_NOTE = "Installing the Stream Dock plugin needs Windows and VSD Craft."
-# How often an open tab re-reads the state, so "Starting" and "Connected" show up
-# without switching tabs.
-STATE_WATCH_MS = 1000
+from tokitty.streamdock.gui_state import (
+    INSTALLED_STATES, MAX_LOG_LINES, STATE_INFO, STATE_WATCH_MS, UNSUPPORTED_NOTE,
+)
 
 
 class StreamDockTab(_Tab):
@@ -143,7 +122,7 @@ class StreamDockTab(_Tab):
         for child in self.actions.winfo_children():
             child.destroy()
         self.install_button = self.uninstall_button = None
-        installed = state in ("not_connected", "connected", "restart_to_connect", "starting", "failed")
+        installed = state in INSTALLED_STATES
         if self._confirming and installed:
             text(self.actions, "Remove the plugin?", bg=SURFACE, color=MUTED,
                  font=FONT_SMALL).pack(side="left", padx=(0, kit.px(8)))
