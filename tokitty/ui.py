@@ -64,10 +64,13 @@ MODEL_BAR_OFFSET = 14
 # not apply to them. This is the neutral fill used instead.
 NEUTRAL_BAR = "#5a7fa8"
 
-# (stored value, menu label) for the three usage radio submenus.
-VIEW_MODE_ITEMS = [("limits", "Limits"), ("models", "Per-model")]
-USAGE_WINDOW_ITEMS = [("24h", "Last 24 hours"), ("7d", "Last 7 days"), ("month", "This month")]
-USAGE_READOUT_ITEMS = [("cost", "Cost"), ("tokens", "Tokens")]
+# (stored value, menu label) for the three usage radio submenus; they live in
+# usage_items so the Qt windows can use them without importing tkinter.
+from tokitty.usage_items import (  # noqa: E402,F401  (re-exported)
+    USAGE_READOUT_ITEMS,
+    USAGE_WINDOW_ITEMS,
+    VIEW_MODE_ITEMS,
+)
 
 POSITION_FILENAME = "position.json"
 FRAME_INTERVAL_MS = 800

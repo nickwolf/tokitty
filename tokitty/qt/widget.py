@@ -12,7 +12,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QRegion
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from tokitty import theme as T
 from tokitty.customize import Customization
@@ -131,6 +131,26 @@ class TokittyQtWidget(QWidget):
             self.move(self.x() - dx, self.y() - dy)
         self._update_mask()
         self.update()
+
+    def set_theme(self, theme: T.Theme) -> None:
+        """Swap the theme and repaint. The cached card layouts and cat images
+        belong to the old one; the homes are recomputed in case the model ever
+        ties them to the theme, and the window only rebuilds when they moved."""
+        self.theme = theme
+        self._layouts.clear()
+        self._images.clear()
+        count = len(self.panes)
+        homes = [T.resolve_home(pane.customization.cat_home, i, count)
+                 for i, pane in enumerate(self.panes)]
+        if homes != self.homes:
+            self.rebuild_layout(homes)
+        self.update()
+
+    def pane_anchor(self, index: int) -> Tuple[int, int]:
+        """Where a window about the pane at `index` opens: 16 logical pixels
+        in from the card's top-left corner, on screen."""
+        ox, oy = self.window_layout.pane_origins[index]
+        return self.x() + ox + 16, self.y() + oy + 16
 
     def grid_size(self) -> Tuple[int, int]:
         """The cards' bounding size: the window minus its margins."""
@@ -522,6 +542,13 @@ class TokittyQtWidget(QWidget):
         if self._drag is not None and event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
             self.save_position()
+
+    def closeEvent(self, event) -> None:
+        # The frameless, focusless widget has no close button, but an OS-level
+        # close must not leave the lock held with nothing on screen. Quitting
+        # is always explicit, because quitOnLastWindowClosed is off.
+        QApplication.quit()
+        super().closeEvent(event)
 
     # ---- always in front ------------------------------------------------
 

@@ -155,6 +155,17 @@ def install_supported() -> bool:
     return sys.platform == "win32"
 
 
+def refresh_streamdock_plugin(state_dir) -> None:
+    """Update an installed Stream Dock plugin to this build's copy. Never raises."""
+    if not install_supported():
+        return
+    try:
+        if refresh_streamdock(state_dir=state_dir, appdata=_real_appdata()):
+            print("tokitty: streamdock: plugin updated; restart VSD Craft to load it", file=sys.stderr)
+    except Exception as exc:
+        print(f"tokitty: streamdock: plugin refresh: {exc}", file=sys.stderr)
+
+
 def gui_install(state_dir, appdata=None, *, install_fn=install_streamdock):
     """Install for the Settings window: (ok, lines). Same arguments as run_install.
 

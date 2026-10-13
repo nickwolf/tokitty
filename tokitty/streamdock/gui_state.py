@@ -21,6 +21,34 @@ STATES = ("not_installed", "not_connected", "connected", "restart_to_connect",
           "restart_to_finish_removal", "starting", "failed")
 
 
+# What the Settings tabs show. Shared by the Tk and Qt Stream Dock tabs.
+MAX_LOG_LINES = 8
+
+# state -> (pill label, pill kind, detail line)
+STATE_INFO = {
+    "not_installed": ("Not installed", "neutral",
+                      "Install the plugin to put your sessions on a Stream Dock."),
+    "not_connected": ("Installed, not connected", "warn",
+                      "Start VSD Craft and check that the Tokitty plugin is loaded."),
+    "connected": ("Connected", "good", "Stream Dock is ready to show live sessions."),
+    "restart_to_connect": ("Restart tokitty to finish", "warn",
+                           "Plugin installed. Restart tokitty, then restart VSD Craft."),
+    "restart_to_finish_removal": ("Restart tokitty to finish", "warn",
+                                  "Plugin removed. Restart tokitty to stop its Stream Dock connection."),
+    # Details with {port} and {reason} are formatted from window.streamdock_info().
+    "starting": ("Starting", "warn",
+                 "Waiting for port {port}. An older copy of tokitty may still be closing."),
+    "failed": ("Couldn't start", "bad",
+               "Couldn't listen on port {port}: {reason}. Restart tokitty to try again."),
+}
+UNSUPPORTED_NOTE = "Installing the Stream Dock plugin needs Windows and VSD Craft."
+# How often an open tab re-reads the state, so "Starting" and "Connected" show up
+# without switching tabs.
+STATE_WATCH_MS = 1000
+# The states in which the plugin is installed, so the tab offers Uninstall, not Install.
+INSTALLED_STATES = ("not_connected", "connected", "restart_to_connect", "starting", "failed")
+
+
 class StreamdockHolder:
     def __init__(self, settings: Any, state_dir, runtime: Callable[[], Optional[Any]],
                  *, deck: Optional[Any] = None, load_fn=load_settings, install_fn=install_mod.gui_install,

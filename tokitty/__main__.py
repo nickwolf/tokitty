@@ -55,6 +55,7 @@ from tokitty.providers.claude import (  # noqa: F401
     resolve_projects_dir,
 )
 from tokitty.ntfy import Notifier
+from tokitty.streamdock.install import refresh_streamdock_plugin  # noqa: F401  (run_gui calls it)
 from tokitty.streamdock.window import InWindowViews, tk_view_factory
 from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, apply_idle_cap, gather_inputs
 
@@ -132,20 +133,6 @@ def debug_print() -> int:
                 print(f"activity: {activity.state}{label}")
 
     return 0
-
-
-def refresh_streamdock_plugin(state_dir) -> None:
-    """Update an installed Stream Dock plugin to this build's copy. Never raises."""
-    from tokitty.streamdock.install import _real_appdata, install_supported, refresh_streamdock
-
-    if not install_supported():
-        return
-    try:
-        if refresh_streamdock(state_dir=state_dir, appdata=_real_appdata()):
-            print("tokitty: streamdock: plugin updated; restart VSD Craft to load it", file=sys.stderr)
-    except Exception as exc:
-        print(f"tokitty: streamdock: plugin refresh: {exc}", file=sys.stderr)
-
 
 
 def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False) -> int:

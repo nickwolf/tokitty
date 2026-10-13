@@ -3,6 +3,7 @@
 Same method as test_theme.test_import_isolation: a subprocess puts None in
 sys.modules for every tkinter entry point, so any import of them raises.
 """
+import os
 import subprocess
 import sys
 
@@ -18,6 +19,7 @@ _MODULES = (
     "tokitty.worker_mailbox",
     "tokitty.app_version",
     "tokitty.settings_style",
+    "tokitty.usage_items",
     "tokitty.accounts_rows",
     "tokitty.accounts_logic",
     # already toolkit-free
@@ -41,4 +43,42 @@ def test_imports_without_tkinter(module):
         f"import {module}\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+_QT_MODULES = (
+    "tokitty.qt.accounts",
+    "tokitty.qt.app",
+    "tokitty.qt.deck_views",
+    "tokitty.qt.host",
+    "tokitty.qt.kit",
+    "tokitty.qt.macos",
+    "tokitty.qt.menu",
+    "tokitty.qt.pane",
+    "tokitty.qt.poller",
+    "tokitty.qt.position",
+    "tokitty.qt.presets",
+    "tokitty.qt.settings",
+    "tokitty.qt.settings_accounts",
+    "tokitty.qt.settings_streamdock",
+    "tokitty.qt.walkthrough",
+    "tokitty.qt.widget",
+)
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize("module", _QT_MODULES)
+def test_qt_modules_import_without_tkinter(module):
+    """The Qt windows share the toolkit-free modules and never reach a Tk one."""
+    code = (
+        "import sys\n"
+        f"for name in {_BLOCKED!r}:\n"
+        "    sys.modules[name] = None\n"
+        f"import {module}\n"
+        "leaked = [m for m in sys.modules if m.split('.')[0] in ('tkinter', '_tkinter')"
+        " and sys.modules[m] is not None]\n"
+        "assert not leaked, leaked\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
     assert r.returncode == 0, r.stderr
