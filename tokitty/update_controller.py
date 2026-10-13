@@ -93,6 +93,22 @@ def skips_ack(environ) -> bool:
     return environ.get(NO_ACK_ENV) == "1" and bool(environ.get(API_URL_ENV))
 
 
+def reclaim(lock, state_dir, backend) -> None:
+    """The toolkit-free start of a restore: take the lock back, then relink the
+    runner and refresh autostart for the copy that is running again. Raises
+    LockAcquisitionError if another copy holds the lock, before anything else."""
+    acquire_with_retry(lock, RESTORE_LOCK_TIMEOUT)
+    try:
+        runner_link.ensure_runner_link(state_dir)
+    except Exception as exc:
+        print(f"tokitty: update: relinking hooks: {exc}", file=sys.stderr)
+    if backend is not None:
+        try:
+            autostart.ensure_current(state_dir, backend)
+        except Exception as exc:
+            print(f"tokitty: update: autostart: {exc}", file=sys.stderr)
+
+
 class TkHost:
     """The Tk-side actions of a handover and of its rollback. All of them run
     on the Tk thread. `quiet` (the hidden --apply-update) opens no messagebox,
@@ -134,16 +150,7 @@ class TkHost:
     def restore(self) -> None:
         """Handover step 5.8 without the message. Raises LockAcquisitionError
         if another copy holds the lock, in which case nothing else is done."""
-        acquire_with_retry(self._lock, RESTORE_LOCK_TIMEOUT)
-        try:
-            runner_link.ensure_runner_link(self._state_dir)
-        except Exception as exc:
-            print(f"tokitty: update: relinking hooks: {exc}", file=sys.stderr)
-        if self._backend is not None:
-            try:
-                autostart.ensure_current(self._state_dir, self._backend)
-            except Exception as exc:
-                print(f"tokitty: update: autostart: {exc}", file=sys.stderr)
+        reclaim(self._lock, self._state_dir, self._backend)
         for window in self._windows:
             window.deiconify()
         if self._tray_enabled():
