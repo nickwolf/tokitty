@@ -346,6 +346,7 @@ class FakeWalkthrough(QWidget):
     closed = Signal()
     instances = []
     save_accounts_on_finish = True
+    refuse_close = False
     when_shown = None  # called with the instance in show()
 
     def __init__(self, state_dir, credentials_cache=None, running_distros=None):
@@ -358,6 +359,7 @@ class FakeWalkthrough(QWidget):
 
     def show(self):
         self.shown = True
+        super().show()  # visible, so a Quit closes it as it would the real one
         if FakeWalkthrough.when_shown is not None:
             FakeWalkthrough.when_shown(self)
         QTimer.singleShot(30, self.finish)
@@ -372,7 +374,20 @@ class FakeWalkthrough(QWidget):
                 Account(name="two", config_dir=str(self.state_dir / "c2"), provider="claude"),
             ])
         first_run.mark_done(self.state_dir)
+        self.emitted = True
+        self.hide()  # the real one closes on Finish
         self.closed.emit()
+
+    def closeEvent(self, event):
+        # As the real one: a close (button, or Qt closing every window on a
+        # Quit) is the end of the walkthrough, unless an install is running.
+        if FakeWalkthrough.refuse_close:
+            event.ignore()
+            return
+        if not getattr(self, "emitted", False):
+            self.emitted = True
+            self.closed.emit()
+        super().closeEvent(event)
 
 
 def fake_home(monkeypatch, tmp_path):
@@ -392,6 +407,7 @@ def fake_walkthrough(monkeypatch, tmp_path):
     FakeWalkthrough.instances = []
     FakeWalkthrough.save_accounts_on_finish = True
     FakeWalkthrough.when_shown = None
+    FakeWalkthrough.refuse_close = False
     monkeypatch.setattr(qt_walkthrough, "Walkthrough", FakeWalkthrough)
     FakeWalkthrough.home = fake_home(monkeypatch, tmp_path)
     return FakeWalkthrough
@@ -802,3 +818,67 @@ def test_a_failing_deck_stop_does_not_skip_the_workers_or_hide_the_error(
         run_qt()
     assert ("stop", "Poller") in fake_deck.log
     assert "stop deck: stop boom" in capsys.readouterr().err
+
+
+def send_quit(qapp, ms=50):
+    """Command-Q on macOS reaches Qt as a Quit event sent to the application,
+    which closes every window. QApplication.quit() is a no-op before exec()."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    QTimer.singleShot(ms, lambda: QCoreApplication.sendEvent(qapp, QEvent(QEvent.Type.Quit)))
+
+
+def test_quit_while_the_walkthrough_is_open_ends_the_launch(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    built = []
+    monkeypatch.setattr("tokitty.qt.app.build_units", lambda **kw: built.append(1) or [])
+
+    def when_shown(walk):
+        walk.finish = lambda: None
+        send_quit(qapp)
+
+    fake_walkthrough.when_shown = when_shown
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert built == [] and fake_workers == []
+
+
+def test_a_quit_the_walkthrough_refuses_does_not_end_the_launch(
+        qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
+    # An install is running, so the walkthrough stays open; finishing it
+    # afterwards launches as usual.
+    def when_shown(walk):
+        fake_walkthrough.refuse_close = True
+        real_finish = walk.finish
+        walk.finish = lambda: None
+        send_quit(qapp)
+        # The install ends, so it stops refusing, and the user finishes.
+        QTimer.singleShot(150, lambda: (setattr(fake_walkthrough, "refuse_close", False), real_finish()))
+
+    fake_walkthrough.when_shown = when_shown
+    seen = quit_from_widget(monkeypatch)
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert len(seen["widgets"]) == 1
+
+
+def test_a_failing_unit_stop_does_not_skip_the_others(
+        qapp, state_dir, monkeypatch, fake_deck, capsys):
+    from tokitty.poller import Poller
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+
+    def boom(self):
+        raise RuntimeError("join boom")
+
+    monkeypatch.setattr(Poller, "stop", boom)
+    assert run_for(qapp, 200) == 0
+    stops = settled(fake_deck.log, "stop")
+    assert ("stop", "ActivityWatcher") in stops and ("stop", "UsageWatcher") in stops
+    assert "stop poller: join boom" in capsys.readouterr().err

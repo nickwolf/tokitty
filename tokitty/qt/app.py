@@ -95,23 +95,49 @@ def run_guarded(label, fn) -> None:
         print(f"tokitty: shutdown: {label}: {exc}", file=sys.stderr)
 
 
-def run_walkthrough(state_dir, credentials_cache, distro_probe) -> None:
+def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
     """Show the first-run walkthrough and wait for it in a local event loop
-    that its `closed` signal quits. The caller reloads accounts and settings
-    afterwards."""
-    from PySide6.QtCore import QEventLoop
+    that its `closed` signal quits. True when it closed because the
+    application was asked to quit (Command-Q on macOS): QApplication.quit()
+    does nothing before app.exec() has started, so the caller has to stop the
+    launch itself. Otherwise the caller reloads accounts and settings."""
+    from PySide6.QtCore import QEvent, QEventLoop, QObject, QTimer
+    from PySide6.QtWidgets import QApplication
 
     from tokitty.qt.walkthrough import Walkthrough
 
-    walkthrough = Walkthrough(state_dir, credentials_cache, distro_probe.get_running)
     loop = QEventLoop()
-    closed = []
-    walkthrough.closed.connect(lambda: (closed.append(True), loop.quit()))
-    walkthrough.show()
-    walkthrough.raise_()
-    walkthrough.activateWindow()
-    if not closed:
-        loop.exec()
+    done = {"closed": False, "quit": False, "quitting": False}
+
+    class QuitWatch(QObject):
+        # Qt handles a Quit event by closing every window, synchronously, so
+        # a `closed` that fires while the flag is up came from the Quit. A
+        # walkthrough that refuses (an install is running) stays open, and
+        # the flag drops on the next turn of the loop.
+        def eventFilter(self, obj, event):
+            if obj is QApplication.instance() and event.type() == QEvent.Type.Quit:
+                done["quitting"] = True
+                QTimer.singleShot(0, lambda: done.update(quitting=False))
+            return False
+
+    def on_closed():
+        done.update(closed=True, quit=done["quitting"])
+        loop.quit()
+
+    app = QApplication.instance()
+    watch = QuitWatch()
+    app.installEventFilter(watch)
+    try:
+        walkthrough = Walkthrough(state_dir, credentials_cache, distro_probe.get_running)
+        walkthrough.closed.connect(on_closed)
+        walkthrough.show()
+        walkthrough.raise_()
+        walkthrough.activateWindow()
+        if not done["closed"]:
+            loop.exec()
+    finally:
+        app.removeEventFilter(watch)
+    return done["quit"]
 
 
 def run_qt() -> int:
@@ -189,7 +215,10 @@ def _run_locked(state_dir) -> int:
         # The panes are built once from accounts.json, so the walkthrough
         # runs first. Nothing else starts until it closes: no pollers, units
         # or discovery, which also keeps the hook guard free for its installs.
-        run_walkthrough(state_dir, wsl_credentials, distro_probe)
+        if run_walkthrough(state_dir, wsl_credentials, distro_probe):
+            # Quit while it was open: it closed as if by its close button,
+            # and nothing else of the launch runs.
+            return 0
         if env_override_set or home_relative_exists:
             # The sweep was only for listing installs. With native credentials
             # the rest of the launch keeps the usual guard, or a skipped
@@ -413,8 +442,10 @@ def _run_locked(state_dir) -> int:
             run_guarded("close deck views", deck_views.close_all)
         if deck is not None:
             run_guarded("stop deck", deck.stop)
+        # Each stop on its own, as the deck's are: a partly started unit can
+        # raise here (joining a thread that never started), and that must not
+        # skip the rest or hide the exception already unwinding.
         for unit in units:
-            unit["poller"].stop()
-            unit["watcher"].stop()
-            unit["usage"].stop()
-        notifier.stop()
+            for part in ("poller", "watcher", "usage"):
+                run_guarded(f"stop {part}", unit[part].stop)
+        run_guarded("stop notifier", notifier.stop)
