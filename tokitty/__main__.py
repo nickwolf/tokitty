@@ -39,6 +39,7 @@ from tokitty.customize import (
 )
 from tokitty.distro_probe import RunningDistroProbe
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
+from tokitty.update_controller import ACK_MAP_POLL_MS, ACK_MAP_TIMEOUT  # noqa: F401  (re-exported)
 from tokitty.paths import get_state_dir
 from tokitty.poller import Poller  # noqa: F401  (patched through here by the tests)
 from tokitty.providers import (
@@ -65,10 +66,6 @@ from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, 
 # run_gui() imports both lazily, only when the GUI path actually runs.
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
-# The ack waits for the window to be mapped, but not forever: a window manager
-# that never reports a map must not strand the handover.
-ACK_MAP_POLL_MS = 50
-ACK_MAP_TIMEOUT = 5.0
 
 
 def debug_print() -> int:

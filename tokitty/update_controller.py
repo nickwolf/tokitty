@@ -64,6 +64,10 @@ from tokitty.updater import (
 )
 
 ACK_TIMEOUT = 120.0
+# The new copy acks once its window is up, but not forever: a window manager
+# that never reports a map must not strand the handover.
+ACK_MAP_POLL_MS = 50
+ACK_MAP_TIMEOUT = 5.0
 RESTORE_LOCK_TIMEOUT = 10.0
 NO_ACK_ENV = "TOKITTY_UPDATE_TEST_NO_ACK"
 

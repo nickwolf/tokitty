@@ -84,7 +84,7 @@ def test_hide_hides_the_widget_and_visible_registered_windows_then_releases(setu
     assert lock.calls == ["release"]
 
 
-def test_restore_reclaims_then_shows_exactly_what_hide_hid(setup, reclaimed):
+def test_restore_reclaims_then_shows_what_hide_hid(setup, reclaimed):
     host, lock, _ = setup.build()
     shown = setup.window()
     already_hidden = setup.window(visible=False)
@@ -94,7 +94,8 @@ def test_restore_reclaims_then_shows_exactly_what_hide_hid(setup, reclaimed):
     assert reclaimed.calls == [(lock, setup.state_dir, None)]
     assert setup.widget.isVisible() and shown.isVisible()
     assert not already_hidden.isVisible()
-    assert not unregistered.isVisible()
+    # Unregistered windows come back too: the presets form is one.
+    assert unregistered.isVisible()
     assert not host.hidden
 
 
@@ -191,3 +192,49 @@ def test_finish_twice_quits_once_and_only_after_the_event_loop_turns(setup, qapp
     assert app.quits == 0
     qapp.processEvents()
     assert app.quits == 1
+
+
+def test_a_child_dialog_window_comes_back_but_a_qdialog_does_not(setup, reclaimed):
+    host, _, _ = setup.build()
+    parent = setup.window()
+    form = QWidget(parent, Qt.WindowType.Dialog)  # how the presets form is made
+    form.show()
+    box = QMessageBox(parent)
+    box.show()
+    host.hide()
+    assert not form.isVisible() and not box.isVisible()
+    host.restore()
+    assert form.isVisible() and not box.isVisible()
+    form.close()
+    box.close()
+
+
+def test_when_shown_runs_now_while_visible(setup):
+    host, _, _ = setup.build()
+    ran = []
+    host.when_shown(lambda: ran.append(1))
+    assert ran == [1]
+
+
+def test_when_shown_holds_while_hidden_and_runs_after_restore(setup, reclaimed, qapp):
+    host, _, _ = setup.build()
+    ran = []
+    host.hide()
+    host.when_shown(lambda: ran.append(1))
+    qapp.processEvents()
+    assert ran == []
+    host.restore()
+    assert ran == []  # not inside restore, which runs in tick()
+    qapp.processEvents()
+    assert ran == [1]
+
+
+def test_when_shown_drops_what_it_held_once_finishing(setup, reclaimed, qapp):
+    host, _, _ = setup.build()
+    ran = []
+    host.hide()
+    host.when_shown(lambda: ran.append(1))
+    host.finish()
+    host.when_shown(lambda: ran.append(2))
+    qapp.processEvents()
+    assert ran == []

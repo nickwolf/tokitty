@@ -6,10 +6,10 @@ Nothing here imports tkinter.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import Callable, List
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QMenu, QWidget
 
 from tokitty import update_controller
 from tokitty.qt.deck_views import QtView
@@ -29,6 +29,9 @@ class QtUpdateHost:
         self._hidden = False
         self._finishing = False
         self._shown: List[QWidget] = []
+        # Update presentations (a check result, the dialog) that arrived while
+        # hidden; they run after restore and are dropped by finish.
+        self._held: List[Callable[[], None]] = []
 
     @property
     def hidden(self) -> bool:
@@ -37,14 +40,16 @@ class QtUpdateHost:
     def hide(self) -> None:
         """Handover step 5.3: windows away, lock released. Every visible
         top-level goes, so a modal box open while staging finished goes too:
-        hiding one inside exec() ends its loop as if dismissed, and restore
-        does not show it again. The Stream Dock views stay, as in Tk."""
+        hiding one inside exec() ends its loop as if dismissed, so restore
+        does not show dialogs or menus again. Everything else comes back,
+        registered or not (the presets form is a child window). The Stream
+        Dock views stay, as in Tk."""
         self._hidden = True
         self._shown = []
         for window in QApplication.topLevelWidgets():
             if not window.isVisible() or isinstance(window, QtView):
                 continue
-            if window is self._host.widget or self._host.is_registered(window):
+            if not isinstance(window, (QDialog, QMenu)):
                 self._shown.append(window)
             window.hide()
         self._lock.release()
@@ -55,12 +60,26 @@ class QtUpdateHost:
         update_controller.reclaim(self._lock, self._state_dir, self._backend)
         for window in self._shown:
             try:
-                self._host.restack(window)
+                if self._host.is_registered(window):
+                    self._host.restack(window)
                 window.show()
             except RuntimeError:  # the C++ window is already gone
                 pass
         self._shown = []
         self._hidden = False
+        held, self._held = self._held, []
+        for fn in held:
+            # Next turn of the loop: one may open a modal box, and restore
+            # runs inside tick() with the rollback still to finish.
+            QTimer.singleShot(0, fn)
+
+    def when_shown(self, fn: Callable[[], None]) -> None:
+        """Run fn now, or after restore if the handover has the app hidden."""
+        if self._hidden:
+            if not self._finishing:
+                self._held.append(fn)
+            return
+        fn()
 
     def finish(self) -> None:
         """Close the app. Deferred, because tick() calls this and still has
@@ -68,6 +87,7 @@ class QtUpdateHost:
         if self._finishing:
             return
         self._finishing = True
+        self._held = []
         QTimer.singleShot(0, self._app.quit)
 
     def notice(self, text: str) -> None:
