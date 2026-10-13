@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -234,3 +235,57 @@ def test_tags_sit_on_the_cards_outer_side(qapp):
     oy = widget.window_layout.pane_origins[1][1]
     assert right_box.right() == T.CARD_WIDTH - 8 - 6
     assert right_box.top() == oy + 8
+
+
+# ---- set_theme, anchors, close -------------------------------------------
+
+def test_set_theme_changes_the_card_alpha(qapp):
+    widget = make(qapp)
+    assert widget.grab().toImage().pixelColor(150, 5).alpha() == 255
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=50)))
+    assert widget.theme.card.opacity == 50
+    assert abs(widget.grab().toImage().pixelColor(150, 5).alpha() - T.card_alpha(50)) <= 1
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=0)))
+    assert widget.grab().toImage().pixelColor(150, 5).alpha() == 1
+
+
+def test_set_theme_drops_cached_layouts_and_images(qapp):
+    widget = make(qapp)
+    widget.grab()
+    assert widget._layouts and widget._images
+    widget.set_theme(T.Theme(bars=T.BarStyle(height=10)))
+    assert not widget._layouts and not widget._images
+    r = widget._layout_for("limits", "inside")["session_bar"]
+    assert r.h == 10
+
+
+def test_set_theme_keeps_the_window_matching_its_layout(qapp):
+    widget = make(qapp, 2, homes=["on_top", "inside"])
+    widget.set_theme(T.Theme(bars=T.BarStyle(layout="full_width")))
+    expected = T.layout_window(widget.homes)
+    assert (widget.width(), widget.height()) == expected.size
+    # homes that changed under the new customizations are picked up too
+    widget.panes[0].set_customization(Customization(cat_home="inside"))
+    widget.set_theme(T.Theme())
+    assert widget.homes == ["inside", "inside"]
+    assert (widget.width(), widget.height()) == T.layout_window(["inside", "inside"]).size
+
+
+def test_pane_anchor_is_the_window_position_plus_origin_plus_16(qapp):
+    widget = make(qapp, 2, homes=["on_top", "inside"])
+    widget.move(300, 200)
+    for index in (0, 1):
+        ox, oy = widget.window_layout.pane_origins[index]
+        assert widget.pane_anchor(index) == (300 + ox + 16, 200 + oy + 16)
+
+
+def test_closing_the_widget_quits_the_application(qapp):
+    from PySide6.QtCore import QTimer
+
+    widget = make(qapp)
+    widget.show()
+    QTimer.singleShot(0, widget.close)
+    QTimer.singleShot(2000, qapp.quit)  # the safety net if close() does not quit
+    start = time.monotonic()
+    qapp.exec()
+    assert time.monotonic() - start < 1.5

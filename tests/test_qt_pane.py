@@ -95,3 +95,22 @@ def test_draw_next_frame_cycles_like_the_tk_pane():
 def test_fit_tag():
     assert fit_tag("Bash") == "Bash"
     assert fit_tag("a" * 20) == "a" * 11 + "…"
+
+
+def test_set_customization_replaces_the_whole_customization_and_keeps_the_label():
+    calls = []
+    pane = QtPane(Customization(cat_home="inside_right", overrides={"coat_base": "#112233"}),
+                  on_change=lambda: calls.append(1))
+    pane.set_appearance(label="Shown")
+    custom = Customization(colorway="gray", pattern="solid", cat_home="on_top")
+    pane.set_customization(custom)
+
+    assert pane.customization is custom
+    assert pane.customization.cat_home == "on_top"
+    assert (pane._colorway, pane._pattern) == ("gray", "solid")
+    assert pane.palette == effective_palette(custom)  # the old coat override is gone
+    assert pane._label == "Shown"                      # custom.label is "", the shown label stays
+    assert calls
+
+    pane.set_customization(custom, label="Other")
+    assert pane._label == "Other"

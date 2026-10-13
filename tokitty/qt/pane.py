@@ -93,6 +93,20 @@ class QtPane:
             self._palette = effective_palette(self.customization)
         self._changed()
 
+    def set_customization(self, custom: Customization, label: Optional[str] = None) -> None:
+        """Take a whole new customization (so cat_home survives and a reset
+        really clears old overrides) and recompute the palette, colorway and
+        pattern from it. The shown label stays what it was unless one is
+        passed: launch shows the account's resolved label, which can differ
+        from custom.label for an unnamed account."""
+        self.customization = custom
+        if label is not None:
+            self._label = label
+        self._colorway = custom.colorway
+        self._pattern = custom.pattern
+        self._palette = effective_palette(custom)
+        self._changed()
+
     def render_usage(
         self,
         state: str,
