@@ -243,3 +243,73 @@ def test_single_process_problems(vu, tmp_path):
 
 def test_top_name(vu):
     assert [vu.top_name(p) for p in ("win32", "darwin", "linux")] == ["Tokitty", "Tokitty.app", "tokitty"]
+
+
+def _scenario_ctx(tmp_path, **extra):
+    return {"work": tmp_path, "tag": "v99.0.0", "old_tag": "v0.0.1", "old_archive": tmp_path / "old.tar.gz", **extra}
+
+
+def test_scenario_folders_follow_the_old_tag(vu, tmp_path, monkeypatch):
+    monkeypatch.setattr(vu.sys, "platform", "linux")
+    default = vu.Scenario(_scenario_ctx(tmp_path), "a")
+    assert default.old_app_dir == tmp_path / "a" / "releases" / "v0.0.1" / "tokitty"
+    legacy = vu.Scenario(_scenario_ctx(tmp_path, old_tag="v0.6.2"), "b")
+    assert legacy.old_app_dir == tmp_path / "b" / "releases" / "v0.6.2" / "tokitty"
+    assert legacy.new_app_dir == tmp_path / "b" / "releases" / "v99.0.0" / "tokitty"
+    assert legacy.old_tag == "v0.6.2"
+
+
+def test_scenario_unpacks_the_old_archive_under_the_old_tag(vu, tmp_path, monkeypatch):
+    monkeypatch.setattr(vu.sys, "platform", "linux")
+    seen = {}
+    monkeypatch.setattr(vu, "unpack_archive", lambda archive, dest: seen.update(dest=Path(dest)))
+    scn = vu.Scenario(_scenario_ctx(tmp_path, old_tag="v0.6.2"), "c")
+    with pytest.raises(RuntimeError):
+        scn.unpack_old()
+    assert seen["dest"] == tmp_path / "c" / "releases" / "v0.6.2"
+
+
+def test_prepare_compares_the_tag_with_the_old_tag(vu, tmp_path):
+    ctx = _scenario_ctx(tmp_path, tag="v0.6.2", old_tag="v0.6.2", new_archive=tmp_path / "n", new_sums=tmp_path / "s")
+    for name in ("old.tar.gz", "n", "s"):
+        (tmp_path / name).write_bytes(b"x")
+    ctx.update(new_archive=tmp_path / "n", new_sums=tmp_path / "s", repo_root=Path(__file__).resolve().parent.parent, rehearsal=False)
+    result = vu.step_prepare(ctx)
+    assert not result["ok"]
+    assert "is not newer than the old fixture v0.6.2" in result["detail"]
+
+
+def test_qt_mode_env_sets_the_switch_and_removes_the_platform_variables(vu):
+    env = vu.qt_mode_env({"HOME": "/h", "QT_QPA_PLATFORM": "offscreen", "WAYLAND_DISPLAY": "wayland-0", "TOKITTY_QT": "0"})
+    assert env == {"HOME": "/h", "TOKITTY_QT": "1"}
+
+
+def test_scratch_env_is_qt_mode_only_when_asked(vu, tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("TOKITTY_QT", raising=False)
+    plain = vu.scratch_env(tmp_path / "p")
+    assert plain["QT_QPA_PLATFORM"] == "offscreen" and "TOKITTY_QT" not in plain
+    qt = vu.scratch_env(tmp_path / "q", qt=True)
+    assert qt["TOKITTY_QT"] == "1" and "QT_QPA_PLATFORM" not in qt and "WAYLAND_DISPLAY" not in qt
+    assert vu.Scenario(_scenario_ctx(tmp_path, qt=True), "d").env["TOKITTY_QT"] == "1"
+    assert "TOKITTY_QT" not in vu.Scenario(_scenario_ctx(tmp_path), "e").env
+
+
+def test_after_update_qt_problems(vu, tmp_path):
+    assert "missing" in vu.after_update_qt_problems(tmp_path)[0]
+    path = tmp_path / "after-update-qt.json"
+    path.write_text('{"exposed_before_ack": true, "waited_s": 0.4}', encoding="utf-8")
+    assert vu.after_update_qt_problems(tmp_path) == []
+    path.write_text('{"exposed_before_ack": false, "waited_s": 9}', encoding="utf-8")
+    assert "exposed_before_ack" in vu.after_update_qt_problems(tmp_path)[0]
+    path.write_text("not json", encoding="utf-8")
+    assert "not JSON" in vu.after_update_qt_problems(tmp_path)[0]
+    path.write_text("[]", encoding="utf-8")
+    assert vu.after_update_qt_problems(tmp_path)
+
+
+def test_the_constant_matches_the_qt_app_file_name(vu):
+    from tokitty.qt.app import AFTER_UPDATE_QT_FILE
+
+    assert vu.AFTER_UPDATE_QT_FILE == AFTER_UPDATE_QT_FILE
