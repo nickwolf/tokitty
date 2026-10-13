@@ -2,6 +2,7 @@
 Updates rows, the tick, and the two update hand-offs. The controller and
 checker are fakes in-process; the after-update path also runs for real in a
 subprocess with a scratch state dir."""
+import os
 import subprocess
 import sys
 import textwrap
@@ -295,7 +296,9 @@ def test_hook_warnings_wait_while_the_update_host_is_hidden(
     from tokitty import update_controller
 
     monkeypatch.setattr(update_controller, "reclaim", lambda lock, state_dir, backend: None)
-    queued = [["a hook warning"]]
+    # Queued only once the app is hidden: a tick can run before the hook
+    # (during show on Windows and macOS), and would rightly take it then.
+    queued = []
     monkeypatch.setattr(Discovery, "take_hook_warnings", lambda self: queued.pop(0) if queued else [])
     seen = {}
 
@@ -303,6 +306,7 @@ def test_hook_warnings_wait_while_the_update_host_is_hidden(
         update_host = fakes.updates().host
         timer = tick_timer(widget)
         update_host.hide()
+        queued.append(["a hook warning"])
         timer.timeout.emit()
         settle(qapp)
         seen["hidden"] = (list(boxes), len(queued))
@@ -449,8 +453,11 @@ def run_driver(tmp_path, env_extra):
     state = tmp_path / "scratch-state"
     state.mkdir()
     token = new_token()
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PYTHONPATH": str(REPO_ROOT),
-           "QT_QPA_PLATFORM": "offscreen", **env_extra}
+    # The real environment minus any tokitty switches: Windows needs SYSTEMROOT
+    # and friends to start Python and Qt, and USERPROFILE for Path.home().
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TOKITTY_")}
+    env.update({"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PYTHONPATH": str(REPO_ROOT),
+                "QT_QPA_PLATFORM": "offscreen", **env_extra})
     proc = subprocess.run([sys.executable, "-c", DRIVER, str(state), token], cwd=REPO_ROOT,
                           env=env, capture_output=True, text=True, timeout=60)
     return proc, state, token
