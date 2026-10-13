@@ -68,6 +68,8 @@ def reset_icons():
 
 def make_tray(tmp_path, items=None, available=True, **kw):
     kw.setdefault("icon_factory", FakeIcon)
+    # Off macOS unless a test asks for it: there notify is always False.
+    kw.setdefault("platform", "linux")
     return QtTray(lambda: items if items is not None else [MenuItem(label="Go", action=lambda: None)],
                   tmp_path, tray_available=lambda: available, **kw)
 
