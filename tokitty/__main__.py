@@ -617,12 +617,12 @@ def main(argv: Optional[list] = None) -> int:
         if not valid_token(token):
             print("tokitty: --after-update needs a token", file=sys.stderr)
             return 2
-    if os.environ.get("TOKITTY_QT") == "1" and "--after-update" not in argv and "--apply-update" not in argv:
-        # Source-only developer mode until #115; the update hand-offs keep
-        # the Tk path (#113).
+    if os.environ.get("TOKITTY_QT") == "1":
+        # Source-only developer mode until #115. The update hand-offs go the
+        # same way, since the new copy inherits the old one's environment.
         from tokitty.qt.app import run_qt
 
-        return run_qt()
+        return run_qt(after_update_token=token, apply_update="--apply-update" in argv)
     if token or "--apply-update" in argv:
         return run_gui(after_update_token=token, apply_update="--apply-update" in argv)
     return run_gui()

@@ -19,7 +19,7 @@ def test_attach_exposes_every_controls_seam_under_its_own_name(make_world):
 def test_tray_update_and_opener_seams_are_none(make_world):
     host = make_world(1).host
     for name in ("on_toggle_tray", "tray_enabled", "update_check_enabled", "on_toggle_update_check",
-                 "on_check_updates", "update_available_label", "on_open_accounts",
+                 "on_check_updates", "update_available_label", "on_install_update", "on_open_accounts",
                  "on_edit_streamdock_presets"):
         assert getattr(host, name) is None
 

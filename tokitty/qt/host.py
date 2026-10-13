@@ -149,7 +149,11 @@ class QtHost:
         if self.settings_refresh is not None:
             self.settings_refresh()
 
+    def dialog_parent(self) -> QWidget:
+        """What a message box is parented to: the last visible window opened
+        here, else the widget."""
+        return next((w for w in reversed(self._windows) if w.isVisible()), self.widget)
+
     def warn(self, title: str, text: str) -> None:
-        parent = next((w for w in reversed(self._windows) if w.isVisible()), self.widget)
-        QMessageBox.warning(parent, title, text)
+        QMessageBox.warning(self.dialog_parent(), title, text)
 
