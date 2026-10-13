@@ -18,6 +18,7 @@ _MODULES = (
     "tokitty.worker_mailbox",
     "tokitty.app_version",
     "tokitty.settings_style",
+    "tokitty.usage_items",
     "tokitty.accounts_rows",
     "tokitty.accounts_logic",
     # already toolkit-free
