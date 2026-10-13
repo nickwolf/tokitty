@@ -144,7 +144,9 @@ def test_view_menu_item_writes_the_setting(qapp, state_dir, monkeypatch, fake_wo
     real_show = TokittyQtWidget.show
 
     def show(self):
-        seen["labels"] = [i.label for i in self.build_menu_model(0)]
+        # The update item is in the model but hidden while no release is known.
+        seen["labels"] = [i.label for i in self.build_menu_model(0)
+                          if i.dynamic_label is None or i.dynamic_label()]
         view = next(i for i in self.build_menu_model(0) if i.label == "View")
         next(i for i in view.submenu if i.label == "Per-model").action()
         real_show(self)
@@ -718,7 +720,9 @@ def test_a_failing_deck_tick_is_reported_and_the_loop_goes_on(
         qapp, state_dir, monkeypatch, fake_deck, capsys):
     save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
     fake_deck.runtime = FakeDeckRuntime(fake_deck.log, fail=True)
-    assert run_for(qapp, 1500) == 0
+    # Setup counts against the window (the quit timer starts first), so leave
+    # room for two 500 ms ticks after a slow start on a CI runner.
+    assert run_for(qapp, 3000) == 0
     assert "streamdock: tick: tick boom" in capsys.readouterr().err
     assert len(settled(fake_deck.log, "deck.tick")) >= 2
 

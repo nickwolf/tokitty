@@ -2,14 +2,16 @@
 
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that (tray, update check) is absent here until its own issue (#113,
-#114). PySide6 is imported inside run_qt, so
-importing this module never needs it.
+has beyond that is absent here until its own issue, except the update check
+and the installer (#113); the tray waits for #114. PySide6 is imported inside
+run_qt, so importing this module never needs it.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from tokitty.app_core import (
 from tokitty.usage_items import VIEW_MODE_ITEMS  # noqa: F401  (also read by the tests)
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
+AFTER_UPDATE_QT_FILE = "after-update-qt.json"
 POSITION_FILENAME = "position.json"  # ui.POSITION_FILENAME, which cannot be imported without Tk
 MISSING_PYSIDE6 = (
     'tokitty: TOKITTY_QT is set but PySide6 is not installed (pip install -e ".[qt]")'
@@ -42,6 +45,21 @@ def apply_customization(pane, custom) -> None:
         bar_fill=custom.overrides.get("bar_fill", ""),
         colorway=custom.colorway, pattern=custom.pattern,
     )
+
+
+class TrayStandIn:
+    """What `announcer` needs of a tray. There is none until #114: a refresh
+    re-syncs an open Settings pill, and notify declines, which leaves
+    notified_tag unwritten so the tray announces the release on a later run."""
+
+    def __init__(self, host):
+        self._host = host
+
+    def refresh(self) -> None:
+        self._host.notify_state_changed()
+
+    def notify(self, title: str, message: str) -> bool:
+        return False
 
 
 def make_preferences_menu(open_settings):
@@ -140,37 +158,46 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
     return done["quit"]
 
 
-def run_qt() -> int:
+def run_qt(after_update_token=None, apply_update=False) -> int:
     try:
         import PySide6  # noqa: F401
     except ImportError:
         print(MISSING_PYSIDE6, file=sys.stderr)
         return 1
 
-    from tokitty.lock import LockAcquisitionError, SingleInstanceLock
+    from tokitty import update_controller
+    from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
     from tokitty.paths import get_state_dir
 
     state_dir = get_state_dir()
     lock = SingleInstanceLock(state_dir)
     try:
-        lock.acquire()
+        # The old copy releases the lock as it hands over, so a new copy
+        # started by an update waits for it instead of giving up.
+        if after_update_token:
+            acquire_with_retry(lock, 30)
+        else:
+            lock.acquire()
     except LockAcquisitionError:
-        print("Tokitty is already running.", file=sys.stderr)
+        if not after_update_token:
+            print("Tokitty is already running.", file=sys.stderr)
         return 1
     try:
-        return _run_locked(state_dir)
+        if after_update_token and update_controller.skips_ack(os.environ):
+            return 0
+        return _run_locked(state_dir, lock, after_update_token, apply_update)
     finally:
         lock.release()
 
 
-def _run_locked(state_dir) -> int:
+def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) -> int:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     from tokitty import first_run, theme
     from tokitty.accounts import env_conflict_warning, load_accounts, load_accounts_result
     from tokitty.customize import Customization, load_customization, save_customization
-    from tokitty.settings import load_settings
+    from tokitty.settings import load_settings, update_settings
     from tokitty.app_controls import make_controls
     from tokitty.distro_probe import RunningDistroProbe
     from tokitty.streamdock.gui_state import StreamdockHolder
@@ -180,9 +207,13 @@ def _run_locked(state_dir) -> int:
     )
     from tokitty.streamdock.window import InWindowViews
     from tokitty import update_controller
+    from tokitty.update_check import UpdateChecker, announcer
+    from tokitty.update_flow import UpdateActions
     from tokitty.qt.deck_views import qt_view_factory
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
+    from tokitty.qt.update_dialog import QtUpdateDialog
+    from tokitty.qt.update_host import QtUpdateHost
     from tokitty.qt.widget import TokittyQtWidget
     from tokitty.wsl_probe import WslCredentialsCache
 
@@ -192,8 +223,12 @@ def _run_locked(state_dir) -> int:
 
     # Under the lock and before anything else writes to the state dir, as in
     # run_gui. A fresh dir is marked pending here, so a walkthrough killed
-    # midway shows again. Debug launches mark nothing and never show it.
-    show = first_run.classify(state_dir, load_settings(state_dir), excluded=debug)
+    # midway shows again. Debug launches and the update hand-offs mark nothing
+    # and never show it.
+    show = first_run.classify(
+        state_dir, load_settings(state_dir),
+        excluded=debug or bool(after_update_token or apply_update),
+    )
 
     app = QApplication.instance() or QApplication([])
     # Quitting is always explicit (Exit, or the widget's closeEvent): the
@@ -307,6 +342,8 @@ def _run_locked(state_dir) -> int:
                 view_modes=VIEW_MODE_ITEMS,
                 current_view_mode=lambda: usage_state["view"],
                 on_view_mode=lambda value: controls.on_view_mode(value),
+                update_available_label=host.update_available_label,
+                on_install_update=host.on_install_update,
             )
 
         widget = TokittyQtWidget(
@@ -329,6 +366,39 @@ def _run_locked(state_dir) -> int:
             warn=host.warn,
         )
         host.attach(controls)
+        update_host = QtUpdateHost(app, host, lock, state_dir, controls.autostart_backend,
+                                   quiet=apply_update)
+        updates = update_controller.UpdateController(state_dir, update_host)
+
+        # Plain-Python shadow state again, as in run_gui.
+        update_check_state = {"on": settings.update_check}
+        checker = UpdateChecker(
+            state_dir, updates.running, enabled=lambda: update_check_state["on"],
+            on_available=announcer(state_dir, TrayStandIn(host)),
+        )
+
+        def toggle_update_check() -> None:
+            update_check_state["on"] = not update_check_state["on"]
+            update_settings(state_dir, update_check=update_check_state["on"])
+
+        def update_box(show_box):
+            return lambda title, text: show_box(host.dialog_parent(), title, text)
+
+        update_actions = UpdateActions(
+            checker, updates,
+            # Held while a handover has the app hidden, so a check result
+            # can't bring the dialog back over a copy that is handing over.
+            defer=lambda fn: QTimer.singleShot(0, lambda: update_host.when_shown(fn)),
+            error=update_box(QMessageBox.critical),
+            info=update_box(QMessageBox.information),
+            offer=lambda release: QtUpdateDialog.open(host, release, updates.running.version, updates),
+        )
+        host.update_available_label = checker.menu_label
+        host.on_install_update = update_actions.install
+        host.on_check_updates = update_actions.check_now
+        host.update_check_enabled = lambda: update_check_state["on"]
+        host.on_toggle_update_check = toggle_update_check
+        apply_exit = {"code": 1}
         widget.on_menu_action_done = host.notify_state_changed
         for unit, pane in zip(units, widget.panes):
             unit["pane"] = pane
@@ -400,7 +470,11 @@ def _run_locked(state_dir) -> int:
             QMessageBox.warning(widget, "Tokitty", "\n\n".join(warnings))
 
         def tick() -> None:
-            hook_warnings = discovery.take_hook_warnings()
+            updates.tick()
+            checker.tick()
+            # Not while the handover has the app hidden: a box would open over
+            # nothing. The warnings wait in discovery until restore.
+            hook_warnings = [] if update_host.hidden else discovery.take_hook_warnings()
             if hook_warnings:
                 # Deferred: the box is modal and must not hold up the tick.
                 QTimer.singleShot(0, lambda warnings=hook_warnings: show_warnings(warnings))
@@ -423,6 +497,9 @@ def _run_locked(state_dir) -> int:
                     deck_views.sync()
                 except Exception as exc:
                     print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
+            interval = 100 if updates.busy else UI_REFRESH_MS
+            if timer.interval() != interval:
+                timer.setInterval(interval)
 
         for unit in units:
             unit["poller"].start()
@@ -431,12 +508,54 @@ def _run_locked(state_dir) -> int:
         timer = QTimer(widget)
         timer.timeout.connect(tick)
         timer.start(UI_REFRESH_MS)
+        updates.startup(frozen=bool(getattr(sys, "frozen", False)))
+        if after_update_token:
+            # Inside the event loop and once the widget is exposed, so the
+            # first window is up when the old copy hears from us. Not forever:
+            # a platform that never exposes must not strand the handover.
+            started = time.monotonic()
+            ack_timer = QTimer(widget)
+
+            def send_ack() -> None:
+                handle = widget.windowHandle()
+                exposed = handle is not None and handle.isExposed()
+                waited = time.monotonic() - started
+                if not exposed and waited < update_controller.ACK_MAP_TIMEOUT:
+                    return
+                ack_timer.stop()
+                from tokitty.update_swap import write_ack
+
+                if os.environ.get(update_controller.API_URL_ENV):
+                    # For the rehearsal: the ack is written either way, so
+                    # this is the record that a window was up before it.
+                    try:
+                        (Path(state_dir) / AFTER_UPDATE_QT_FILE).write_text(
+                            json.dumps({"exposed_before_ack": exposed, "waited_s": waited}),
+                            encoding="utf-8",
+                        )
+                    except OSError as exc:
+                        print(f"tokitty: update: writing {AFTER_UPDATE_QT_FILE}: {exc}", file=sys.stderr)
+                try:
+                    write_ack(state_dir, after_update_token)
+                except OSError as exc:
+                    print(f"tokitty: update: writing the ack: {exc}", file=sys.stderr)
+
+            ack_timer.timeout.connect(send_ack)
+            ack_timer.start(update_controller.ACK_MAP_POLL_MS)
+        if apply_update:
+            def on_apply_done(result) -> None:
+                apply_exit["code"] = {"installed": 0, "rolled_back": 2}.get(result.outcome, 1)
+                if result.outcome != "installed":
+                    print(f"tokitty: update: {result.message}", file=sys.stderr)
+                    update_host.finish()
+
+            updates.start_apply_newest(on_apply_done)
         # showEvent runs the macOS helper and sets the click mask once the
         # native window exists.
         widget.show()
         app.exec()
         del preferences  # alive until here
-        return 0
+        return apply_exit["code"] if apply_update else 0
     finally:
         if deck_views is not None:
             run_guarded("close deck views", deck_views.close_all)

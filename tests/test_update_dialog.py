@@ -242,3 +242,41 @@ def test_a_manual_check_that_finds_a_release_opens_the_dialog(root):
     checker.waiting[0](CheckResult(RELEASE, True))
     root.update()
     assert UpdateDialog._current.button_labels() == ["Install", "Release notes", "Later"]
+
+
+# --- the Tk window properties the flow does not own -----------------------------
+
+
+def test_the_dialog_is_transient_to_the_root(root):
+    dialog = open_dialog(root)
+    assert root.nametowidget(dialog.toplevel.wm_transient()) is root
+
+
+def test_the_close_protocol_is_refused_while_an_install_runs_and_accepted_after(root):
+    controller = FakeController()
+    dialog = open_dialog(root, controller)
+    dialog.invoke("Install")
+    root.tk.call(dialog.toplevel.protocol("WM_DELETE_WINDOW"))
+    assert dialog.alive
+    controller.busy = False
+    root.tk.call(dialog.toplevel.protocol("WM_DELETE_WINDOW"))
+    assert not dialog.alive
+
+
+def test_the_dialog_is_fixed_size_and_titled(root):
+    dialog = open_dialog(root)
+    assert dialog.toplevel.title() == "Update Tokitty"
+    assert dialog.toplevel.resizable() == (False, False)
+
+
+def test_withdrawing_the_root_takes_the_dialog_with_it(root):
+    """Xvfb here has no window manager, which is what unmaps a transient along with
+    its master, so the unmapped state can't be asserted; the transient relationship
+    that causes it is (test above), and the dialog is mapped while the root shows."""
+    dialog = open_dialog(root)
+    root.deiconify()
+    root.update()
+    assert dialog.toplevel.winfo_ismapped()
+    root.withdraw()
+    root.update()
+    assert root.nametowidget(dialog.toplevel.wm_transient()) is root

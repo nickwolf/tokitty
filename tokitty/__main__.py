@@ -39,6 +39,7 @@ from tokitty.customize import (
 )
 from tokitty.distro_probe import RunningDistroProbe
 from tokitty.lock import LockAcquisitionError, SingleInstanceLock, acquire_with_retry
+from tokitty.update_controller import ACK_MAP_POLL_MS, ACK_MAP_TIMEOUT  # noqa: F401  (re-exported)
 from tokitty.paths import get_state_dir
 from tokitty.poller import Poller  # noqa: F401  (patched through here by the tests)
 from tokitty.providers import (
@@ -65,10 +66,6 @@ from tokitty.streamdock.wiring import DEFAULT_NAME, BIND_MARGIN_S, DeckStarter, 
 # run_gui() imports both lazily, only when the GUI path actually runs.
 
 DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
-# The ack waits for the window to be mapped, but not forever: a window manager
-# that never reports a map must not strand the handover.
-ACK_MAP_POLL_MS = 50
-ACK_MAP_TIMEOUT = 5.0
 
 
 def debug_print() -> int:
@@ -617,12 +614,12 @@ def main(argv: Optional[list] = None) -> int:
         if not valid_token(token):
             print("tokitty: --after-update needs a token", file=sys.stderr)
             return 2
-    if os.environ.get("TOKITTY_QT") == "1" and "--after-update" not in argv and "--apply-update" not in argv:
-        # Source-only developer mode until #115; the update hand-offs keep
-        # the Tk path (#113).
+    if os.environ.get("TOKITTY_QT") == "1":
+        # Source-only developer mode until #115. The update hand-offs go the
+        # same way, since the new copy inherits the old one's environment.
         from tokitty.qt.app import run_qt
 
-        return run_qt()
+        return run_qt(after_update_token=token, apply_update="--apply-update" in argv)
     if token or "--apply-update" in argv:
         return run_gui(after_update_token=token, apply_update="--apply-update" in argv)
     return run_gui()

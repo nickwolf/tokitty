@@ -84,6 +84,30 @@ def _check_tk_root():
         root.destroy()
 
 
+def _check_qt():
+    from PySide6 import QtCore, QtWidgets  # noqa: F401
+
+    return QtCore.qVersion()
+
+
+def _check_qt_root():
+    """The Qt counterpart of _check_tk_root: a QApplication on the real
+    platform plugin (not forced offscreen), one widget shown and its events
+    processed, so a bundle whose plugin can't load fails here."""
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.resize(64, 64)
+    try:
+        widget.show()
+        app.processEvents()
+        return QGuiApplication.platformName()
+    finally:
+        widget.close()
+
+
 def _check_pil():
     from PIL import Image
 
@@ -139,6 +163,17 @@ def _check_tls():
     return f"{count} CA certificates from {source}"
 
 
+def build_toolkits(environ=None) -> set:
+    """The GUI toolkits this build declares (TOKITTY_BUILD_TOOLKITS, a comma
+    list baked in by the runtime hook, read from the environment in a source
+    run). Unset or empty means Tk only. Declared rather than guessed: a build
+    that merely has PySide6 installed must not be failed for it."""
+    environ = os.environ if environ is None else environ
+    names = {part.strip().lower() for part in environ.get("TOKITTY_BUILD_TOOLKITS", "").split(",")}
+    names.discard("")
+    return names or {"tk"}
+
+
 def env_names(environ=None) -> list:
     """Sorted names of the environment variables the bootloader may have set."""
     environ = os.environ if environ is None else environ
@@ -152,18 +187,33 @@ def self_check() -> int:
     launched."""
     from tokitty import paths
 
-    checks = {
-        "tkinter": _check(_check_tkinter),
-        "pil": _check(_check_pil),
-        "pystray": _check(_check_pystray),
-        "prices": _check(_check_prices),
-        "hook_writer": _check(_check_hook_writer),
-        "tls": _check(_check_tls),
-    }
+    toolkits = build_toolkits()
+    checks = {}
+    if "tk" in toolkits:
+        checks["tkinter"] = _check(_check_tkinter)
+    if "qt" in toolkits:
+        checks["qt"] = _check(_check_qt)
+    checks.update(
+        {
+            "pil": _check(_check_pil),
+            "pystray": _check(_check_pystray),
+            "prices": _check(_check_prices),
+            "hook_writer": _check(_check_hook_writer),
+            "tls": _check(_check_tls),
+        }
+    )
     if getattr(sys, "frozen", False):
         checks["hook_runner"] = _check(_check_hook_runner)
     if os.environ.get("TOKITTY_SELF_CHECK_TK") == "1":
-        checks["tk_root"] = _check(_check_tk_root)
+        if "tk" in toolkits:
+            checks["tk_root"] = _check(_check_tk_root)
+        if "qt" in toolkits:
+            checks["qt_root"] = _check(_check_qt_root)
+            if "tk" not in toolkits:
+                # Every shipped updater requires a tk_root entry in the report
+                # of the build it installs, so a Qt-only build carries the Qt
+                # window result under that name (#142).
+                checks["tk_root"] = checks["qt_root"]
 
     report = {
         "checks": checks,
@@ -173,6 +223,8 @@ def self_check() -> int:
         "state_dir": str(paths.state_dir_path()),
         "env": env_names(),
     }
+    if toolkits != {"tk"}:
+        report["toolkits"] = sorted(toolkits)
     if sys.stdout is not None:
         print(json.dumps(report))
     return 0 if all(check["ok"] for check in checks.values()) else 1

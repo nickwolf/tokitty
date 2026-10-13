@@ -726,3 +726,62 @@ def test_host_finish_is_deferred_and_safe_twice(tmp_path, monkeypatch):
     host.finish()
 
     assert log.count("root.after(0)") == 2
+
+
+# --- reclaim -----------------------------------------------------------------
+
+
+def _reclaim_log(tmp_path, monkeypatch):
+    log = []
+    monkeypatch.setattr(update_controller, "acquire_with_retry", lambda lk, timeout: log.append(f"acquire({lk},{timeout})"))
+    monkeypatch.setattr(update_controller.runner_link, "ensure_runner_link", lambda sd: log.append(f"link({sd})"))
+    monkeypatch.setattr(update_controller.autostart, "ensure_current", lambda sd, b: log.append(f"autostart({sd},{b})"))
+    return log
+
+
+def test_reclaim_retakes_the_lock_then_relinks_then_refreshes_autostart(tmp_path, monkeypatch):
+    log = _reclaim_log(tmp_path, monkeypatch)
+    update_controller.reclaim("LOCK", tmp_path, "BACKEND")
+
+    assert log == ["acquire(LOCK,10.0)", f"link({tmp_path})", f"autostart({tmp_path},BACKEND)"]
+
+
+def test_reclaim_raises_before_anything_else_when_the_lock_is_held(tmp_path, monkeypatch):
+    log = _reclaim_log(tmp_path, monkeypatch)
+
+    def held(lk, timeout):
+        raise LockAcquisitionError("held")
+
+    monkeypatch.setattr(update_controller, "acquire_with_retry", held)
+    with pytest.raises(LockAcquisitionError):
+        update_controller.reclaim("LOCK", tmp_path, "BACKEND")
+    assert log == []
+
+
+def test_reclaim_prints_relink_and_autostart_failures_and_does_not_raise(tmp_path, monkeypatch, capsys):
+    _reclaim_log(tmp_path, monkeypatch)
+
+    def fail(*a):
+        raise OSError("nope")
+
+    monkeypatch.setattr(update_controller.runner_link, "ensure_runner_link", fail)
+    monkeypatch.setattr(update_controller.autostart, "ensure_current", fail)
+    update_controller.reclaim("LOCK", tmp_path, "BACKEND")
+
+    err = capsys.readouterr().err
+    assert "tokitty: update: relinking hooks: nope" in err and "tokitty: update: autostart: nope" in err
+
+
+def test_reclaim_skips_autostart_with_no_backend(tmp_path, monkeypatch):
+    log = _reclaim_log(tmp_path, monkeypatch)
+    update_controller.reclaim("LOCK", tmp_path, None)
+
+    assert log == ["acquire(LOCK,10.0)", f"link({tmp_path})"]
+
+
+def test_host_restore_goes_through_reclaim(tmp_path, monkeypatch):
+    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
+    monkeypatch.setattr(update_controller, "reclaim", lambda lock, sd, backend: log.append(f"reclaim({sd},{backend})"))
+    host.restore()
+
+    assert log[0] == f"reclaim({tmp_path},BACKEND)" and log[1] == "root.deiconify"

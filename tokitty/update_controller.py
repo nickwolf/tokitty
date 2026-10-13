@@ -64,6 +64,10 @@ from tokitty.updater import (
 )
 
 ACK_TIMEOUT = 120.0
+# The new copy acks once its window is up, but not forever: a window manager
+# that never reports a map must not strand the handover.
+ACK_MAP_POLL_MS = 50
+ACK_MAP_TIMEOUT = 5.0
 RESTORE_LOCK_TIMEOUT = 10.0
 NO_ACK_ENV = "TOKITTY_UPDATE_TEST_NO_ACK"
 
@@ -91,6 +95,22 @@ def skips_ack(environ) -> bool:
     honoured only next to TOKITTY_UPDATE_API_URL, so a stray variable on a
     real machine can't make an update look like it failed."""
     return environ.get(NO_ACK_ENV) == "1" and bool(environ.get(API_URL_ENV))
+
+
+def reclaim(lock, state_dir, backend) -> None:
+    """The toolkit-free start of a restore: take the lock back, then relink the
+    runner and refresh autostart for the copy that is running again. Raises
+    LockAcquisitionError if another copy holds the lock, before anything else."""
+    acquire_with_retry(lock, RESTORE_LOCK_TIMEOUT)
+    try:
+        runner_link.ensure_runner_link(state_dir)
+    except Exception as exc:
+        print(f"tokitty: update: relinking hooks: {exc}", file=sys.stderr)
+    if backend is not None:
+        try:
+            autostart.ensure_current(state_dir, backend)
+        except Exception as exc:
+            print(f"tokitty: update: autostart: {exc}", file=sys.stderr)
 
 
 class TkHost:
@@ -134,16 +154,7 @@ class TkHost:
     def restore(self) -> None:
         """Handover step 5.8 without the message. Raises LockAcquisitionError
         if another copy holds the lock, in which case nothing else is done."""
-        acquire_with_retry(self._lock, RESTORE_LOCK_TIMEOUT)
-        try:
-            runner_link.ensure_runner_link(self._state_dir)
-        except Exception as exc:
-            print(f"tokitty: update: relinking hooks: {exc}", file=sys.stderr)
-        if self._backend is not None:
-            try:
-                autostart.ensure_current(self._state_dir, self._backend)
-            except Exception as exc:
-                print(f"tokitty: update: autostart: {exc}", file=sys.stderr)
+        reclaim(self._lock, self._state_dir, self._backend)
         for window in self._windows:
             window.deiconify()
         if self._tray_enabled():
