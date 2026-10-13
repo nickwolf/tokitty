@@ -91,6 +91,19 @@ def hbox(parent: Optional[QWidget] = None, spacing: int = 0) -> QHBoxLayout:
     return layout
 
 
+def clear_layout(layout: QLayout) -> None:
+    """Remove and delete every widget in a layout. Detached at once, so a
+    caller that re-reads its children right after sees only the new ones."""
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+        elif item.layout() is not None:
+            clear_layout(item.layout())
+
+
 def sprite_cells(state: str = "content") -> Tuple[int, int]:
     frame = get_frames(state)[0]
     return len(frame[0]), len(frame)
@@ -574,6 +587,8 @@ QPushButton[kit="button"] {{ border: none; padding: 7px 13px; font: {_css_font(F
 QPushButton[kit="button"][compact="true"] {{ padding: 5px 10px; font: {_css_font(FONT_SMALL)}; }}
 QPushButton[kit="button"]:disabled {{ color: #686872; background: #292930; }}
 {buttons}{pills}\
+QFrame[kit="banner"][tone="bad"] {{ background: {_PILL_COLORS["bad"][1]}; }}
+QFrame[kit="banner"][tone="warn"] {{ background: {_PILL_COLORS["warn"][1]}; }}
 QLabel[kit="pill"] {{ padding: 3px 7px; font: {_css_font(FONT_SMALL)}; }}
 QFrame[kit="segmented"] {{ background: {BORDER}; }}
 QPushButton[kit="segment"] {{ border: none; padding: 7px 10px; background: {SURFACE};
