@@ -135,8 +135,6 @@ def debug_print() -> int:
     return 0
 
 
-
-
 def run_gui(after_update_token: Optional[str] = None, apply_update: bool = False) -> int:
     import tkinter as tk
 
