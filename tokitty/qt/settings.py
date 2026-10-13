@@ -797,17 +797,18 @@ class SettingsWindow(QWidget):
         for tab in self.tabs.values():
             tab.frame.setVisible(False)
             self._stack.layout().addWidget(tab.frame)
-        self.resize(BASE_WIDTH, self._tallest_tab_height())
+        self.resize(BASE_WIDTH, self._look_tab_height())
         self.current = "general"
         self._show(self.current)
         host.settings_refresh = self.refresh
 
-    def _tallest_tab_height(self) -> int:
-        """The base height, grown to the tallest tab. The base fits Windows
-        fonts; macOS ones run larger and cut off the bottom of Usage. Capped
-        to the screen, and the window stays resizable either way."""
+    def _look_tab_height(self) -> int:
+        """The base height, grown to show the whole Look tab. Taller tabs
+        (Theme, Accounts) scroll rather than open the window most of a screen
+        tall (Nick, 2026-10-12). Capped to the screen, and the window stays
+        resizable either way."""
         chrome = 18 + 12 + self.footer.sizeHint().height()
-        needed = max(chrome + tab.frame.sizeHint().height() for tab in self.tabs.values())
+        needed = chrome + self.tabs["look"].frame.sizeHint().height()
         screen = self.screen()
         cap = screen.availableGeometry().height() - 80 if screen is not None else needed
         return max(BASE_HEIGHT, min(needed, cap))

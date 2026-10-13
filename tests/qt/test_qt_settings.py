@@ -60,10 +60,15 @@ def test_reopening_switches_the_pane_and_does_not_make_a_second_window(make_worl
     assert first.tabs["look"].pane_picker.get() == "Cat 2"
 
 
-def test_minimum_size_and_growth_to_the_tallest_tab(make_world):
+def test_opens_as_tall_as_the_look_tab_not_the_tallest(make_world):
     window = open_window(make_world(2))
     assert (window.minimumWidth(), window.minimumHeight()) == (BASE_WIDTH, BASE_HEIGHT)
     assert window.width() == BASE_WIDTH and window.height() >= BASE_HEIGHT
+    chrome = 18 + 12 + window.footer.sizeHint().height()
+    look = chrome + window.tabs["look"].frame.sizeHint().height()
+    theme = chrome + window.tabs["theme"].frame.sizeHint().height()
+    assert theme > look  # otherwise this test proves nothing
+    assert window.height() == max(BASE_HEIGHT, look)
     window.close()
 
 
