@@ -182,6 +182,32 @@ def test_a_pending_request_opens_one_view_at_the_panes_anchor(views):
     assert runtime.calls == [("opened", "n1")]
 
 
+def test_keep_on_screen_pulls_a_frame_back_inside():
+    from PySide6.QtCore import QRect
+
+    from tokitty.qt.deck_views import keep_on_screen
+
+    area = QRect(0, 0, 1707, 920)
+    assert keep_on_screen(100, 100, 480, 390, area) == (100, 100)  # already inside
+    assert keep_on_screen(1616, 916, 480, 390, area) == (1227, 530)  # past right and bottom
+    assert keep_on_screen(-50, -20, 480, 390, area) == (0, 0)
+    # Larger than the area: the top-left corner, with the title bar, stays visible.
+    assert keep_on_screen(10, 10, 2000, 1200, area) == (0, 0)
+
+
+def test_a_view_anchored_near_the_screen_corner_stays_on_screen(qapp):
+    from tokitty.qt.deck_views import qt_view_factory
+
+    area = qapp.primaryScreen().availableGeometry()
+    corner = (area.x() + area.width() - 40, area.y() + area.height() - 40)
+    view = qt_view_factory()(req(), "t", "e", corner, lambda b: None, lambda: None)
+    try:
+        frame = view.frameGeometry()
+        assert area.contains(frame.topLeft()) and area.contains(frame.bottomRight())
+    finally:
+        view.close()
+
+
 def test_the_tool_input_is_shown_whole(views):
     long = "x" * 5000
     views.views.open(req(tool_input={"command": long}))

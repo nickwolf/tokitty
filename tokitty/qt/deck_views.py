@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QPoint, QRect, QTimer, Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
 
 from tokitty.qt.kit import Kit, hbox, qfont, text
@@ -18,6 +19,16 @@ from tokitty.streamdock.pending import PendingRequest
 from tokitty.streamdock.window import always_label, format_tool_input
 
 VIEW_WIDTH = 480
+
+
+def keep_on_screen(x: int, y: int, width: int, height: int, area: QRect) -> tuple:
+    """Where a frame at (x, y) has to move to lie inside `area`: pulled left
+    and up past the right and bottom edges, then down and right past the
+    left and top ones, so a frame larger than the area keeps its top-left
+    corner (and the title bar) visible."""
+    x = min(x, area.x() + area.width() - width)
+    y = min(y, area.y() + area.height() - height)
+    return max(x, area.x()), max(y, area.y())
 
 
 class QtView(QWidget):
@@ -75,6 +86,16 @@ class QtView(QWidget):
         if anchor:
             self.move(anchor[0], anchor[1])
         self.show()
+        if anchor:
+            # The frame size is only known once shown. A pane near the bottom
+            # or right of the screen would otherwise push the buttons off it.
+            screen = QGuiApplication.screenAt(QPoint(anchor[0], anchor[1])) or self.screen()
+            if screen is not None:
+                frame = self.frameGeometry()
+                x, y = keep_on_screen(frame.x(), frame.y(), frame.width(), frame.height(),
+                                      screen.availableGeometry())
+                if (x, y) != (frame.x(), frame.y()):
+                    self.move(x, y)
         self.raise_()
         self.activateWindow()
 
