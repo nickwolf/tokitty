@@ -326,11 +326,15 @@ def test_apply_customization_clears_overrides_that_are_gone():
 def test_the_preferences_action_has_the_preferences_role(qapp):
     from PySide6.QtGui import QAction
 
-    from tokitty.qt.app import make_preferences_menu
+    from tokitty.qt.app import make_app_menu
 
-    opened = []
-    menubar, menu, action = make_preferences_menu(lambda: opened.append(1))
+    opened, about = [], []
+    menubar, menu, action, about_action = make_app_menu(lambda: opened.append(1), lambda: about.append(1))
     assert action.menuRole() == QAction.MenuRole.PreferencesRole
+    assert about_action.menuRole() == QAction.MenuRole.AboutRole
+    assert about_action.text() == "About Tokitty" and about_action in menu.actions()
+    about_action.trigger()
+    assert about == [1]
     assert action in menu.actions() and menu.menuAction() in menubar.actions()
     assert menubar.parent() is None
     action.trigger()
@@ -886,3 +890,46 @@ def test_a_failing_unit_stop_does_not_skip_the_others(
     stops = settled(fake_deck.log, "stop")
     assert ("stop", "ActivityWatcher") in stops and ("stop", "UsageWatcher") in stops
     assert "stop poller: join boom" in capsys.readouterr().err
+
+
+# -- About Tokitty ------------------------------------------------------------
+
+
+def test_a_source_run_shows_the_version_in_a_box(qapp, monkeypatch):
+    from tokitty.app_version import version_text
+    from tokitty.qt import app as qt_app
+
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args))
+    qt_app.show_about(False, None, about_panel=lambda: pytest.fail("panel used"))
+    assert shown == [(None, "About Tokitty", f"Tokitty {version_text()}\nRunning from source.")]
+
+
+def test_a_frozen_build_uses_the_native_panel_and_no_box(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from tokitty.qt.app import show_about
+
+    shown, panel = [], []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args))
+    show_about(True, None, about_panel=lambda: panel.append(1))
+    assert panel == [1] and shown == []
+
+
+def test_a_failing_panel_prints_a_line_and_falls_back_to_the_box(qapp, monkeypatch, capsys):
+    from PySide6.QtWidgets import QMessageBox
+
+    from tokitty.qt.app import show_about
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args))
+
+    def broken():
+        raise OSError("no panel")
+
+    show_about(True, None, about_panel=broken)
+    assert "tokitty: about panel: no panel" in capsys.readouterr().err
+    assert len(shown) == 1 and shown[0][1] == "About Tokitty"
+    assert shown[0][2].startswith("Tokitty ") and "Running from source" not in shown[0][2]

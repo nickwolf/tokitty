@@ -46,8 +46,10 @@ def test_render_menu_covers_every_item_kind(qapp):
     ]
     menu = QMenu()
     render_menu(menu, items, passthrough)
-    assert labels(menu) == ["Plain", "", "Status", "Update to 9", "Check", "View", "Inert"]
-    assert menu.actions()[1].isSeparator()
+    # a hidden dynamic_label stays in actions() but is not shown
+    visible = [a for a in menu.actions() if a.isVisible()]
+    assert [a.text() for a in visible] == ["Plain", "", "Status", "Update to 9", "Check", "View", "Inert"]
+    assert visible[1].isSeparator()
     assert not by_text(menu, "Status").isEnabled()
     assert by_text(menu, "Check").isCheckable() and by_text(menu, "Check").isChecked()
     sub = by_text(menu, "View").menu()
@@ -58,6 +60,17 @@ def test_render_menu_covers_every_item_kind(qapp):
     sub.actions()[0].trigger()
     assert ran == ["plain", "u", "check", "l"]
     assert sub.actions()[0].isChecked() and not sub.actions()[1].isChecked()
+
+
+def test_sync_reveals_the_update_action_once_the_getter_has_text(qapp):
+    state = {"label": None}
+    menu = QMenu()
+    sync = render_menu(menu, [MenuItem(label="x", dynamic_label=lambda: state["label"],
+                                       action=lambda: None)], passthrough)
+    assert [a.text() for a in menu.actions() if a.isVisible()] == []
+    state["label"] = "Update to 9"
+    sync()
+    assert [a.text() for a in menu.actions() if a.isVisible()] == ["Update to 9"]
 
 
 def test_after_action_wraps_every_action(qapp):

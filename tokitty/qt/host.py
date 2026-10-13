@@ -6,9 +6,9 @@ builds (attach() copies them on under the same names, so tab code reads
 host.on_toggle_ntfy as Tk reads win.on_toggle_ntfy), and this class adds the
 few that touch the Qt widget: always in front, the theme, the colours a pane
 shows, the layout follow-up after a customization save, and the stacking of
-the windows it opened. The tray seams stay None until #114, and the update
-seams stay None until run_qt sets them (#113), which hides their rows exactly
-as the Tk tabs do.
+the windows it opened. The tray and update seams stay None until run_qt sets
+them (#114, #113), which hides their rows exactly as the Tk tabs do; the tray
+seams stay None when the platform has no tray.
 """
 from __future__ import annotations
 
@@ -38,8 +38,10 @@ class QtHost:
         self.streamdock_install: Optional[Callable] = None
         self.streamdock_uninstall: Optional[Callable] = None
         self.streamdock_install_supported: Optional[Callable[[], bool]] = None
-        # The tray is not available in Qt mode yet (#114). The update seams
-        # are set by run_qt (#113).
+        # The tray seams are set by run_qt (#114): tray_refresh always, the
+        # other two only when a tray is available. The update seams are set
+        # by run_qt too (#113).
+        self.tray_refresh: Optional[Callable[[], None]] = None
         self.on_toggle_tray = None
         self.tray_enabled = None
         self.update_check_enabled = None
@@ -145,7 +147,9 @@ class QtHost:
     # ---- refresh and warnings ------------------------------------------
 
     def notify_state_changed(self) -> None:
-        """Re-sync an open Settings window. There is no tray to refresh until #114."""
+        """Re-sync the tray menu, then an open Settings window."""
+        if self.tray_refresh is not None:
+            self.tray_refresh()
         if self.settings_refresh is not None:
             self.settings_refresh()
 

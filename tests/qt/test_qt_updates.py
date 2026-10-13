@@ -507,3 +507,216 @@ def test_after_update_exits_before_acking_under_skips_ack(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert not ack_path(state, token).exists()
     assert not (state / "after-update-qt.json").exists()
+
+
+# ---- the tray wired into run_qt (#114 slice 2) -------------------------------
+
+
+class FakeTray:
+    """Stands in for QtTray: no QSystemTrayIcon, availability set per test."""
+
+    available = True
+    instances = []
+
+    def __init__(self, menu_provider, state_dir, colorway="orange", pattern="tabby", *,
+                 on_action_done=None, **_):
+        self.menu_provider, self.state_dir = menu_provider, state_dir
+        self.colorway, self.pattern = colorway, pattern
+        self.on_action_done = on_action_done
+        self.available = type(self).available
+        self.calls = []
+        self.notified = []
+        FakeTray.instances.append(self)
+
+    def start(self):
+        self.calls.append("start")
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def refresh(self):
+        self.calls.append("refresh")
+
+    def notify(self, title, message):
+        self.notified.append((title, message))
+        return True
+
+    def set_enabled(self, enabled):
+        from tokitty.settings import update_settings
+
+        update_settings(self.state_dir, tray_enabled=enabled)
+        self.calls.append("start" if enabled else "stop")
+
+
+@pytest.fixture
+def tray(monkeypatch):
+    FakeTray.instances, FakeTray.available = [], True
+    monkeypatch.setattr("tokitty.qt.tray.QtTray", FakeTray)
+    return SimpleNamespace(get=lambda: FakeTray.instances[0], cls=FakeTray)
+
+
+def quit_soon(qapp):
+    QTimer.singleShot(0, qapp.quit)
+
+
+def test_the_general_tab_has_the_tray_row_only_with_an_available_tray(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    from tokitty.qt.settings import SettingsWindow
+
+    seen = {}
+    for available in (True, False):
+        tray.cls.available = available
+        FakeUpdates.instances.clear()
+
+        def hook(widget, available=available):
+            window = SettingsWindow.open(host_of(fakes), 0)
+            seen[available] = "tray" in window.tabs["general"].toggles
+            window.close()
+            quit_soon(qapp)
+
+        assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen == {True: True, False: False}
+
+
+def starts_and_stops(tray):
+    return [call for call in tray.get().calls if call != "refresh"]
+
+
+def test_the_tray_toggle_writes_settings_and_starts_and_stops_the_tray(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    from tokitty.qt.settings import SettingsWindow
+
+    seen = {}
+
+    def hook(widget):
+        window = SettingsWindow.open(host_of(fakes), 0)
+        toggle = window.tabs["general"].toggles["tray"]
+        seen["before"] = (toggle.value, load_settings(state_dir).tray_enabled)
+        toggle._clicked()
+        seen["on"] = (host_of(fakes).tray_enabled(), load_settings(state_dir).tray_enabled,
+                      starts_and_stops(tray))
+        toggle._clicked()
+        seen["off"] = (host_of(fakes).tray_enabled(), load_settings(state_dir).tray_enabled,
+                       starts_and_stops(tray))
+        window.close()
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["before"] == (False, False)
+    assert seen["on"][:2] == (True, True) and seen["on"][2][-1] == "start"
+    assert seen["off"][:2] == (False, False) and seen["off"][2][-1] == "stop"
+
+
+def test_the_tray_starts_after_launch_only_when_available_and_enabled(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    seen = []
+    for available, enabled in ((True, True), (True, False), (False, True)):
+        tray.cls.available = available
+        save_settings(state_dir, Settings(tray_enabled=enabled, surprise_me=False, first_run="done"))
+        calls = []
+
+        def hook(widget, calls=calls):
+            calls.extend(tray.get().calls)
+            quit_soon(qapp)
+
+        FakeTray.instances.clear()
+        assert run_with(monkeypatch, qapp, hook) == 0
+        seen.append(("start" in calls, tray.get().calls[-1]))
+    assert seen == [(True, "stop"), (False, "stop"), (False, "stop")]
+
+
+def test_a_menu_action_refreshes_the_tray_and_the_tray_gets_the_menu_model(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    seen = {}
+
+    def hook(widget):
+        t = tray.get()
+        before = t.calls.count("refresh")
+        widget.on_menu_action_done()
+        seen["refreshed"] = t.calls.count("refresh") - before
+        seen["tray_action_done"] = t.on_action_done == host_of(fakes).notify_state_changed
+        seen["menu"] = [item.label for item in t.menu_provider()]
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["refreshed"] == 1 and seen["tray_action_done"]
+    assert "Refresh now" in seen["menu"]
+
+
+def test_the_onboarder_is_given_the_trays_refresh(qapp, state_dir, fakes, tray, monkeypatch):
+    got = []
+    monkeypatch.setattr("tokitty.qt.app.make_onboarder",
+                        lambda state_dir, usage_state, on_changed: got.append(on_changed) or (lambda *a: None))
+    assert run_with(monkeypatch, qapp, lambda widget: quit_soon(qapp)) == 0
+    assert len(got) == 1 and got[0] == tray.get().refresh
+
+
+def test_surprise_me_colours_reach_the_tray_and_the_update_host_holds_it(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=True, first_run="done"))
+    seen = {}
+
+    def hook(widget):
+        pane = widget.panes[0]
+        t = tray.get()
+        seen["colours"] = ((t.colorway, t.pattern), (pane._colorway, pane._pattern))
+        seen["same"] = fakes.updates().host._tray is t
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    tray_colours, pane_colours = seen["colours"]
+    assert tray_colours == pane_colours
+    assert seen["same"]
+
+
+def test_update_host_gets_a_tray_enabled_that_reads_the_settings_file(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    seen = []
+
+    def hook(widget):
+        enabled = fakes.updates().host._tray_enabled
+        seen.append(enabled())
+        save_settings(state_dir, Settings(tray_enabled=True, surprise_me=False, first_run="done"))
+        seen.append(enabled())
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen == [False, True]
+
+
+def test_the_announcer_notifies_through_the_tray(qapp, state_dir, fakes, tray, monkeypatch):
+    seen = {}
+
+    def hook(widget):
+        fakes.checker().on_available(RELEASE)
+        seen["notified"] = list(tray.get().notified)
+        seen["refreshes"] = tray.get().calls.count("refresh")
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["notified"] == [("Tokitty v9.0.0 is available", "Right-click Tokitty to update")]
+    assert seen["refreshes"] >= 1
+
+
+def test_the_tray_is_stopped_when_the_app_exits(qapp, state_dir, fakes, tray, monkeypatch):
+    assert run_with(monkeypatch, qapp, lambda widget: quit_soon(qapp)) == 0
+    assert tray.get().calls[-1] == "stop"
+
+
+def test_about_to_quit_stops_the_tray_before_the_loop_ends(qapp, state_dir, fakes, tray, monkeypatch):
+    seen = {}
+
+    def hook(widget):
+        seen["before"] = tray.get().calls.count("stop")
+        qapp.aboutToQuit.emit()
+        seen["after"] = tray.get().calls.count("stop")
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["after"] == seen["before"] + 1
+
+
+def test_a_debug_launch_builds_no_tray(qapp, state_dir, fakes, tray, monkeypatch):
+    monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
+    assert run_with(monkeypatch, qapp, lambda widget: quit_soon(qapp)) == 0
+    assert FakeTray.instances == []

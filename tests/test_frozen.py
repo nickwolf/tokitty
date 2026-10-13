@@ -320,12 +320,35 @@ def test_tk_and_qt_adds_qt_and_qt_root_only_with_the_window_switch(monkeypatch, 
 
 def test_qt_alone_drops_tkinter_and_tk_root_carries_the_qt_result(monkeypatch, capsys):
     _, report = _report(monkeypatch, capsys, toolkits="qt")
-    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter"}) | {"qt"}
+    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter", "pystray"}) | {"qt"}
     assert report["toolkits"] == ["qt"]
     _, report = _report(monkeypatch, capsys, toolkits="qt", window=True)
-    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter"}) | {"qt", "qt_root", "tk_root"}
+    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter", "pystray"}) | {"qt", "qt_root", "tk_root"}
     assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
     assert report["checks"]["tk_root"] == {"ok": True, "detail": "xcb"}
+
+
+def test_pystray_follows_the_tk_declaration_in_report_order(monkeypatch, capsys):
+    _, report = _report(monkeypatch, capsys)
+    assert list(report["checks"])[:3] == ["tkinter", "pil", "pystray"]
+    _, report = _report(monkeypatch, capsys, toolkits="tk,qt")
+    assert report["checks"]["pystray"]["ok"] is True
+
+
+def test_qt_alone_passes_and_is_accepted_without_pystray_installed(monkeypatch, capsys):
+    # The Tk tray's backend is absent from a build without Tk (#114), so its
+    # check must not run there at all.
+    monkeypatch.setitem(sys.modules, "pystray", None)
+    monkeypatch.setattr(frozen, "_check_pystray", lambda: pytest.fail("pystray checked"))
+    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
+    monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
+    monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
+    monkeypatch.setattr(frozen, "_check_qt_root", lambda: "xcb")
+    code = frozen.self_check()
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert "pystray" not in report["checks"]
+    _judge(report)
 
 
 def test_declared_qt_with_pyside6_blocked_fails_the_qt_check(monkeypatch, capsys):

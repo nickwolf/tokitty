@@ -14,6 +14,10 @@ _BLOCKED = (
     "tkinter.simpledialog", "tkinter.colorchooser", "tkinter.filedialog",
 )
 
+# What Qt modules must also never reach: the Tk tray's backend and pyobjc.
+_QT_BLOCKED = _BLOCKED + ("pystray", "AppKit", "Foundation", "objc")
+_LEAK_ROOTS = ("tkinter", "_tkinter", "pystray", "AppKit", "Foundation", "objc")
+
 _MODULES = (
     # split out of the Tk modules for the Qt port
     "tokitty.worker_mailbox",
@@ -23,6 +27,7 @@ _MODULES = (
     "tokitty.accounts_rows",
     "tokitty.accounts_logic",
     # already toolkit-free
+    "tokitty.tray_icon",
     "tokitty.theme",
     "tokitty.app_core",
     "tokitty.app_controls",
@@ -67,6 +72,7 @@ _QT_MODULES = (
     "tokitty.qt.settings",
     "tokitty.qt.settings_accounts",
     "tokitty.qt.settings_streamdock",
+    "tokitty.qt.tray",
     "tokitty.qt.update_dialog",
     "tokitty.qt.update_host",
     "tokitty.qt.walkthrough",
@@ -80,10 +86,10 @@ def test_qt_modules_import_without_tkinter(module):
     """The Qt windows share the toolkit-free modules and never reach a Tk one."""
     code = (
         "import sys\n"
-        f"for name in {_BLOCKED!r}:\n"
+        f"for name in {_QT_BLOCKED!r}:\n"
         "    sys.modules[name] = None\n"
         f"import {module}\n"
-        "leaked = [m for m in sys.modules if m.split('.')[0] in ('tkinter', '_tkinter')"
+        f"leaked = [m for m in sys.modules if m.split('.')[0] in {_LEAK_ROOTS!r}"
         " and sys.modules[m] is not None]\n"
         "assert not leaked, leaked\n"
     )

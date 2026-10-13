@@ -3,8 +3,8 @@
 The unit construction, the tick step, onboarding and discovery all come from
 app_core, so what a pane shows is decided in one place. Everything the Tk path
 has beyond that is absent here until its own issue, except the update check
-and the installer (#113); the tray waits for #114. PySide6 is imported inside
-run_qt, so importing this module never needs it.
+and the installer (#113) and the tray (#114; a debug launch has none). PySide6
+is imported inside run_qt, so importing this module never needs it.
 """
 from __future__ import annotations
 
@@ -47,37 +47,67 @@ def apply_customization(pane, custom) -> None:
     )
 
 
-class TrayStandIn:
-    """What `announcer` needs of a tray. There is none until #114: a refresh
-    re-syncs an open Settings pill, and notify declines, which leaves
-    notified_tag unwritten so the tray announces the release on a later run."""
+class AnnouncerTray:
+    """What `announcer` needs of a tray. A refresh goes through the host, so
+    the tray menu and an open Settings pill both re-sync; notify is the
+    tray's, and a decline leaves notified_tag unwritten so the release is
+    announced on a later run."""
 
-    def __init__(self, host):
+    def __init__(self, host, tray):
         self._host = host
+        self._tray = tray
 
     def refresh(self) -> None:
         self._host.notify_state_changed()
 
     def notify(self, title: str, message: str) -> bool:
-        return False
+        return self._tray.notify(title, message)
 
 
-def make_preferences_menu(open_settings):
-    """A parentless menu bar holding one Settings action with PreferencesRole.
-    On macOS Qt moves an action with that role out of its menu into the
-    application menu (Command-comma); the role only applies to an action in a
-    menu, not one on the bar itself. The caller keeps the returned objects
-    alive for the life of the app. Other platforms never call this."""
+def make_app_menu(open_settings, show_about):
+    """A parentless menu bar whose one menu holds Settings (PreferencesRole)
+    and About Tokitty (AboutRole). On macOS Qt moves an action with either
+    role out of its menu into the application menu (Settings gets
+    Command-comma); the role only applies to an action in a menu, not one on
+    the bar itself. The caller keeps the returned objects alive for the life
+    of the app. Other platforms never call this."""
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import QMenuBar
 
     menubar = QMenuBar()
     menu = menubar.addMenu("Tokitty")
-    action = QAction("Settings…", menu)
-    action.setMenuRole(QAction.MenuRole.PreferencesRole)
-    action.triggered.connect(lambda _checked=False: open_settings())
-    menu.addAction(action)
-    return menubar, menu, action
+    settings_action = QAction("Settings…", menu)
+    settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+    settings_action.triggered.connect(lambda _checked=False: open_settings())
+    menu.addAction(settings_action)
+    about_action = QAction("About Tokitty", menu)
+    about_action.setMenuRole(QAction.MenuRole.AboutRole)
+    about_action.triggered.connect(lambda _checked=False: show_about())
+    menu.addAction(about_action)
+    return menubar, menu, settings_action, about_action
+
+
+def show_about(frozen, parent, about_panel=None):
+    """Answer About Tokitty. A frozen build has a real Info.plist, so the
+    native panel shows its name, version and copyright; a source run would
+    get Python's, so it shows the version in a plain box instead. A frozen
+    build whose panel fails gets the box too, without the source line."""
+    from PySide6.QtWidgets import QMessageBox
+
+    if frozen:
+        try:
+            if about_panel is None:
+                from tokitty.qt import macos
+
+                about_panel = macos.show_about_panel
+            about_panel()
+            return
+        except Exception as exc:
+            print(f"tokitty: about panel: {exc}", file=sys.stderr)
+    from tokitty.app_version import version_text
+
+    text = f"Tokitty {version_text()}" if frozen else f"Tokitty {version_text()}\nRunning from source."
+    QMessageBox.information(parent, "About Tokitty", text)
 
 
 def qt_timers(parent):
@@ -212,6 +242,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     from tokitty.qt.deck_views import qt_view_factory
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
+    from tokitty.qt.tray import QtTray
     from tokitty.qt.update_dialog import QtUpdateDialog
     from tokitty.qt.update_host import QtUpdateHost
     from tokitty.qt.widget import TokittyQtWidget
@@ -326,6 +357,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     # far, so a failure in setup still closes what was opened.
     deck = None
     deck_views = None
+    tray = None
     try:
         units = build_units(
             accounts=accounts, state_dir=state_dir, customization_store=customization_store,
@@ -366,7 +398,35 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             warn=host.warn,
         )
         host.attach(controls)
+        widget.on_menu_action_done = host.notify_state_changed
+        for unit, pane in zip(units, widget.panes):
+            unit["pane"] = pane
+            pane.set_appearance(label=unit["label"])
+        if settings.surprise_me:
+            for index in range(len(units)):
+                controls.on_customization_changed(index, "randomize", None)
+        # After the randomizing, so the icon wears pane 0's final colours.
+        pane0 = widget.panes[0]
+        tray = QtTray(lambda: menu_model(0), state_dir,
+                      colorway=pane0._colorway, pattern=pane0._pattern,
+                      on_action_done=host.notify_state_changed)
+        host.tray_refresh = tray.refresh
+        # stop() schedules deleteLater, which Qt never processes once the loop
+        # has ended; the finally's stop is the backstop for a failed launch.
+        app.aboutToQuit.connect(tray.stop)
+        if tray.available:
+            tray_state = {"enabled": settings.tray_enabled}
+            host.tray_enabled = lambda: tray_state["enabled"]
+
+            def toggle_tray() -> None:
+                tray_state["enabled"] = not tray_state["enabled"]
+                tray.set_enabled(tray_state["enabled"])
+
+            host.on_toggle_tray = toggle_tray
+
         update_host = QtUpdateHost(app, host, lock, state_dir, controls.autostart_backend,
+                                   tray=tray,
+                                   tray_enabled=lambda: load_settings(state_dir).tray_enabled,
                                    quiet=apply_update)
         updates = update_controller.UpdateController(state_dir, update_host)
 
@@ -374,7 +434,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         update_check_state = {"on": settings.update_check}
         checker = UpdateChecker(
             state_dir, updates.running, enabled=lambda: update_check_state["on"],
-            on_available=announcer(state_dir, TrayStandIn(host)),
+            on_available=announcer(state_dir, AnnouncerTray(host, tray)),
         )
 
         def toggle_update_check() -> None:
@@ -399,18 +459,14 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         host.update_check_enabled = lambda: update_check_state["on"]
         host.on_toggle_update_check = toggle_update_check
         apply_exit = {"code": 1}
-        widget.on_menu_action_done = host.notify_state_changed
-        for unit, pane in zip(units, widget.panes):
-            unit["pane"] = pane
-            pane.set_appearance(label=unit["label"])
-        if settings.surprise_me:
-            for index in range(len(units)):
-                controls.on_customization_changed(index, "randomize", None)
         widget.restore_position()
         # Created before the first show and held until exec returns.
         preferences = None
         if sys.platform == "darwin":
-            preferences = make_preferences_menu(lambda: SettingsWindow.open(host, 0))
+            preferences = make_app_menu(
+                lambda: SettingsWindow.open(host, 0),
+                lambda: show_about(bool(getattr(sys, "frozen", False)), host.dialog_parent()),
+            )
 
         def account_name(index: int) -> str:
             account = units[index]["account"]
@@ -463,7 +519,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             return AccountsManager.open(state_dir, discovery.wsl_matches(), host=host)
 
         host.on_open_accounts = open_accounts
-        maybe_onboard = make_onboarder(state_dir, usage_state, lambda: None)  # no tray to refresh
+        maybe_onboard = make_onboarder(state_dir, usage_state, tray.refresh)
         notes_removed: set = set()
 
         def show_warnings(warnings) -> None:
@@ -508,6 +564,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         timer = QTimer(widget)
         timer.timeout.connect(tick)
         timer.start(UI_REFRESH_MS)
+        if tray.available and settings.tray_enabled:
+            tray.start()
         updates.startup(frozen=bool(getattr(sys, "frozen", False)))
         if after_update_token:
             # Inside the event loop and once the widget is exposed, so the
@@ -557,6 +615,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         del preferences  # alive until here
         return apply_exit["code"] if apply_update else 0
     finally:
+        if tray is not None:
+            run_guarded("stop tray", tray.stop)
         if deck_views is not None:
             run_guarded("close deck views", deck_views.close_all)
         if deck is not None:

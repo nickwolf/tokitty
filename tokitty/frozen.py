@@ -193,10 +193,13 @@ def self_check() -> int:
         checks["tkinter"] = _check(_check_tkinter)
     if "qt" in toolkits:
         checks["qt"] = _check(_check_qt)
+    checks["pil"] = _check(_check_pil)
+    if "tk" in toolkits:
+        # Only the Tk tray uses pystray; a build without Tk does not carry it,
+        # and a failed entry would make every shipped updater refuse it (#114).
+        checks["pystray"] = _check(_check_pystray)
     checks.update(
         {
-            "pil": _check(_check_pil),
-            "pystray": _check(_check_pystray),
             "prices": _check(_check_prices),
             "hook_writer": _check(_check_hook_writer),
             "tls": _check(_check_tls),

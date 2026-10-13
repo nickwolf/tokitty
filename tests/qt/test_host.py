@@ -18,10 +18,23 @@ def test_attach_exposes_every_controls_seam_under_its_own_name(make_world):
 
 def test_tray_update_and_opener_seams_are_none(make_world):
     host = make_world(1).host
-    for name in ("on_toggle_tray", "tray_enabled", "update_check_enabled", "on_toggle_update_check",
+    for name in ("tray_refresh", "on_toggle_tray", "tray_enabled", "update_check_enabled", "on_toggle_update_check",
                  "on_check_updates", "update_available_label", "on_install_update", "on_open_accounts",
                  "on_edit_streamdock_presets"):
         assert getattr(host, name) is None
+
+
+def test_notify_state_changed_refreshes_the_tray_before_settings(make_world):
+    host = make_world(1).host
+    order = []
+    host.tray_refresh = lambda: order.append("tray")
+    host.settings_refresh = lambda: order.append("settings")
+    host.notify_state_changed()
+    assert order == ["tray", "settings"]
+
+
+def test_notify_state_changed_works_with_neither_seam_set(make_world):
+    make_world(1).host.notify_state_changed()
 
 
 def test_always_on_top_is_a_method_over_the_widgets_property(make_world):
