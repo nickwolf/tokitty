@@ -1,6 +1,8 @@
 # PyInstaller spec for Tokitty. Build from the repo root:
 #   python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath <dist> --workpath <work>
 # TOKITTY_BUILD_ID (optional) is baked into both executables; see --self-check.
+# TOKITTY_BUILD_TOOLKITS (optional, default "tk"; a comma list such as "tk,qt")
+# declares which GUI toolkits the build carries; --self-check checks those.
 import os
 import sys
 from pathlib import Path
@@ -31,7 +33,8 @@ rthook = Path(workpath) / "rthook_build_id.py"
 rthook.parent.mkdir(parents=True, exist_ok=True)
 rthook.write_text(
     "import os\n"
-    f"os.environ['TOKITTY_BUILD_ID'] = {os.environ.get('TOKITTY_BUILD_ID', 'dev')!r}\n",
+    f"os.environ['TOKITTY_BUILD_ID'] = {os.environ.get('TOKITTY_BUILD_ID', 'dev')!r}\n"
+    f"os.environ['TOKITTY_BUILD_TOOLKITS'] = {os.environ.get('TOKITTY_BUILD_TOOLKITS', 'tk')!r}\n",
     encoding="utf-8",
 )
 

@@ -226,3 +226,134 @@ def test_fallback_state_dir_matches_paths_state_dir_path(monkeypatch, tmp_path):
     from tokitty import paths
 
     assert Path(module._fallback_state_dir()) == paths.state_dir_path()
+
+
+# --- declared toolkits (#113) ---------------------------------------------
+
+DEFAULT_KEYS = {"tkinter", "pil", "pystray", "prices", "hook_writer", "tls"}
+
+
+def _report(monkeypatch, capsys, toolkits=None, window=False, qt_blocked=False):
+    """Run self_check() under a declared toolkit list and return (exit code,
+    report). The Tk and Qt window checks are stubbed so this stays headless;
+    the real ones are covered by the gui and qt suites."""
+    if toolkits is None:
+        monkeypatch.delenv("TOKITTY_BUILD_TOOLKITS", raising=False)
+    else:
+        monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", toolkits)
+    if window:
+        monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
+    else:
+        monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
+    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    monkeypatch.setattr(frozen, "_check_tk_root", lambda: "8.6.0")
+    if qt_blocked:
+        for name in ("PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"):
+            monkeypatch.setitem(sys.modules, name, None)
+    else:
+        monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
+        monkeypatch.setattr(frozen, "_check_qt_root", lambda: "xcb")
+    code = frozen.self_check()
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _judge(report, tag="v1.2.3"):
+    """Feed a report through the check every shipped build applies to a new
+    copy's --self-check output."""
+    from tokitty import update_install
+
+    report = dict(report, build_id=tag)
+    runner = lambda *a, **k: types.SimpleNamespace(stdout=json.dumps(report).encode(), returncode=0)  # noqa: E731
+    update_install.run_self_check("tokitty", tag, runner=runner, sys_platform="linux")
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, {"tk"}),
+        ("", {"tk"}),
+        (" , ,", {"tk"}),
+        ("tk", {"tk"}),
+        ("qt", {"qt"}),
+        ("tk,qt", {"tk", "qt"}),
+        (" Qt , TK ,", {"tk", "qt"}),
+        ("qt,qt", {"qt"}),
+    ],
+)
+def test_build_toolkits_parsing(value, expected):
+    environ = {} if value is None else {"TOKITTY_BUILD_TOOLKITS": value}
+    assert frozen.build_toolkits(environ) == expected
+
+
+def test_build_toolkits_reads_os_environ_by_default(monkeypatch):
+    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
+    assert frozen.build_toolkits() == {"qt"}
+
+
+@pytest.mark.parametrize("qt_blocked", [False, True])
+@pytest.mark.parametrize("window", [False, True])
+def test_default_declaration_keeps_todays_keys(monkeypatch, capsys, window, qt_blocked):
+    code, report = _report(monkeypatch, capsys, window=window, qt_blocked=qt_blocked)
+    assert code == 0
+    expected = DEFAULT_KEYS | ({"tk_root"} if window else set())
+    assert set(report["checks"]) == expected
+    assert "toolkits" not in report
+
+
+def test_explicit_tk_declaration_matches_the_default(monkeypatch, capsys):
+    _, report = _report(monkeypatch, capsys, toolkits="tk")
+    assert set(report["checks"]) == DEFAULT_KEYS
+    assert "toolkits" not in report
+
+
+def test_tk_and_qt_adds_qt_and_qt_root_only_with_the_window_switch(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt")
+    assert code == 0
+    assert set(report["checks"]) == DEFAULT_KEYS | {"qt"}
+    assert report["checks"]["qt"] == {"ok": True, "detail": "6.12.0"}
+    assert report["toolkits"] == ["qt", "tk"]
+    _, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True)
+    assert set(report["checks"]) == DEFAULT_KEYS | {"qt", "qt_root", "tk_root"}
+    assert report["checks"]["tk_root"]["detail"] == "8.6.0"
+    assert report["checks"]["qt_root"]["detail"] == "xcb"
+
+
+def test_qt_alone_drops_tkinter_and_tk_root_carries_the_qt_result(monkeypatch, capsys):
+    _, report = _report(monkeypatch, capsys, toolkits="qt")
+    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter"}) | {"qt"}
+    assert report["toolkits"] == ["qt"]
+    _, report = _report(monkeypatch, capsys, toolkits="qt", window=True)
+    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter"}) | {"qt", "qt_root", "tk_root"}
+    assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
+    assert report["checks"]["tk_root"] == {"ok": True, "detail": "xcb"}
+
+
+def test_declared_qt_with_pyside6_blocked_fails_the_qt_check(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_blocked=True)
+    assert code == 1
+    assert report["checks"]["qt"]["ok"] is False
+    assert report["checks"]["tkinter"]["ok"] is True
+
+
+def test_declared_qt_window_check_fails_with_pyside6_blocked(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, toolkits="qt", window=True, qt_blocked=True)
+    assert code == 1
+    assert report["checks"]["qt_root"]["ok"] is False
+    assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
+
+
+@pytest.mark.parametrize("toolkits", [None, "tk,qt", "qt"])
+def test_shipped_judge_accepts_each_passing_report(monkeypatch, capsys, toolkits):
+    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True)
+    assert code == 0
+    _judge(report)
+
+
+@pytest.mark.parametrize("toolkits", ["tk,qt", "qt"])
+def test_shipped_judge_rejects_a_failed_qt_report(monkeypatch, capsys, toolkits):
+    from tokitty.update_install import UpdateInstallError
+
+    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_blocked=True)
+    assert code == 1
+    with pytest.raises(UpdateInstallError, match="failed its self-check"):
+        _judge(report)
