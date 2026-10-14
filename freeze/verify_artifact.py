@@ -504,13 +504,17 @@ def step_bundle_contents(ctx):
             problems.append(f"{rel} is not a plain file under {', '.join(label for label, _ in roots)}")
     detail["lgpl_source_in"] = source_in
 
-    if plat.startswith("linux"):
+    if plat.startswith("linux") and os.environ.get("TOKITTY_QT_TRIM", "1") != "0":
         internal = roots[0][1]
         stray = sorted(name for name in bundle_data.GTK_THEME_LIBS if os.path.lexists(internal / name))
         if stray:
             problems.append(f"the GTK 3 theme libraries are still in _internal: {stray}")
 
-    if qt_build:
+    # A dispatch with the trim off (TOKITTY_QT_TRIM=0, for measuring) keeps
+    # what the trim would drop on purpose; everything else is still checked.
+    if os.environ.get("TOKITTY_QT_TRIM", "1") == "0":
+        detail["trim_check"] = "skipped: TOKITTY_QT_TRIM=0"
+    elif qt_build:
         trim, info = trim_problems(bundle_data, roots, plat)
         problems += trim
         detail.update(info)

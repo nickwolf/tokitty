@@ -369,3 +369,25 @@ def test_qt_notice_carries_the_icu_licence_of_the_bundled_version():
     assert "ICU 73.2, icu4c/LICENSE at unicode-org/icu release-73-2" in notice
     assert "UNICODE LICENSE V3" in notice.upper() or "UNICODE, INC. LICENSE AGREEMENT" in notice.upper()
     assert "/usr/share/doc/" not in notice
+
+
+def test_notice_versions_follow_the_installed_packages(tmp_path):
+    # pystray and python-xlib are unpinned, so the spec refuses to build when a
+    # notice names a different version than the build venv has (#115).
+    data = _bundle_data()
+    (tmp_path / "pystray-NOTICE.txt").write_text("pystray\n\nVersion: 0.19.5\n", encoding="utf-8")
+    (tmp_path / "python-xlib-NOTICE.txt").write_text("python-xlib\n\nVersion: 0.33\n", encoding="utf-8")
+    versions = {"pystray": "0.19.5", "python-xlib": "0.33"}
+    assert data.notice_version_problems(tmp_path, versions.get) == []
+    versions["pystray"] = "0.19.6"
+    assert data.notice_version_problems(tmp_path, versions.get) == ["pystray-NOTICE.txt says pystray 0.19.5, the build has 0.19.6"]
+    # A package this platform does not install (python-xlib off Linux) is skipped.
+    assert data.notice_version_problems(tmp_path, {"pystray": "0.19.5"}.get) == []
+
+
+def test_the_shipped_notices_name_versions_the_spec_can_check():
+    data = _bundle_data()
+    licenses = Path(__file__).resolve().parent.parent / "freeze" / "licenses"
+    assert data.notice_version_problems(licenses, {"pystray": "0.19.5", "python-xlib": "0.33"}.get) == []
+    spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    assert "notice_version_problems(" in spec

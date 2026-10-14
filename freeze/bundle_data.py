@@ -125,6 +125,30 @@ def qt_entry_dropped(dest: str) -> bool:
     return False
 
 
+# Notices that name the version of a package pip resolves without a pin
+# (pystray, and python-xlib through it on Linux): the build checks them.
+VERSIONED_NOTICES = {"pystray": "pystray-NOTICE.txt", "python-xlib": "python-xlib-NOTICE.txt"}
+
+
+def notice_version_problems(licenses_dir, installed) -> list:
+    """Notices whose "Version:" line is not the version `installed(name)`
+    reports. `installed` returns None for a package this platform does not
+    have, which is skipped (python-xlib exists only on Linux)."""
+    import re
+
+    problems = []
+    for name, notice in VERSIONED_NOTICES.items():
+        version = installed(name)
+        if version is None:
+            continue
+        text = (Path(licenses_dir) / notice).read_text(encoding="utf-8")
+        match = re.search(r"^Version: (\S+)$", text, re.MULTILINE)
+        stated = match.group(1) if match else None
+        if stated != version:
+            problems.append(f"{notice} says {name} {stated}, the build has {version}")
+    return problems
+
+
 def project_version(root) -> str:
     """The version in pyproject.toml, read without tomllib so the spec runs on
     any build Python. The release tag must match it, which verify_artifact.py

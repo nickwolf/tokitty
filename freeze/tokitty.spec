@@ -12,12 +12,28 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
 from bundle_data import (  # noqa: E402
-    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, project_version, qt_toc_entry_dropped,
+    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, notice_version_problems, project_version,
+    qt_toc_entry_dropped,
 )
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
 QT_TRIM = os.environ.get("TOKITTY_QT_TRIM", "1") != "0"
+
+
+def _installed(name):
+    from importlib import metadata
+
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+# A notice must name the version the bundle ships; pip resolves these unpinned.
+_stale = notice_version_problems(ROOT / "freeze" / "licenses", _installed)
+if _stale:
+    raise SystemExit("licence notice out of date: " + "; ".join(_stale))
 
 # Licence notices (#115). macOS keeps them inside the .app; Windows and Linux
 # get a folder beside the executable, copied after COLLECT, since data files

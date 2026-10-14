@@ -338,3 +338,23 @@ def test_a_tk_only_bundle_skips_the_qt_contents(tmp_path):
     if sys.platform.startswith("linux"):
         result = va.step_bundle_contents({"app_dir": app, "repo_root": REPO, "toolkits": ["tk"]})
         assert result["ok"], result
+
+
+def test_an_untrimmed_measurement_build_skips_only_the_trim_checks(tmp_path, monkeypatch):
+    # The trim=false dispatch keeps the dropped files on purpose (#115 review).
+    monkeypatch.setenv("TOKITTY_QT_TRIM", "0")
+    app = tmp_path / "tokitty"
+    internal = app / "_internal"
+    for rel in REQUIRED_SOURCE:
+        (internal / rel).parent.mkdir(parents=True, exist_ok=True)
+        (internal / rel).write_text("", encoding="utf-8")
+    (internal / "PySide6" / "Qt" / "lib").mkdir(parents=True)
+    (internal / "PySide6" / "Qt" / "lib" / "libQt6Network.so.6").write_text("", encoding="utf-8")
+    licenses = app / "licenses"
+    licenses.mkdir()
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
+        (licenses / name).write_text("x", encoding="utf-8")
+    if sys.platform.startswith("linux"):
+        result = va.step_bundle_contents({"app_dir": app, "repo_root": REPO, "toolkits": ["qt", "tk"]})
+        assert result["detail"]["trim_check"] == "skipped: TOKITTY_QT_TRIM=0"
+        assert not any("libQt6Network" in p for p in result["detail"].get("problems", []))
