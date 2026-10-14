@@ -67,9 +67,18 @@ Not in scope: anything the Tk path does (it does not change until #142, with two
 
 ## Sizes
 
-Local Linux build (WSL, Python 3.12, 2026-10-13), `tk,qt`, trimmed as above: 152,976,969 bytes extracted and 60,745,793 as `tar.gz`, against 38,906,610 for the v0.6.2 Linux asset. Untrimmed (measured before the GTK and source-collection changes): 187,921,250 and 73,076,953. The CI figures below replace these.
+From the release workflow on this branch, in bytes. "This build" is run 38506230465 at dc64969 (trimmed, `tk,qt`); "Untrimmed" is run 38501933998 at 6106db3 with the `trim` input off, whose bundle content is the same apart from the trim. v0.6.0 is the spike's table (section 8). Archives are what the updater downloads: zip on Windows and macOS, tar.gz on Linux.
 
-Filled in from the `workflow_dispatch` run on this branch (slice 4), against the v0.6.0 release assets (spike section 8 table, and `gh release view v0.6.0`). Per target: v0.6.0 archive bytes, this build's archive bytes and the change, this build's extracted bytes, and the untrimmed build's archive bytes for comparison (one dispatch with the trim switched off by `TOKITTY_QT_TRIM=0`, a build-time switch the spec reads, as the spike's `SPIKE_TRIM` did).
+| Target | v0.6.0 archive | This build, archive | Change | This build, extracted | Untrimmed archive | Trim saves |
+|--------|----------------|---------------------|--------|-----------------------|-------------------|------------|
+| windows-x64 | 22,417,629 | 39,382,194 | +75.7% | 88,799,154 | 55,062,980 | 15,680,786 |
+| macos-arm64 | 18,982,047 | 35,046,037 | +84.6% | 93,145,500 | 39,680,596 | 4,634,559 |
+| macos-x86_64 | 20,165,770 | 37,942,187 | +88.2% | 93,997,244 | 42,871,317 | 4,929,130 |
+| linux-x86_64 | 38,795,809 | 75,926,072 | +95.7% | 187,154,749 | 88,220,064 | 12,293,992 |
+
+The growth is close to the spike's estimate for a port that keeps Tk next to Qt: v0.6.0 plus its trimmed Qt and shiboken came to 39,043,773 on Windows against 39,382,194 here, and on macOS arm64 the spike's port estimate plus Tcl/Tk comes to 34,555,105 against 35,046,037. #142 takes Tcl/Tk, pystray and pyobjc out again, and Pillow with them if the Stream Dock renderer moves to QPainter (spike: about 2.8 MB and 6.7 MB of the Windows archive). Linux is the largest because Qt's Linux wheel ships ICU 73, whose `libicudata.so.73` alone is 32,035,888 bytes unpacked, and Qt Core links it.
+
+A local WSL build (Python 3.12) came to 60,745,793 bytes for Linux; the runner's 75,926,072 is larger mostly because setup-python's `libpython3.13.so.1.0` is 31,209,968 bytes unpacked, a cost v0.6.x carries too.
 
 ## Tests
 
@@ -129,3 +138,11 @@ Slice 3 (d71f0d0): a bundle built without the toolkit declaration would skip bot
 
 Local Linux runs on the finished verifiers: `verify_artifact --expect-toolkits tk,qt` passes every step, including `tk_without_qt` with QtCore deleted; `verify_update` passes the full Tk rehearsal, the Qt pass (`exposed_before_ack` true after 0.049 s) and the update from the real v0.6.2 Linux asset.
 
+
+Slice 4 (8573dd4, 9040bca): a `trim=false` dispatch would have failed the trim check it exists to measure, and the pystray and python-xlib notices name versions that pip resolves unpinned. Fixed in 6106db3: the verifier skips only the trim and GTK checks under `TOKITTY_QT_TRIM=0`, and the spec refuses to build when a notice's version differs from the installed package. python-xlib itself (LGPL-2.1-or-later, pulled in by pystray on Linux) was found while drafting the follow-up notices issue, not by a review, and got the same treatment as pystray in 9040bca.
+
+## CI (2026-10-13)
+
+The first dispatch (6106db3) passed on Windows and failed elsewhere. Linux: the Qt-mode self-check failed because QtGui links `libEGL.so.1` and the xcb plugin needs `libxcb-shape.so.0`, neither on the ubuntu-22.04 runner; reproduced in a clean `ubuntu:22.04` container, where Tk mode passed throughout, which is decision 2 working. Both Macs: the Qt rollback pass exited 0 instead of 2, because `QtUpdateHost.finish` called `quit()`, which on macOS goes through `[NSApp terminate:]`; it now calls `exit()`. Both fixed in dc64969, which also makes the verifier name the failing entries when a self-check exits non-zero (the first Linux failure said only "exit 1").
+
+Run 38506230465 at dc64969 then passed on all four targets: `verify_artifact --expect-toolkits tk,qt` with `bundle_contents` and `tk_without_qt`, the Tk rehearsal, the Qt pass (`exposed_before_ack` true after 0.052 s on Linux, 0.175 s on macOS arm64, 0.285 s on macOS x86_64, 0.384 s on Windows) and the update from the published v0.6.2 archive. The macOS x86_64 job needed one rerun of a failed job: its hook timing gate measured 181.453 ms against a limit of 181.000 ms, set by a baseline of 91.000 ms where the earlier runs measured 150.374 and 124.318; the frozen medians on that runner were 226.245, 186.269 and 181.453 against 175.997 for v0.6.2, and arm64 showed no change, so it was read as runner noise, and the rerun passed.
