@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -35,36 +36,53 @@ def test_bundled_files_exist():
 def test_release_build_installs_the_streamdock_extra():
     # Without comtypes in the build environment, the frozen Windows app has no
     # Stream Dock tab switching or Interrupt, and nothing fails to say so.
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert 'pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"' in workflow
+    workflow = _release_workflow()
+    assert 'pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock]"' in workflow
 
 
 def _release_workflow():
     return (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
 
-def test_release_build_declares_both_toolkits_and_installs_the_xcb_libraries():
+def test_release_build_has_no_toolkit_switch_and_installs_the_xcb_libraries():
     workflow = _release_workflow()
-    assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow
+    # The one TOKITTY_BUILD_TOOLKITS left is the old tk,qt fixture build.
+    assert workflow.count("TOKITTY_BUILD_TOOLKITS") == 1
+    assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow[workflow.index("Build the last tk,qt release"):]
     apt = next(line for line in workflow.splitlines() if "apt-get install" in line)
-    for package in ("xvfb", "libegl1", "libxcb-shape0", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
+    for package in ("xvfb", "libegl1", "libglib2.0-0", "libxcb-shape0", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
         assert package in apt
 
 
-def test_release_verifies_the_declared_toolkits_on_every_platform():
-    assert _release_workflow().count("--expect-toolkits tk,qt") == 3
-
-
-def test_release_runs_the_qt_and_shipped_release_update_passes():
+def test_release_verifies_qt_on_every_platform():
     workflow = _release_workflow()
-    assert "name: Verify update (Qt)" in workflow
-    assert "--qt --only apply_update,no_ack_rollback" in workflow
-    assert "update-report-qt.json" in workflow
+    assert workflow.count("--expect-toolkits qt") == 3
+    assert "--qt " not in workflow
+
+
+def test_release_runs_the_clean_system_check_on_linux():
+    workflow = _release_workflow()
+    assert 'bash freeze/clean_system_check.sh "$RUNNER_TEMP/extracted"' in workflow
+    script = (ROOT / "freeze" / "clean_system_check.sh").read_text(encoding="utf-8")
+    assert "ubuntu:22.04" in script
+    assert "qt qt_root tk_root" in script
+
+
+def test_release_runs_the_shipped_release_and_tkqt_update_passes():
+    workflow = _release_workflow()
     assert "name: Verify update from a shipped release" in workflow
     assert "LEGACY_TAG: v0.6.2" in workflow
     assert 'gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY"' in workflow
     assert '--old-tag "$LEGACY_TAG"' in workflow
     assert "update-report-legacy.json" in workflow
+    assert workflow.count("--only apply_update,no_ack_rollback") == 3
+    assert "--only apply_update " not in workflow
+    # The tk,qt fixture is a pinned full SHA, run once in each old toolkit mode.
+    assert re.search(r"^  TKQT_REF: [0-9a-f]{40}$", workflow, re.MULTILINE)
+    assert "ref: ${{ env.TKQT_REF }}" in workflow
+    for mode in ("tk", "qt"):
+        assert f"--old-tag v0.6.99 --old-mode {mode}" in workflow
+        assert f"update-report-tkqt-{mode}.json" in workflow
 
 
 def test_release_rehearsal_tag_sits_above_every_real_release():
