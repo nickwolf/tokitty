@@ -59,7 +59,12 @@ def register_font() -> str:
         if _family is not None:
             return _family
         path = resources.files("tokitty.streamdock") / "fonts" / FONT_FILE
-        font_id = QFontDatabase.addApplicationFont(str(path))
+        # From bytes, so a package imported from a zip works as well.
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(f"could not read the Stream Dock key font at {path}: {exc}") from exc
+        font_id = QFontDatabase.addApplicationFontFromData(QByteArray(data))
         families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
         if not families:
             raise RuntimeError(f"could not load the Stream Dock key font from {path}")
@@ -84,15 +89,12 @@ def _qcolor(color: _Color) -> QColor:
     return QColor(*color)
 
 
-@lru_cache(maxsize=None)
-def _qfont(family: str, size: int) -> QFont:
-    font = QFont(family)
+def _font(size: int) -> QFont:
+    """A new QFont per call: QFont is reentrant, not thread-safe, and the
+    request handlers draw keys on several threads at once."""
+    font = QFont(font_family())
     font.setPixelSize(size)
     return font
-
-
-def _font(size: int) -> QFont:
-    return _qfont(font_family(), size)
 
 
 def _encode(img: QImage) -> str:

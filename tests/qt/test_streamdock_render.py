@@ -209,8 +209,30 @@ def test_rendering_without_the_font_raises(monkeypatch):
 def test_register_font_reports_a_missing_file(monkeypatch):
     monkeypatch.setattr(render, "_family", None)
     monkeypatch.setattr(render, "FONT_FILE", "missing.ttf")
-    with pytest.raises(RuntimeError, match="could not load"):
+    with pytest.raises(RuntimeError, match="could not read"):
         render.register_font()
+
+
+def test_many_threads_draw_different_keys_at_once():
+    # The deck server answers requests on several threads, each drawing
+    # uncached keys at the same time.
+    titles = [f"thread {i}" for i in range(16)]
+    expected = {t: render.session_key("content", 0, PALETTE, t, False) for t in titles}
+    for fn in (render._session_key, render._text_lines):
+        fn.cache_clear()
+    start = threading.Barrier(len(titles))
+    got = {}
+
+    def draw(title):
+        start.wait(10)
+        got[title] = render.session_key("content", 0, PALETTE, title, False)
+
+    threads = [threading.Thread(target=draw, args=(t,)) for t in titles]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert got == expected
 
 
 def test_fit_truncates_to_the_width_with_two_dots():
