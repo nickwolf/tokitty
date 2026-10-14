@@ -50,6 +50,15 @@ def release_notes_url(version: str) -> Optional[str]:
     return RELEASE_URL.format(tag=version) if parse_version(version) is not None else None
 
 
+def release_build() -> bool:
+    """True for a frozen build whose own build ID is a release tag. A source
+    run or a CI dry run reports the package version, whose release page may
+    not exist or may describe a different build."""
+    from tokitty.updater import running_version
+
+    return running_version().installable
+
+
 def qt_notice() -> str:
     """LGPL-3.0 section 4(c): the notice goes wherever copyright is shown."""
     import PySide6
@@ -126,7 +135,7 @@ class AboutWindow(QWidget):
         links.addStretch(1)
         self.links = {}
         self._add_link(links, "github", "GitHub", GITHUB_URL)
-        notes = release_notes_url(self.version)
+        notes = release_notes_url(self.version) if release_build() else None
         if notes is not None:
             self._add_link(links, "release_notes", "Release notes", notes)
         self.licenses_path = licenses_dir(frozen)

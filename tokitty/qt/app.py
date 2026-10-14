@@ -293,7 +293,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             return build_menu(
                 on_refresh=lambda: None,
                 always_on_top=lambda: widget.always_on_top,
-                on_toggle_always_on_top=lambda: widget.set_always_on_top(not widget.always_on_top),
+                # Through the host, so an open About window follows the widget.
+                on_toggle_always_on_top=host.toggle_always_on_top,
                 on_about=about,
                 on_quit=app.quit,
             )

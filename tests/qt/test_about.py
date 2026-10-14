@@ -1,5 +1,6 @@
 """The About Tokitty window: content, single instance, raising, closing."""
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,6 +48,7 @@ def labels(window):
 
 def test_open_shows_the_version_description_and_links(host, activations, opened_urls, monkeypatch):
     monkeypatch.setattr("tokitty.app_version.version_text", lambda: "v1.2.3")
+    monkeypatch.setattr(about_mod, "release_build", lambda: True)
     window = about_mod.AboutWindow.open(host, lambda: COAT, frozen=True)
     assert window.isVisible()
     assert window.windowTitle() == "About Tokitty"
@@ -95,6 +97,16 @@ def test_the_release_notes_link_needs_a_release_version(host, activations, monke
     monkeypatch.setattr("tokitty.app_version.version_text", lambda: "dev")
     window = about_mod.AboutWindow.open(host, lambda: COAT)
     assert "release_notes" not in window.links and "github" in window.links
+
+
+def test_a_dry_run_build_shows_no_release_notes_for_its_package_version(host, activations, monkeypatch):
+    # A dryrun-<sha> build reports the package version, v0.6.2 say, whose
+    # release page describes a different build or does not exist yet.
+    monkeypatch.setattr("tokitty.app_version.version_text", lambda: "v0.6.2")
+    monkeypatch.setattr("tokitty.updater.running_version",
+                        lambda **kw: SimpleNamespace(version="v0.6.2", installable=False))
+    window = about_mod.AboutWindow.open(host, lambda: COAT, frozen=True)
+    assert "release_notes" not in window.links
 
 
 def test_the_qt_notice_names_the_running_versions(host, activations):
