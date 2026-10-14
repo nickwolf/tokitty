@@ -27,6 +27,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # PySide6 is a dependency, and collecting tests/qt imports QtGui, which
+      # links libEGL; the runner image does not carry it.
+      - name: Qt system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libfontconfig1
       - run: pip install -e ".[dev]"
       - run: pytest
 
