@@ -325,7 +325,16 @@ def _self_check_report(gui, env):
     if err:
         return None, err
     if proc.returncode != 0:
-        return None, f"exit {proc.returncode}, stderr={proc.stderr!r}"
+        # A failed entry exits 1 with the report on stdout and nothing on
+        # stderr, so name the failed entries rather than only the exit code.
+        try:
+            report = json.loads(proc.stdout.decode("utf-8").strip())
+            failed = {k: v for k, v in report["checks"].items() if not v.get("ok")}
+        except Exception:  # noqa: BLE001 - no report: fall back to the raw output
+            failed = None
+        if failed is not None:
+            return None, f"exit {proc.returncode}, failing self-check(s): {failed}"
+        return None, f"exit {proc.returncode}, stderr={proc.stderr!r}, stdout={proc.stdout[-2000:]!r}"
     try:
         data = json.loads(proc.stdout.decode("utf-8").strip())
     except Exception as exc:

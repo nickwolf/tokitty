@@ -37,9 +37,13 @@ class FakeTray:
 class FakeApp:
     def __init__(self):
         self.quits = 0
+        self.exits = []
 
     def quit(self):
         self.quits += 1
+
+    def exit(self, code=0):
+        self.exits.append(code)
 
 
 @pytest.fixture
@@ -205,12 +209,15 @@ def test_notice_is_silent_when_quiet(setup, qapp, monkeypatch):
 
 
 def test_finish_twice_quits_once_and_only_after_the_event_loop_turns(setup, qapp):
+    # exit() rather than quit(), which on macOS goes through NSApp terminate
+    # and can end the process with 0 before run_qt returns its code (#115).
     host, _, app = setup.build()
     host.finish()
     host.finish()
-    assert app.quits == 0
+    assert app.exits == []
     qapp.processEvents()
-    assert app.quits == 1
+    assert app.exits == [0]
+    assert app.quits == 0
 
 
 def test_a_child_dialog_window_comes_back_but_a_qdialog_does_not(setup, reclaimed):

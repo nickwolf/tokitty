@@ -98,7 +98,13 @@ class QtUpdateHost:
             return
         self._finishing = True
         self._held = []
-        QTimer.singleShot(0, self._app.quit)
+        # exit(), not quit(): on macOS quit() goes through [NSApp terminate:],
+        # which closes every window (the widget's closeEvent quits again), and
+        # a terminate that lands with no event loop running makes AppKit call
+        # exit(0). The release CI saw a rolled-back --apply-update end with 0
+        # instead of 2 on both Macs (#115). exit() only ends the loop, so
+        # run_qt returns its own code.
+        QTimer.singleShot(0, lambda: self._app.exit(0))
 
     def notice(self, text: str) -> None:
         if self._quiet:

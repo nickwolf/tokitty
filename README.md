@@ -49,7 +49,7 @@ Move Tokitty to Applications before turning on **Start at login** or adding an a
 
 Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
 
-The Qt window (the default from v0.7.0, reachable before that with `TOKITTY_QT=1`) needs a few X11 libraries that some desktops leave out. On Debian or Ubuntu, `sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0` covers them. Translucency on Linux depends on your compositor and is best-effort.
+The Qt window (the default from v0.7.0, reachable before that with `TOKITTY_QT=1`) needs a few X11 libraries that some desktops leave out. On Debian or Ubuntu, `sudo apt install libegl1 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0` covers them. Translucency on Linux depends on your compositor and is best-effort.
 
 ## Updating
 

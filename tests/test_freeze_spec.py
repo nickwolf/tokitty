@@ -47,7 +47,7 @@ def test_release_build_declares_both_toolkits_and_installs_the_xcb_libraries():
     workflow = _release_workflow()
     assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow
     apt = next(line for line in workflow.splitlines() if "apt-get install" in line)
-    for package in ("xvfb", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
+    for package in ("xvfb", "libegl1", "libxcb-shape0", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
         assert package in apt
 
 
