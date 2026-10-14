@@ -28,7 +28,9 @@ run_pass() {
     set -u
     apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $base_packages $2 >/dev/null 2>&1 || { echo 'apt-get failed' >&2; exit 99; }
     cd /b/tokitty
-    TOKITTY_SELF_CHECK_TK=1 xvfb-run -a ./tokitty --self-check 2>/tmp/err
+    # xvfb-run sends the program's stderr to stdout, so the redirect goes
+    # inside it: stdout must hold the report alone, as an updater reads it.
+    TOKITTY_SELF_CHECK_TK=1 xvfb-run -a sh -c './tokitty --self-check 2>/tmp/err'
     rc=\$?
     tail -c 600 /tmp/err >&2
     exit \$rc
@@ -59,6 +61,16 @@ if [ "$rc" != 0 ]; then
   cat "$out/with-libegl1.err" >&2
   fail "with libegl1 the self-check exited $rc, expected 0. Failed checks: $(failed_checks with-libegl1 2>&1 | tr '\n' ' ')"
 fi
+# Exit 0 alone is not a report: require the JSON and the window checks in it.
+python3 -I -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+checks = data["checks"]
+missing = [n for n in ("qt", "qt_root", "tk_root") if n not in checks]
+bad = sorted(n for n, c in checks.items() if not c.get("ok"))
+if missing or bad or data.get("toolkits") != ["qt"]:
+    sys.exit("missing %s, failed %s, toolkits %s" % (missing, bad, data.get("toolkits")))
+' "$out/with-libegl1.json" || fail "with libegl1 the self-check did not print a complete passing report"
 echo "clean_system_check: pass 1 ok (self-check passes with libegl1)"
 
 run_pass without-libegl1 ""

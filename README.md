@@ -298,7 +298,7 @@ Same as above: `resolve_credentials_source()` finds `~/.claude/.credentials.json
 
 ### Linux
 
-1. `sudo apt install libegl1` (or your distro's equivalent), then `pip install -e .` from the repo root, which pulls PySide6.
+1. `sudo apt install libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0` (or your distro's equivalent), then `pip install -e .` from the repo root, which pulls PySide6. A source install uses the system's X11 libraries, which the release archive carries itself, so it needs the longer list.
 2. `python3 -m tokitty`
 
 ### macOS
