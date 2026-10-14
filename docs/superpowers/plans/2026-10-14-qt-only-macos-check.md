@@ -23,7 +23,7 @@ A real launch also repoints the Claude Code hook command in `~/.claude/settings.
 ## Checks
 
 1. Agent app (#117 item 13): `open Tokitty.app`. The widget and the menu-bar cat come up, with no Dock icon and no Tokitty app menu (the menu bar keeps showing the frontmost app's menus). Command-Tab does not list Tokitty.
-2. About: menu-bar cat ▸ About Tokitty opens the native panel in front of other apps, with "Tokitty", the version once, "Copyright © 2026 Nick Wolf. MIT License." and the Qt line. Close it, then right-click the widget ▸ About Tokitty: the same panel, in front.
+2. About: menu-bar cat ▸ About Tokitty opens the Tokitty About window in front of other apps: the cat, "Tokitty", the version, the GitHub, Release notes and Licences links (each opens), "Copyright © 2026 Nick Wolf. MIT License." and the Qt line. Close it, then right-click the widget ▸ About Tokitty: the same window, in front.
 3. Windows come to the front: with another app frontmost (TextEdit), open Settings… from the menu-bar cat, then from the right-click menu. Each time Settings is in front and takes typing. Same for Accounts (from Settings) and Check now's result box.
 4. Licences: `ls Tokitty.app/Contents/Resources/licenses` lists four files: GPL-3.0.txt, LGPL-3.0.txt, LICENSE, Qt-NOTICE.txt. No pystray or python-xlib notices.
 5. #117 item 3, full screen: put TextEdit in full screen. Is the widget visible over it, in that Space?

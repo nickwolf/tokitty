@@ -99,6 +99,10 @@ Run 38636831492 at ce55a11 passed on all four targets: verify_artifact (with `ke
 
 The first PR CI run failed collection on the Linux `test` job: with PySide6 a dependency, `tests/qt` imports QtGui, which links `libEGL.so.1`, and that runner image lacks it. ci.yml now installs `libegl1 libxkbcommon0 libfontconfig1` there as the `qt` job does (ae67a98), and PR CI then passed all ten checks, the Windows test jobs included.
 
+## Manual checks
+
+Windows (Cucumber), the CI zip from run 38636831492, unzipped to `C:\tmp\tk142-win` and launched with scratch `LOCALAPPDATA`, `USERPROFILE` and `APPDATA` (settings pre-marked `first_run: done`, no `accounts.json`). The process started in the desktop session (session 1, as `explorer.exe`), the card came up showing "multiple installs", and `licenses/` held GPL-3.0.txt, LGPL-3.0.txt, LICENSE and Qt-NOTICE.txt. Nick, by hand: the right-click menu looks better than before; Settings opens in front; the grey cat tray icon sits beside the installed copy's orange one with the same menu; Exit removes the card and the icon. About showed a plain box with the name and version that did not come to the front and looked poor, so About becomes a Tokitty window (the cat in pane 0's coat, version, description, links to GitHub, the release notes and the licences, the copyright and Qt lines) on every platform, raised like Settings, replacing the macOS native panel.
+
 ## Open questions
 
 All three decided by Nick on 2026-10-14, as proposed.
