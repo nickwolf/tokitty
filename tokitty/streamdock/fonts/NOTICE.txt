@@ -1,0 +1,7 @@
+Aileron-Regular.ttf
+
+This is Aileron Regular, designed by Sora Sagano (Dot Colon, http://www.dotcolon.net) and released under the CC0 1.0 Universal public domain dedication (https://creativecommons.org/publicdomain/zero/1.0/).
+
+The file is the reduced-character-set copy that Pillow 10.1 and later embeds for ImageFont.load_default, extracted unchanged by scripts/extract_aileron.py. It covers printable ASCII and a few punctuation marks, including the ellipsis the key renderer uses.
+
+Tokitty draws the Stream Dock key images with it (tokitty/streamdock/render.py).

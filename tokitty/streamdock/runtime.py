@@ -21,7 +21,6 @@ from tokitty.accounts import DEFAULT_PROVIDER, Account
 from tokitty.activity import SessionView
 from tokitty.streamdock import launch as launch_mod
 from tokitty.streamdock import pending as pending_mod
-from tokitty.streamdock.keyimages import spec_image
 from tokitty.streamdock.model import (
     CancelOverlay,
     Decide,
@@ -138,6 +137,9 @@ class StreamdockRuntime:
         self._inbound: "queue.Queue[Any]" = queue.Queue()
         if image_fn is None:
             def image_fn(spec: KeySpec) -> str:
+                # Imported here because the renderer needs PySide6, and this
+                # module must import without it.
+                from tokitty.streamdock.keyimages import spec_image
                 return spec_image(spec, palette_fn)
         self._server = server_factory(port, token, self._box, self._inbound, image_fn=image_fn, meta_fn=self._meta)
         self._watchers: Dict[int, Any] = {a.index: watcher_factory(a) for a in accounts}

@@ -1,8 +1,17 @@
+import pytest
+
 from tokitty import sprites
 from tokitty.streamdock import keyimages, render
 from tokitty.streamdock.model import KeySpec, SessionRef
 
+pytestmark = pytest.mark.qt
+
 REF = SessionRef(0, "s1")
+
+
+@pytest.fixture(autouse=True)
+def _font(qapp):
+    render.register_font()
 
 
 def palette(index):
