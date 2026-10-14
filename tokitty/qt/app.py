@@ -129,32 +129,33 @@ def run_guarded(label, fn) -> None:
 def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
     """Show the first-run walkthrough and wait for it in a local event loop
     that its `closed` signal quits. True when the launch was asked to quit,
-    either by the walkthrough's own Quit shortcut (which leaves onboarding
-    pending) or by a Qt Quit event that closed it: QApplication.quit() does
+    by the walkthrough's Quit shortcut or a Qt Quit event, both of which leave
+    onboarding pending: QApplication.quit() does
     nothing before app.exec() has started, so the caller has to stop the
     launch itself. Otherwise the caller reloads accounts and settings."""
-    from PySide6.QtCore import QEvent, QEventLoop, QObject, QTimer
+    from PySide6.QtCore import QEvent, QEventLoop, QObject
     from PySide6.QtWidgets import QApplication
 
     from tokitty.qt import macos
     from tokitty.qt.walkthrough import Walkthrough
 
     loop = QEventLoop()
-    done = {"closed": False, "quit": False, "quitting": False}
+    done = {"closed": False, "quit": False}
+    shown = {}
 
     class QuitWatch(QObject):
-        # Qt handles a Quit event by closing every window, synchronously, so
-        # a `closed` that fires while the flag is up came from the Quit. A
-        # walkthrough that refuses (an install is running) stays open, and
-        # the flag drops on the next turn of the loop.
+        # Qt would answer a Quit event (Command-Q, logout) by closing every
+        # window, and the walkthrough's close means Skip, which marks
+        # onboarding done. So the event goes to the walkthrough's own Quit,
+        # which leaves it pending, or is refused with it while an install runs.
         def eventFilter(self, obj, event):
-            if obj is QApplication.instance() and event.type() == QEvent.Type.Quit:
-                done["quitting"] = True
-                QTimer.singleShot(0, lambda: done.update(quitting=False))
+            if obj is QApplication.instance() and event.type() == QEvent.Type.Quit and "walk" in shown:
+                shown["walk"].quit_app()
+                return True
             return False
 
     def on_closed():
-        done.update(closed=True, quit=done["quit"] or done["quitting"])
+        done.update(closed=True)
         loop.quit()
 
     def on_quit_requested():
@@ -168,6 +169,7 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
         walkthrough = Walkthrough(state_dir, credentials_cache, distro_probe.get_running)
         walkthrough.closed.connect(on_closed)
         walkthrough.quit_requested.connect(on_quit_requested)
+        shown["walk"] = walkthrough
         walkthrough.show()
         macos.activate_app()
         walkthrough.raise_()

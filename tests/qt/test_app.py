@@ -378,6 +378,14 @@ class FakeWalkthrough(QWidget):
             FakeWalkthrough.when_shown(self)
         QTimer.singleShot(30, self.finish)
 
+    def quit_app(self):
+        # As the real one: refused while an install runs, else ends the
+        # launch without marking onboarding done.
+        if FakeWalkthrough.refuse_close:
+            return
+        self.hide()
+        self.quit_requested.emit()
+
     def finish(self):
         from tokitty import first_run
         from tokitty.accounts import Account, save_accounts
@@ -901,6 +909,27 @@ def test_the_walkthrough_quit_shortcut_ends_the_launch_and_leaves_onboarding_pen
     real_show = qt_walkthrough.Walkthrough.show
     monkeypatch.setattr(qt_walkthrough.Walkthrough, "show",
                         lambda self: (real_show(self), QTimer.singleShot(30, self.quit_shortcut.activated.emit))[0])
+    built = []
+    monkeypatch.setattr("tokitty.qt.app.build_units", lambda **kw: built.append(1) or [])
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert built == [] and fake_workers == []
+    assert load_settings(state_dir).first_run == "pending"
+
+
+def test_a_quit_event_during_the_real_walkthrough_leaves_onboarding_pending(
+        qapp, state_dir, monkeypatch, fake_workers, tmp_path):
+    from tokitty.qt import walkthrough as qt_walkthrough
+
+    fake_home(monkeypatch, tmp_path)
+    QTimer.singleShot(0, qapp.quit)
+    qapp.exec()
+    real_show = qt_walkthrough.Walkthrough.show
+    monkeypatch.setattr(qt_walkthrough.Walkthrough, "show",
+                        lambda self: (real_show(self), send_quit(qapp, 30))[0])
     built = []
     monkeypatch.setattr("tokitty.qt.app.build_units", lambda **kw: built.append(1) or [])
     net = safety_net(qapp)
