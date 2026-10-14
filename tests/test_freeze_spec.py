@@ -290,7 +290,7 @@ def test_licence_files_exist_and_license_matches_the_repo():
     assert (licenses / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
     assert "GNU LESSER GENERAL PUBLIC LICENSE" in (licenses / "LGPL-3.0.txt").read_text(encoding="utf-8")
     assert "GNU GENERAL PUBLIC LICENSE" in (licenses / "GPL-3.0.txt").read_text(encoding="utf-8")
-    assert "LGPL" in (licenses / "pystray-NOTICE.txt").read_text(encoding="utf-8")
+    assert set(data.LICENSE_FILES) == {"LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt"}
 
 
 def test_qt_notice_names_the_pinned_version():
@@ -302,12 +302,38 @@ def test_qt_notice_names_the_pinned_version():
     assert f"PySide6 {pinned}" in notice
 
 
-def test_qt_version_is_read_from_the_qt_extra(tmp_path):
+def test_qt_version_is_read_from_the_dependencies(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
-        '[project.optional-dependencies]\nother = ["PySide6==1.0"]\nqt = ["PySide6-Essentials==6.99.1"]\n',
+        '[project]\ndependencies = ["PySide6-Essentials==6.99.1"]\n'
+        '[project.optional-dependencies]\nother = ["PySide6==1.0"]\n',
         encoding="utf-8",
     )
     assert _bundle_data().qt_version(tmp_path) == "6.99.1"
+
+
+def test_qt_version_raises_without_a_pin_in_the_dependencies(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["other"]\n[project.optional-dependencies]\nqt = ["PySide6-Essentials==6.99.1"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        _bundle_data().qt_version(tmp_path)
+
+
+def test_pyproject_pins_pyside6_as_the_only_runtime_dependency():
+    tomllib = pytest.importorskip("tomllib")
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["dependencies"] == [f"PySide6-Essentials=={QT_PIN}"]
+    extras = project["optional-dependencies"]
+    assert "qt" not in extras
+    for extra in ("packaging", "dev"):
+        assert any(dep.startswith("Pillow") for dep in extras[extra])
+    everything = " ".join(project["dependencies"] + [d for deps in extras.values() for d in deps])
+    assert "pystray" not in everything and "xlib" not in everything.lower()
+
+
+def test_info_plist_makes_the_mac_app_an_agent_app():
+    assert _bundle_data().info_plist("0.6.0")["LSUIElement"] is True
 
 
 def test_info_plist_carries_the_qt_line():
@@ -325,7 +351,7 @@ def test_spec_applies_the_trim_and_ships_the_licences():
     assert "qt_entry_dropped" in spec
     assert "LICENSE_FILES" in spec
     assert "TOKITTY_QT_TRIM" in spec
-    assert "excludes=list(QT_EXCLUDED_MODULES)" in spec
+    assert "excludes=GUI_EXCLUDES + (list(QT_EXCLUDED_MODULES) if QT_TRIM else [])" in spec
     assert '"PySide6", "shiboken6"' in spec
     assert 'Path(DISTPATH) / APP_NAME / "licenses"' in spec
 
@@ -354,10 +380,10 @@ def test_qt_notices_script_keeps_the_bundled_modules(tmp_path):
 
 
 def test_lgpl_packages_ship_as_replaceable_source():
-    # pystray, PySide6 and shiboken6 are LGPL-3.0: their Python code must sit
+    # PySide6 and shiboken6 are LGPL-3.0: their Python code must sit
     # in the bundle as .py files a user can replace, not inside the PYZ (#115).
     data = _bundle_data()
-    assert data.LGPL_SOURCE_PACKAGES == {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
+    assert data.LGPL_SOURCE_PACKAGES == {"PySide6": "py", "shiboken6": "py"}
     spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
     assert "module_collection_mode=LGPL_SOURCE_PACKAGES" in spec
 
@@ -371,37 +397,21 @@ def test_qt_notice_carries_the_icu_licence_of_the_bundled_version():
     assert "/usr/share/doc/" not in notice
 
 
-def test_notice_versions_follow_the_installed_packages(tmp_path):
-    # pystray and python-xlib are unpinned, so the spec refuses to build when a
-    # notice names a different version than the build venv has (#115).
+def test_release_constraints_pin_nothing_the_build_no_longer_ships():
+    text = (ROOT / "freeze" / "release-constraints.txt").read_text(encoding="utf-8")
+    pins = [line for line in text.splitlines() if line.split("#", 1)[0].strip()]
+    assert pins == []
+
+
+def test_the_font_and_its_notice_are_bundled_beside_the_streamdock_modules():
     data = _bundle_data()
-    (tmp_path / "pystray-NOTICE.txt").write_text("pystray\n\nVersion: 0.19.5\n", encoding="utf-8")
-    (tmp_path / "python-xlib-NOTICE.txt").write_text("python-xlib\n\nVersion: 0.33\n", encoding="utf-8")
-    versions = {"pystray": "0.19.5", "python-xlib": "0.33"}
-    assert data.notice_version_problems(tmp_path, versions.get) == []
-    versions["pystray"] = "0.19.6"
-    assert data.notice_version_problems(tmp_path, versions.get) == ["pystray-NOTICE.txt says pystray 0.19.5, the build has 0.19.6"]
-    # A package this platform does not install (python-xlib off Linux) is skipped.
-    assert data.notice_version_problems(tmp_path, {"pystray": "0.19.5"}.get) == []
+    assert "streamdock/fonts/Aileron-Regular.ttf" in data.DATA_FILES
+    assert "streamdock/fonts/NOTICE.txt" in data.DATA_FILES
 
 
-def test_the_shipped_notices_name_versions_the_spec_can_check():
-    data = _bundle_data()
-    licenses = Path(__file__).resolve().parent.parent / "freeze" / "licenses"
-    assert data.notice_version_problems(licenses, {"pystray": "0.19.5", "python-xlib": "0.33"}.get) == []
-    spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
-    assert "notice_version_problems(" in spec
-
-
-def test_release_constraints_pin_the_versions_the_notices_name():
-    # The release build installs with these pins, so a tag build cannot
-    # resolve a newer pystray or python-xlib than its notices name (#115).
-    root = Path(__file__).resolve().parent.parent
-    pins = {}
-    for line in (root / "freeze" / "release-constraints.txt").read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line:
-            name, version = line.split("==")
-            pins[name] = version
-    assert set(pins) == set(_bundle_data().VERSIONED_NOTICES)
-    assert _bundle_data().notice_version_problems(root / "freeze" / "licenses", pins.get) == []
+def test_the_spec_excludes_every_other_toolkit_and_no_tokitty_build_toolkits():
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    for name in ("tkinter", "_tkinter", "PIL", "pystray", "objc", "AppKit", "Foundation", "Xlib"):
+        assert f'"{name}"' in spec.split("GUI_EXCLUDES = [", 1)[1].split("]", 1)[0]
+    assert "TOKITTY_BUILD_TOOLKITS" not in spec
+    assert "TOKITTY_BUILD_ID" in spec

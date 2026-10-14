@@ -3,6 +3,7 @@ is the release workflow; nothing here starts a process, opens a socket or
 imports cryptography."""
 import importlib.util
 import io
+import json
 import tarfile
 import zipfile
 from pathlib import Path
@@ -279,21 +280,70 @@ def test_prepare_compares_the_tag_with_the_old_tag(vu, tmp_path):
     assert "is not newer than the old fixture v0.6.2" in result["detail"]
 
 
-def test_qt_mode_env_sets_the_switch_and_removes_the_platform_variables(vu):
-    env = vu.qt_mode_env({"HOME": "/h", "QT_QPA_PLATFORM": "offscreen", "WAYLAND_DISPLAY": "wayland-0", "TOKITTY_QT": "0"})
-    assert env == {"HOME": "/h", "TOKITTY_QT": "1"}
+def test_qt_mode_env_removes_the_platform_variables_and_the_switch(vu):
+    env = vu.qt_mode_env({"HOME": "/h", "QT_QPA_PLATFORM": "offscreen", "WAYLAND_DISPLAY": "wayland-0", "TOKITTY_QT": "1"})
+    assert env == {"HOME": "/h"}
 
 
-def test_scratch_env_is_qt_mode_only_when_asked(vu, tmp_path, monkeypatch):
+def test_old_process_env_sets_the_switch_only_under_old_mode_qt(vu):
+    assert vu.old_process_env({"HOME": "/h", "TOKITTY_QT": "0"}, "tk") == {"HOME": "/h"}
+    assert vu.old_process_env({"HOME": "/h"}, "qt") == {"HOME": "/h", "TOKITTY_QT": "1"}
+
+
+def test_scratch_env_is_always_qt_ready_and_never_carries_the_switch(vu, tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("TOKITTY_QT", "1")
+    env = vu.scratch_env(tmp_path / "p")
+    assert "QT_QPA_PLATFORM" not in env and "WAYLAND_DISPLAY" not in env and "TOKITTY_QT" not in env
+
+
+def test_old_mode_qt_puts_tokitty_qt_in_the_old_process_env_only(vu, tmp_path, monkeypatch):
     monkeypatch.delenv("TOKITTY_QT", raising=False)
-    plain = vu.scratch_env(tmp_path / "p")
-    assert plain["QT_QPA_PLATFORM"] == "offscreen" and "TOKITTY_QT" not in plain
-    qt = vu.scratch_env(tmp_path / "q", qt=True)
-    assert qt["TOKITTY_QT"] == "1" and "QT_QPA_PLATFORM" not in qt and "WAYLAND_DISPLAY" not in qt
-    assert vu.Scenario(_scenario_ctx(tmp_path, qt=True), "d").env["TOKITTY_QT"] == "1"
-    assert "TOKITTY_QT" not in vu.Scenario(_scenario_ctx(tmp_path), "e").env
+    qt = vu.Scenario(_scenario_ctx(tmp_path, old_mode="qt"), "d")
+    assert qt.old_env["TOKITTY_QT"] == "1"
+    assert "TOKITTY_QT" not in qt.env
+    assert qt.apply_env({"server_url": "https://x", "certs": {"ca": "ca.pem"}})["TOKITTY_QT"] == "1"
+    for ctx in (_scenario_ctx(tmp_path), _scenario_ctx(tmp_path, old_mode="tk")):
+        tk = vu.Scenario(ctx, "e")
+        assert "TOKITTY_QT" not in tk.old_env and "TOKITTY_QT" not in tk.env
+        assert "TOKITTY_QT" not in tk.apply_env({"server_url": "https://x", "certs": {"ca": "ca.pem"}})
+
+
+def test_an_inherited_tokitty_qt_never_reaches_a_tk_mode_old_process(vu, tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKITTY_QT", "1")
+    scn = vu.Scenario(_scenario_ctx(tmp_path), "f")
+    assert "TOKITTY_QT" not in scn.old_env and "TOKITTY_QT" not in scn.env
+
+
+def _main_ctx(vu, tmp_path, monkeypatch, *extra):
+    seen = {}
+    monkeypatch.setattr(vu, "STEPS", [("prepare", lambda ctx: seen.update(ctx) or {"ok": True})])
+    argv = [
+        "--old-archive", str(tmp_path / "o"), "--new-archive", str(tmp_path / "n"), "--new-sums", str(tmp_path / "s"),
+        "--tag", "v99.0.0", "--work", str(tmp_path / "w"), "--report", str(tmp_path / "r.json"), *extra,
+    ]
+    assert vu.main(argv) == 0
+    return seen
+
+
+def test_old_mode_defaults_to_tk_and_accepts_qt(vu, tmp_path, monkeypatch):
+    assert _main_ctx(vu, tmp_path, monkeypatch)["old_mode"] == "tk"
+    assert _main_ctx(vu, tmp_path, monkeypatch, "--old-mode", "qt")["old_mode"] == "qt"
+    assert json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["old_mode"] == "qt"
+
+
+def test_old_mode_rejects_other_values_and_the_qt_flag_is_gone(vu, tmp_path, monkeypatch):
+    for extra in (("--old-mode", "both"), ("--qt",)):
+        with pytest.raises(SystemExit):
+            _main_ctx(vu, tmp_path, monkeypatch, *extra)
+
+
+def test_the_qt_marker_check_applies_to_every_pass():
+    # apply_update judges after-update-qt.json for the new copy whatever the old mode is.
+    source = VERIFY_UPDATE_PATH.read_text(encoding="utf-8")
+    assert 'ctx.get("qt")' not in source
+    assert "problems += after_update_qt_problems(scn.state_dir)" in source
 
 
 def test_after_update_qt_problems(vu, tmp_path):

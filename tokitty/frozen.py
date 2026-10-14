@@ -63,27 +63,6 @@ def _check(fn) -> dict:
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 
 
-def _check_tkinter():
-    import tkinter
-
-    return tkinter.Tcl().eval("info patchlevel")
-
-
-def _check_tk_root():
-    """tkinter.Tcl() above only starts the Tcl interpreter; it never opens
-    a window, so a bundle whose Tk can't actually initialise (missing
-    display, broken Tcl/Tk libs in the onedir layout) would still pass.
-    Gated behind TOKITTY_SELF_CHECK_TK so headless unit tests stay headless."""
-    import tkinter
-
-    root = tkinter.Tk()
-    try:
-        root.update_idletasks()
-        return root.eval("info patchlevel")
-    finally:
-        root.destroy()
-
-
 def _check_qt():
     from PySide6 import QtCore, QtWidgets  # noqa: F401
 
@@ -91,9 +70,10 @@ def _check_qt():
 
 
 def _check_qt_root():
-    """The Qt counterpart of _check_tk_root: a QApplication on the real
-    platform plugin (not forced offscreen), one widget shown and its events
-    processed, so a bundle whose plugin can't load fails here."""
+    """A QApplication on the real platform plugin (not forced offscreen), one
+    widget shown and its events processed, so a bundle whose plugin can't
+    load fails here. Gated behind TOKITTY_SELF_CHECK_TK so headless unit tests
+    stay headless."""
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication, QWidget
 
@@ -132,18 +112,6 @@ def qt_platform_env(environ=None, *, frozen=None, platform=None) -> Optional[str
         file=sys.stderr,
     )
     return "xcb"
-
-
-def _check_pil():
-    from PIL import Image
-
-    return Image.new("RGBA", (1, 1))
-
-
-def _check_pystray():
-    import pystray
-
-    return pystray
 
 
 def _check_prices():
@@ -189,17 +157,6 @@ def _check_tls():
     return f"{count} CA certificates from {source}"
 
 
-def build_toolkits(environ=None) -> set:
-    """The GUI toolkits this build declares (TOKITTY_BUILD_TOOLKITS, a comma
-    list baked in by the runtime hook, read from the environment in a source
-    run). Unset or empty means Tk only. Declared rather than guessed: a build
-    that merely has PySide6 installed must not be failed for it."""
-    environ = os.environ if environ is None else environ
-    names = {part.strip().lower() for part in environ.get("TOKITTY_BUILD_TOOLKITS", "").split(",")}
-    names.discard("")
-    return names or {"tk"}
-
-
 def env_names(environ=None) -> list:
     """Sorted names of the environment variables the bootloader may have set."""
     environ = os.environ if environ is None else environ
@@ -210,44 +167,28 @@ def self_check() -> int:
     """Hidden --self-check: prove a bundle carries what the app needs.
     The release CI verifier depends on this, including the state_dir
     field, to fail closed rather than trust a bundle that merely
-    launched."""
+    launched.
+
+    Qt is the only toolkit (#142). Nothing here reads TOKITTY_BUILD_TOOLKITS
+    or TOKITTY_QT: both are inherited from the old copy's environment during
+    an update, and a copy that obeyed them would fail checks the bundle no
+    longer has."""
     from tokitty import paths
 
-    toolkits = build_toolkits()
-    checks = {}
-    if "tk" in toolkits:
-        checks["tkinter"] = _check(_check_tkinter)
-    # A build that carries Tk runs the Qt checks only for a Qt-mode launch:
-    # every shipped updater runs this report with the window switch on and
-    # refuses any failed entry, and on Linux a missing xcb library makes Qt
-    # abort the whole process, which would block a Tk user's updates (#115).
-    run_qt_checks = "qt" in toolkits and ("tk" not in toolkits or os.environ.get("TOKITTY_QT") == "1")
-    if run_qt_checks:
-        checks["qt"] = _check(_check_qt)
-    checks["pil"] = _check(_check_pil)
-    if "tk" in toolkits:
-        # Only the Tk tray uses pystray; a build without Tk does not carry it,
-        # and a failed entry would make every shipped updater refuse it (#114).
-        checks["pystray"] = _check(_check_pystray)
-    checks.update(
-        {
-            "prices": _check(_check_prices),
-            "hook_writer": _check(_check_hook_writer),
-            "tls": _check(_check_tls),
-        }
-    )
+    checks = {
+        "qt": _check(_check_qt),
+        "prices": _check(_check_prices),
+        "hook_writer": _check(_check_hook_writer),
+        "tls": _check(_check_tls),
+    }
     if getattr(sys, "frozen", False):
         checks["hook_runner"] = _check(_check_hook_runner)
     if os.environ.get("TOKITTY_SELF_CHECK_TK") == "1":
-        if "tk" in toolkits:
-            checks["tk_root"] = _check(_check_tk_root)
-        if run_qt_checks:
-            checks["qt_root"] = _check(_check_qt_root)
-            if "tk" not in toolkits:
-                # Every shipped updater requires a tk_root entry in the report
-                # of the build it installs, so a Qt-only build carries the Qt
-                # window result under that name (#142).
-                checks["tk_root"] = checks["qt_root"]
+        checks["qt_root"] = _check(_check_qt_root)
+        # Every shipped updater requires a tk_root entry in the report of the
+        # build it installs (update_install.run_self_check, unchanged since
+        # v0.6.2), so the Qt window result is also carried under that name.
+        checks["tk_root"] = checks["qt_root"]
 
     report = {
         "checks": checks,
@@ -256,9 +197,8 @@ def self_check() -> int:
         "build_id": os.environ.get("TOKITTY_BUILD_ID"),
         "state_dir": str(paths.state_dir_path()),
         "env": env_names(),
+        "toolkits": ["qt"],
     }
-    if toolkits != {"tk"}:
-        report["toolkits"] = sorted(toolkits)
     if sys.stdout is not None:
         print(json.dumps(report))
     return 0 if all(check["ok"] for check in checks.values()) else 1

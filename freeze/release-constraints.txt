@@ -1,5 +1,3 @@
-# Pins for the release build only (pip install -c), so a tag build resolves
-# the versions its licence notices name. freeze/tokitty.spec refuses to build
-# when they differ; bump a pin together with its notice (#115).
-pystray==0.19.5
-python-xlib==0.33
+# Pins for the release build only (pip install -c). PySide6 is pinned in
+# pyproject.toml, and the build has no other package whose licence notice
+# names a version, so nothing is pinned here since the Qt-only build (#142).

@@ -27,11 +27,11 @@ checks the platform or OS name to decide which gate applies -- the caller
 
 Steps, in order (stops at the first failure, always writes the report):
   1. locate the GUI and hook executables beside each other
-  2. `<gui> --self-check`; for a build that declares Qt, again in Qt mode
-     (TOKITTY_QT=1, no QT_QPA_PLATFORM), which must also pass qt and qt_root
-  2b. bundle_contents: the licence files, the LGPL packages as source, the Qt
-      trim and the platform plugin (#115)
-  2c. tk_without_qt: a copy with QtCore deleted still passes the Tk self-check
+  2. `<gui> --self-check` with no QT_QPA_PLATFORM: qt and qt_root must pass and
+     the report must say "toolkits": ["qt"] (Qt is the only toolkit, #142)
+  2b. bundle_contents: the licence files, the font, the LGPL packages as
+      source, the Qt trim and the platform plugin (#115), nothing from Tcl/Tk,
+      Pillow, pystray, pyobjc or python-xlib, and on Linux the xcb libraries
   3. fail-closed accounts.json preflight, before anything can write hooks
   4. `<gui> --install-hooks`, checked against the repo and the state dir
   4b. a second simulated release, extracted separately, repoints `current`
@@ -84,9 +84,23 @@ CHILD_TIMEOUT = 60
 # that mean QtDBus is present (binding, Windows/Linux library, framework binary).
 QT_PLATFORM_PLUGINS = {"win32": "qwindows", "darwin": "libqcocoa", "linux": "libqxcb"}
 QT_DBUS_STEMS = ("QtDBus", "Qt6DBus", "libQt6DBus")
-LGPL_SOURCE_FILES = ("pystray/__init__.py", "PySide6/__init__.py", "shiboken6/__init__.py")
-# python-xlib, which pystray pulls in on Linux only.
-LINUX_LGPL_SOURCE_FILES = ("Xlib/__init__.py",)
+LGPL_SOURCE_FILES = ("PySide6/__init__.py", "shiboken6/__init__.py")
+
+# The Stream Dock key font and its notice, under tokitty/ in the bundle.
+FONT_FILES = ("tokitty/streamdock/fonts/Aileron-Regular.ttf", "tokitty/streamdock/fonts/NOTICE.txt")
+
+# The xcb libraries the Linux build must carry in _internal/ (the build runner
+# installs them and PyInstaller collects them), so a runner change cannot
+# silently drop one and leave a user to install it (#142 decision 6).
+LINUX_XCB_LIBS = (
+    "libxcb-cursor.so.0", "libxcb-shape.so.0", "libxcb-icccm.so.4", "libxcb-keysyms.so.1",
+    "libxcb-xkb.so.1", "libxkbcommon-x11.so.0",
+)
+
+# Names that must not appear anywhere in the app (Qt is the only toolkit).
+# Matched against each file or folder name by forbidden_names().
+FORBIDDEN_EXACT = frozenset(("tcl", "tk", "_tcl_data", "_tk_data", "tcl86t.dll", "tk86t.dll", "PIL", "pillow.libs", "pystray", "objc", "Xlib"))
+FORBIDDEN_PREFIXES = ("libtcl", "libtk", "_tkinter", "pyobjc_")
 
 # Only present on Windows Python 3.8+; guarded so this stays importable on
 # POSIX, where stat has neither the tag nor st_reparse_tag.
@@ -353,44 +367,36 @@ def _self_check_report(gui, env):
 
 
 def step_self_check(ctx):
-    # TOKITTY_SELF_CHECK_TK=1 makes self-check also open a real tkinter.Tk()
-    # window (check tk_root), not just start the Tcl interpreter: a bundle
-    # whose window can't open must fail here, not slip through as a pass.
-    # On Linux CI runs this under xvfb-run, which wraps this whole process
-    # so DISPLAY is already set for this child. Windows and macOS hosted
-    # runners provide a real GUI session directly.
+    # TOKITTY_SELF_CHECK_TK=1 makes self-check also open a real Qt window
+    # (checks qt_root and its alias tk_root), not just import Qt: a bundle
+    # whose platform plugin can't load must fail here, not slip through as a
+    # pass. On Linux CI runs this under xvfb-run, which wraps this whole
+    # process so DISPLAY is already set for this child. Windows and macOS
+    # hosted runners provide a real GUI session directly. The platform is
+    # Qt's own choice, not whatever the runner exported.
     env = dict(ctx["env"])
     env["TOKITTY_SELF_CHECK_TK"] = "1"
+    env.pop("QT_QPA_PLATFORM", None)
+    env.pop("WAYLAND_DISPLAY", None)
     data, problem = _self_check_report(ctx["gui"], env)
     if problem:
         return {"ok": False, "detail": problem}
     ctx["state_dir"] = Path(data["state_dir"])
     ctx["self_check_report"] = data
-    ctx["toolkits"] = data.get("toolkits") or ["tk"]
+    ctx["toolkits"] = data.get("toolkits")
+    # The report's own declaration is checked rather than trusted: a build
+    # that still carried Tk would say so here.
+    if ctx["toolkits"] != ["qt"]:
+        return {"ok": False, "detail": f"the bundle declares toolkits {ctx['toolkits']}, expected ['qt']"}
     expected = ctx.get("expect_toolkits")
-    if expected is not None and sorted(set(ctx["toolkits"])) != expected:
-        # The bundle's own declaration decides which checks run, so a build
-        # that left out TOKITTY_BUILD_TOOLKITS would skip every Qt check.
-        return {"ok": False, "detail": f"the bundle declares toolkits {ctx['toolkits']}, expected {expected}"}
-    if "qt" not in ctx["toolkits"]:
-        return {"ok": True, "detail": data}
-
-    # A build that declares Qt runs its Qt checks only for a Qt-mode launch
-    # (#115), so run it again as one, on a real platform plugin rather than
-    # whatever the runner exported.
-    qt_env = dict(env)
-    qt_env["TOKITTY_QT"] = "1"
-    qt_env.pop("QT_QPA_PLATFORM", None)
-    qt_env.pop("WAYLAND_DISPLAY", None)
-    qt_data, problem = _self_check_report(ctx["gui"], qt_env)
-    if problem:
-        return {"ok": False, "detail": f"Qt mode: {problem}"}
-    qt_checks = qt_data["checks"]
-    missing = [name for name in ("qt", "qt_root") if name not in qt_checks]
+    if expected is not None and expected != ["qt"]:
+        return {"ok": False, "detail": f"--expect-toolkits {expected} given; Qt is the only toolkit"}
+    checks = data["checks"]
+    missing = [name for name in ("qt", "qt_root") if name not in checks]
     if missing:
-        return {"ok": False, "detail": f"Qt-mode self-check report missing {missing}: {qt_data!r}"}
-    ctx["qt_version"] = qt_checks["qt"].get("detail")
-    return {"ok": True, "detail": {**data, "qt_mode": qt_data}}
+        return {"ok": False, "detail": f"self-check report missing {missing}: {data!r}"}
+    ctx["qt_version"] = checks["qt"].get("detail")
+    return {"ok": True, "detail": data}
 
 
 def _load_bundle_data(repo_root: Path):
@@ -480,6 +486,19 @@ def trim_problems(bundle_data, roots, plat: str):
     return problems, info
 
 
+def forbidden_names(root: Path, limit: int = 20):
+    """Paths under `root` named for Tcl/Tk, _tkinter, Pillow, pystray, pyobjc or
+    python-xlib, relative to `root`, up to `limit`. Does not follow symlinks."""
+    found = []
+    for folder, dirs, files in os.walk(root):
+        for name in dirs + files:
+            if name in FORBIDDEN_EXACT or name.startswith(FORBIDDEN_PREFIXES):
+                found.append(os.path.relpath(os.path.join(folder, name), root))
+                if len(found) >= limit:
+                    return found
+    return found
+
+
 def step_bundle_contents(ctx):
     plat = sys.platform
     app_dir = ctx["app_dir"]
@@ -498,20 +517,32 @@ def step_bundle_contents(ctx):
             problems.append(f"Qt-NOTICE.txt does not name Qt {qt_version}, the version the bundle reports")
         detail["notice_names_qt"] = qt_version
 
-    # pystray, PySide6 and shiboken6 are LGPL-3.0, so they ship as source files
-    # a user can replace, not inside the PyInstaller archive.
+    # PySide6 and shiboken6 are LGPL-3.0, so they ship as source files a user
+    # can replace, not inside the PyInstaller archive.
     source_in = {}
-    qt_build = "qt" in (ctx.get("toolkits") or ["tk"])
-    required = LGPL_SOURCE_FILES + (LINUX_LGPL_SOURCE_FILES if plat.startswith("linux") else ())
-    for rel in required:
-        if not qt_build and rel.startswith(("PySide6/", "shiboken6/")):
-            continue
+    for rel in LGPL_SOURCE_FILES:
         hits = [label for label, base in roots if (base / rel).is_file()]
         if hits:
             source_in[rel] = hits[0]
         else:
             problems.append(f"{rel} is not a plain file under {', '.join(label for label, _ in roots)}")
     detail["lgpl_source_in"] = source_in
+
+    forbidden = forbidden_names(app_dir)
+    if forbidden:
+        problems.append(f"the bundle carries what Qt-only builds leave out: {forbidden}")
+
+    if plat.startswith("linux"):
+        internal = roots[0][1]
+        absent_libs = [name for name in LINUX_XCB_LIBS if not os.path.lexists(internal / name)]
+        if absent_libs:
+            problems.append(f"_internal is missing the xcb libraries {absent_libs}")
+
+    # The Stream Dock font sits under tokitty/ in _internal on Windows and
+    # Linux and in either macOS root; the renderer refuses to draw without it.
+    for rel in FONT_FILES:
+        if not any((base / rel).is_file() for _label, base in roots):
+            problems.append(f"{rel} is missing from {', '.join(label for label, _ in roots)}")
 
     if plat.startswith("linux") and os.environ.get("TOKITTY_QT_TRIM", "1") != "0":
         internal = roots[0][1]
@@ -523,7 +554,7 @@ def step_bundle_contents(ctx):
     # what the trim would drop on purpose; everything else is still checked.
     if os.environ.get("TOKITTY_QT_TRIM", "1") == "0":
         detail["trim_check"] = "skipped: TOKITTY_QT_TRIM=0"
-    elif qt_build:
+    else:
         trim, info = trim_problems(bundle_data, roots, plat)
         problems += trim
         detail.update(info)
@@ -535,64 +566,6 @@ def step_bundle_contents(ctx):
     if problems:
         detail["problems"] = problems
     return {"ok": not problems, "detail": detail}
-
-
-def qtcore_library_paths(root: Path, plat: str):
-    """The QtCore shared library in an app copy: Qt6Core.dll, libQt6Core.so*
-    (the top-level link and the file behind it), or the binary inside
-    QtCore.framework."""
-    found = []
-    for folder, dirs, files in os.walk(root):
-        for name in files + [d for d in dirs if os.path.islink(os.path.join(folder, d))]:
-            if plat == "win32":
-                hit = name == "Qt6Core.dll"
-            elif plat == "darwin":
-                hit = name == "QtCore" and "QtCore.framework" in Path(folder).parts
-            else:
-                hit = name.startswith("libQt6Core.so")
-            if hit:
-                found.append(Path(folder) / name)
-    return found
-
-
-def step_tk_without_qt(ctx):
-    # The frozen proof for #115 decision 2: PyInstaller's PySide6 runtime hook
-    # imports QtCore on every launch, so a Tk-mode start (and the self-check
-    # every shipped updater runs on a new copy) must survive a QtCore that
-    # cannot load.
-    if "qt" not in (ctx.get("toolkits") or []):
-        return {"ok": True, "detail": "skipped: the build does not declare Qt"}
-    plat = sys.platform
-    copy_root = ctx["work"] / "tk-without-qt"
-    shutil.copytree(ctx["app_dir"], copy_root, symlinks=True)
-    try:
-        removed = qtcore_library_paths(copy_root, plat)
-        if not removed:
-            return {"ok": False, "detail": f"no QtCore library found to delete in {copy_root}"}
-        for path in removed:
-            os.unlink(path)
-        gui, _hook = _locate_binaries(copy_root)
-        env = dict(ctx["env"])
-        env["TOKITTY_SELF_CHECK_TK"] = "1"
-        env.pop("TOKITTY_QT", None)
-        # Deleting a file breaks a macOS bundle's signature. Run the inner
-        # executable as step_self_check does and only re-sign if that fails.
-        data, problem = _self_check_report(gui, env)
-        resigned = False
-        if problem and plat == "darwin":
-            proc, err = run_child(["codesign", "--force", "--deep", "-s", "-", str(copy_root / "Tokitty.app")], env)
-            if err or proc.returncode != 0:
-                return {"ok": False, "detail": f"{problem}; codesign of the copy failed: {err or proc.stderr!r}"}
-            resigned = True
-            data, problem = _self_check_report(gui, env)
-        if problem:
-            return {"ok": False, "detail": f"Tk self-check without QtCore: {problem}"}
-        detail = {"deleted": [str(p.relative_to(copy_root)) for p in removed], "tk_root": data["checks"]["tk_root"]}
-        if plat == "darwin":
-            detail["needed_codesign"] = resigned
-        return {"ok": True, "detail": detail}
-    finally:
-        shutil.rmtree(copy_root, ignore_errors=True)
 
 
 def step_preflight_accounts(ctx):
@@ -1262,7 +1235,6 @@ STEPS = [
     ("locate_binaries", step_locate_binaries),
     ("self_check", step_self_check),
     ("bundle_contents", step_bundle_contents),
-    ("tk_without_qt", step_tk_without_qt),
     ("bundle_version", step_bundle_version),
     ("preflight_accounts", step_preflight_accounts),
     ("install_hooks", step_install_hooks),
@@ -1305,7 +1277,7 @@ def main() -> int:
     parser.add_argument(
         "--expect-toolkits",
         default=None,
-        help="comma list the bundle must declare (e.g. tk,qt); release CI passes it so a build cannot skip its Qt checks",
+        help="kept for the workflow; the only accepted value is qt (the report must say toolkits == [qt] regardless)",
     )
     args = parser.parse_args()
 

@@ -532,6 +532,55 @@ def test_self_check_failures(tmp_path, runner, message):
         run_self_check(tmp_path / "tokitty", TAG, runner=runner, sys_platform="linux")
 
 
+def _qt_only_report(**overrides):
+    ok = {"ok": True, "detail": "x"}
+    report = {
+        "checks": {"qt": ok, "prices": ok, "hook_writer": ok, "tls": ok, "qt_root": ok, "tk_root": ok},
+        "frozen": True,
+        "build_id": TAG,
+        "toolkits": ["qt"],
+    }
+    report.update(overrides)
+    return report
+
+
+def test_self_check_accepts_the_qt_only_report(tmp_path):
+    run_self_check(tmp_path / "tokitty", TAG, runner=_runner(_qt_only_report()), sys_platform="linux")
+
+
+def test_self_check_refusal_names_the_first_failed_entry_and_its_detail(tmp_path):
+    bad = {"ok": False, "detail": "ImportError: libEGL.so.1: cannot open shared object file: No such file or directory"}
+    checks = _qt_only_report()["checks"]
+    checks.update(qt=bad, qt_root=bad, tk_root=bad)
+    with pytest.raises(UpdateInstallError) as excinfo:
+        run_self_check(tmp_path / "tokitty", TAG, runner=_runner(_qt_only_report(checks=checks)), sys_platform="linux")
+    assert str(excinfo.value) == (
+        "The new version failed its self-check: qt, qt_root, tk_root "
+        "(qt: ImportError: libEGL.so.1: cannot open shared object file: No such file or directory)."
+    )
+
+
+def test_self_check_refusal_detail_is_one_line_and_truncated(tmp_path):
+    bad = {"ok": False, "detail": "first line\n" + "x" * 500}
+    checks = _qt_only_report()["checks"]
+    checks["qt"] = bad
+    with pytest.raises(UpdateInstallError) as excinfo:
+        run_self_check(tmp_path / "tokitty", TAG, runner=_runner(_qt_only_report(checks=checks)), sys_platform="linux")
+    message = str(excinfo.value)
+    assert "\n" not in message
+    assert message.startswith("The new version failed its self-check: qt (qt: first line xxx")
+    assert message.endswith("...).")
+    assert len(message) < 300
+
+
+def test_self_check_refusal_without_a_detail_keeps_the_short_message(tmp_path):
+    checks = _qt_only_report()["checks"]
+    checks["qt"] = {"ok": False}
+    with pytest.raises(UpdateInstallError) as excinfo:
+        run_self_check(tmp_path / "tokitty", TAG, runner=_runner(_qt_only_report(checks=checks)), sys_platform="linux")
+    assert str(excinfo.value) == "The new version failed its self-check: qt."
+
+
 def test_unpacking_a_tar_is_refused_without_the_data_filter(tmp_path, monkeypatch):
     from tokitty import update_install
 

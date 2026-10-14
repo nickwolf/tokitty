@@ -1,7 +1,6 @@
-"""The real Qt self-check functions (#113 slice 4); the declaration logic
-around them is tested headless in tests/test_frozen.py."""
+"""The real Qt self-check functions (#113 slice 4, #142); the report's key set
+is tested headless in tests/test_frozen.py."""
 import json
-import sys
 import types
 
 import pytest
@@ -30,17 +29,19 @@ def test_check_qt_root_maps_the_platform_first(qapp, monkeypatch):
     assert calls == [1]
 
 
-def test_self_check_passes_a_real_qt_declaration(qapp, monkeypatch, capsys):
-    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
+def test_self_check_passes_with_the_real_qt_checks(qapp, monkeypatch, capsys):
     monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    # What an old tk,qt copy hands the new one must change nothing.
+    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "tk,qt")
+    monkeypatch.setenv("TOKITTY_QT", "1")
     assert frozen.self_check() == 0
     report = json.loads(capsys.readouterr().out)
     checks = report["checks"]
     assert checks["qt"] == {"ok": True, "detail": qVersion()}
     assert checks["qt_root"]["ok"] is True
     assert checks["tk_root"] == checks["qt_root"]
-    assert "tkinter" not in checks
+    assert "tkinter" not in checks and "pystray" not in checks and "pil" not in checks
+    assert report["toolkits"] == ["qt"]
     from tokitty import update_install
 
     report["build_id"] = "v1.2.3"

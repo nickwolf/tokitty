@@ -19,9 +19,9 @@ _BLOCKED = (
     "tkinter", "_tkinter", "tkinter.ttk", "tkinter.messagebox",
     "tkinter.simpledialog", "tkinter.colorchooser", "tkinter.filedialog",
     "tkinter.font", "tkinter.constants", "tkinter.commondialog",
-    "pystray", "AppKit", "Foundation", "objc", "Xlib",
+    "pystray", "AppKit", "Foundation", "objc", "Xlib", "PIL", "PIL.Image",
 )
-_LEAK_ROOTS = ("tkinter", "_tkinter", "pystray", "AppKit", "Foundation", "objc", "Xlib")
+_LEAK_ROOTS = ("tkinter", "_tkinter", "pystray", "AppKit", "Foundation", "objc", "Xlib", "PIL")
 
 
 def _module_names():

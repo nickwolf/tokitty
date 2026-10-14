@@ -13,7 +13,12 @@ from typing import Optional
 PLUGIN_DIR = "streamdock/plugin/com.tokitty.deck.sdPlugin"
 PLUGIN_FILES = [f"{PLUGIN_DIR}/{name}" for name in ("manifest.json", "index.html", "pi.html", "icon.png")]
 
-DATA_FILES = ["hook_writer.py", "prices.json", *PLUGIN_FILES]
+# The Stream Dock key font and its notice (#142). tokitty/streamdock/render.py
+# reads the TTF through importlib.resources, so it has to sit on disk next to
+# the frozen modules.
+FONT_FILES = ["streamdock/fonts/Aileron-Regular.ttf", "streamdock/fonts/NOTICE.txt"]
+
+DATA_FILES = ["hook_writer.py", "prices.json", *PLUGIN_FILES, *FONT_FILES]
 
 # The Qt trim (#115). tokitty/ imports only these three PySide6 bindings, and
 # QtDBus has to stay: QtGui links it on macOS and the xcb plugin on Linux.
@@ -69,13 +74,9 @@ GTK_THEME_LIBS = frozenset((
 
 # LGPL-3.0 Python packages, collected as source (PyInstaller's
 # module_collection_mode "py") so the copy in the bundle can be replaced.
-# Xlib is python-xlib (LGPL-2.1-or-later), which pystray pulls in on Linux only.
-LGPL_SOURCE_PACKAGES = {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
+LGPL_SOURCE_PACKAGES = {"PySide6": "py", "shiboken6": "py"}
 
-LICENSE_FILES = (
-    "LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "LGPL-2.1.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt",
-    "python-xlib-NOTICE.txt",
-)
+LICENSE_FILES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt")
 
 
 def qt_toc_entry_dropped(entry) -> bool:
@@ -125,30 +126,6 @@ def qt_entry_dropped(dest: str) -> bool:
     return False
 
 
-# Notices that name the version of a package pip resolves without a pin
-# (pystray, and python-xlib through it on Linux): the build checks them.
-VERSIONED_NOTICES = {"pystray": "pystray-NOTICE.txt", "python-xlib": "python-xlib-NOTICE.txt"}
-
-
-def notice_version_problems(licenses_dir, installed) -> list:
-    """Notices whose "Version:" line is not the version `installed(name)`
-    reports. `installed` returns None for a package this platform does not
-    have, which is skipped (python-xlib exists only on Linux)."""
-    import re
-
-    problems = []
-    for name, notice in VERSIONED_NOTICES.items():
-        version = installed(name)
-        if version is None:
-            continue
-        text = (Path(licenses_dir) / notice).read_text(encoding="utf-8")
-        match = re.search(r"^Version: (\S+)$", text, re.MULTILINE)
-        stated = match.group(1) if match else None
-        if stated != version:
-            problems.append(f"{notice} says {name} {stated}, the build has {version}")
-    return problems
-
-
 def project_version(root) -> str:
     """The version in pyproject.toml, read without tomllib so the spec runs on
     any build Python. The release tag must match it, which verify_artifact.py
@@ -163,26 +140,28 @@ def project_version(root) -> str:
 
 
 def qt_version(root) -> str:
-    """The Qt version the bundle ships: the `qt` extra's PySide6 pin in
-    pyproject.toml, so a pin bump moves the copyright line and the notices."""
+    """The Qt version the bundle ships: the PySide6 pin in the dependencies
+    list of pyproject.toml, so a pin bump moves the copyright line and the notices."""
     import re
 
     text = (Path(root) / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'^qt\s*=\s*\[[^\]]*?PySide6[\w-]*==([\d.]+)', text, re.MULTILINE)
+    match = re.search(r'^dependencies\s*=\s*\[[^\]]*?PySide6[\w-]*==([\d.]+)', text, re.MULTILINE)
     if match is None:
-        raise ValueError("no PySide6 pin in the qt extra of pyproject.toml")
+        raise ValueError("no PySide6 pin in the dependencies of pyproject.toml")
     return match.group(1)
 
 
 def info_plist(version: str, qt: Optional[str] = None) -> dict:
     """Info.plist keys for Tokitty.app. The native About panel reads all
     three, so an unset version shows PyInstaller's 0.0.0 there (#98). The Qt
-    line is LGPL-3.0 section 4(c): the panel displays a copyright."""
+    line is LGPL-3.0 section 4(c): the panel displays a copyright.
+    LSUIElement makes Tokitty an agent app: no Dock icon, no app menu (#142)."""
     if qt is None:
         qt = qt_version(Path(__file__).resolve().parent.parent)
     return {
         "CFBundleShortVersionString": version,
         "CFBundleVersion": version,
+        "LSUIElement": True,
         "NSHumanReadableCopyright": (
             "Copyright © 2026 Nick Wolf. MIT License.\n"
             f"Includes Qt {qt} and PySide6 {qt} under the LGPL-3.0, see Contents/Resources/licenses."
