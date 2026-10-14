@@ -165,6 +165,10 @@ def test_each_xcb_library_is_required_in_internal_on_linux(tmp_path, linux, name
     assert name in " ".join(result["detail"]["problems"])
 
 
+def test_libglib_is_required_in_internal_on_linux():
+    assert "libglib-2.0.so.0" in va.LINUX_XCB_LIBS
+
+
 def test_the_xcb_libraries_are_not_required_off_linux(tmp_path, monkeypatch):
     monkeypatch.setattr(va.sys, "platform", "win32")
     internal = tmp_path / "_internal"
@@ -181,7 +185,7 @@ def test_the_xcb_libraries_are_not_required_off_linux(tmp_path, monkeypatch):
     [
         "tcl/init.tcl", "tk/tk.tcl", "_tcl_data/init.tcl", "_tk_data/tk.tcl", "libtcl8.6.so", "libtk8.6.so",
         "tcl86t.dll", "tk86t.dll", "lib-dynload/_tkinter.cpython-312-x86_64-linux-gnu.so", "_tkinter.pyd",
-        "PIL/__init__.py", "pillow.libs/libz.so", "pystray/__init__.py", "objc/__init__.py",
+        "PIL/__init__.py", "pillow.libs/libz.so", "tkinter/__init__.py", "AppKit/__init__.py", "Foundation/__init__.py", "pystray/__init__.py", "objc/__init__.py",
         "pyobjc_framework_Cocoa-10.0.dist-info/METADATA", "Xlib/__init__.py",
     ],
 )
@@ -197,6 +201,7 @@ def test_names_that_merely_contain_a_forbidden_word_pass(tmp_path, linux):
     app = make_linux_bundle(tmp_path)
     _touch(app / "_internal" / "tokitty" / "pilot.py")
     _touch(app / "_internal" / "tkinter_notes.txt")
+    _touch(app / "_internal" / "Foundation_notes.txt")
     _touch(app / "_internal" / "PySide6" / "Qt" / "tkdata.txt")
     assert run_contents(app)["ok"]
 

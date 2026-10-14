@@ -89,29 +89,55 @@ def _check_qt_root():
         widget.close()
 
 
+# The one Qt platform plugin each OS's frozen build ships (the trim drops the
+# rest: offscreen, minimal, wayland*, eglfs and so on). A test ties this to
+# freeze/bundle_data.qt_entry_dropped, which this module cannot import at run time.
+KEPT_QT_PLATFORMS = {"linux": "xcb", "win32": "windows", "darwin": "cocoa"}
+
+
 def qt_platform_env(environ=None, *, frozen=None, platform=None) -> Optional[str]:
-    """The frozen Linux build leaves out Qt's Wayland plugin (#115), and an
-    explicit QT_QPA_PLATFORM replaces Qt's fallback list, so a session that
-    exports only Wayland platforms would make Qt abort. Map that to xcb when
-    DISPLAY says XWayland or X is there. Returns the new value, or None when
-    nothing was changed. Toolkit-free: it only touches the environment."""
+    """The frozen build ships one Qt platform plugin per OS, and an explicit
+    QT_QPA_PLATFORM replaces Qt's fallback list, so an inherited value that
+    names only plugins the trim removed (offscreen, wayland, minimal...) would
+    make Qt abort before anything prints (#115). On Linux map it to xcb when
+    DISPLAY says XWayland or X is there; on Windows and macOS drop it so Qt
+    uses its default. A value that includes the shipped platform, and a source
+    run, are left alone. Returns the new value (the default's name when the
+    variable was dropped), or None when nothing was changed. Toolkit-free: it
+    only touches the environment."""
     environ = os.environ if environ is None else environ
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     platform = sys.platform if platform is None else platform
-    if not frozen or not platform.startswith("linux"):
+    if not frozen:
+        return None
+    kept = next((name for key, name in KEPT_QT_PLATFORMS.items() if platform.startswith(key)), None)
+    if kept is None:
         return None
     requested = environ.get("QT_QPA_PLATFORM")
-    if not requested or not environ.get("DISPLAY"):
+    if not requested:
         return None
     names = [entry.split(":", 1)[0].strip().lower() for entry in requested.split(";") if entry.strip()]
-    if not names or not all(name.startswith("wayland") for name in names):
+    if not names or kept in names:
         return None
-    environ["QT_QPA_PLATFORM"] = "xcb"
+    if platform.startswith("linux"):
+        if not environ.get("DISPLAY"):
+            return None
+        environ["QT_QPA_PLATFORM"] = kept
+    else:
+        del environ["QT_QPA_PLATFORM"]
     print(
-        f"tokitty: QT_QPA_PLATFORM={requested} needs the Wayland plugin, which this build leaves out; using xcb",
+        f"tokitty: QT_QPA_PLATFORM={requested} names no platform this build ships; using {kept}",
         file=sys.stderr,
     )
-    return "xcb"
+    return kept
+
+
+def _check_key_font():
+    """The Stream Dock key font loads from the bundle. Needs the QGuiApplication
+    that _check_qt_root creates, so it only runs after it."""
+    from tokitty.streamdock import render
+
+    return f"family {render.register_font()}"
 
 
 def _check_prices():
@@ -189,6 +215,11 @@ def self_check() -> int:
         # build it installs (update_install.run_self_check, unchanged since
         # v0.6.2), so the Qt window result is also carried under that name.
         checks["tk_root"] = checks["qt_root"]
+        # Needs the application qt_root created, so it is absent (not failed)
+        # when qt_root failed: a system without libEGL must report exactly qt,
+        # qt_root and tk_root. Old judges accept extra ok entries.
+        if checks["qt_root"]["ok"]:
+            checks["key_font"] = _check(_check_key_font)
 
     report = {
         "checks": checks,

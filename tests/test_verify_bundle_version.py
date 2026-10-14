@@ -42,3 +42,31 @@ def test_a_build_number_that_disagrees_fails():
     data = plist("0.6.0")
     data["CFBundleVersion"] = "0.0.0"
     assert va.bundle_version_problem(data, "v0.6.0", "0.6.0")
+
+
+def _mac_ctx(tmp_path, plist_data):
+    import plistlib
+
+    gui = tmp_path / "Tokitty.app" / "Contents" / "MacOS" / "Tokitty"
+    gui.parent.mkdir(parents=True)
+    (gui.parent.parent / "Info.plist").write_bytes(plistlib.dumps(plist_data))
+    repo = Path(__file__).resolve().parent.parent
+    return {"gui": gui, "repo_root": repo, "self_check_report": {"build_id": "dryrun-abc1234"}}
+
+
+def _pyproject_version():
+    return va._pyproject_version(Path(__file__).resolve().parent.parent)
+
+
+def test_macos_requires_lsuielement_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    good = {**plist(_pyproject_version()), "LSUIElement": True}
+    assert va.step_bundle_version(_mac_ctx(tmp_path / "a", good))["ok"]
+    for bad in (plist(_pyproject_version()), {**good, "LSUIElement": False}, {**good, "LSUIElement": "1"}):
+        result = va.step_bundle_version(_mac_ctx(tmp_path / f"b{len(str(bad))}{bad.get('LSUIElement')}", bad))
+        assert not result["ok"] and "LSUIElement" in result["detail"]
+
+
+def test_other_platforms_skip_the_bundle_version_step(monkeypatch):
+    monkeypatch.setattr(va.sys, "platform", "linux")
+    assert va.step_bundle_version({})["ok"]

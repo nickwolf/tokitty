@@ -40,6 +40,7 @@ def test_self_check_passes_with_the_real_qt_checks(qapp, monkeypatch, capsys):
     assert checks["qt"] == {"ok": True, "detail": qVersion()}
     assert checks["qt_root"]["ok"] is True
     assert checks["tk_root"] == checks["qt_root"]
+    assert checks["key_font"]["ok"] is True and "Aileron" in checks["key_font"]["detail"]
     assert "tkinter" not in checks and "pystray" not in checks and "pil" not in checks
     assert report["toolkits"] == ["qt"]
     from tokitty import update_install

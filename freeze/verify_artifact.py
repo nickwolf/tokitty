@@ -95,11 +95,14 @@ FONT_FILES = ("tokitty/streamdock/fonts/Aileron-Regular.ttf", "tokitty/streamdoc
 LINUX_XCB_LIBS = (
     "libxcb-cursor.so.0", "libxcb-shape.so.0", "libxcb-icccm.so.4", "libxcb-keysyms.so.1",
     "libxcb-xkb.so.1", "libxkbcommon-x11.so.0",
+    # Qt links glib; PyInstaller collects it only if the build host has it, and a
+    # bare desktop-less system does not (found in the #142 container check).
+    "libglib-2.0.so.0",
 )
 
 # Names that must not appear anywhere in the app (Qt is the only toolkit).
 # Matched against each file or folder name by forbidden_names().
-FORBIDDEN_EXACT = frozenset(("tcl", "tk", "_tcl_data", "_tk_data", "tcl86t.dll", "tk86t.dll", "PIL", "pillow.libs", "pystray", "objc", "Xlib"))
+FORBIDDEN_EXACT = frozenset(("tkinter", "AppKit", "Foundation", "tcl", "tk", "_tcl_data", "_tk_data", "tcl86t.dll", "tk86t.dll", "PIL", "pillow.libs", "pystray", "objc", "Xlib"))
 FORBIDDEN_PREFIXES = ("libtcl", "libtk", "_tkinter", "pyobjc_")
 
 # Only present on Windows Python 3.8+; guarded so this stays importable on
@@ -1224,6 +1227,8 @@ def step_bundle_version(ctx):
         data = plistlib.loads(plist_path.read_bytes())
     except Exception as exc:
         return {"ok": False, "detail": f"could not read {plist_path}: {exc}"}
+    if data.get("LSUIElement") is not True:
+        return {"ok": False, "detail": f"Info.plist LSUIElement is {data.get('LSUIElement')!r}, expected True (agent app)"}
     build_id = (ctx.get("self_check_report") or {}).get("build_id")
     problem = bundle_version_problem(data, build_id, _pyproject_version(ctx["repo_root"]))
     if problem:

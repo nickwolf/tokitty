@@ -195,6 +195,7 @@ def test_fallback_state_dir_matches_paths_state_dir_path(monkeypatch, tmp_path):
 # --- the Qt-only report (#142) ---------------------------------------------
 
 QT_ONLY_KEYS = {"qt", "prices", "hook_writer", "tls"}
+WINDOW_KEYS = {"qt_root", "tk_root", "key_font"}
 
 
 def _report(monkeypatch, capsys, window=False, qt_blocked=False, inherited=False):
@@ -218,6 +219,7 @@ def _report(monkeypatch, capsys, window=False, qt_blocked=False, inherited=False
     else:
         monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
         monkeypatch.setattr(frozen, "_check_qt_root", lambda: "xcb")
+    monkeypatch.setattr(frozen, "_check_key_font", lambda: "family Aileron")
     code = frozen.self_check()
     return code, json.loads(capsys.readouterr().out)
 
@@ -237,7 +239,7 @@ def _judge(report, tag="v1.2.3"):
 def test_the_report_has_the_qt_only_keys_whatever_the_environment_inherited(monkeypatch, capsys, window, inherited):
     code, report = _report(monkeypatch, capsys, window=window, inherited=inherited)
     assert code == 0
-    assert set(report["checks"]) == QT_ONLY_KEYS | ({"qt_root", "tk_root"} if window else set())
+    assert set(report["checks"]) == QT_ONLY_KEYS | (WINDOW_KEYS if window else set())
     assert report["toolkits"] == ["qt"]
     for gone in ("tkinter", "pystray", "pil"):
         assert gone not in report["checks"]
@@ -263,11 +265,23 @@ def test_tk_root_carries_the_qt_root_result(monkeypatch, capsys):
     assert report["checks"]["tk_root"] == report["checks"]["qt_root"] == {"ok": True, "detail": "xcb"}
 
 
+def test_key_font_is_never_checked_when_qt_root_failed(monkeypatch, capsys):
+    monkeypatch.setattr(frozen, "_check_key_font", lambda: pytest.fail("key_font checked"))
+    monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
+    monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
+    monkeypatch.setattr(frozen, "_check_qt_root", lambda: (_ for _ in ()).throw(ImportError("libEGL.so.1")))
+    assert frozen.self_check() == 1
+    report = json.loads(capsys.readouterr().out)
+    assert sorted(n for n, c in report["checks"].items() if not c["ok"]) == ["qt_root", "tk_root"]
+    assert "key_font" not in report["checks"]
+
+
 def test_blocked_pyside6_fails_qt_qt_root_and_tk_root_only(monkeypatch, capsys):
     code, report = _report(monkeypatch, capsys, window=True, qt_blocked=True)
     assert code == 1
     failed = sorted(name for name, check in report["checks"].items() if not check["ok"])
     assert failed == ["qt", "qt_root", "tk_root"]
+    assert "key_font" not in report["checks"]
 
 
 @pytest.mark.parametrize("inherited", [False, True])
@@ -302,23 +316,49 @@ def test_a_wayland_only_value_becomes_xcb_in_a_frozen_linux_build(capsys, value)
     assert environ["QT_QPA_PLATFORM"] == "xcb"
     err = capsys.readouterr().err
     assert err == (
-        f"tokitty: QT_QPA_PLATFORM={value} needs the Wayland plugin, which this build leaves out; using xcb\n"
+        f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using xcb\n"
     )
+
+
+@pytest.mark.parametrize("value", ["offscreen", "minimal", "eglfs", "linuxfb", "vnc", "offscreen;minimal", "Offscreen:foo=1"])
+def test_any_trimmed_platform_becomes_xcb_in_a_frozen_linux_build(capsys, value):
+    environ = {"QT_QPA_PLATFORM": value, "DISPLAY": ":0"}
+    assert _platform_env(environ) == "xcb"
+    assert environ["QT_QPA_PLATFORM"] == "xcb"
+    assert capsys.readouterr().err == f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using xcb\n"
+
+
+@pytest.mark.parametrize(
+    "platform, kept, value",
+    [("win32", "windows", "offscreen"), ("win32", "windows", "minimal;offscreen"), ("darwin", "cocoa", "offscreen"), ("darwin", "cocoa", "wayland"), ("win32", "windows", "xcb")],
+)
+def test_a_trimmed_platform_is_dropped_on_windows_and_macos(capsys, platform, kept, value):
+    environ = {"QT_QPA_PLATFORM": value, "HOME": "/h"}
+    assert _platform_env(environ, platform=platform) == kept
+    assert environ == {"HOME": "/h"}
+    assert capsys.readouterr().err == f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using {kept}\n"
 
 
 @pytest.mark.parametrize(
     "environ, kwargs",
     [
         ({"QT_QPA_PLATFORM": "wayland"}, {}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ""}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ""}, {}),
         ({"QT_QPA_PLATFORM": "wayland;xcb", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen;xcb", "DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "xcb", "DISPLAY": ":0"}, {}),
-        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "XCB:foo=1", "DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "", "DISPLAY": ":0"}, {}),
         ({"DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"frozen": False}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "win32"}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "darwin"}),
+        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ":0"}, {"frozen": False}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {"platform": "win32", "frozen": False}),
+        ({"QT_QPA_PLATFORM": "windows"}, {"platform": "win32"}),
+        ({"QT_QPA_PLATFORM": "offscreen;windows:darkmode=2"}, {"platform": "win32"}),
+        ({"QT_QPA_PLATFORM": "cocoa"}, {"platform": "darwin"}),
+        ({}, {"platform": "darwin"}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {"platform": "freebsd14"}),
     ],
 )
 def test_qt_platform_env_changes_nothing_otherwise(capsys, environ, kwargs):
@@ -326,6 +366,20 @@ def test_qt_platform_env_changes_nothing_otherwise(capsys, environ, kwargs):
     assert _platform_env(environ, **kwargs) is None
     assert environ == before
     assert capsys.readouterr().err == ""
+
+
+def test_the_kept_platforms_match_what_the_trim_keeps():
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("bundle_data_for_frozen_test", root / "freeze" / "bundle_data.py")
+    bundle_data = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bundle_data)
+    plugin_files = {"linux": "libqxcb.so", "win32": "qwindows.dll", "darwin": "libqcocoa.dylib"}
+    assert set(frozen.KEPT_QT_PLATFORMS) == set(plugin_files)
+    for key, name in frozen.KEPT_QT_PLATFORMS.items():
+        assert plugin_files[key].replace("lib", "", 1).startswith(f"q{name}")
+        assert not bundle_data.qt_entry_dropped(f"PySide6/Qt/plugins/platforms/{plugin_files[key]}")
+    for dropped in ("offscreen", "minimal", "wayland", "wayland-egl", "eglfs", "linuxfb", "vkkhrdisplay", "vnc", "direct2d"):
+        assert bundle_data.qt_entry_dropped(f"PySide6/Qt/plugins/platforms/libq{dropped}.so"), dropped
 
 
 def test_qt_platform_env_defaults_to_the_process(monkeypatch):
