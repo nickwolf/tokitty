@@ -793,3 +793,35 @@ def test_a_debug_launch_builds_no_tray(qapp, state_dir, fakes, tray, monkeypatch
     monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
     assert run_with(monkeypatch, qapp, lambda widget: quit_soon(qapp)) == 0
     assert FakeTray.instances == []
+
+
+def test_after_update_waits_for_the_old_copys_lock_then_acks(tmp_path):
+    # The handover as a shipped updater runs it: the old copy still holds the
+    # lock when it starts the new one, and releases it as it hides.
+    import time
+
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.update_swap import ack_path, new_token
+
+    state = tmp_path / "scratch-state"
+    state.mkdir()
+    token = new_token()
+    old = SingleInstanceLock(state)
+    old.acquire()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TOKITTY_")}
+    env.update({"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PYTHONPATH": str(REPO_ROOT),
+                "QT_QPA_PLATFORM": "offscreen"})
+    proc = subprocess.Popen([sys.executable, "-c", DRIVER, str(state), token], cwd=REPO_ROOT,
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        time.sleep(1.5)
+        assert proc.poll() is None, "the new copy gave up on the held lock"
+        assert not ack_path(state, token).exists()
+        old.release()
+        _, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, err
+    assert ack_path(state, token).read_text(encoding="utf-8") == token
+
