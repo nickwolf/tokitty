@@ -4,10 +4,10 @@ The frozen checks the spec leaves to a real Mac: the agent app (`LSUIElement`, #
 
 ## Setup
 
-The build is the `workflow_dispatch` run of `release.yml` on `qt-only-142` (run ID filled in once it exists). Quit the installed Tokitty first: both copies use `~/Library/Application Support/Tokitty` and its lock.
+The build is the `workflow_dispatch` run of `release.yml` on `qt-only-142` (run 38642089300 at 841e8f7). Quit the installed Tokitty first: both copies use `~/Library/Application Support/Tokitty` and its lock.
 
 ```
-gh run download <run-id> -R nickwolf/tokitty -n tokitty-macos-arm64 -D ~/Downloads/tokitty-142
+gh run download 38642089300 -R nickwolf/tokitty -n tokitty-macos-arm64 -D ~/Downloads/tokitty-142
 cd ~/Downloads/tokitty-142
 ditto -x -k tokitty/tokitty/tokitty-dryrun-*-macos-arm64.zip .
 xattr -dr com.apple.quarantine Tokitty.app
