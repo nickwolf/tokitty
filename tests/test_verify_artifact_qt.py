@@ -41,7 +41,7 @@ def make_linux_bundle(root: Path, qt_version: str = "6.12.0") -> Path:
     _touch(internal / "PySide6" / "QtDBus.abi3.so")
     _touch(internal / "PySide6" / "Qt" / "plugins" / "platforms" / "libqxcb.so")
     _touch(internal / "PySide6" / "Qt" / "lib" / "libQt6Core.so.6")
-    os.symlink("PySide6/Qt/lib/libQt6Core.so.6", internal / "libQt6Core.so.6")
+    os.symlink(os.path.join("PySide6", "Qt", "lib", "libQt6Core.so.6"), internal / "libQt6Core.so.6")
     licenses = root / "licenses"
     for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
         _touch(licenses / name)
@@ -135,7 +135,7 @@ def test_gtk_theme_libraries_at_the_top_of_internal_fail_on_linux(tmp_path, linu
 @posix_only
 def test_a_dangling_symlink_anywhere_fails(tmp_path, linux):
     app = make_linux_bundle(tmp_path)
-    os.symlink("PySide6/Qt/lib/libQt6Gone.so.6", app / "_internal" / "libQt6Gone.so.6")
+    os.symlink(os.path.join("PySide6", "Qt", "lib", "libQt6Gone.so.6"), app / "_internal" / "libQt6Gone.so.6")
     result = run_contents(app)
     assert not result["ok"]
     assert "libQt6Gone.so.6" in " ".join(result["detail"]["problems"])
