@@ -152,9 +152,9 @@ def qt_version(root) -> str:
 
 
 def info_plist(version: str, qt: Optional[str] = None) -> dict:
-    """Info.plist keys for Tokitty.app. The native About panel reads all
-    three, so an unset version shows PyInstaller's 0.0.0 there (#98). The Qt
-    line is LGPL-3.0 section 4(c): the panel displays a copyright.
+    """Info.plist keys for Tokitty.app. Finder's Get Info shows the version
+    and copyright, so an unset version would show PyInstaller's 0.0.0 there
+    (#98); the Qt line is LGPL-3.0 section 4(c), as in the About window.
     LSUIElement makes Tokitty an agent app: no Dock icon, no app menu (#142)."""
     if qt is None:
         qt = qt_version(Path(__file__).resolve().parent.parent)

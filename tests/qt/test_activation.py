@@ -144,23 +144,15 @@ def test_the_walkthrough_activates_the_app_when_presented(qapp, tmp_path, activa
         walk.close()
 
 
-def test_about_activates_the_app_before_the_box(qapp, activations, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
-
+def test_about_activates_the_app_and_opens_the_window(qapp, activations):
+    from tokitty.qt import about
     from tokitty.qt.app import show_about
 
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: activations.append("box"))
-    show_about(False, None)
-    assert activations == [1, "box"]
-
-
-@pytest.mark.parametrize("platform", ["linux", "win32"])
-def test_a_frozen_build_off_macos_goes_straight_to_the_box(qapp, activations, monkeypatch, platform):
-    from PySide6.QtWidgets import QMessageBox
-
-    from tokitty.qt.app import show_about
-
-    shown = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args))
-    show_about(True, None, about_panel=lambda: pytest.fail("panel used"), platform=platform)
-    assert len(shown) == 1 and "Running from source" not in shown[0][2]
+    host = SimpleNamespace(register_window=lambda w: None, forget_window=lambda w: None)
+    pane0 = SimpleNamespace(_colorway="gray", _pattern="tabby")
+    window = show_about(host, pane0)
+    try:
+        assert isinstance(window, about.AboutWindow) and window.isVisible()
+        assert activations == [1]
+    finally:
+        window.close()

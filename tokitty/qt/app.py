@@ -67,30 +67,12 @@ class AnnouncerTray:
         return self._tray.notify(title, message)
 
 
-def show_about(frozen, parent, about_panel=None, platform=sys.platform):
-    """Answer About Tokitty. A frozen macOS build has a real Info.plist, so
-    the native panel shows its name, version and copyright; a source run would
-    get Python's, so it shows the version in a plain box instead. Other
-    platforms have no native panel, so a frozen build there gets the box too,
-    as does a macOS build whose panel fails, without the source line. The app
-    is activated first: an agent app does not come forward on its own."""
-    from PySide6.QtWidgets import QMessageBox
+def show_about(host, pane0, frozen=None):
+    """Answer About Tokitty: open (or raise) the About window, wearing the coat
+    pane 0 has now. `pane0` is read at call time, so a recoloured cat shows."""
+    from tokitty.qt.about import AboutWindow
 
-    from tokitty.qt import macos
-
-    macos.activate_app()
-    if frozen and platform == "darwin":
-        try:
-            if about_panel is None:
-                about_panel = macos.show_about_panel
-            about_panel()
-            return
-        except Exception as exc:
-            print(f"tokitty: about panel: {exc}", file=sys.stderr)
-    from tokitty.app_version import version_text
-
-    text = f"Tokitty {version_text()}" if frozen else f"Tokitty {version_text()}\nRunning from source."
-    QMessageBox.information(parent, "About Tokitty", text)
+    return AboutWindow.open(host, lambda: (pane0._colorway, pane0._pattern), frozen=frozen)
 
 
 def qt_timers(parent):
@@ -303,7 +285,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         from tokitty.menu import build_menu
 
         def about() -> None:
-            show_about(bool(getattr(sys, "frozen", False)), widget)
+            show_about(host, widget.panes[0])
 
         def debug_menu(_pane_index: int):
             # Nothing to refresh and no settings to write, but Exit is the way
@@ -318,6 +300,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
         widget = TokittyQtWidget(loaded_theme, [Customization() for _ in range(count)], count,
                                  build_menu_model=debug_menu)
+        host = QtHost(widget, state_dir)  # only for the windows it tracks
         fake = dict(
             state=debug_state or "content", session_pct=37.0, weekly_pct=62.0,
             session_reset_text="resets 9pm", weekly_reset_text="resets Fri",
@@ -371,7 +354,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 on_toggle_always_on_top=host.toggle_always_on_top,
                 on_quit=app.quit,
                 on_open_settings=lambda: SettingsWindow.open(host, pane_index),
-                on_about=lambda: show_about(bool(getattr(sys, "frozen", False)), host.dialog_parent()),
+                on_about=lambda: show_about(host, widget.panes[0]),
                 view_modes=VIEW_MODE_ITEMS,
                 current_view_mode=lambda: usage_state["view"],
                 on_view_mode=lambda value: controls.on_view_mode(value),
