@@ -80,6 +80,25 @@ File ownership is per slice; no two parallel slices edit the same file.
 
 Proposed: one PR, merged with `--no-ff`.
 
+## Sizes
+
+From release workflow run 38636831492 at ce55a11, in bytes. Archives are what the updater downloads: zip on Windows and macOS, tar.gz on Linux. v0.6.0 is the spike's table; #115 is run 38506230465 (`tk,qt`, trimmed).
+
+| Target | v0.6.0 | #115 (tk,qt) | Qt only | vs v0.6.0 | vs #115 |
+|--------|--------|--------------|---------|-----------|---------|
+| windows-x64 | 22,417,629 | 39,382,194 | 28,552,759 | +27.4% | -27.5% |
+| macos-arm64 | 18,982,047 | 35,046,037 | 26,338,234 | +38.8% | -24.8% |
+| macos-x86_64 | 20,165,770 | 37,942,187 | 28,665,176 | +42.1% | -24.5% |
+| linux-x86_64 | 38,795,809 | 75,926,072 | 65,512,667 | +68.9% | -13.7% |
+
+Linux shrinks least because Qt's ICU data (`libicudata.so.73`, 32,035,888 bytes unpacked) stays. The macos-x86_64 rerun's archive was 28,666,861 bytes.
+
+## CI (2026-10-14)
+
+Run 38636831492 at ce55a11 passed on all four targets: verify_artifact (with `key_font` in the self-check), the clean ubuntu:22.04 check on Linux both ways, the v0.0.1 to v99.0.0 rehearsal, and `apply_update` plus `no_ack_rollback` from the published v0.6.2 archive and from the `tk,qt` build of 9644fc0 in Tk mode and in Qt mode. macos-x86_64 needed one rerun of its overhead gate: the first attempt measured a frozen median of 228.142 ms against a plain-Python baseline of 119.182 ms (limit 209.182), the rerun 173.331 against 108.464 (limit 198.464). The hook executable's build does not change in this issue, and #115 saw the same spread on that runner (181.453 against 181.000).
+
+The first PR CI run failed collection on the Linux `test` job: with PySide6 a dependency, `tests/qt` imports QtGui, which links `libEGL.so.1`, and that runner image lacks it. ci.yml now installs `libegl1 libxkbcommon0 libfontconfig1` there as the `qt` job does (ae67a98), and PR CI then passed all ten checks, the Windows test jobs included.
+
 ## Open questions
 
 All three decided by Nick on 2026-10-14, as proposed.
