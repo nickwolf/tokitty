@@ -1,14 +1,14 @@
-"""QtHost: what the Qt Settings tabs read where the Tk tabs read the window.
+"""QtHost: what the Qt Settings tabs read their state and actions from.
 
-The Tk tabs read about 40 seams as attributes of the TokittyWindow. Here the
-toolkit-free ones come from the Controls that app_controls.make_controls
-builds (attach() copies them on under the same names, so tab code reads
-host.on_toggle_ntfy as Tk reads win.on_toggle_ntfy), and this class adds the
+The tabs read about 40 seams as attributes of the host. The toolkit-free ones
+come from the Controls that app_controls.make_controls builds (attach() copies
+them on under the same names, so tab code reads host.on_toggle_ntfy), and this
+class adds the
 few that touch the Qt widget: always in front, the theme, the colours a pane
 shows, the layout follow-up after a customization save, and the stacking of
 the windows it opened. The tray and update seams stay None until run_qt sets
-them (#114, #113), which hides their rows exactly as the Tk tabs do; the tray
-seams stay None when the platform has no tray.
+them (#114, #113), which hides their rows; the tray row is also hidden
+while tray_available says no.
 """
 from __future__ import annotations
 
@@ -38,12 +38,13 @@ class QtHost:
         self.streamdock_install: Optional[Callable] = None
         self.streamdock_uninstall: Optional[Callable] = None
         self.streamdock_install_supported: Optional[Callable[[], bool]] = None
-        # The tray seams are set by run_qt (#114): tray_refresh always, the
-        # other two only when a tray is available. The update seams are set
+        # The tray seams are set by run_qt (#114). The update seams are set
         # by run_qt too (#113).
         self.tray_refresh: Optional[Callable[[], None]] = None
         self.on_toggle_tray = None
         self.tray_enabled = None
+        # Read live (a tray that failed to start drops out), not at build time.
+        self.tray_available: Optional[Callable[[], bool]] = None
         self.update_check_enabled = None
         self.on_toggle_update_check = None
         self.on_check_updates = None

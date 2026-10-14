@@ -1,13 +1,13 @@
 """The Qt Settings window: a dark left rail over a stack of tabs.
 
-The counterpart of settings_ui. One SettingsWindow per QApplication, opened
+One SettingsWindow per QApplication, opened
 with SettingsWindow.open(host, pane_index). It owns no state: every control is
 read from the getters the QtHost it is given carries, and every write goes
 through the same seam the right-click menu uses, followed by
 host.notify_state_changed() so every other view re-syncs.
 
 GUI thread only: the one worker (the ntfy test) publishes into a Mailbox that
-a QtPoller drains, and never touches a QObject. Nothing here imports tkinter.
+a QtPoller drains, and never touches a QObject.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QColorDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
 )
 
+from tokitty.qt import macos
 from tokitty import sprites, theme as T
 from tokitty.app_version import version_text
 from tokitty.display import bar_color
@@ -169,7 +170,8 @@ class GeneralTab(_Tab):
 
         add("aot", "Always in front", "Keep panes above other windows",
             lambda _v: self.write(host.toggle_always_on_top))
-        if host.on_toggle_tray is not None and host.tray_enabled is not None:
+        if (host.on_toggle_tray is not None and host.tray_enabled is not None
+                and self._tray_available()):
             add("tray", "Show tray icon", "Quick access when panes are hidden",
                 lambda _v: self.write(host.on_toggle_tray))
         if host.on_toggle_autostart is not None and host.autostart_enabled is not None:
@@ -200,9 +202,16 @@ class GeneralTab(_Tab):
                                          command=lambda: self.write(host.on_check_updates)))
             kit.add(card, lower)
 
+    def _tray_available(self) -> bool:
+        available = self.host.tray_available
+        return available is None or bool(available())
+
     def refresh(self) -> None:
         host = self.host
         self.toggles["aot"].set(host.always_on_top())
+        if "tray" in self.toggles:
+            # A tray that failed to start while this window was open goes.
+            self.toggles["tray"].setVisible(self._tray_available())
         for key, getter in (("tray", host.tray_enabled), ("autostart", host.autostart_enabled),
                             ("surprise", host.surprise_me)):
             if key in self.toggles and getter is not None:
@@ -856,6 +865,7 @@ class SettingsWindow(QWidget):
         if self.isMinimized():
             self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.show()
+        macos.activate_app()
         self.raise_()
         self.activateWindow()
 

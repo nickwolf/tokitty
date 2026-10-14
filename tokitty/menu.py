@@ -1,11 +1,10 @@
-"""The single-source menu model, rendered to both the Tk right-click menu
-(ui.py) and the pystray tray menu (tray.py). Pure Python: no tkinter, no
-pystray, no I/O.
+"""The single-source menu model, rendered to both the widget's right-click
+menu and the tray menu by tokitty.qt.menu.render_menu. Pure Python: no Qt,
+no I/O.
 
-The getter fields (checkbox, radio_selected) are evaluated by pystray on
-its OWN thread when it draws the tray menu. They MUST therefore read only
-plain-Python shadow state -- never a tkinter Var or widget. Callers wire
-them accordingly.
+The getter fields (checkbox, radio_selected, dynamic_label) are evaluated
+each time a menu is drawn or synced, so they should be cheap and read only
+plain-Python state.
 """
 from __future__ import annotations
 
@@ -21,10 +20,10 @@ class MenuItem:
     separator: bool = False
     checkbox: Optional[Callable[[], bool]] = None
     radio_selected: Optional[Callable[[], bool]] = None
-    # Only the Tk menu honours this; a status line, not a command.
+    # A status line, not a command.
     enabled: bool = True
     # Evaluated each time the menu is drawn: the label to show, or None to
-    # hide the item. Lets the tray (built once) pick up an update that is
+    # hide the item. Lets the tray (rendered once) pick up an update that is
     # found later, which a static label could not.
     dynamic_label: Optional[Callable[[], Optional[str]]] = None
 
@@ -36,6 +35,7 @@ def build_menu(
     on_toggle_always_on_top: Callable[[], None],
     on_quit: Callable[[], None],
     on_open_settings: Optional[Callable[[], None]] = None,
+    on_about: Optional[Callable[[], None]] = None,
     view_modes: Optional[List[tuple]] = None,
     current_view_mode: Optional[Callable[[], str]] = None,
     on_view_mode: Optional[Callable[[str], None]] = None,
@@ -60,9 +60,12 @@ def build_menu(
             for value, label in view_modes
         ]))
     items.append(MenuItem(label="Always in front", action=on_toggle_always_on_top, checkbox=always_on_top))
-    if on_open_settings is not None:
+    if on_open_settings is not None or on_about is not None:
         items.append(MenuItem(separator=True))
+    if on_open_settings is not None:
         items.append(MenuItem(label="Settings…", action=on_open_settings))
+    if on_about is not None:
+        items.append(MenuItem(label="About Tokitty", action=on_about))
     items.append(MenuItem(separator=True))
     items.append(MenuItem(label="Exit", action=on_quit))
     return items

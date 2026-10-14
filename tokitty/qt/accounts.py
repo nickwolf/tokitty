@@ -5,11 +5,11 @@ Kept parallel to accounts_ui (same class and method names where the method
 still makes sense) over the shared pure functions in accounts_logic. One
 manager per process: AccountsManager.open() raises the existing window.
 
-Threading rule, as in Tk: a worker only calls its on_done, and on_done only
+Threading rule: a worker only calls its on_done, and on_done only
 calls hook_guard.complete_operation or writes plain data under a lock. Result
 polls run on single-shot QTimers on the GUI thread, and the in-flight state
 of a mutation lives in hook_guard (module level), so closing the manager and
-reopening it picks the operation back up. Nothing here imports tkinter.
+reopening it picks the operation back up.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QFrame, QInputDialog, QMessageBox, QPushButton, QWidget,
 )
 
+from tokitty.qt import macos
 from tokitty.accounts import (
     DEFAULT_PROVIDER,
     Account,
@@ -275,6 +276,7 @@ class AccountsManager(QWidget):
             self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self._fit()
         self.show()
+        macos.activate_app()
         self.raise_()
         self.activateWindow()
 

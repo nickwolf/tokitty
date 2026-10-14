@@ -1,10 +1,10 @@
-"""The Qt entry point (TOKITTY_QT=1): run_qt, the counterpart of __main__.run_gui.
+"""The GUI entry point: run_qt.
 
 The unit construction, the tick step, onboarding and discovery all come from
-app_core, so what a pane shows is decided in one place. Everything the Tk path
-has beyond that is absent here until its own issue, except the update check
-and the installer (#113) and the tray (#114; a debug launch has none). PySide6
-is imported inside run_qt, so importing this module never needs it.
+app_core, so what a pane shows is decided in one place. The update check and
+the installer (#113) and the tray (#114; a debug launch has none) are wired
+here. PySide6 is imported inside run_qt, so importing this module never needs
+it.
 """
 from __future__ import annotations
 
@@ -30,15 +30,16 @@ DEBUG_STATE_ENV = "TOKITTY_DEBUG_STATE"
 DEBUG_NOTIFY_ENV = "TOKITTY_DEBUG_NOTIFY"
 DEBUG_NOTIFY_DELAY_MS = 5000
 AFTER_UPDATE_QT_FILE = "after-update-qt.json"
-POSITION_FILENAME = "position.json"  # ui.POSITION_FILENAME, which cannot be imported without Tk
+POSITION_FILENAME = "position.json"
 MISSING_PYSIDE6 = (
-    'tokitty: TOKITTY_QT is set but PySide6 is not installed (pip install -e ".[qt]")'
+    'tokitty: PySide6 is not installed; reinstall tokitty with its dependencies '
+    '(pip install -e ".") or pip install PySide6-Essentials'
 )
 
 
 def apply_customization(pane, custom) -> None:
-    """Restyle a pane from its customization, as run_gui's does minus the Tk
-    default card colour: an empty string means no override."""
+    """Restyle a pane from its customization. An empty string means no
+    override."""
     from tokitty.customize import effective_palette
 
     pane.set_appearance(
@@ -66,41 +67,21 @@ class AnnouncerTray:
         return self._tray.notify(title, message)
 
 
-def make_app_menu(open_settings, show_about):
-    """A parentless menu bar whose one menu holds Settings (PreferencesRole)
-    and About Tokitty (AboutRole). On macOS Qt moves an action with either
-    role out of its menu into the application menu (Settings gets
-    Command-comma); the role only applies to an action in a menu, not one on
-    the bar itself. The caller keeps the returned objects alive for the life
-    of the app. Other platforms never call this."""
-    from PySide6.QtGui import QAction
-    from PySide6.QtWidgets import QMenuBar
-
-    menubar = QMenuBar()
-    menu = menubar.addMenu("Tokitty")
-    settings_action = QAction("Settings…", menu)
-    settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
-    settings_action.triggered.connect(lambda _checked=False: open_settings())
-    menu.addAction(settings_action)
-    about_action = QAction("About Tokitty", menu)
-    about_action.setMenuRole(QAction.MenuRole.AboutRole)
-    about_action.triggered.connect(lambda _checked=False: show_about())
-    menu.addAction(about_action)
-    return menubar, menu, settings_action, about_action
-
-
-def show_about(frozen, parent, about_panel=None):
-    """Answer About Tokitty. A frozen build has a real Info.plist, so the
-    native panel shows its name, version and copyright; a source run would
-    get Python's, so it shows the version in a plain box instead. A frozen
-    build whose panel fails gets the box too, without the source line."""
+def show_about(frozen, parent, about_panel=None, platform=sys.platform):
+    """Answer About Tokitty. A frozen macOS build has a real Info.plist, so
+    the native panel shows its name, version and copyright; a source run would
+    get Python's, so it shows the version in a plain box instead. Other
+    platforms have no native panel, so a frozen build there gets the box too,
+    as does a macOS build whose panel fails, without the source line. The app
+    is activated first: an agent app does not come forward on its own."""
     from PySide6.QtWidgets import QMessageBox
 
-    if frozen:
+    from tokitty.qt import macos
+
+    macos.activate_app()
+    if frozen and platform == "darwin":
         try:
             if about_panel is None:
-                from tokitty.qt import macos
-
                 about_panel = macos.show_about_panel
             about_panel()
             return
@@ -147,13 +128,15 @@ def run_guarded(label, fn) -> None:
 
 def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
     """Show the first-run walkthrough and wait for it in a local event loop
-    that its `closed` signal quits. True when it closed because the
-    application was asked to quit (Command-Q on macOS): QApplication.quit()
-    does nothing before app.exec() has started, so the caller has to stop the
+    that its `closed` signal quits. True when the launch was asked to quit,
+    either by the walkthrough's own Quit shortcut (which leaves onboarding
+    pending) or by a Qt Quit event that closed it: QApplication.quit() does
+    nothing before app.exec() has started, so the caller has to stop the
     launch itself. Otherwise the caller reloads accounts and settings."""
     from PySide6.QtCore import QEvent, QEventLoop, QObject, QTimer
     from PySide6.QtWidgets import QApplication
 
+    from tokitty.qt import macos
     from tokitty.qt.walkthrough import Walkthrough
 
     loop = QEventLoop()
@@ -171,7 +154,11 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
             return False
 
     def on_closed():
-        done.update(closed=True, quit=done["quitting"])
+        done.update(closed=True, quit=done["quit"] or done["quitting"])
+        loop.quit()
+
+    def on_quit_requested():
+        done.update(quit=True)
         loop.quit()
 
     app = QApplication.instance()
@@ -180,10 +167,12 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
     try:
         walkthrough = Walkthrough(state_dir, credentials_cache, distro_probe.get_running)
         walkthrough.closed.connect(on_closed)
+        walkthrough.quit_requested.connect(on_quit_requested)
         walkthrough.show()
+        macos.activate_app()
         walkthrough.raise_()
         walkthrough.activateWindow()
-        if not done["closed"]:
+        if not (done["closed"] or done["quit"]):
             loop.exec()
     finally:
         app.removeEventFilter(watch)
@@ -234,6 +223,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     from tokitty.distro_probe import RunningDistroProbe
     from tokitty.streamdock.gui_state import StreamdockHolder
     from tokitty.streamdock.install import install_supported, refresh_streamdock_plugin
+    from tokitty.streamdock.render import register_font
     from tokitty.streamdock.wiring import (
         BIND_MARGIN_S, DEFAULT_NAME, DeckStarter, apply_idle_cap, gather_inputs,
     )
@@ -285,8 +275,9 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # runs first. Nothing else starts until it closes: no pollers, units
         # or discovery, which also keeps the hook guard free for its installs.
         if run_walkthrough(state_dir, wsl_credentials, distro_probe):
-            # Quit while it was open: it closed as if by its close button,
-            # and nothing else of the launch runs.
+            # Quit while it was open: nothing else of the launch runs. The
+            # Quit shortcut leaves onboarding pending; a Qt Quit event closes
+            # it as its close button would.
             return 0
         if env_override_set or home_relative_exists:
             # The sweep was only for listing installs. With native credentials
@@ -309,13 +300,17 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         count = 2 if debug_accounts == "2" else 1
         from tokitty.menu import build_menu
 
+        def about() -> None:
+            show_about(bool(getattr(sys, "frozen", False)), widget)
+
         def debug_menu(_pane_index: int):
-            # Nothing to refresh and no settings to write, but Tk's debug
-            # window has a menu, and Exit is the way out of a frameless window.
+            # Nothing to refresh and no settings to write, but Exit is the way
+            # out of a frameless window.
             return build_menu(
                 on_refresh=lambda: None,
                 always_on_top=lambda: widget.always_on_top,
                 on_toggle_always_on_top=lambda: widget.set_always_on_top(not widget.always_on_top),
+                on_about=about,
                 on_quit=app.quit,
             )
 
@@ -374,6 +369,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 on_toggle_always_on_top=host.toggle_always_on_top,
                 on_quit=app.quit,
                 on_open_settings=lambda: SettingsWindow.open(host, pane_index),
+                on_about=lambda: show_about(bool(getattr(sys, "frozen", False)), host.dialog_parent()),
                 view_modes=VIEW_MODE_ITEMS,
                 current_view_mode=lambda: usage_state["view"],
                 on_view_mode=lambda value: controls.on_view_mode(value),
@@ -417,20 +413,21 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # stop() schedules deleteLater, which Qt never processes once the loop
         # has ended; the finally's stop is the backstop for a failed launch.
         app.aboutToQuit.connect(tray.stop)
-        if tray.available:
-            tray_state = {"enabled": settings.tray_enabled}
-            host.tray_enabled = lambda: tray_state["enabled"]
 
-            def toggle_tray() -> None:
-                tray_state["enabled"] = not tray_state["enabled"]
-                tray.set_enabled(tray_state["enabled"])
+        # One source for the tray setting: settings.json, which set_enabled
+        # writes. The Settings toggle and the update handover's restore both
+        # read it, so a rolled-back handover brings back the tray the user
+        # last chose. Availability is read live from the tray, which drops it
+        # if start() fails.
+        def tray_enabled() -> bool:
+            return load_settings(state_dir).tray_enabled
 
-            host.on_toggle_tray = toggle_tray
+        host.tray_enabled = tray_enabled
+        host.tray_available = lambda: tray.available
+        host.on_toggle_tray = lambda: tray.set_enabled(not tray_enabled())
 
         update_host = QtUpdateHost(app, host, lock, state_dir, controls.autostart_backend,
-                                   tray=tray,
-                                   tray_enabled=lambda: load_settings(state_dir).tray_enabled,
-                                   quiet=apply_update)
+                                   tray=tray, tray_enabled=tray_enabled, quiet=apply_update)
         updates = update_controller.UpdateController(state_dir, update_host)
 
         # Plain-Python shadow state again, as in run_gui.
@@ -463,17 +460,16 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         host.on_toggle_update_check = toggle_update_check
         apply_exit = {"code": 1}
         widget.restore_position()
-        # Created before the first show and held until exec returns.
-        preferences = None
-        if sys.platform == "darwin":
-            preferences = make_app_menu(
-                lambda: SettingsWindow.open(host, 0),
-                lambda: show_about(bool(getattr(sys, "frozen", False)), host.dialog_parent()),
-            )
-
         def account_name(index: int) -> str:
             account = units[index]["account"]
             return account.name if account else DEFAULT_NAME
+
+        try:
+            register_font()
+        except Exception as exc:
+            # The keys then raise per request in the deck server's handler
+            # threads, which the server survives; the app keeps running.
+            print(f"tokitty: streamdock: key font: {exc}", file=sys.stderr)
 
         deck_views = InWindowViews(lambda: deck.runtime, account_name, widget.pane_anchor,
                                    qt_view_factory())
@@ -618,7 +614,6 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # native window exists.
         widget.show()
         app.exec()
-        del preferences  # alive until here
         return apply_exit["code"] if apply_update else 0
     finally:
         if tray is not None:

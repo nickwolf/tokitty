@@ -1,5 +1,6 @@
-"""macOS-only window fixes Qt does not expose, through ctypes and the
-Objective-C runtime (no pyobjc).
+"""macOS-only window and app fixes Qt does not expose, through ctypes and the
+Objective-C runtime (no pyobjc). apply() fixes one window; activate_app() and
+show_about_panel() act on the application.
 
 From the widget's winId(), which is an NSView, it reaches the NSWindow and
 then makes two changes: stop a click from activating the app (the private
@@ -126,6 +127,26 @@ def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform
     except Exception as exc:
         _warn(f"setCollectionBehavior: failed: {exc}")
     return done
+
+
+def activate_app(objc: Optional[ObjC] = None, platform: str = sys.platform) -> bool:
+    """[NSApp activateIgnoringOtherApps:YES], so a window opened from a menu
+    comes to the front. An agent app (LSUIElement) is not activated by opening
+    a window. Does nothing off macOS, and prints one line and returns False if
+    the runtime cannot be reached. GUI thread only."""
+    if platform != "darwin":
+        return False
+    try:
+        objc = objc or ObjC()
+        ns_app = objc.get_class("NSApplication")
+        app = objc.send_id(ns_app, objc.sel("sharedApplication")) if ns_app else None
+        if not app:
+            raise OSError("sharedApplication returned null")
+        objc.send_void_bool(app, objc.sel("activateIgnoringOtherApps:"), True)
+        return True
+    except Exception as exc:
+        _warn(f"cannot activate the app: {exc}")
+        return False
 
 
 def show_about_panel(objc: Optional[ObjC] = None) -> None:

@@ -1,14 +1,12 @@
-"""System-tray icon for Qt mode, the counterpart of tray.TrayManager.
+"""The system-tray icon (the menu-bar icon on macOS).
 
 Everything runs on the GUI thread: QSystemTrayIcon lives there and its
-signals arrive there, so unlike the pystray tray there is no worker thread
-and no marshalling back. Each menu action is still deferred with
-QTimer.singleShot(0, ...) so it never runs inside the native menu's own
-event handling.
+signals arrive there, so there is no worker thread and no marshalling back.
+Each menu action is still deferred with QTimer.singleShot(0, ...) so it never
+runs inside the native menu's own event handling.
 
-The menu is rendered once in start() and updated in place by refresh(),
-as pystray's is. Clearing and re-rendering it can delete the QAction the user
-just picked: on macOS and on Linux's DBusMenu the native menu reports its
+The menu is rendered once in start() and updated in place by refresh().
+Clearing and re-rendering it can delete the QAction the user just picked: on macOS and on Linux's DBusMenu the native menu reports its
 close before Qt delivers the activation to the action, and there is no
 dependable signal for "the native menu is closed" to postpone a rebuild to.
 So no QAction is created or deleted after start().
@@ -17,8 +15,11 @@ notify() is always False on macOS. Qt's Cocoa tray posts through the
 deprecated NSUserNotificationCenter, which current macOS may drop without a
 word for an app with no notification permission, and a True would end the
 announcing for a toast nobody saw. It can be tried once there is a Qt Mac
-bundle (#115). This module imports neither tokitty.tray nor pystray, tkinter
-or pyobjc.
+bundle (#115). This module imports no pyobjc.
+
+`available` is live: it starts as the system's answer and drops to False for
+good if start() fails, so callers that read it later (the Settings row, the
+update handover's restore) see a tray that cannot be shown.
 """
 from __future__ import annotations
 
@@ -99,7 +100,9 @@ class QtTray:
             self._sync = render_menu(menu, self._menu_provider(), self._wrap)
             icon.setContextMenu(menu)
             icon.show()
-        except Exception:
+        except Exception as exc:
+            # Recorded: from here the tray counts as unavailable.
+            print(f"tokitty: tray: could not show the tray icon: {exc}", file=sys.stderr)
             self.available = False
             self._drop()
 

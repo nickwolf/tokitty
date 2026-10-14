@@ -1,5 +1,5 @@
-"""The in-window permission view for Qt mode: the counterpart of the Tk
-factory in streamdock/window.py.
+"""The in-window permission view: the view factory InWindowViews in
+streamdock/window.py is given.
 
 InWindowViews does the bookkeeping (one view per nonce, closing a view whose
 request left pending); qt_view_factory() supplies the windows. GUI thread
@@ -34,7 +34,7 @@ def keep_on_screen(x: int, y: int, width: int, height: int, area: QRect) -> tupl
 class QtView(QWidget):
     """One permission request. Its buttons call on_answer; the title-bar close
     goes through closeEvent to on_close, so the bookkeeping drops the nonce and
-    tells the runtime, as Tk's WM_DELETE_WINDOW does. close(), which the
+    tells the runtime. close(), which the
     bookkeeping calls, sets a flag first so the closeEvent it triggers does not
     call on_close a second time."""
 
@@ -47,7 +47,7 @@ class QtView(QWidget):
         kit = Kit()
         kit.style_window(self)
         self.setWindowTitle(title)
-        # Always in front, as Tk's -topmost: it is asking a question.
+        # Always in front: it is asking a question.
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setFixedWidth(VIEW_WIDTH)
 
@@ -96,6 +96,9 @@ class QtView(QWidget):
                                       screen.availableGeometry())
                 if (x, y) != (frame.x(), frame.y()):
                     self.move(x, y)
+        # No macos.activate_app() here: the request arrives while the user is
+        # typing elsewhere, and taking the app's focus could send a keystroke
+        # to these buttons.
         self.raise_()
         self.activateWindow()
 

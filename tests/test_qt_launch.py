@@ -58,7 +58,8 @@ def test_missing_pyside6_prints_the_message_and_returns_1(tmp_path, monkeypatch,
 
     assert run_qt() == 1
     assert capsys.readouterr().err.strip() == (
-        'tokitty: TOKITTY_QT is set but PySide6 is not installed (pip install -e ".[qt]")'
+        'tokitty: PySide6 is not installed; reinstall tokitty with its dependencies '
+        '(pip install -e ".") or pip install PySide6-Essentials'
     )
     # Nothing was started: no lock, no settings.
     assert list(tmp_path.iterdir()) == []

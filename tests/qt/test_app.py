@@ -155,7 +155,7 @@ def test_view_menu_item_writes_the_setting(qapp, state_dir, monkeypatch, fake_wo
 
     assert run_for(qapp, 100) == 0
 
-    assert seen["labels"] == ["Refresh now", "View", "Always in front", "", "Settings…", "", "Exit"]
+    assert seen["labels"] == ["Refresh now", "View", "Always in front", "", "Settings…", "About Tokitty", "", "Exit"]
     assert load_settings(state_dir).view_mode == "models"
 
 
@@ -323,22 +323,29 @@ def test_apply_customization_clears_overrides_that_are_gone():
     assert pane._colorway == "gray"
 
 
-def test_the_preferences_action_has_the_preferences_role(qapp):
-    from PySide6.QtGui import QAction
+def test_the_menu_has_about_after_settings_and_no_app_menu_exists(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import app as qt_app
 
-    from tokitty.qt.app import make_app_menu
+    assert not hasattr(qt_app, "make_app_menu")
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    seen = {}
+    abouts = []
+    monkeypatch.setattr(qt_app, "show_about", lambda frozen, parent, **kw: abouts.append((frozen, parent)))
+    from tokitty.qt.widget import TokittyQtWidget
 
-    opened, about = [], []
-    menubar, menu, action, about_action = make_app_menu(lambda: opened.append(1), lambda: about.append(1))
-    assert action.menuRole() == QAction.MenuRole.PreferencesRole
-    assert about_action.menuRole() == QAction.MenuRole.AboutRole
-    assert about_action.text() == "About Tokitty" and about_action in menu.actions()
-    about_action.trigger()
-    assert about == [1]
-    assert action in menu.actions() and menu.menuAction() in menubar.actions()
-    assert menubar.parent() is None
-    action.trigger()
-    assert opened == [1]
+    real_show = TokittyQtWidget.show
+
+    def show(self):
+        items = self.build_menu_model(0)
+        labels = [i.label for i in items]
+        seen["after_settings"] = labels[labels.index("Settings…") + 1]
+        next(i for i in items if i.label == "About Tokitty").action()
+        real_show(self)
+
+    monkeypatch.setattr(TokittyQtWidget, "show", show)
+    assert run_for(qapp, 100) == 0
+    assert seen["after_settings"] == "About Tokitty"
+    assert len(abouts) == 1 and abouts[0][0] is False
 
 
 # -- the first-run walkthrough ------------------------------------------------
@@ -350,6 +357,7 @@ class FakeWalkthrough(QWidget):
     pressing Finish would after saving two accounts."""
 
     closed = Signal()
+    quit_requested = Signal()
     instances = []
     save_accounts_on_finish = True
     refuse_close = False
@@ -671,6 +679,32 @@ def settled(log, *names):
     return [entry for entry in log if entry[0] in names]
 
 
+def test_the_key_font_is_registered_before_the_deck_can_start(qapp, state_dir, monkeypatch, fake_deck):
+    from tokitty.streamdock import render
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    monkeypatch.setattr(render, "register_font", lambda: fake_deck.log.append(("register_font",)) or "Aileron")
+    assert run_for(qapp, 100) == 0
+    order = [entry[0] for entry in fake_deck.log if entry[0] in ("register_font", "deck.begin")]
+    assert order == ["register_font", "deck.begin"]
+
+
+def test_a_failing_font_registration_is_one_stderr_line_and_the_app_runs(
+        qapp, state_dir, monkeypatch, fake_deck, capsys):
+    from tokitty.streamdock import render
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+
+    def boom():
+        raise RuntimeError("could not load the Stream Dock key font")
+
+    monkeypatch.setattr(render, "register_font", boom)
+    assert run_for(qapp, 100) == 0
+    err = [line for line in capsys.readouterr().err.splitlines() if "key font" in line]
+    assert err == ["tokitty: streamdock: key font: could not load the Stream Dock key font"]
+    assert ("deck.begin",) in fake_deck.log
+
+
 def test_the_deck_is_built_with_qt_timers_and_the_widgets_anchor(
         qapp, state_dir, monkeypatch, fake_deck):
     from tokitty.streamdock.wiring import DEFAULT_NAME
@@ -854,6 +888,30 @@ def test_quit_while_the_walkthrough_is_open_ends_the_launch(
     assert built == [] and fake_workers == []
 
 
+def test_the_walkthrough_quit_shortcut_ends_the_launch_and_leaves_onboarding_pending(
+        qapp, state_dir, monkeypatch, fake_workers, tmp_path):
+    from tokitty.qt import walkthrough as qt_walkthrough
+
+    fake_home(monkeypatch, tmp_path)
+    # An earlier test's Quit event leaves the thread's quit flag up, which
+    # only a QApplication.exec() clears; spend it here so run_walkthrough's
+    # own loop really runs.
+    QTimer.singleShot(0, qapp.quit)
+    qapp.exec()
+    real_show = qt_walkthrough.Walkthrough.show
+    monkeypatch.setattr(qt_walkthrough.Walkthrough, "show",
+                        lambda self: (real_show(self), QTimer.singleShot(30, self.quit_shortcut.activated.emit))[0])
+    built = []
+    monkeypatch.setattr("tokitty.qt.app.build_units", lambda **kw: built.append(1) or [])
+    net = safety_net(qapp)
+    from tokitty.qt.app import run_qt
+
+    assert run_qt() == 0
+    net.stop()
+    assert built == [] and fake_workers == []
+    assert load_settings(state_dir).first_run == "pending"
+
+
 def test_a_quit_the_walkthrough_refuses_does_not_end_the_launch(
         qapp, state_dir, monkeypatch, fake_workers, fake_walkthrough):
     # An install is running, so the walkthrough stays open; finishing it
@@ -914,7 +972,7 @@ def test_a_frozen_build_uses_the_native_panel_and_no_box(qapp, monkeypatch):
 
     shown, panel = [], []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args))
-    show_about(True, None, about_panel=lambda: panel.append(1))
+    show_about(True, None, about_panel=lambda: panel.append(1), platform="darwin")
     assert panel == [1] and shown == []
 
 
@@ -929,7 +987,7 @@ def test_a_failing_panel_prints_a_line_and_falls_back_to_the_box(qapp, monkeypat
     def broken():
         raise OSError("no panel")
 
-    show_about(True, None, about_panel=broken)
+    show_about(True, None, about_panel=broken, platform="darwin")
     assert "tokitty: about panel: no panel" in capsys.readouterr().err
     assert len(shown) == 1 and shown[0][1] == "About Tokitty"
     assert shown[0][2].startswith("Tokitty ") and "Running from source" not in shown[0][2]

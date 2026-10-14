@@ -86,8 +86,7 @@ def load(path, screens: Sequence[ScreenInfo], system_ratio: float,
 
 
 def save(path, x: int, y: int) -> bool:
-    """Write the first card's position atomically. Failure is cosmetic, as
-    in the Tk build, so it is reported but never raised."""
+    """Write the first card's position atomically. Failure is cosmetic, so it is reported but never raised."""
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
