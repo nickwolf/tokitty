@@ -420,10 +420,9 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
 
 
 def make_usage_state(settings: Settings) -> dict:
-    """Plain-Python shadow state: menu.py's contract is that every getter is
-    read by the tray on its OWN thread, so none of these may ever become a
-    toolkit variable. UsageWatcher reads usage_state["window"] from its worker
-    thread for the same reason."""
+    """Plain-Python shadow state, never a toolkit object: UsageWatcher reads
+    usage_state["window"] from its worker thread, and the menu getters
+    (menu.py) read the rest whenever a menu is built."""
     return {
         "view": settings.view_mode,
         "window": settings.usage_window,

@@ -2,8 +2,8 @@
 
 `UpdateChecker.tick()` runs on the GUI thread. The check itself runs on a
 daemon thread that never touches the GUI: it publishes into a lock-guarded field
-that `tick()` reads, the way `Poller.get_latest` works. The menu label is read
-from the tray's thread, so it lives in plain Python state. The schedule is in
+that `tick()` reads, the way `Poller.get_latest` works. The menu label is
+plain Python state, read on the GUI thread whenever a menu is built. The schedule is in
 docs/superpowers/specs/2026-10-02-auto-update-design.md, "The check".
 """
 from __future__ import annotations
