@@ -2,7 +2,7 @@
 
 `send` is one blocking POST that never raises. `Notifier` decides which
 alerts (from usage_notes.alerts_for) are new for an account and hands the
-sends to one background worker, so the Tk tick never waits on HTTP. A window
+sends to one background worker, so the GUI tick never waits on HTTP. A window
 counts as sent only after a 2xx, and the sent set persists across restarts.
 """
 from __future__ import annotations
@@ -80,7 +80,7 @@ def alert_text(label: str, alert: dict) -> Tuple[str, str]:
 
 
 class Notifier:
-    """Owned by the Tk thread: check() and stop() are called only from there.
+    """Owned by the GUI thread: check() and stop() are called only from there.
     One daemon worker does the HTTP."""
 
     def __init__(self, state_dir, sender=send, clock: Callable[[], float] = time.monotonic) -> None:

@@ -1,4 +1,4 @@
-"""The running version for display, toolkit-free (shared by the Tk and Qt windows)."""
+"""The running version for display, toolkit-free (shared by the Qt windows)."""
 from __future__ import annotations
 
 

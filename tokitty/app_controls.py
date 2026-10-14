@@ -1,8 +1,7 @@
-"""The Settings seams, toolkit-free: what the Tk and Qt Settings tabs both call.
+"""The Settings seams, toolkit-free: what the Qt Settings tabs call.
 
-These were closures inside run_gui assigned onto the Tk window. Living here,
-the budget, ntfy, usage-note and customization rules exist once, and each
-toolkit only supplies the few hooks that touch its widgets.
+Living here, the budget, ntfy, usage-note and customization rules exist once,
+and the toolkit only supplies the few hooks that touch its widgets.
 """
 from __future__ import annotations
 
@@ -76,7 +75,7 @@ def make_controls(
         key = unit["key"]
         # Start from this identity's latest persisted value, not the
         # process-lifetime startup snapshot.  Accounts... may have changed
-        # its label (or added other identities) since run_gui initialized.
+        # its label (or added other identities) since the launch initialized.
         custom = load_customization(state_dir).get(key, customization_store[key])
 
         if field == "colorway":

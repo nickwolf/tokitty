@@ -251,26 +251,6 @@ def test_import_isolation():
     assert r.returncode == 0, r.stderr
 
 
-@pytest.mark.gui
-def test_defaults_match_tk_constants():
-    pytest.importorskip("tkinter")
-    from tokitty import display, ui
-
-    t = Theme()
-    assert t.card.background == ui.BG_COLOR
-    assert t.text.foreground == ui.FG_COLOR
-    assert t.text.dim == ui.DIM_COLOR
-    assert t.bars.track == ui.BAR_BG
-    assert t.bars.neutral == ui.NEUTRAL_BAR
-    assert t.bars.height == ui.BAR_HEIGHT
-    assert T.ACCENT_BG == ui.ACCENT_BG and T.ACCENT_FG == ui.ACCENT_FG
-    assert T.CARD_WIDTH == ui.CARD_WIDTH and T.CARD_HEIGHT == ui.PANE_HEIGHT
-    assert (t.bars.low, t.bars.mid, t.bars.high) == (display.GREEN, display.AMBER, display.RED)
-    # thresholds: drive display.bar_color across the boundaries
-    for p in (0, 49.9, 50, 79.9, 80, 100):
-        assert bar_fill(t, p, None) == display.bar_color(p)
-
-
 # --- card layout ---
 
 from itertools import combinations  # noqa: E402
@@ -620,20 +600,6 @@ def test_pane_style_accent_wins():
 def test_pane_style_unreachable_home_falls_back():
     cust = Customization(cat_home="on_top")
     assert resolve_pane_style(Theme(), cust, False, 1, 3).home == "inside"
-
-
-@pytest.mark.gui
-def test_spots_and_grid_match_tk():
-    pytest.importorskip("tkinter")
-    from tokitty import ui
-
-    xs, ys = ui.sprite_bounds(28, 26, 1)
-    assert (xs[0], ys[0]) == (0, 4)
-    assert placement("inside").origin == (8 + xs[0], 8 + ys[0])
-    assert (xs[-1] - xs[0], ys[-1] - ys[0]) == (SPRITE_W, SPRITE_H)
-    for n in range(1, 13):
-        assert grid_shape(n)[0] == ui.grid_size(n)[2]
-        assert grid_shape(n)[1] * 128 == ui.grid_size(n)[1]
 
 
 def _shifted(lay, dx):

@@ -1779,7 +1779,7 @@ def apply_hook_operation(
     job.
 
     The caller must hold the hook_guard for state_dir (and call this off
-    the Tk thread); this function does not take it.
+    the GUI thread); this function does not take it.
     """
     if op not in ("install", "uninstall", "remove"):
         raise ValueError(f"unknown hook operation {op!r}")
@@ -1829,7 +1829,7 @@ def apply_account_mutation(
 ) -> ConfigDirResult:
     """accounts.json first (durable desired state), then a pending hook
     op record, then the hook side effect, clearing the record only on
-    success. Call this off the Tk thread (see accounts_ui.py, Task 13) --
+    success. Call this off the GUI thread (see the Accounts window) --
     a slow filesystem or a stuck wsl.exe call must not freeze the UI.
     result.ok is False and a raised exception are both treated as "did
     not complete": both leave the pending-op record in place for
@@ -1871,7 +1871,7 @@ def _pending_dir_has_hooks(state_dir: Path, config_dir: str, op: str) -> bool:
 
     The account's own provider decides when it is still in accounts.json.
     A removed account is gone from there, so its dir is judged by what is
-    in it; this runs off the Tk thread, like the hook op it gates.
+    in it; this runs off the GUI thread, like the hook op it gates.
 
     An uninstall and an install are judged differently once the account
     is gone. Replaying an uninstall just removes tokitty's own hook

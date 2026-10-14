@@ -251,7 +251,7 @@ def validate_codex_path(
 ) -> PathValidationResult:
     """The Codex counterpart of validate_manual_path, with the same result
     shape. A WSL UNC path is checked through wsl.exe, which makes this
-    unsafe to call on the Tk thread for that shape."""
+    unsafe to call on the GUI thread for that shape."""
     expanded = os.path.expanduser(raw.strip())
     if not expanded:
         return PathValidationResult(ok=False, error="Enter a Codex home directory.")

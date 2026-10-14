@@ -1,4 +1,4 @@
-"""TOKITTY_QT routing and the missing-PySide6 exit. These need no PySide6, so
+"""GUI routing (always Qt) and the missing-PySide6 exit. These need no PySide6, so
 they run in the headless matrix; the launches themselves are in
 tests/qt/test_app.py."""
 import sys
@@ -8,35 +8,26 @@ import pytest
 
 @pytest.fixture
 def routed(monkeypatch):
-    """main() with run_gui and run_qt replaced by recorders."""
+    """main() with run_qt replaced by a recorder."""
     from tokitty import __main__ as main_module
     from tokitty.qt import app
 
     calls = []
-    monkeypatch.setattr(main_module, "run_gui", lambda **kw: calls.append(("gui", kw)) or 0)
-    monkeypatch.setattr(app, "run_qt", lambda **kw: calls.append(("qt", kw)) or 0)
+    monkeypatch.setattr(app, "run_qt", lambda **kw: calls.append(kw) or 0)
     monkeypatch.setattr("tokitty.update_swap.valid_token", lambda token: True)
     return main_module, calls
 
 
-def test_flag_runs_the_qt_entry_point(routed, monkeypatch):
-    main_module, calls = routed
-    monkeypatch.setenv("TOKITTY_QT", "1")
-
-    assert main_module.main([]) == 0
-    assert calls == [("qt", {"after_update_token": None, "apply_update": False})]
-
-
-@pytest.mark.parametrize("value", [None, "", "0", "true"])
-def test_anything_but_one_runs_tk(routed, monkeypatch, value):
+@pytest.mark.parametrize("value", [None, "", "0", "1", "true"])
+def test_a_plain_launch_runs_qt_whatever_the_old_flag_says(routed, monkeypatch, value):
     main_module, calls = routed
     if value is None:
         monkeypatch.delenv("TOKITTY_QT", raising=False)
     else:
         monkeypatch.setenv("TOKITTY_QT", value)
 
-    main_module.main([])
-    assert calls == [("gui", {})]
+    assert main_module.main([]) == 0
+    assert calls == [{"after_update_token": None, "apply_update": False}]
 
 
 @pytest.mark.parametrize("argv, kwargs", [
@@ -44,29 +35,15 @@ def test_anything_but_one_runs_tk(routed, monkeypatch, value):
     (["--after-update", "tok"], {"after_update_token": "tok", "apply_update": False}),
     (["--after-update", "tok", "--apply-update"], {"after_update_token": "tok", "apply_update": True}),
 ])
-def test_update_arguments_reach_run_qt_in_qt_mode(routed, monkeypatch, argv, kwargs):
+def test_update_arguments_reach_run_qt(routed, argv, kwargs):
     main_module, calls = routed
-    monkeypatch.setenv("TOKITTY_QT", "1")
 
     main_module.main(argv)
-    assert calls == [("qt", kwargs)]
-
-
-@pytest.mark.parametrize("argv, kwargs", [
-    (["--apply-update"], {"after_update_token": None, "apply_update": True}),
-    (["--after-update", "tok"], {"after_update_token": "tok", "apply_update": False}),
-])
-def test_update_arguments_still_reach_run_gui_without_qt_mode(routed, monkeypatch, argv, kwargs):
-    main_module, calls = routed
-    monkeypatch.delenv("TOKITTY_QT", raising=False)
-
-    main_module.main(argv)
-    assert calls == [("gui", kwargs)]
+    assert calls == [kwargs]
 
 
 def test_an_invalid_token_is_refused_before_routing(routed, monkeypatch, capsys):
     main_module, calls = routed
-    monkeypatch.setenv("TOKITTY_QT", "1")
     monkeypatch.setattr("tokitty.update_swap.valid_token", lambda token: False)
 
     assert main_module.main(["--after-update", "bad"]) == 2

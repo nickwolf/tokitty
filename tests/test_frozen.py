@@ -76,24 +76,6 @@ def test_run_gui_entry_swallows_a_failure_to_write_the_log(tmp_path):
     assert frozen.run_gui_entry(boom, state_dir_fn=lambda: missing) == 1
 
 
-@pytest.mark.gui
-def test_self_check_passes_in_dev(capsys):
-    """The real pystray import needs a working GTK/AppIndicator (or xorg)
-    backend, which a bare headless Linux box may not have even under xvfb --
-    see test_self_check_passes_in_dev_headless for the check-logic-only
-    version that runs everywhere. A box missing that backend raises
-    ValueError (not ImportError) out of pystray's own backend selection, so
-    skip cleanly on either rather than leaving the gui suite red; self_check()
-    itself is not weakened to work around this."""
-    try:
-        import pystray  # noqa: F401
-    except (ImportError, ValueError) as exc:
-        pytest.skip(f"pystray unavailable: {exc}")
-    assert frozen.self_check() == 0
-    report = json.loads(capsys.readouterr().out)
-    assert all(c["ok"] for c in report["checks"].values())
-
-
 def test_self_check_passes_in_dev_headless(monkeypatch, capsys):
     """Same assertion as test_self_check_passes_in_dev, but stubs only the
     pystray check: pystray's import can fail on a headless Linux host with
@@ -114,19 +96,6 @@ def test_self_check_omits_tk_root_without_the_env_var(monkeypatch, capsys):
     assert frozen.self_check() == 0
     report = json.loads(capsys.readouterr().out)
     assert "tk_root" not in report["checks"]
-
-
-@pytest.mark.gui
-def test_self_check_tk_root_when_env_var_set(monkeypatch, capsys):
-    """TOKITTY_SELF_CHECK_TK=1 opens a real tkinter.Tk() window and reports
-    its patchlevel as check tk_root, catching a bundle whose window can't
-    actually open even though tkinter.Tcl() above it passed."""
-    monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
-    assert frozen.self_check() == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["checks"]["tk_root"]["ok"] is True
-    assert report["checks"]["tk_root"]["detail"]
 
 
 def test_self_check_reports_env_names_not_values(monkeypatch, capsys):

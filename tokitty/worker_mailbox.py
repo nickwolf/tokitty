@@ -1,8 +1,7 @@
 """Toolkit-free worker results: a Mailbox filled by worker threads.
 
-Split out of settings_async so the Qt windows can share it without importing
-tkinter. settings_async re-exports both names; see its docstring for why
-workers only ever call Mailbox.put().
+Workers only ever call Mailbox.put(); the GUI thread drains it, so a worker
+never touches a widget.
 """
 from __future__ import annotations
 
@@ -33,7 +32,7 @@ def run_worker(mailbox: Mailbox, tag: str, fn: Callable[[], Any]) -> None:
     def target() -> None:
         try:
             value = fn()
-        except Exception as exc:  # reported to the Tk side, never raised here
+        except Exception as exc:  # reported to the GUI side, never raised here
             mailbox.put(tag, False, exc)
         else:
             mailbox.put(tag, True, value)

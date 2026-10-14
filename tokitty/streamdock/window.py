@@ -1,9 +1,10 @@
-"""The in-window fallback: a small always-on-top Tk view of one permission request.
+"""The in-window fallback: a small always-on-top view of one permission request.
 
 Opened when the deck can not show the full request itself (tab not focused, or too
 few keys for the overlay). It shows the complete tool input, which is what makes
 Allow on the deck safe, and answers through the runtime. The bookkeeping here is
-toolkit-free; tk_view_factory builds the Tk windows. Tk thread only.
+toolkit-free; the make_view callback builds the window (qt/deck_views.py). GUI
+thread only.
 """
 from __future__ import annotations
 
@@ -99,7 +100,7 @@ class InWindowViews:
         runtime.in_window_opened(nonce)
 
     def sync(self) -> None:
-        """Close the windows whose request is gone. Called from the Tk tick."""
+        """Close the windows whose request is gone. Called from the GUI tick."""
         runtime = self._runtime_fn()
         if runtime is None:
             return
@@ -121,50 +122,3 @@ class InWindowViews:
     def close_all(self) -> None:
         for nonce in list(self._open):
             self.close(nonce)
-
-
-class _TkView:
-    def __init__(self, win: Any) -> None:
-        self._win = win
-
-    def close(self) -> None:
-        self._win.destroy()
-
-
-def tk_view_factory(root: Any) -> Callable[..., Any]:
-    """A make_view for InWindowViews that builds an always-on-top Toplevel."""
-
-    def make_view(request: PendingRequest, title: str, explain: str, anchor: Optional[tuple],
-                  on_answer: Callable[[str], None], on_close: Callable[[], None]) -> _TkView:
-        import tkinter as tk
-        from tkinter import ttk
-
-        win = tk.Toplevel(root)
-        win.title(title)
-        win.attributes("-topmost", True)
-        if anchor:
-            win.geometry(f"+{anchor[0]}+{anchor[1]}")
-        win.protocol("WM_DELETE_WINDOW", on_close)
-        view = _TkView(win)
-
-        ttk.Label(win, text=explain, wraplength=440, justify="left").pack(anchor="w", padx=8, pady=(8, 6))
-        body = ttk.Frame(win)
-        body.pack(fill="both", expand=True, padx=8)
-        text = tk.Text(body, width=64, height=14, wrap="word")
-        scroll = ttk.Scrollbar(body, command=text.yview)
-        text.configure(yscrollcommand=scroll.set)
-        text.insert("1.0", format_tool_input(request.tool_input))
-        text.configure(state="disabled")
-        text.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        buttons = ttk.Frame(win)
-        buttons.pack(fill="x", padx=8, pady=8)
-        ttk.Button(buttons, text="Allow", command=lambda: on_answer("allow")).pack(side="left")
-        ttk.Button(buttons, text="Deny", command=lambda: on_answer("deny")).pack(side="left", padx=4)
-        label = always_label(request)
-        if label:
-            ttk.Button(buttons, text=label, command=lambda: on_answer("always")).pack(side="left")
-        return view
-
-    return make_view

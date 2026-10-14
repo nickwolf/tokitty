@@ -3,8 +3,8 @@
 One global theme per user, stored in theme.json next to settings.json and
 customization.json (see paths.py). Per-account looks (coat, card_bg,
 bar_fill, cat_home) stay in customization.json. Every default equals what
-the Tk widget draws today; the colours are copied here as literals, not
-imported, because ui.py needs tkinter and this module must not.
+the widget has always drawn; the colours are literals here, not imported from
+a GUI module, because this module must not need a toolkit.
 
 Imports are limited to the standard library and tokitty.sprites (also GUI-free) so the module loads on every
 CI OS with tkinter and PySide6 absent. A test enforces that.
@@ -30,11 +30,11 @@ THEME_FILENAME = "theme.json"
 _SETTINGS_FILENAME = "settings.json"  # read raw for the opacity migration only
 
 # Card size is fixed: a resizable card is the main way a layout ends up
-# with text outside it. Values are ui.py CARD_WIDTH / PANE_HEIGHT.
+# with text outside it. Values are the original Tk window's CARD_WIDTH / PANE_HEIGHT.
 CARD_WIDTH = 300
 CARD_HEIGHT = 128
 
-# Permission accent (ui.py ACCENT_BG / ACCENT_FG). Constants, not theme
+# Permission accent (the original Tk window's ACCENT_BG / ACCENT_FG). Constants, not theme
 # fields: the accent exists to be noticed, so it cannot be themed away.
 ACCENT_BG = "#3a1620"
 ACCENT_FG = "#ffb4a8"
@@ -54,7 +54,7 @@ HALO_ELEMENTS = frozenset({"section_labels", "percent"})
 SPOTS = ("inside", "inside_right", "on_top")
 VIEWS = ("limits", "models")
 
-# Opacity levels the Tk build offers (transparency.py LEVELS), the only
+# Opacity levels the Tk build offered (transparency.py LEVELS), the only
 # values accepted when migrating from settings.json.
 _TK_OPACITY_LEVELS = (100, 90, 80, 70, 60, 50)
 
@@ -323,9 +323,9 @@ def save_theme(state_dir, theme: Theme) -> None:
 
 # --- card layout ----------------------------------------------------------
 
-# Geometry copied from ui.py (STATS_X, BAR_WIDTH, MODEL_ROW_Y,
+# Geometry copied from the original Tk ui.py (STATS_X, BAR_WIDTH, MODEL_ROW_Y,
 # MODEL_BAR_OFFSET). The step constants below are chosen so the default
-# theme reproduces today's Tk coordinates exactly.
+# theme reproduces the original Tk coordinates exactly.
 STATS_X = 132
 STATS_W = 158
 FULL_X = 8
@@ -342,7 +342,7 @@ MODEL_ROW_GAP = 6           # bar bottom to the next row
 MODEL_STATUS_GAP = 10       # last bar bottom to the status line
 PERCENT_W = 40              # nominal width of the "42%" run
 VALUE_W = 60                # nominal width of a per-model value
-ACCOUNT_LABEL_RECT = (194, 4, 100, SMALL_H)  # right edge at 294, as ui.py
+ACCOUNT_LABEL_RECT = (194, 4, 100, SMALL_H)  # right edge at 294, as in the original Tk ui.py
 # inside_right: how far the stats block moves left so its left edge sits
 # where its old right gap was (CARD_WIDTH - STATS_X - STATS_W = 10).
 STATS_SHIFT_RIGHT = STATS_X - (CARD_WIDTH - STATS_X - STATS_W)

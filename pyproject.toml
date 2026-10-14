@@ -33,15 +33,12 @@ tokitty = [
 ]
 
 [tool.pytest.ini_options]
-# The `gui` marker guards tests that need a real Tk display (run under xvfb in
-# CI). Deselected by default so `pytest` stays headless-green everywhere.
 # The `qt` marker guards tests that need PySide6 (the `qt` extra), run with
 # QT_QPA_PLATFORM=offscreen in the `qt` CI job.
 markers = [
-    "gui: requires a live Tk display (run via `xvfb-run -a pytest -m gui`)",
     "qt: requires PySide6 (run via `QT_QPA_PLATFORM=offscreen pytest -m qt`)",
 ]
-addopts = "-m 'not gui and not qt'"
+addopts = "-m 'not qt'"
 
 [tool.ruff]
 target-version = "py310"

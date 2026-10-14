@@ -30,18 +30,6 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest
 
-  smoke:
-    name: smoke (linux xvfb Tk boot)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-      - run: sudo apt-get update && sudo apt-get install -y xvfb
-      - run: pip install -e ".[dev]"
-      - run: xvfb-run -a pytest -m gui
-
   qt:
     name: qt (${{ matrix.os }}, py3.14)
     runs-on: ${{ matrix.os }}

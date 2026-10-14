@@ -1,4 +1,4 @@
-"""Pure helpers that connect run_gui's per-account units to the Stream Dock runtime."""
+"""Pure helpers that connect the launch's per-account units to the Stream Dock runtime."""
 from __future__ import annotations
 
 import errno
@@ -109,7 +109,7 @@ class DeckStarter:
 
     After an in-app update the old copy keeps the deck port until the new copy's
     window acks, so the bind fails at launch and succeeds a little later. The retry
-    runs on the Tk thread through `after`, never blocks it, and gives up at the
+    runs on the GUI thread through `after`, never blocks it, and gives up at the
     deadline. One runtime is built and its start() retried: a failed bind has
     started nothing (see StreamdockRuntime.start), so there is nothing to leak.
 
@@ -153,7 +153,7 @@ class DeckStarter:
         self.port = getattr(settings, "streamdock_port", 0)
 
     def begin(self) -> None:
-        """Build the runtime and make the first attempt. Tk thread."""
+        """Build the runtime and make the first attempt. GUI thread."""
         from tokitty.streamdock.runtime import StreamdockRuntime
 
         cls = self._cls or StreamdockRuntime
@@ -215,7 +215,7 @@ class DeckStarter:
             target.set_hidden_accounts(names)
 
     def stop(self) -> None:
-        """Cancel a pending retry and stop the runtime if it started. Tk thread."""
+        """Cancel a pending retry and stop the runtime if it started. GUI thread."""
         self._stopped = True
         if self._handle is not None:
             try:

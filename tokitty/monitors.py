@@ -1,12 +1,12 @@
 """Monitor work areas, for placing the card on the monitor it was saved on.
 
-Tk only knows the primary monitor: winfo_screenwidth and
-winfo_screenheight are its full bounds, taskbar included. A position
+Toolkit screen sizes cover only the primary monitor, full bounds, taskbar
+included. A position
 saved on any other monitor is a virtual-desktop coordinate outside that
 rectangle, so it has to be clamped against its own monitor instead.
 
 Windows only. Everywhere else these return None and the caller keeps
-using Tk's screen size, which is what it did before.
+using the toolkit's screen size.
 """
 from __future__ import annotations
 

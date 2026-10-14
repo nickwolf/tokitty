@@ -648,7 +648,7 @@ class _FakeToggleBackendForCli:
 
 def test_suite_cannot_reach_the_real_autostart_backend():
     """Guards the conftest fixture that keeps tests out of HKCU, the
-    LaunchAgents dir, and ~/.config/autostart. Without it a run_gui test
+    LaunchAgents dir, and ~/.config/autostart. Without it a launch test
     repointed the real Run value at a pytest tmp_path."""
     import tokitty.autostart as autostart_module
 

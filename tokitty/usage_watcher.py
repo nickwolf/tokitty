@@ -2,7 +2,7 @@
 
 Shaped after ActivityWatcher on purpose: same start/stop/get_latest
 contract, same injectable seams, same "resolution failure means run
-without it, never a crash" philosophy. tick() on the Tk thread reads
+without it, never a crash" philosophy. tick() on the GUI thread reads
 get_latest() exactly the way it reads the activity watcher's.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ class UsageWatcher:
 
     The record store stays worker-owned and the lock is never held while
     scanning: each pass builds a fully detached UsageBreakdown of tuples
-    and publishes it by swapping one reference. The Tk thread can then hold
+    and publishes it by swapping one reference. The GUI thread can then hold
     an older snapshot across ticks with no tearing, and the size of the
     dict behind it is irrelevant because the dict is never handed out.
     """
@@ -91,7 +91,7 @@ class UsageWatcher:
                 self._window(), previous.status, previous.failed_files, previous.failed_rows
             )
         except Exception:
-            # Runs on the Tk thread; pricing can raise here as well as in
+            # Runs on the GUI thread; pricing can raise here as well as in
             # the scan, and a window switch must not take the UI down.
             snapshot = self._unavailable()
         self._publish(snapshot)

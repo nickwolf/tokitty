@@ -4,7 +4,7 @@ Everything that may write hooks or the single-slot pending-op journal
 (the Accounts dialog, the Settings Accounts tab, the startup retry) claims
 this slot first, so a closed-then-reopened window cannot race a worker
 still running for the old one. Kept in its own module so hooks_install
-callers and accounts_ui can both import it without a cycle.
+callers and the Accounts window can both import it without a cycle.
 """
 
 from __future__ import annotations

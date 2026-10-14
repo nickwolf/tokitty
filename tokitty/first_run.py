@@ -1,4 +1,4 @@
-"""Backend for the first-run walkthrough (#88). No Tk: the UI calls in here,
+"""Backend for the first-run walkthrough (#88). Toolkit-free: the UI calls in here,
 and the discovery and save functions are meant for worker threads.
 
 A state dir counts as fresh when it holds nothing but the single-instance
@@ -217,8 +217,7 @@ def _wsl_claude(credentials_cache) -> List[Candidate]:
 
 
 def _codex(home: str, here: str) -> Optional[Candidate]:
-    # Local only, like accounts_ui.discover_local_codex_home (which imports
-    # Tk, so it cannot run here): probing WSL for .codex would boot distros.
+    # Local only, like accounts_logic.discover_local_codex_home: probing WSL for .codex would boot distros.
     if any((Path(home) / name).is_dir() for name in ("sessions", "archived_sessions")):
         return Candidate(CODEX_PROVIDER, home, here, signed_in=True)
     return None

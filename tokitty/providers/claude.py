@@ -114,7 +114,7 @@ def resolve_activity_sessions(config_dir: Optional[str] = None, credentials=None
 
     from tokitty.wsl_probe import find_wsl_credentials, wsl_sessions_dir_from_credentials
 
-    # `credentials` is the process-wide WslCredentialsCache when run_gui
+    # `credentials` is the process-wide WslCredentialsCache when the launch
     # wired one up (issue #52). Falling back to the bare function keeps the
     # tests that call this resolver directly working unchanged.
     try:
@@ -195,7 +195,7 @@ def resolve_projects_dir(config_dir: Optional[str] = None, credentials=None):
             distro, wsl_credentials_path = find_wsl_credentials()
     except AmbiguousCredentialsError:
         # Several signed-in installs: the Accounts dialog resolves that, so
-        # don't sweep again for transcripts on the Tk thread just to guess.
+        # don't sweep again for transcripts on the GUI thread just to guess.
         return None, None
     except CredentialsError:
         try:

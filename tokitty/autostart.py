@@ -358,8 +358,7 @@ def write_launcher_and_register(
 ) -> None:
     """Write the launcher file, then register the resolved command with
     the backend. This is the one place that does both steps, shared by
-    install_autostart below and the menu toggle in __main__.py's
-    run_gui, so turning autostart on from the CLI and from the tray/menu
+    install_autostart below and the menu toggle (app_controls), so turning autostart on from the CLI and from the tray/menu
     checkbox can never drift apart into two implementations of the same
     thing.
 
