@@ -36,7 +36,7 @@ def test_release_build_installs_the_streamdock_extra():
     # Without comtypes in the build environment, the frozen Windows app has no
     # Stream Dock tab switching or Interrupt, and nothing fails to say so.
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert 'pip install -e ".[packaging,streamdock,qt]"' in workflow
+    assert 'pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"' in workflow
 
 
 def _release_workflow():
@@ -391,3 +391,17 @@ def test_the_shipped_notices_name_versions_the_spec_can_check():
     assert data.notice_version_problems(licenses, {"pystray": "0.19.5", "python-xlib": "0.33"}.get) == []
     spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
     assert "notice_version_problems(" in spec
+
+
+def test_release_constraints_pin_the_versions_the_notices_name():
+    # The release build installs with these pins, so a tag build cannot
+    # resolve a newer pystray or python-xlib than its notices name (#115).
+    root = Path(__file__).resolve().parent.parent
+    pins = {}
+    for line in (root / "freeze" / "release-constraints.txt").read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            name, version = line.split("==")
+            pins[name] = version
+    assert set(pins) == set(_bundle_data().VERSIONED_NOTICES)
+    assert _bundle_data().notice_version_problems(root / "freeze" / "licenses", pins.get) == []

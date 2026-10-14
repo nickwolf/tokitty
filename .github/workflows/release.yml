@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - run: pip install -e ".[packaging,streamdock,qt]"
+      - run: pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"
 
       - name: Install xvfb and the Qt xcb libraries (Linux)
         if: matrix.os == 'ubuntu-22.04'
