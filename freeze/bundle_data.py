@@ -69,9 +69,13 @@ GTK_THEME_LIBS = frozenset((
 
 # LGPL-3.0 Python packages, collected as source (PyInstaller's
 # module_collection_mode "py") so the copy in the bundle can be replaced.
-LGPL_SOURCE_PACKAGES = {"pystray": "py", "PySide6": "py", "shiboken6": "py"}
+# Xlib is python-xlib (LGPL-2.1-or-later), which pystray pulls in on Linux only.
+LGPL_SOURCE_PACKAGES = {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
 
-LICENSE_FILES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt")
+LICENSE_FILES = (
+    "LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "LGPL-2.1.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt",
+    "python-xlib-NOTICE.txt",
+)
 
 
 def qt_toc_entry_dropped(entry) -> bool:

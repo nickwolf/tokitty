@@ -357,7 +357,7 @@ def test_lgpl_packages_ship_as_replaceable_source():
     # pystray, PySide6 and shiboken6 are LGPL-3.0: their Python code must sit
     # in the bundle as .py files a user can replace, not inside the PYZ (#115).
     data = _bundle_data()
-    assert data.LGPL_SOURCE_PACKAGES == {"pystray": "py", "PySide6": "py", "shiboken6": "py"}
+    assert data.LGPL_SOURCE_PACKAGES == {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
     spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
     assert "module_collection_mode=LGPL_SOURCE_PACKAGES" in spec
 

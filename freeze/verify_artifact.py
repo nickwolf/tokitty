@@ -85,6 +85,8 @@ CHILD_TIMEOUT = 60
 QT_PLATFORM_PLUGINS = {"win32": "qwindows", "darwin": "libqcocoa", "linux": "libqxcb"}
 QT_DBUS_STEMS = ("QtDBus", "Qt6DBus", "libQt6DBus")
 LGPL_SOURCE_FILES = ("pystray/__init__.py", "PySide6/__init__.py", "shiboken6/__init__.py")
+# python-xlib, which pystray pulls in on Linux only.
+LINUX_LGPL_SOURCE_FILES = ("Xlib/__init__.py",)
 
 # Only present on Windows Python 3.8+; guarded so this stays importable on
 # POSIX, where stat has neither the tag nor st_reparse_tag.
@@ -491,8 +493,9 @@ def step_bundle_contents(ctx):
     # a user can replace, not inside the PyInstaller archive.
     source_in = {}
     qt_build = "qt" in (ctx.get("toolkits") or ["tk"])
-    for rel in LGPL_SOURCE_FILES:
-        if not qt_build and not rel.startswith("pystray/"):
+    required = LGPL_SOURCE_FILES + (LINUX_LGPL_SOURCE_FILES if plat.startswith("linux") else ())
+    for rel in required:
+        if not qt_build and rel.startswith(("PySide6/", "shiboken6/")):
             continue
         hits = [label for label, base in roots if (base / rel).is_file()]
         if hits:

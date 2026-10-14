@@ -25,7 +25,7 @@ def _load_module():
 
 va = _load_module()
 
-REQUIRED_SOURCE = ("pystray/__init__.py", "PySide6/__init__.py", "shiboken6/__init__.py")
+REQUIRED_SOURCE = ("pystray/__init__.py", "PySide6/__init__.py", "shiboken6/__init__.py", "Xlib/__init__.py")
 
 
 def _touch(path: Path, text: str = "x") -> None:
@@ -43,7 +43,7 @@ def make_linux_bundle(root: Path, qt_version: str = "6.12.0") -> Path:
     _touch(internal / "PySide6" / "Qt" / "lib" / "libQt6Core.so.6")
     os.symlink("PySide6/Qt/lib/libQt6Core.so.6", internal / "libQt6Core.so.6")
     licenses = root / "licenses"
-    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "pystray-NOTICE.txt"):
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
         _touch(licenses / name)
     _touch(licenses / "Qt-NOTICE.txt", f"Qt {qt_version} notices")
     return root
@@ -65,7 +65,7 @@ def test_a_trimmed_linux_bundle_passes(tmp_path, linux):
     assert result["detail"]["qt_dbus"] is True
 
 
-@pytest.mark.parametrize("name", ["LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt"])
+@pytest.mark.parametrize("name", ["LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"])
 def test_a_missing_licence_file_fails(tmp_path, linux, name):
     app = make_linux_bundle(tmp_path)
     (app / "licenses" / name).unlink()
@@ -148,7 +148,7 @@ def test_windows_needs_its_plugin_but_not_qtdbus(tmp_path, monkeypatch):
         _touch(internal / rel)
     _touch(internal / "PySide6" / "Qt" / "plugins" / "platforms" / "qwindows.dll")
     licenses = tmp_path / "licenses"
-    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt"):
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
         _touch(licenses / name, "Qt 6.12.0")
     result = run_contents(tmp_path)
     assert result["ok"], result
@@ -164,7 +164,7 @@ def make_mac_bundle(root: Path, source_root: str) -> None:
         _touch(base / rel)
     _touch(base / "PySide6" / "Qt" / "lib" / "QtDBus.framework" / "Versions" / "A" / "QtDBus")
     _touch(base / "PySide6" / "Qt" / "plugins" / "platforms" / "libqcocoa.dylib")
-    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt"):
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
         _touch(contents / "Resources" / "licenses" / name, "Qt 6.12.0")
 
 
@@ -329,9 +329,11 @@ def test_a_tk_only_bundle_skips_the_qt_contents(tmp_path):
     internal = app / "_internal"
     (internal / "pystray").mkdir(parents=True)
     (internal / "pystray" / "__init__.py").write_text("", encoding="utf-8")
+    (internal / "Xlib").mkdir()
+    (internal / "Xlib" / "__init__.py").write_text("", encoding="utf-8")
     licenses = app / "licenses"
     licenses.mkdir()
-    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt"):
+    for name in ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt", "python-xlib-NOTICE.txt", "LGPL-2.1.txt"):
         (licenses / name).write_text("x", encoding="utf-8")
     if sys.platform.startswith("linux"):
         result = va.step_bundle_contents({"app_dir": app, "repo_root": REPO, "toolkits": ["tk"]})
