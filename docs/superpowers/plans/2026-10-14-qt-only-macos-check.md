@@ -37,4 +37,19 @@ Afterwards: restore `position.json` from the backup, and launch the installed To
 
 ## Results
 
-(Filled in after the run.)
+Run 2026-10-14 on an arm64 Mac (Darwin 25.6.0), build from run 38642089300 (841e8f7), driven through System Events, posted mouse events and screenshots. Notifications were left as found (see 7). Exit (10) was run before 7, because 7 starts from a quit Tokitty.
+
+1. Pass. `Info.plist` has `LSUIElement` true. After `open Tokitty.app` the widget and the menu-bar cat came up with no Dock icon, the menu bar kept Terminal's menus, and the Command-Tab switcher listed Terminal, Finder, TextEdit and Chrome only.
+2. Pass. The menu-bar cat's menu is Refresh now, View, Always in front, Settings…, About Tokitty, Exit. About opened in front of Chrome and Terminal with the cat, "Tokitty", "v0.6.2", the description, GitHub, Release notes and Licences links, "Copyright © 2026 Nick Wolf. MIT License." and "Includes Qt 6.12.0 and PySide6 6.12.0 under the LGPL-3.0, see the licenses folder." GitHub opened github.com/nickwolf/tokitty, Release notes opened releases/tag/v0.6.2 and Licences opened `Contents/Resources/licenses` in Finder. Right-click ▸ About Tokitty opened the same window, in front.
+3. Pass. With TextEdit frontmost, Settings… from the menu-bar cat and from the right-click menu each came up in front with Tokitty active and the Settings window focused; typed keys did not reach TextEdit. Manage accounts… opened Accounts in front with focus in the Budget field, and a typed character landed there (cleared, not set). Check now's box came up in front, and Return closed it. The menu bar keeps the previous app's menus while Tokitty is active, as an agent app.
+4. Pass. GPL-3.0.txt, LGPL-3.0.txt, LICENSE, Qt-NOTICE.txt; no pystray or python-xlib notices.
+5. Pass. The widget showed over full-screen TextEdit, in its Space.
+6. Pass. Typed "before ", dragged the widget by the cat from the bottom left, typed "after": the document read "Before after" (TextEdit's capitalisation) and TextEdit stayed frontmost.
+7. No notification; not the first-run case. Both runs printed `tokitty: debug notify: submitted`, but no banner showed and Notification Center had none. The first run was under Do Not Disturb; the second was after it was turned off. System Settings ▸ Notifications lists Tokitty as Off, so notifications are not allowed now, and nothing here shows what a first toast does on a fresh install. The gate stays.
+8. Pass. The widget showed live usage (session 4%, week 37%), and Check now reported "Tokitty v0.6.2 is the latest version." with no certificate error.
+9. Pass. With the state dir moved aside, the walkthrough ("Tokitty setup") came up in front and active. Command-Q ended the process within 0.1 s; a second launch showed the walkthrough again, and Command-Q ended it the same way. The state dir was restored.
+10. Pass. menu-bar cat ▸ Exit removed the cat and ended the process 0.4 s later.
+
+Afterwards: `position.json` (changed by check 6's drag) restored from the backup, and the installed Tokitty relaunched; `current` points back at `~/Applications/Tokitty.app`.
+
+Not covered by this build: b28dbbc's About without Release notes in a dry-run build, and the debug menu's Always in front going through the host.
