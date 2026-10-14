@@ -49,6 +49,8 @@ Move Tokitty to Applications before turning on **Start at login** or adding an a
 
 Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
 
+The Qt window (the default from v0.7.0, reachable before that with `TOKITTY_QT=1`) needs a few X11 libraries that some desktops leave out. On Debian or Ubuntu, `sudo apt install libegl1 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0` covers them. Translucency on Linux depends on your compositor and is best-effort.
+
 ## Updating
 
 Tokitty checks GitHub Releases for a newer version about a minute after startup and then once a day, and it never installs anything without a click. **Check for updates automatically** in Settings ▸ General turns the daily check off. **Check now** in the same place runs one on demand, whatever that setting is.
@@ -342,3 +344,5 @@ The five planned phases (finer sprites, live activity with a permission flag, mu
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+The release builds also include Qt and PySide6 (LGPL-3.0), pystray (LGPL-3.0) and, on Linux, python-xlib (LGPL-2.1-or-later). Their licence files are in the `licenses` folder beside the executable on Windows and Linux, and in `Tokitty.app/Contents/Resources/licenses` on macOS. Qt, PySide6, shiboken6, pystray and python-xlib ship as separate files you can replace, and `Qt-NOTICE.txt` in that folder explains how.

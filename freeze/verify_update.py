@@ -4,7 +4,7 @@
 Drives an old frozen copy (built with TOKITTY_BUILD_ID=v0.0.1) through its
 hidden --apply-update entry against a fake GitHub on 127.0.0.1, with the new
 release being the exact archive CI is about to upload (or, on a
-workflow_dispatch rehearsal, a v0.0.2 rebuild). Every child runs in a scratch
+workflow_dispatch rehearsal, a v99.0.0 rebuild). Every child runs in a scratch
 environment, so the state dir is under --work; it is read from the child's own
 --self-check report rather than recomputed.
 
@@ -18,11 +18,18 @@ with the child's stderr.
 Usage:
   verify_update.py --old-archive <old.zip|.tar.gz> --new-archive <new archive> \\
       --new-sums <new archive>.sha256 --tag <tag> --work <empty scratch dir> \\
-      --report <report.json> [--rehearsal] [--repo-root <repo>] [--only a,b]
+      --report <report.json> [--rehearsal] [--repo-root <repo>] [--only a,b] \\
+      [--old-tag <tag>] [--qt]
 
 --old-archive is the v0.0.1 fixture, archived the way the release job archives
 (zip on Windows, ditto on macOS, tar.gz on Linux) and unpacked here with the
-same tools. --new-archive must be named tokitty-<tag>-<target>.<ext>, and
+same tools. --old-tag (default v0.0.1) is the build ID that archive was built
+with, so a shipped release can stand in for the fixture. --qt runs the pass in
+Qt mode: every child gets TOKITTY_QT=1 and no QT_QPA_PLATFORM or
+WAYLAND_DISPLAY (the rehearsal must run on a real platform plugin), and
+apply_update also requires the new copy's after-update-qt.json to say a window
+was exposed before the ack (#115); pair it with --only apply_update,no_ack_rollback.
+--new-archive must be named tokitty-<tag>-<target>.<ext>, and
 --new-sums holds its sha256sum line. --repo-root (default: the parent of this
 script's directory) is put on sys.path to import the updater's own
 `child_env`, `asset_name` and the single-instance lock, none of which touch Tk.
@@ -83,6 +90,9 @@ NO_ACK_LIMIT_S = 100
 CLEANUP_TIMEOUT = 60
 REPO_API_PATH = "/repos/nickwolf/tokitty/releases"
 ENV_PREFIXES = ("TOKITTY_UPDATE", "SSL_CERT_FILE", "PYINSTALLER_RESET_ENVIRONMENT")
+AFTER_UPDATE_QT_FILE = "after-update-qt.json"  # tokitty.qt.app.AFTER_UPDATE_QT_FILE; this script never imports Qt code
+# Removed from every child's environment under --qt, so Qt picks a real platform plugin.
+QT_MODE_UNSET = ("QT_QPA_PLATFORM", "WAYLAND_DISPLAY")
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +178,7 @@ def survivor_problems(kept: Sequence[Path], gone: Sequence[Path], exists: Callab
 def cleanup_seed(plat: str, base: Path, tag: str) -> dict:
     """The spec's cleanup seed set, laid out relative to `base` (the versions
     dir on Windows and Linux, the folder holding the app on macOS). Needs a tag
-    above v0.0.1, which every tag build and the v0.0.2 rehearsal are.
+    above v0.0.1, which every tag build and the v99.0.0 rehearsal are.
 
     `dirs` are plain folders to create, `links` are (link, target) pairs,
     `owned` is what update.json records, `kept` and `gone` are the expected
@@ -286,6 +296,29 @@ def single_process_problems(procs: Sequence[dict], new_exe, old_pid: Optional[in
         if path and os.path.normcase(os.path.realpath(path)) != os.path.normcase(os.path.realpath(str(new_exe))):
             problems.append(f"process {proc['pid']} runs {path}, not {new_exe}")
     return problems
+
+
+def qt_mode_env(env: dict) -> dict:
+    """`env` as a Qt-mode pass runs it: TOKITTY_QT=1, and none of the variables
+    that would force Qt onto the offscreen or Wayland platform."""
+    env = {k: v for k, v in env.items() if k not in QT_MODE_UNSET}
+    env["TOKITTY_QT"] = "1"
+    return env
+
+
+def after_update_qt_problems(state_dir) -> List[str]:
+    """Why the new copy's after-update-qt.json does not prove a window was up
+    before it acked, or [] when it does (#115)."""
+    path = Path(state_dir) / AFTER_UPDATE_QT_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return [f"{AFTER_UPDATE_QT_FILE} is missing from {state_dir}: the new copy did not run in Qt mode"]
+    except ValueError as exc:
+        return [f"{AFTER_UPDATE_QT_FILE} is not JSON: {exc}"]
+    if not isinstance(data, dict) or data.get("exposed_before_ack") is not True:
+        return [f"{AFTER_UPDATE_QT_FILE} does not say exposed_before_ack is true: {data!r}"]
+    return []
 
 
 def tail(data, limit: int = 2000) -> str:
@@ -554,7 +587,8 @@ class Scenario:
         self.ctx, self.name = ctx, name
         self.dir = ctx["work"] / name
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.env = scratch_env(self.dir)
+        self.env = scratch_env(self.dir, qt=ctx.get("qt", False))
+        self.old_tag = ctx["old_tag"]
         self.plat = sys.platform
         if self.plat == "darwin":
             self.versions = self.dir / "apps"
@@ -562,9 +596,10 @@ class Scenario:
             self.new_app_dir = self.versions
         else:
             self.versions = self.dir / "releases"
-            self.old_app_dir = self.versions / OLD_TAG / top_name(self.plat)
+            self.old_app_dir = self.versions / self.old_tag / top_name(self.plat)
             self.new_app_dir = self.versions / ctx["tag"] / top_name(self.plat)
         self.state_dir: Optional[Path] = None
+        self.last_build_id: Optional[str] = None
 
     @property
     def old_gui(self) -> Path:
@@ -579,7 +614,7 @@ class Scenario:
         return _locate_binaries(self.new_app_dir)[1]
 
     def unpack_old(self) -> None:
-        dest = self.versions if self.plat == "darwin" else self.versions / OLD_TAG
+        dest = self.versions if self.plat == "darwin" else self.versions / self.old_tag
         unpack_archive(self.ctx["old_archive"], dest)
         if not self.old_gui.is_file():
             raise RuntimeError(f"the old fixture has no executable at {self.old_gui}")
@@ -593,6 +628,7 @@ class Scenario:
         try:
             report = json.loads(proc.stdout.decode("utf-8").strip())
             state_dir = Path(report["state_dir"]).resolve()
+            self.last_build_id = report.get("build_id")
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"could not read state_dir from --self-check ({exc}): {tail(proc.stdout)} {tail(proc.stderr)}")
         if not _inside(state_dir, self.dir):
@@ -604,6 +640,9 @@ class Scenario:
     def prepare_old(self) -> "Scenario":
         self.unpack_old()
         self.read_state_dir(self.old_gui)
+        # --old-tag claims which updater this pass drives; hold the archive to it.
+        if self.last_build_id != self.old_tag:
+            raise RuntimeError(f"the old copy reports build {self.last_build_id}, not --old-tag {self.old_tag}")
         return self
 
     def update_json(self) -> dict:
@@ -637,9 +676,10 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def scratch_env(scn_dir: Path) -> dict:
+def scratch_env(scn_dir: Path, qt: bool = False) -> dict:
     """verify_artifact's scratch environment plus every other per-user
-    location, minus any TOKITTY_UPDATE_* or SSL_CERT_FILE the runner had."""
+    location, minus any TOKITTY_UPDATE_* or SSL_CERT_FILE the runner had; with
+    `qt`, set up for a Qt-mode pass (qt_mode_env)."""
     env = _scratch_env(scn_dir)
     for key in [k for k in env if k.startswith(ENV_PREFIXES)]:
         del env[key]
@@ -652,7 +692,7 @@ def scratch_env(scn_dir: Path) -> dict:
     for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "LOCALAPPDATA", "APPDATA", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"):
         if key in env and str(env[key]).startswith(str(scn_dir)):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
-    return env
+    return qt_mode_env(env) if qt else env
 
 
 def unpack_archive(archive, dest) -> None:
@@ -747,8 +787,10 @@ def step_prepare(ctx):
             problems.append(f"--{key.replace('_', '-')} {ctx[key]} is not a file")
     if parse_version(ctx["tag"]) is None:
         problems.append(f"--tag {ctx['tag']!r} is not vMAJOR.MINOR.PATCH")
-    elif parse_version(ctx["tag"]) <= parse_version(OLD_TAG):
-        problems.append(f"--tag {ctx['tag']} is not newer than the old fixture {OLD_TAG}")
+    elif parse_version(ctx["old_tag"]) is None:
+        problems.append(f"--old-tag {ctx['old_tag']!r} is not vMAJOR.MINOR.PATCH")
+    elif parse_version(ctx["tag"]) <= parse_version(ctx["old_tag"]):
+        problems.append(f"--tag {ctx['tag']} is not newer than the old fixture {ctx['old_tag']}")
     target = platform_target()
     if target is None:
         problems.append("this platform has no release target")
@@ -892,21 +934,27 @@ def step_apply_update(ctx):
         detail["new_build_id"] = build
         if build != ctx["tag"]:
             problems.append(f"the new copy's --self-check reports {build}, expected {ctx['tag']}")
+        if ctx.get("qt"):
+            problems += after_update_qt_problems(scn.state_dir)
+            try:
+                detail["after_update_qt"] = json.loads((scn.state_dir / AFTER_UPDATE_QT_FILE).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
         quarantine, info = _quarantine_problems(scn)
         detail["quarantine"] = info
         problems += quarantine
         owned = state.get("owned") or []
         detail["owned"] = owned
         if sys.platform == "darwin":
-            backup = scn.versions / f".Tokitty-{OLD_TAG}.app"
+            backup = scn.versions / f".Tokitty-{scn.old_tag}.app"
             if not backup.is_dir():
                 problems.append(f"the backup {backup} is missing")
             elif not any(e.get("path") == str(backup) and e.get("kind") == "backup" for e in owned):
                 problems.append(f"{backup} is not recorded as an owned backup")
             else:
                 old_build = scn.self_check_build(backup / "Contents" / "MacOS" / "Tokitty")
-                if old_build != OLD_TAG:
-                    problems.append(f"the backup reports build {old_build}, expected {OLD_TAG}")
+                if old_build != scn.old_tag:
+                    problems.append(f"the backup reports build {old_build}, expected {scn.old_tag}")
             if not (scn.versions / "Tokitty.app").is_dir():
                 problems.append("Tokitty.app is missing")
         else:
@@ -972,8 +1020,8 @@ def step_no_ack_rollback(ctx):
         if sys.platform == "darwin":
             build = scn.self_check_build(scn.versions / "Tokitty.app" / "Contents" / "MacOS" / "Tokitty")
             detail["restored_build_id"] = build
-            if build != OLD_TAG:
-                problems.append(f"Tokitty.app reports build {build} after the rollback, expected {OLD_TAG}")
+            if build != scn.old_tag:
+                problems.append(f"Tokitty.app reports build {build} after the rollback, expected {scn.old_tag}")
             detail["apps"] = sorted(p.name for p in scn.versions.iterdir())
     finally:
         stop_tokitty(scn.dir)
@@ -1114,9 +1162,11 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--work", required=True)
     parser.add_argument("--report", required=True)
-    parser.add_argument("--rehearsal", action="store_true", help="the new side is a v0.0.2 rebuild, not the release being published")
+    parser.add_argument("--rehearsal", action="store_true", help="the new side is a v99.0.0 rebuild, not the release being published")
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--only", default=None, help="comma-separated step names to run after prepare (debugging)")
+    parser.add_argument("--old-tag", default=OLD_TAG, help="the build ID of --old-archive (default: %(default)s)")
+    parser.add_argument("--qt", action="store_true", help="run every child in Qt mode and require after-update-qt.json in apply_update")
     args = parser.parse_args(argv)
 
     report_path = Path(args.report)
@@ -1125,6 +1175,8 @@ def main(argv: Optional[list] = None) -> int:
     report = {
         "tag": args.tag,
         "rehearsal": args.rehearsal,
+        "old_tag": args.old_tag,
+        "qt": args.qt,
         "platform": sys.platform,
         "work": str(work_arg),
         "repo_root": str(repo_root),
@@ -1147,6 +1199,8 @@ def main(argv: Optional[list] = None) -> int:
         "new_sums": Path(args.new_sums).resolve(),
         "tag": args.tag,
         "rehearsal": args.rehearsal,
+        "old_tag": args.old_tag,
+        "qt": args.qt,
     }
     only = set(args.only.split(",")) if args.only else None
     for name, fn in STEPS:

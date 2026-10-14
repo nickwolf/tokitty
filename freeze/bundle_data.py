@@ -7,10 +7,146 @@ not only inside the archive. Paths are relative to tokitty/ and keep their
 folders in the bundle.
 """
 
+from pathlib import Path
+from typing import Optional
+
 PLUGIN_DIR = "streamdock/plugin/com.tokitty.deck.sdPlugin"
 PLUGIN_FILES = [f"{PLUGIN_DIR}/{name}" for name in ("manifest.json", "index.html", "pi.html", "icon.png")]
 
 DATA_FILES = ["hook_writer.py", "prices.json", *PLUGIN_FILES]
+
+# The Qt trim (#115). tokitty/ imports only these three PySide6 bindings, and
+# QtDBus has to stay: QtGui links it on macOS and the xcb plugin on Linux.
+QT_KEPT_BINDINGS = ("QtCore", "QtGui", "QtWidgets")
+
+# Every other PySide6.Qt* binding in the PySide6-Essentials 6.12.0 wheel, hard
+# coded so a wheel change shows up as a diff. Excluded from the GUI Analysis.
+QT_EXCLUDED_MODULES = tuple(
+    f"PySide6.Qt{name}"
+    for name in (
+        "Concurrent", "Designer", "Help", "LabsStyleKit", "Network", "OpenGL", "OpenGLWidgets",
+        "PrintSupport", "Qml", "QmlFeatures", "Quick", "QuickControls2", "QuickTest",
+        "QuickWidgets", "Sql", "Svg", "SvgWidgets", "Test", "UiTools", "Xml",
+    )
+)
+
+# Plugin directories dropped whole. The wayland-* directories are matched by
+# prefix: Linux ships the xcb platform only.
+_QT_DROPPED_DIRS = (
+    "imageformats", "iconengines", "generic", "networkinformation", "tls", "qmltooling", "translations",
+    # Embedded Linux backends, for the eglfs platform the bundle leaves out.
+    "egldeviceintegrations",
+)
+# Qt libraries (and their PySide6 bindings) dropped by name.
+_QT_DROPPED_LIBS = (
+    "Network", "Pdf", "Qml", "QmlModels", "QmlMeta", "QmlWorkerScript", "Quick", "OpenGL",
+    "OpenGLWidgets", "Svg", "VirtualKeyboard",
+    # Only the Wayland platform plugin loads these, and Linux ships xcb only.
+    "WaylandClient", "WlShellIntegration",
+    # Only the eglfs platform plugin loads these.
+    "EglFSDeviceIntegration", "EglFsKmsSupport", "EglFsKmsGbmSupport",
+)
+# Linux keeps xcb alone: eglfs, linuxfb, vkkhrdisplay and vnc are for
+# embedded and remote displays, not a desktop session.
+_QT_DROPPED_PLATFORMS = ("offscreen", "direct2d", "eglfs", "linuxfb", "vkkhrdisplay", "vnc")
+# The GTK 3 platform theme only gives Qt's colour and folder dialogs a GTK
+# look, and it pulls GTK, GDK, cairo, pango and atk into the Linux bundle.
+_QT_DROPPED_THEMES = ("gtk3",)
+_QT_DROPPED_PLATFORM_PREFIXES = ("minimal", "wayland")
+
+# System libraries PyInstaller collects on Linux only because the GTK 3 theme
+# plugin links them (checked with ldd on a trimmed build: nothing else in the
+# bundle needs them). They sit at the top of _internal/, outside PySide6/, so
+# they are named exactly. The X11 extension and glib libraries that GTK also
+# pulls in stay: libX11 and Qt can dlopen those, which ldd does not show.
+GTK_THEME_LIBS = frozenset((
+    "libgtk-3.so.0", "libgdk-3.so.0", "libgdk_pixbuf-2.0.so.0", "libatk-1.0.so.0",
+    "libatk-bridge-2.0.so.0", "libatspi.so.0", "libcairo.so.2", "libcairo-gobject.so.2",
+    "libpango-1.0.so.0", "libpangocairo-1.0.so.0", "libpangoft2-1.0.so.0", "libepoxy.so.0",
+    "libharfbuzz.so.0", "libgraphite2.so.3", "libfribidi.so.0", "libthai.so.0", "libdatrie.so.1",
+    "libpixman-1.so.0", "libjpeg.so.8",
+))
+
+# LGPL-3.0 Python packages, collected as source (PyInstaller's
+# module_collection_mode "py") so the copy in the bundle can be replaced.
+# Xlib is python-xlib (LGPL-2.1-or-later), which pystray pulls in on Linux only.
+LGPL_SOURCE_PACKAGES = {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
+
+LICENSE_FILES = (
+    "LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "LGPL-2.1.txt", "Qt-NOTICE.txt", "pystray-NOTICE.txt",
+    "python-xlib-NOTICE.txt",
+)
+
+
+def qt_toc_entry_dropped(entry) -> bool:
+    """qt_entry_dropped for a PyInstaller TOC entry (dest, src, typecode).
+    Linux also lists a SYMLINK at the top of the bundle for each Qt library,
+    named without the PySide6/ prefix, whose target is the PySide6 path, so
+    those are judged by their target; a dropped library otherwise leaves a
+    dangling link behind."""
+    dest, src, kind = entry[0], entry[1], entry[2]
+    if kind == "BINARY" and dest in GTK_THEME_LIBS:
+        return True
+    return qt_entry_dropped(dest) or (kind == "SYMLINK" and qt_entry_dropped(src))
+
+
+def qt_entry_dropped(dest: str) -> bool:
+    """Whether a collected file under PySide6/ is one the trim drops. Matches
+    whole path components and library base names, never substrings, and only
+    under PySide6/, so Tokitty's and Python's own files are never touched."""
+    import re
+
+    parts = dest.replace("\\", "/").split("/")
+    if parts[0] != "PySide6":
+        return False
+    for part in parts[1:-1]:
+        if part in _QT_DROPPED_DIRS or part.startswith("wayland-"):
+            return True
+        match = re.fullmatch(r"Qt(\w+)\.framework", part)
+        if match and match.group(1) in _QT_DROPPED_LIBS:
+            return True
+    name = parts[-1]
+    if name == "opengl32sw.dll" or re.fullmatch(r"d3dcompiler_\d+\.dll", name):
+        return True
+    # Library and binding names: Qt6Name.dll, libQt6Name.so.6, QtName.pyd,
+    # QtName.abi3.so, with the name ended by the first dot.
+    stem = name.split(".", 1)[0]
+    lib = re.fullmatch(r"(?:lib)?Qt6(\w+)", stem) or re.fullmatch(r"Qt([A-Za-z]\w*)", stem)
+    if lib and lib.group(1) in _QT_DROPPED_LIBS:
+        return True
+    # Platform plugins: qoffscreen.dll, libqoffscreen.so, libqoffscreen.dylib.
+    plugin = stem[3:] if stem.startswith("lib") else stem
+    if plugin.startswith("q") and "platforms" in parts[1:-1]:
+        base = plugin[1:]
+        if base in _QT_DROPPED_PLATFORMS or base.startswith(_QT_DROPPED_PLATFORM_PREFIXES):
+            return True
+    if plugin.startswith("q") and "platformthemes" in parts[1:-1] and plugin[1:] in _QT_DROPPED_THEMES:
+        return True
+    return False
+
+
+# Notices that name the version of a package pip resolves without a pin
+# (pystray, and python-xlib through it on Linux): the build checks them.
+VERSIONED_NOTICES = {"pystray": "pystray-NOTICE.txt", "python-xlib": "python-xlib-NOTICE.txt"}
+
+
+def notice_version_problems(licenses_dir, installed) -> list:
+    """Notices whose "Version:" line is not the version `installed(name)`
+    reports. `installed` returns None for a package this platform does not
+    have, which is skipped (python-xlib exists only on Linux)."""
+    import re
+
+    problems = []
+    for name, notice in VERSIONED_NOTICES.items():
+        version = installed(name)
+        if version is None:
+            continue
+        text = (Path(licenses_dir) / notice).read_text(encoding="utf-8")
+        match = re.search(r"^Version: (\S+)$", text, re.MULTILINE)
+        stated = match.group(1) if match else None
+        if stated != version:
+            problems.append(f"{notice} says {name} {stated}, the build has {version}")
+    return problems
 
 
 def project_version(root) -> str:
@@ -18,7 +154,6 @@ def project_version(root) -> str:
     any build Python. The release tag must match it, which verify_artifact.py
     checks against the bundle's Info.plist."""
     import re
-    from pathlib import Path
 
     text = (Path(root) / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -27,11 +162,29 @@ def project_version(root) -> str:
     return match.group(1)
 
 
-def info_plist(version: str) -> dict:
+def qt_version(root) -> str:
+    """The Qt version the bundle ships: the `qt` extra's PySide6 pin in
+    pyproject.toml, so a pin bump moves the copyright line and the notices."""
+    import re
+
+    text = (Path(root) / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^qt\s*=\s*\[[^\]]*?PySide6[\w-]*==([\d.]+)', text, re.MULTILINE)
+    if match is None:
+        raise ValueError("no PySide6 pin in the qt extra of pyproject.toml")
+    return match.group(1)
+
+
+def info_plist(version: str, qt: Optional[str] = None) -> dict:
     """Info.plist keys for Tokitty.app. The native About panel reads all
-    three, so an unset version shows PyInstaller's 0.0.0 there (#98)."""
+    three, so an unset version shows PyInstaller's 0.0.0 there (#98). The Qt
+    line is LGPL-3.0 section 4(c): the panel displays a copyright."""
+    if qt is None:
+        qt = qt_version(Path(__file__).resolve().parent.parent)
     return {
         "CFBundleShortVersionString": version,
         "CFBundleVersion": version,
-        "NSHumanReadableCopyright": "Copyright © 2026 Nick Wolf. MIT License.",
+        "NSHumanReadableCopyright": (
+            "Copyright © 2026 Nick Wolf. MIT License.\n"
+            f"Includes Qt {qt} and PySide6 {qt} under the LGPL-3.0, see Contents/Resources/licenses."
+        ),
     }

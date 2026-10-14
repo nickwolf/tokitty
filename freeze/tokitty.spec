@@ -3,16 +3,43 @@
 # TOKITTY_BUILD_ID (optional) is baked into both executables; see --self-check.
 # TOKITTY_BUILD_TOOLKITS (optional, default "tk"; a comma list such as "tk,qt")
 # declares which GUI toolkits the build carries; --self-check checks those.
+# TOKITTY_QT_TRIM=0 builds without the Qt trim, to measure what it saves (#115).
 import os
+import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
-from bundle_data import DATA_FILES, info_plist, project_version  # noqa: E402
+from bundle_data import (  # noqa: E402
+    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, notice_version_problems, project_version,
+    qt_toc_entry_dropped,
+)
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
+QT_TRIM = os.environ.get("TOKITTY_QT_TRIM", "1") != "0"
+
+
+def _installed(name):
+    from importlib import metadata
+
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+# A notice must name the version the bundle ships; pip resolves these unpinned.
+_stale = notice_version_problems(ROOT / "freeze" / "licenses", _installed)
+if _stale:
+    raise SystemExit("licence notice out of date: " + "; ".join(_stale))
+
+# Licence notices (#115). macOS keeps them inside the .app; Windows and Linux
+# get a folder beside the executable, copied after COLLECT, since data files
+# would land in _internal/.
+if sys.platform == "darwin":
+    datas += [(str(ROOT / "freeze" / "licenses" / name), "licenses") for name in LICENSE_FILES]
 
 # The app icon is drawn from the sprites at build time (#100), so it can't
 # drift from the cat the build ships.
@@ -43,13 +70,24 @@ gui = Analysis(
     pathex=[str(ROOT)],
     datas=datas,
     runtime_hooks=[str(rthook)],
+    excludes=list(QT_EXCLUDED_MODULES) if QT_TRIM else [],
+    # The LGPL packages ship as plain .py files beside their binaries rather
+    # than inside the PYZ archive, so a user can replace them (#115).
+    module_collection_mode=LGPL_SOURCE_PACKAGES,
 )
 hook = Analysis(
     [str(ROOT / "freeze" / "hook_entry.py")],
     pathex=[str(ROOT)],
     runtime_hooks=[str(rthook)],
-    excludes=["tkinter", "PIL", "pystray"],
+    excludes=["tkinter", "PIL", "pystray", "PySide6", "shiboken6"],
 )
+
+# The Qt trim works on Analysis destinations under PySide6/, by path component
+# and library name (bundle_data.qt_entry_dropped, with symlink targets via qt_toc_entry_dropped),
+# before COLLECT and BUNDLE.
+if QT_TRIM:
+    gui.binaries = [e for e in gui.binaries if not qt_toc_entry_dropped(e)]
+    gui.datas = [e for e in gui.datas if not qt_toc_entry_dropped(e)]
 
 gui_exe = EXE(
     PYZ(gui.pure),
@@ -74,6 +112,12 @@ coll = COLLECT(
     hook_exe, hook.binaries, hook.datas,
     name=APP_NAME,
 )
+
+if sys.platform != "darwin":
+    licenses_dir = Path(DISTPATH) / APP_NAME / "licenses"
+    licenses_dir.mkdir(parents=True, exist_ok=True)
+    for name in LICENSE_FILES:
+        shutil.copyfile(ROOT / "freeze" / "licenses" / name, licenses_dir / name)
 
 if sys.platform == "darwin":
     app = BUNDLE(

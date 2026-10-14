@@ -97,6 +97,7 @@ def _check_qt_root():
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication, QWidget
 
+    qt_platform_env()
     app = QApplication.instance() or QApplication([])
     widget = QWidget()
     widget.resize(64, 64)
@@ -106,6 +107,31 @@ def _check_qt_root():
         return QGuiApplication.platformName()
     finally:
         widget.close()
+
+
+def qt_platform_env(environ=None, *, frozen=None, platform=None) -> Optional[str]:
+    """The frozen Linux build leaves out Qt's Wayland plugin (#115), and an
+    explicit QT_QPA_PLATFORM replaces Qt's fallback list, so a session that
+    exports only Wayland platforms would make Qt abort. Map that to xcb when
+    DISPLAY says XWayland or X is there. Returns the new value, or None when
+    nothing was changed. Toolkit-free: it only touches the environment."""
+    environ = os.environ if environ is None else environ
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    platform = sys.platform if platform is None else platform
+    if not frozen or not platform.startswith("linux"):
+        return None
+    requested = environ.get("QT_QPA_PLATFORM")
+    if not requested or not environ.get("DISPLAY"):
+        return None
+    names = [entry.split(":", 1)[0].strip().lower() for entry in requested.split(";") if entry.strip()]
+    if not names or not all(name.startswith("wayland") for name in names):
+        return None
+    environ["QT_QPA_PLATFORM"] = "xcb"
+    print(
+        f"tokitty: QT_QPA_PLATFORM={requested} needs the Wayland plugin, which this build leaves out; using xcb",
+        file=sys.stderr,
+    )
+    return "xcb"
 
 
 def _check_pil():
@@ -191,7 +217,12 @@ def self_check() -> int:
     checks = {}
     if "tk" in toolkits:
         checks["tkinter"] = _check(_check_tkinter)
-    if "qt" in toolkits:
+    # A build that carries Tk runs the Qt checks only for a Qt-mode launch:
+    # every shipped updater runs this report with the window switch on and
+    # refuses any failed entry, and on Linux a missing xcb library makes Qt
+    # abort the whole process, which would block a Tk user's updates (#115).
+    run_qt_checks = "qt" in toolkits and ("tk" not in toolkits or os.environ.get("TOKITTY_QT") == "1")
+    if run_qt_checks:
         checks["qt"] = _check(_check_qt)
     checks["pil"] = _check(_check_pil)
     if "tk" in toolkits:
@@ -210,7 +241,7 @@ def self_check() -> int:
     if os.environ.get("TOKITTY_SELF_CHECK_TK") == "1":
         if "tk" in toolkits:
             checks["tk_root"] = _check(_check_tk_root)
-        if "qt" in toolkits:
+        if run_qt_checks:
             checks["qt_root"] = _check(_check_qt_root)
             if "tk" not in toolkits:
                 # Every shipped updater requires a tk_root entry in the report

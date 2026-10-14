@@ -137,6 +137,24 @@ class QtTray:
             return False
         return True
 
+    def debug_notify(self, title: str, message: str) -> bool:
+        """notify without the macOS gate, for TOKITTY_DEBUG_NOTIFY (#115):
+        one real try at the Cocoa tray's message, with the outcome on stderr."""
+        icon = self._icon
+        if icon is None:
+            reason = "no tray icon"
+        else:
+            try:
+                if icon.supportsMessages():
+                    icon.showMessage(title, message)
+                    print("tokitty: debug notify: submitted", file=sys.stderr)
+                    return True
+                reason = "the tray does not support messages"
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+        print(f"tokitty: debug notify: not submitted ({reason})", file=sys.stderr)
+        return False
+
     def stop(self) -> None:
         icon = self._icon
         if icon is None:

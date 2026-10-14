@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      trim:
+        description: Trim Qt in the bundle. Turn off once to measure untrimmed sizes. A tag push always trims.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -16,6 +21,12 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    env:
+      TOKITTY_BUILD_TOOLKITS: tk,qt
+      TOKITTY_QT_TRIM: ${{ (github.event_name == 'workflow_dispatch' && !inputs.trim) && '0' || '1' }}
+      # The release the legacy update pass starts from. Pinned on purpose
+      # and moved deliberately, never to "latest".
+      LEGACY_TAG: v0.6.2
     strategy:
       fail-fast: false
       matrix:
@@ -36,11 +47,11 @@ jobs:
         with:
           python-version: '3.13'
 
-      - run: pip install -e ".[packaging,streamdock]"
+      - run: pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"
 
-      - name: Install xvfb (Linux)
+      - name: Install xvfb and the Qt xcb libraries (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0
 
       - name: Determine version
         id: version
@@ -113,12 +124,12 @@ jobs:
 
       - name: Verify artifact (Windows)
         if: matrix.os == 'windows-latest'
-        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt
 
       - name: Verify artifact (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json")
+          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt)
           if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
             args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
           fi
@@ -133,7 +144,7 @@ jobs:
 
       - name: Verify artifact (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json"
+        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt
 
       - name: Install cryptography (update verifier)
         run: pip install cryptography
@@ -149,11 +160,12 @@ jobs:
             echo "OLD_ARCHIVE=$RUNNER_TEMP/old/tokitty-v0.0.1-${{ matrix.target }}.$ext"
             if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
               # A dry run's build ID doesn't parse as a version, so the update
-              # test uses a v0.0.2 rebuild of this commit: a rehearsal.
-              echo "UPDATE_TAG=v0.0.2"
+              # test uses a v99.0.0 rebuild of this commit: a rehearsal. The
+              # number sits above any real release, so it is always an update.
+              echo "UPDATE_TAG=v99.0.0"
               echo "REHEARSAL=true"
-              echo "NEW_ARCHIVE=$RUNNER_TEMP/new/tokitty-v0.0.2-${{ matrix.target }}.$ext"
-              echo "NEW_SUMS=$RUNNER_TEMP/new/tokitty-v0.0.2-${{ matrix.target }}.$ext.sha256"
+              echo "NEW_ARCHIVE=$RUNNER_TEMP/new/tokitty-v99.0.0-${{ matrix.target }}.$ext"
+              echo "NEW_SUMS=$RUNNER_TEMP/new/tokitty-v99.0.0-${{ matrix.target }}.$ext.sha256"
             else
               echo "UPDATE_TAG=${{ steps.version.outputs.version }}"
               echo "REHEARSAL=false"
@@ -182,10 +194,10 @@ jobs:
               ;;
           esac
 
-      - name: Build rehearsal artifact (v0.0.2, workflow_dispatch only)
+      - name: Build rehearsal artifact (v99.0.0, workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         env:
-          TOKITTY_BUILD_ID: v0.0.2
+          TOKITTY_BUILD_ID: v99.0.0
         run: python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath dist-new --workpath build-new
 
       - name: Archive rehearsal artifact (workflow_dispatch only)
@@ -194,7 +206,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/new"
           case "${{ matrix.os }}" in
             windows-latest)
-              python -c "import os, shutil; shutil.make_archive(os.path.join(os.environ['RUNNER_TEMP'], 'new', 'tokitty-v0.0.2-${{ matrix.target }}'), 'zip', 'dist-new', 'Tokitty')"
+              python -c "import os, shutil; shutil.make_archive(os.path.join(os.environ['RUNNER_TEMP'], 'new', 'tokitty-v99.0.0-${{ matrix.target }}'), 'zip', 'dist-new', 'Tokitty')"
               ;;
             ubuntu-22.04)
               tar -czf "$NEW_ARCHIVE" -C dist-new tokitty
@@ -209,6 +221,39 @@ jobs:
       - name: Verify update
         run: |
           args=(--old-archive "$OLD_ARCHIVE" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --work "$RUNNER_TEMP/vu" --report "$RUNNER_TEMP/update-report.json")
+          if [ "$REHEARSAL" = "true" ]; then
+            args+=(--rehearsal)
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            xvfb-run -a python freeze/verify_update.py "${args[@]}"
+          else
+            python freeze/verify_update.py "${args[@]}"
+          fi
+
+      - name: Verify update (Qt)
+        run: |
+          args=(--old-archive "$OLD_ARCHIVE" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --qt --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-qt" --report "$RUNNER_TEMP/update-report-qt.json")
+          if [ "$REHEARSAL" = "true" ]; then
+            args+=(--rehearsal)
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            xvfb-run -a python freeze/verify_update.py "${args[@]}"
+          else
+            python freeze/verify_update.py "${args[@]}"
+          fi
+
+      - name: Verify update from a shipped release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            ext=tar.gz
+          else
+            ext=zip
+          fi
+          name="tokitty-$LEGACY_TAG-${{ matrix.target }}.$ext"
+          gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/legacy"
+          args=(--old-archive "$RUNNER_TEMP/legacy/$name" --old-tag "$LEGACY_TAG" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update --work "$RUNNER_TEMP/vu-legacy" --report "$RUNNER_TEMP/update-report-legacy.json")
           if [ "$REHEARSAL" = "true" ]; then
             args+=(--rehearsal)
           fi
@@ -236,7 +281,9 @@ jobs:
           print(f"- overall: {'PASS' if data.get('ok') else 'FAIL'}")
           sizes = data.get("sizes", {})
           if "app_dir_bytes" in sizes:
-              print(f"- extracted size: {sizes['app_dir_bytes']} bytes")
+              archive = os.path.join(os.environ["GITHUB_WORKSPACE"], "${{ steps.names.outputs.archive }}")
+              archive_bytes = os.path.getsize(archive) if os.path.exists(archive) else "unknown"
+              print(f"- archive size: {archive_bytes} bytes, extracted size: {sizes['app_dir_bytes']} bytes")
           timing = data.get("steps", {}).get("hook_timing", {}).get("detail", {})
           if isinstance(timing, dict) and "median_ms" in timing:
               cold_ms = timing.get("cold_s", 0) * 1000
@@ -318,7 +365,7 @@ jobs:
               raise SystemExit(0)
           with open(report_path, encoding="utf-8") as f:
               data = json.load(f)
-          label = "REHEARSAL (v0.0.2 rebuild of this commit)" if data.get("rehearsal") else "the release being published"
+          label = "REHEARSAL (v99.0.0 rebuild of this commit)" if data.get("rehearsal") else "the release being published"
           print(f"- overall: {'PASS' if data.get('ok') else 'FAIL'}, new side: {data.get('tag')}, {label}")
           steps = data.get("steps", {})
           for name, step in steps.items():
@@ -341,6 +388,33 @@ jobs:
               print(f"- no_ack_rollback: exit {rollback['apply'].get('returncode')} after {rollback['apply'].get('elapsed_s')} s")
           PY
 
+      - name: Append Qt and shipped-release update summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+
+          target = "${{ matrix.target }}"
+          print(f"### {target} Qt and shipped-release update tests")
+          for label, file_name in (
+              ("Tk update", "update-report.json"),
+              ("Qt update", "update-report-qt.json"),
+              (f"update from {os.environ['LEGACY_TAG']}", "update-report-legacy.json"),
+          ):
+              path = os.path.join(os.environ["RUNNER_TEMP"], file_name)
+              if not os.path.exists(path):
+                  print(f"- {label}: not run")
+                  continue
+              with open(path, encoding="utf-8") as f:
+                  data = json.load(f)
+              print(f"- {label}: {'PASS' if data.get('ok') else 'FAIL'}")
+              if file_name == "update-report-qt.json":
+                  apply_run = data.get("steps", {}).get("apply_update", {}).get("detail", {})
+                  if isinstance(apply_run, dict) and "after_update_qt" in apply_run:
+                      print(f"  after_update_qt: `{json.dumps(apply_run['after_update_qt'])[:1500]}`")
+          PY
+
       - name: Upload archive and report
         if: always()
         uses: actions/upload-artifact@v4
@@ -351,6 +425,8 @@ jobs:
             ${{ steps.names.outputs.archive }}.sha256
             ${{ runner.temp }}/report.json
             ${{ runner.temp }}/update-report.json
+            ${{ runner.temp }}/update-report-qt.json
+            ${{ runner.temp }}/update-report-legacy.json
 
   keychain:
     name: macOS Keychain check (dry run, #48 Task 8)
