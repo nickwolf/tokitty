@@ -114,6 +114,10 @@ class TokittyQtWidget(QWidget):
         self.anim.timeout.connect(self._next_frames)
         self.anim.start(FRAME_INTERVAL_MS)
 
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_application_state)
+
     # ---- layout ---------------------------------------------------------
 
     def rebuild_layout(self, homes: Sequence[str]) -> None:
@@ -569,13 +573,24 @@ class TokittyQtWidget(QWidget):
         self._after_native_window()
 
     def _after_native_window(self) -> None:
-        """Everything that needs the native window: the macOS helper (only
-        under the cocoa platform plugin, so offscreen runs skip it), then the
-        click mask. Runs after the first show and after every recreate."""
+        """Everything that needs the native window: the macOS helper, then
+        the click mask. Runs after the first show and after every recreate."""
+        self._apply_macos()
+        self._update_mask()
+
+    def _apply_macos(self) -> None:
+        """The macOS helper, only under the cocoa platform plugin, so
+        offscreen runs skip it."""
         if (sys.platform == "darwin" and self.windowHandle() is not None
                 and QGuiApplication.platformName() == "cocoa"):
-            macos.apply(int(self.winId()))
-        self._update_mask()
+            macos.apply(int(self.winId()), on_top=self._always_on_top)
+
+    def _on_application_state(self, state) -> None:
+        """Qt raises a Qt.Tool window back to the floating level as the app
+        becomes active, which undoes the helper's normal level when Always
+        in front is off. The state change arrives after that, so redo it."""
+        if state == Qt.ApplicationState.ApplicationActive and not self._always_on_top:
+            self._apply_macos()
 
     def cat_rects(self) -> List[T.Rect]:
         """Each cat's sprite rectangle in window coordinates."""

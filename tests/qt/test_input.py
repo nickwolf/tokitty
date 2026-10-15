@@ -328,10 +328,44 @@ def test_macos_helper_runs_on_darwin_under_cocoa(qapp, monkeypatch):
     from tokitty.qt import widget as widget_mod
 
     calls = []
-    monkeypatch.setattr(widget_mod.macos, "apply", lambda win_id: calls.append(win_id))
+    monkeypatch.setattr(widget_mod.macos, "apply",
+                        lambda win_id, on_top=True: calls.append((win_id, on_top)))
     monkeypatch.setattr(widget_mod, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(widget_mod.QGuiApplication, "platformName", staticmethod(lambda: "cocoa"))
     widget = make()
     widget.show()
-    assert calls == [int(widget.winId())]
+    assert calls == [(int(widget.winId()), True)]
+    widget.hide()
+
+
+def test_macos_helper_redoes_always_in_front_off_when_the_app_becomes_active(qapp, monkeypatch):
+    """Qt raises a Qt.Tool window back to the floating level as the app
+    becomes active, so with Always in front off the widget runs the helper
+    again on every activation. With it on there is nothing to redo."""
+    from tokitty.qt import widget as widget_mod
+
+    seen = []
+    monkeypatch.setattr(widget_mod.macos, "apply",
+                        lambda win_id, on_top=True: seen.append((win_id, on_top)))
+    monkeypatch.setattr(widget_mod, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(widget_mod.QGuiApplication, "platformName", staticmethod(lambda: "cocoa"))
+    widget = make()
+    widget.show()
+
+    def calls():
+        # Widgets other tests left alive hear the application's state too.
+        return [on_top for win_id, on_top in seen if win_id == int(widget.winId())]
+
+    active, inactive = Qt.ApplicationState.ApplicationActive, Qt.ApplicationState.ApplicationInactive
+    seen.clear()
+    qapp.applicationStateChanged.emit(active)
+    assert calls() == []
+    # The toggle's show() can make the app active, which runs it once more.
+    widget.set_always_on_top(False)
+    assert calls()[-1] is False
+    seen.clear()
+    qapp.applicationStateChanged.emit(inactive)
+    assert calls() == []
+    qapp.applicationStateChanged.emit(active)
+    assert calls() == [False]
     widget.hide()
