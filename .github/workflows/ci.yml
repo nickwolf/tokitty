@@ -46,6 +46,9 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The pixel report reads the reference PNGs at the pull request's base commit.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -53,19 +56,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libfontconfig1
       - run: pip install -e ".[dev]"
-      - name: probe 128
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then grep -m1 'model name' /proc/cpuinfo; grep -m1 -oE 'avx512[a-z]*' /proc/cpuinfo | sort -u | tr '\n' ' '; fi
-          if [ "$RUNNER_OS" = macOS ]; then sysctl -n machdep.cpu.brand_string; fi
-          if [ "$RUNNER_OS" = Windows ]; then powershell -c "(Get-CimInstance Win32_Processor).Name"; fi
-          python tests/qt/probe_128.py probe-out | grep PROBE
-          QT_SCALE_FACTOR=2 python tests/qt/probe_128.py probe-out | grep PROBE
-          ONLYCARD=1 QT_NO_CPU_FEATURE="avx512f avx512bw avx512vl avx512dq avx512cd" python tests/qt/probe_128.py probe-noavx | sed 's/PROBE /PROBE NOAVX512 /' | grep card_low || true
-          ONLYCARD=1 QT_QPA_PLATFORM=offscreen:fontengine=freetype python tests/qt/probe_128.py probe-ft | sed 's/PROBE /PROBE FT /' | grep -E 'card|text_' || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: probe-128-${{ matrix.os }}
-          path: probe-out
       - run: pytest -m qt
       - name: Upload pixel diffs
         if: failure()
@@ -73,6 +63,16 @@ jobs:
         with:
           name: pixel-diff-${{ matrix.os }}
           path: build/pixel-diff/
+          if-no-files-found: ignore
+      - name: Pixel reference report
+        if: always() && github.event_name == 'pull_request' && runner.os == 'Linux'
+        run: python tests/qt/pixel_check.py report ${{ github.event.pull_request.base.sha }}
+      - name: Upload pixel report
+        if: always() && github.event_name == 'pull_request' && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-report
+          path: build/pixel-report/
           if-no-files-found: ignore
 
   lint:
