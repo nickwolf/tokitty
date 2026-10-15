@@ -38,13 +38,16 @@ jobs:
         include:
           - os: windows-latest
             target: windows-x64
+            overhead_gate_ms: 60
           - os: macos-15
             target: macos-arm64
+            overhead_gate_ms: 80
           - os: macos-15-intel
             target: macos-x86_64
-            overhead_gate_ms: 90
+            overhead_gate_ms: 120
           - os: ubuntu-22.04
             target: linux-x86_64
+            overhead_gate_ms: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -132,15 +135,13 @@ jobs:
 
       - name: Verify artifact (Windows)
         if: matrix.os == 'windows-latest'
-        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt
+        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt --overhead-gate-ms "${{ matrix.overhead_gate_ms }}"
 
       - name: Verify artifact (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
           args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt)
-          if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
-            args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
-          fi
+          args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
           # The bundle's OpenSSL looks for trusted roots in this Python's
           # etc/openssl, which a user's Mac doesn't have. Hide it so the
           # self-check's tls check sees what users see.
@@ -152,7 +153,7 @@ jobs:
 
       - name: Verify artifact (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt
+        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt --overhead-gate-ms "${{ matrix.overhead_gate_ms }}"
 
       - name: Self-check on a clean Ubuntu 22.04 (Linux)
         if: matrix.os == 'ubuntu-22.04'
@@ -355,6 +356,8 @@ jobs:
                   f"- hook cold: {cold_ms:.1f} ms, median: {timing['median_ms']:.1f} ms "
                   f"(min {min_ms:.1f}, max {max_ms:.1f})"
               )
+              if timing.get("overhead_median_ms") is not None:
+                  print(f"  paired overhead median (frozen - baseline, interleaved): {timing['overhead_median_ms']:.1f} ms")
 
           # #48 Task 1: the plain-Python baseline on the same runner, for
           # comparison against the frozen median above. Informational only
@@ -374,7 +377,7 @@ jobs:
               if frozen_median_ms is not None and diff_ms is not None:
                   print(
                       f"  frozen median {frozen_median_ms:.1f} ms vs baseline median "
-                      f"{baseline['median_ms']:.1f} ms, difference {diff_ms:.1f} ms"
+                      f"{baseline['median_ms']:.1f} ms, {baseline.get('diff_kind', 'difference')} {diff_ms:.1f} ms"
                   )
               frozen_series_ms = [round(t * 1000, 3) for t in (baseline.get("frozen_timings_s") or [])]
               baseline_series_ms = [round(t * 1000, 3) for t in (baseline.get("timings_s") or [])]
@@ -382,9 +385,8 @@ jobs:
               print(f"  baseline series (ms): {baseline_series_ms}")
 
           # #48 dry run 2: the gate decision, judged after both of the above
-          # have measured. gate_kind is "overhead" only for the matrix entry
-          # that passed --overhead-gate-ms (macos-15-intel); everyone else
-          # gets the absolute gate.
+          # have measured. gate_kind is "overhead" for every matrix entry (each
+          # sets overhead_gate_ms, so each passes --overhead-gate-ms).
           gate_step = data.get("steps", {}).get("hook_timing_gate", {})
           gate = gate_step.get("detail", {})
           if isinstance(gate, dict) and "gate_kind" in gate:
@@ -395,7 +397,13 @@ jobs:
               line = f"- gate ({gate['gate_kind']}): {verdict}, threshold {threshold_ms} ms, frozen median {frozen_median_ms} ms"
               if baseline_median_ms is not None:
                   line += f", baseline median {baseline_median_ms} ms"
+              if gate.get("overhead_median_ms") is not None:
+                  line += f", paired overhead median {gate['overhead_median_ms']:.1f} ms"
               print(line)
+              for r in gate.get("rounds") or []:
+                  overhead = r.get("overhead_median_ms")
+                  overhead_text = f"{overhead:.1f} ms" if isinstance(overhead, (int, float)) else "n/a"
+                  print(f"  round {r.get('round')}: {'PASS' if r.get('ok') else 'FAIL'}, paired overhead median {overhead_text}")
               if gate.get("error"):
                   print(f"  {gate['error']}")
 

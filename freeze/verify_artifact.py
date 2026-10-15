@@ -19,8 +19,8 @@ parent of this script's own directory (freeze/), used only to byte-compare
 the bundled hook_writer.py against the repo's copy.
 
 --overhead-gate-ms replaces the absolute --gate-ms gate with a
-baseline-relative one (frozen_median_ms <= baseline_median_ms +
-overhead_gate_ms), for runners where only the overhead over a same-runner
+baseline-relative one (median of the paired frozen - baseline differences
+<= overhead_gate_ms), for runners where only the overhead over a same-runner
 plain-Python hook is meaningful, not the absolute number. Nothing here
 checks the platform or OS name to decide which gate applies -- the caller
 (release.yml) passes the flag only for the matrix entries it wants it on.
@@ -35,20 +35,25 @@ Steps, in order (stops at the first failure, always writes the report):
   3. fail-closed accounts.json preflight, before anything can write hooks
   4. `<gui> --install-hooks`, checked against the repo and the state dir
   4b. a second simulated release, extracted separately, repoints `current`
-  5. hook_timing: time the registered PreToolUse hook argv (cold + 20 warm
-     runs). Measurement only -- no gate is judged here.
-  5b. hook_timing_baseline: the same cold + 20 warm loop against a copy of
-      the repo's own tokitty/hook_writer.py, run with sys.executable
-      instead of the frozen tokitty-hook. Always runs right after 5,
-      before the gate is judged, regardless of whether 5 measured cleanly.
-  5c. hook_timing_gate: judges 5 against 5b, after both have measured.
-      Absolute gate (default): frozen_median_ms <= gate_ms; the baseline
-      stays informational here, so a baseline that failed to measure
-      cannot fail this gate. Overhead gate (--overhead-gate-ms given):
-      frozen_median_ms <= baseline_median_ms + overhead_gate_ms; the
-      baseline is required for this gate, so a baseline that failed to
-      measure fails it closed instead of silently passing. Records which
-      gate applied, its threshold, and the measured numbers.
+  5. hook_timing: one interleaved round (#158, #160). A cold run of the
+     registered PreToolUse hook argv and of a copy of the repo's own
+     tokitty/hook_writer.py (the baseline, run with sys.executable), then 30
+     warm pairs that each run both, alternating which goes first. Runner
+     slowdowns hit both sides of a pair, and the per-pair difference
+     (frozen - baseline) cancels them. Reports the frozen side plus the
+     paired overhead. Measurement only (no gate is judged here).
+  5b. hook_timing_baseline: reports the baseline side of the same round
+      (no separate timing loop). diff_ms is the median of the paired
+      differences. Informational, like 5.
+  5c. hook_timing_gate: judges the round. Absolute gate (default):
+      frozen median <= gate_ms. Overhead gate (--overhead-gate-ms given):
+      the median of the paired differences <= overhead_gate_ms; the baseline
+      is required for it, so a baseline that failed to measure fails it
+      closed. If the first round misses the gate, one more full round is
+      measured on fresh session ids and judged again; the gate passes if the
+      retry passes. A measurement error (a hook crashed, a bad seq) fails
+      at once with no retry. Records which gate applied, its threshold, the
+      deciding round's numbers, and a summary of every round.
   6. run every registered hook by its own event name
   7. autostart install/uninstall round trip
 """
@@ -752,231 +757,289 @@ def step_second_release(ctx):
     return {"ok": True, "detail": {"release_b_dir": str(release_b_root), "current_link_target": link_real}}
 
 
-def _time_hook_argv(argv, env, sessions_dir: Path, label: str):
-    """One cold + 20 warm invocations of `argv`, piping the same PreToolUse
-    payload shape to each and validating exit code, stdout, and state-file
-    seq the same way regardless of which hook runner `argv` points at (the
-    frozen tokitty-hook, or a plain-Python hook_writer.py copy run with
-    sys.executable). `label` namespaces the cold/warm session ids so two
-    callers can safely share one sessions_dir. Returns (ok, detail): detail
-    always carries whatever timings were collected, even on a failure
-    partway through the warm loop, so a fix round's report shows every
-    value gathered so far."""
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+# Warm (frozen, baseline) pairs per round.
+PAIRED_WARM_RUNS = 30
 
-    def _payload(session_id):
-        return json.dumps(
-            {"session_id": session_id, "hook_event_name": "PreToolUse", "tool_name": "Bash"}
-        ).encode("utf-8")
 
-    cold_id = f"{label}-cold"
-    cold_state = sessions_dir / f"{cold_id}.json"
-    if cold_state.exists():
-        cold_state.unlink()
-    t0 = time.perf_counter()
-    proc, err = run_child(argv, env, input_bytes=_payload(cold_id))
-    cold_s = time.perf_counter() - t0
-    if err:
-        return False, {"error": f"cold run: {err}"}
-    if proc.returncode != 0 or proc.stdout != b"":
-        return False, {"error": f"cold run: exit={proc.returncode} stdout={proc.stdout!r}"}
-    if not cold_state.is_file():
-        return False, {"error": "cold run: state file missing"}
-    cold_data = json.loads(cold_state.read_text(encoding="utf-8"))
-    if cold_data.get("seq") != 1:
-        return False, {"error": f"cold run: seq {cold_data.get('seq')} != 1"}
+def _median(values):
+    ordered = sorted(values)
+    n = len(ordered)
+    return ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
 
-    warm_id = f"{label}-warm"
-    warm_state = sessions_dir / f"{warm_id}.json"
-    if warm_state.exists():
-        warm_state.unlink()
 
-    timings = []
-    for i in range(1, 21):
-        t0 = time.perf_counter()
-        proc, err = run_child(argv, env, input_bytes=_payload(warm_id))
-        elapsed = time.perf_counter() - t0
-        timings.append(elapsed)
-        if err:
-            return False, {"error": f"warm run {i}: {err}", "timings_s": timings, "cold_s": cold_s}
-        if proc.returncode != 0 or proc.stdout != b"":
-            return False, {
-                "error": f"warm run {i}: exit={proc.returncode} stdout={proc.stdout!r}",
-                "timings_s": timings,
-                "cold_s": cold_s,
-            }
-        if not warm_state.is_file():
-            return False, {
-                "error": f"warm run {i}: state file missing",
-                "timings_s": timings,
-                "cold_s": cold_s,
-            }
-        data = json.loads(warm_state.read_text(encoding="utf-8"))
-        if data.get("seq") != i:
-            return False, {
-                "error": f"warm run {i}: seq {data.get('seq')} != {i}",
-                "timings_s": timings,
-                "cold_s": cold_s,
-            }
-
-    sorted_t = sorted(timings)
-    n = len(sorted_t)
-    median = sorted_t[n // 2] if n % 2 else (sorted_t[n // 2 - 1] + sorted_t[n // 2]) / 2
-    return True, {
+def _side_stats(cold_s, timings):
+    ordered = sorted(timings)
+    median = _median(timings)
+    return {
         "cold_s": cold_s,
-        "timings_s": timings,
-        "min_s": sorted_t[0],
+        "timings_s": list(timings),
+        "min_s": ordered[0],
         "median_s": median,
-        "max_s": sorted_t[-1],
+        "max_s": ordered[-1],
         "median_ms": median * 1000,
     }
 
 
+def _checked_run(argv, env, session_id, state_path: Path, expected_seq):
+    """One hook invocation with the per-run checks every timed hook run gets:
+    exit 0, empty stdout, the state file exists, its seq == expected_seq.
+    Returns (elapsed_s, error); error is None when every check held."""
+    payload = json.dumps(
+        {"session_id": session_id, "hook_event_name": "PreToolUse", "tool_name": "Bash"}
+    ).encode("utf-8")
+    t0 = time.perf_counter()
+    proc, err = run_child(argv, env, input_bytes=payload)
+    elapsed = time.perf_counter() - t0
+    if err:
+        return elapsed, err
+    if proc.returncode != 0 or proc.stdout != b"":
+        return elapsed, f"exit={proc.returncode} stdout={proc.stdout!r}"
+    if not state_path.is_file():
+        return elapsed, "state file missing"
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    if data.get("seq") != expected_seq:
+        return elapsed, f"seq {data.get('seq')} != {expected_seq}"
+    return elapsed, None
+
+
+def _time_hook_pair(frozen_argv, frozen_sessions: Path, baseline_argv, baseline_sessions: Path, env, suffix=""):
+    """One interleaved round (#158, #160): a cold run of each hook (frozen
+    first, then baseline), then PAIRED_WARM_RUNS warm iterations that each
+    run both, alternating which goes first (even iteration: frozen then
+    baseline; odd: baseline then frozen). Runner slowdowns therefore land on
+    both sides of a pair instead of on whichever block happened to be
+    running, and the per-pair difference (frozen - baseline) cancels them.
+    Each side keeps its own sessions dir and a label ("verify"/"baseline" plus
+    `suffix`, so a retry round gets fresh session ids and a clean seq), and
+    gets _checked_run's per-run checks. Returns a round dict:
+    error / failed_side (None when clean), frozen and baseline side details
+    (full stats only for a side that finished all its runs, otherwise just
+    the cold_s and timings_s collected so far, plus the error on the failing
+    side), paired_overhead_ms, overhead_median_ms (None unless the round was
+    clean), and order (one "FB"/"BF" per warm iteration actually started)."""
+    sides = {
+        "frozen": {"argv": frozen_argv, "dir": frozen_sessions, "label": f"verify{suffix}"},
+        "baseline": {"argv": baseline_argv, "dir": baseline_sessions, "label": f"baseline{suffix}"},
+    }
+    for side in sides.values():
+        side["dir"].mkdir(parents=True, exist_ok=True)
+        side["cold_state"] = side["dir"] / f"{side['label']}-cold.json"
+        side["warm_state"] = side["dir"] / f"{side['label']}-warm.json"
+        for state in (side["cold_state"], side["warm_state"]):
+            if state.exists():
+                state.unlink()
+        side["cold_s"] = None
+        side["timings"] = []
+        side["error"] = None
+
+    overheads_ms = []
+    order = []
+    failed_side = None
+    error = None
+
+    def _finish():
+        round_ = {"error": error, "failed_side": failed_side, "order": order, "paired_overhead_ms": overheads_ms}
+        for name, side in sides.items():
+            complete = side["error"] is None and side["cold_s"] is not None and len(side["timings"]) == PAIRED_WARM_RUNS
+            if complete and error is None:
+                detail = _side_stats(side["cold_s"], side["timings"])
+            else:
+                detail = {"cold_s": side["cold_s"], "timings_s": list(side["timings"])}
+                if side["error"]:
+                    detail["error"] = side["error"]
+            round_[name] = detail
+        round_["overhead_median_ms"] = _median(overheads_ms) if overheads_ms and error is None else None
+        return round_
+
+    for name in ("frozen", "baseline"):
+        side = sides[name]
+        elapsed, err = _checked_run(side["argv"], env, f"{side['label']}-cold", side["cold_state"], 1)
+        side["cold_s"] = elapsed
+        if err:
+            side["error"] = f"cold run: {err}"
+            failed_side, error = name, f"{name} cold run: {err}"
+            return _finish()
+
+    for k in range(PAIRED_WARM_RUNS):
+        names = ("frozen", "baseline") if k % 2 == 0 else ("baseline", "frozen")
+        order.append("FB" if k % 2 == 0 else "BF")
+        elapsed_by_side = {}
+        for name in names:
+            side = sides[name]
+            elapsed, err = _checked_run(side["argv"], env, f"{side['label']}-warm", side["warm_state"], k + 1)
+            side["timings"].append(elapsed)
+            elapsed_by_side[name] = elapsed
+            if err:
+                side["error"] = f"warm run {k + 1}: {err}"
+                failed_side, error = name, f"{name} warm run {k + 1}: {err}"
+                return _finish()
+        overheads_ms.append((elapsed_by_side["frozen"] - elapsed_by_side["baseline"]) * 1000)
+    return _finish()
+
+
+def _measure_round(ctx, suffix=""):
+    setup = ctx["timing_setup"]
+    return _time_hook_pair(
+        setup["frozen_argv"],
+        setup["frozen_sessions"],
+        setup["baseline_argv"],
+        setup["baseline_sessions"],
+        ctx["env"],
+        suffix,
+    )
+
+
 def step_hook_timing(ctx):
-    """Times the registered PreToolUse hook argv (cold + 20 warm runs).
-    Measurement only: no gate is judged here (#48 dry run 2, Nick's
-    overhead gate decision) -- that happens in step_hook_timing_gate, after
-    step_hook_timing_baseline has also had a chance to measure."""
+    """Times the registered PreToolUse hook argv against a copy of the repo's
+    own tokitty/hook_writer.py (run with sys.executable, the runner's
+    setup-python interpreter) as one interleaved round: a cold run of each,
+    then 30 warm pairs in alternating order (#158, #160; see
+    _time_hook_pair). This step reports the frozen side in the same fields
+    as before (cold_s, timings_s, min_s, median_s, max_s, median_ms, argv)
+    plus the paired data (paired_overhead_ms, overhead_median_ms, order);
+    step_hook_timing_baseline reports the other side of the same round.
+    Measurement only: no gate is judged here (#48 dry run 2, Nick's overhead
+    gate decision); that happens in step_hook_timing_gate."""
     realpath_err = _release_b_realpath_check(ctx)
     if realpath_err:
         return {"ok": False, "detail": realpath_err}
     argv = _hook_argv(ctx["settings_data"], "PreToolUse", "", ctx["expected_command"], ctx["sessions_dir_expected"])
     sessions_dir = Path(_sessions_dir_from_argv(argv))
 
-    ok, detail = _time_hook_argv(argv, ctx["env"], sessions_dir, "verify")
-    detail["argv"] = argv
-    return {"ok": ok, "detail": detail}
-
-
-def step_hook_timing_baseline(ctx):
-    """Informational only (#48 Task 1, Nick's baseline decision): times the
-    same cold + 20 warm loop against a copy of the repo's own
-    tokitty/hook_writer.py, run with sys.executable (the runner's
-    setup-python interpreter that runs this verifier) instead of the frozen
-    tokitty-hook. Always runs right after hook_timing, before the gate is
-    judged, and its own ok/fail is never allowed by name to change whether
-    the run as a whole passes (see main()'s report["ok"] computation and
-    INFORMATIONAL_STEPS) -- under the absolute gate a failed baseline stays
-    purely informational. Under the overhead gate (#48 dry run 2) a failed
-    baseline is not swallowed, though: step_hook_timing_gate reads this
-    step's result and fails itself closed when the overhead gate has no
-    baseline median to judge against."""
-    frozen_result = ctx.get("hook_timing_result") or {}
-    frozen_detail = frozen_result.get("detail")
-    frozen_detail = frozen_detail if isinstance(frozen_detail, dict) else {}
-
     hook_writer_src = ctx["repo_root"] / "tokitty" / "hook_writer.py"
     if not hook_writer_src.is_file():
         return {"ok": False, "detail": f"repo hook_writer.py not found at {hook_writer_src}"}
-
     baseline_dir = ctx["work"] / "baseline"
     baseline_dir.mkdir(parents=True, exist_ok=True)
     hook_writer_copy = baseline_dir / "hook_writer.py"
     shutil.copy2(hook_writer_src, hook_writer_copy)
-    sessions_dir = baseline_dir / "sessions"
-    argv = [sys.executable, str(hook_writer_copy), "--sessions-dir", str(sessions_dir)]
+    baseline_sessions = baseline_dir / "sessions"
+    ctx["timing_setup"] = {
+        "frozen_argv": argv,
+        "frozen_sessions": sessions_dir,
+        "baseline_argv": [sys.executable, str(hook_writer_copy), "--sessions-dir", str(baseline_sessions)],
+        "baseline_sessions": baseline_sessions,
+    }
 
-    ok, detail = _time_hook_argv(argv, ctx["env"], sessions_dir, "baseline")
+    rnd = _measure_round(ctx)
+    ctx["timing_round"] = rnd
+    detail = dict(rnd["frozen"])
     detail["argv"] = argv
+    detail["paired_overhead_ms"] = rnd["paired_overhead_ms"]
+    detail["overhead_median_ms"] = rnd["overhead_median_ms"]
+    detail["order"] = rnd["order"]
+    detail["order_note"] = "alternating per warm pair: FB = frozen then baseline, BF = baseline then frozen"
+    if rnd["error"]:
+        detail["round_error"] = rnd["error"]
+    return {"ok": "median_ms" in rnd["frozen"], "detail": detail}
+
+
+def step_hook_timing_baseline(ctx):
+    """Informational only (#48 Task 1, Nick's baseline decision). Does not
+    measure anything itself any more: the baseline (a copy of the repo's own
+    tokitty/hook_writer.py run with sys.executable) is timed inside
+    step_hook_timing's interleaved round, and this reports that side in its
+    existing fields (cold_s, timings_s, min_s, median_s, max_s, median_ms,
+    argv, sys_executable, frozen_timings_s, frozen_median_ms). diff_ms is
+    now the median of the paired (frozen - baseline) differences, not the
+    difference of the medians (diff_kind says so). `ok` reports only whether
+    the baseline side measured cleanly; main()'s report["ok"] excludes this
+    step by name (INFORMATIONAL_STEPS), and step_hook_timing_gate decides
+    whether a baseline failure matters."""
+    rnd = ctx.get("timing_round")
+    if not rnd:
+        return {"ok": False, "detail": "hook_timing produced no round to report the baseline from"}
+    detail = dict(rnd["baseline"])
+    detail["argv"] = ctx["timing_setup"]["baseline_argv"]
     detail["sys_executable"] = sys.executable
+    detail["frozen_timings_s"] = rnd["frozen"].get("timings_s")
+    detail["frozen_median_ms"] = rnd["frozen"].get("median_ms")
+    detail["diff_ms"] = rnd["overhead_median_ms"]
+    detail["diff_kind"] = "median of paired differences"
+    return {"ok": "median_ms" in rnd["baseline"], "detail": detail}
 
-    frozen_median_ms = frozen_detail.get("median_ms")
-    baseline_median_ms = detail.get("median_ms")
-    diff_ms = None
-    if isinstance(frozen_median_ms, (int, float)) and isinstance(baseline_median_ms, (int, float)):
-        diff_ms = frozen_median_ms - baseline_median_ms
-    detail["frozen_timings_s"] = frozen_detail.get("timings_s")
-    detail["frozen_median_ms"] = frozen_median_ms
-    detail["diff_ms"] = diff_ms
 
-    # `ok` here reports only whether the baseline's own cold/warm loop ran
-    # cleanly -- there is no gate judged in this step. main()'s report["ok"]
-    # computation excludes this step by name, so a baseline-only failure
-    # here never fails the run by itself; step_hook_timing_gate decides
-    # whether that failure matters.
-    return {"ok": ok, "detail": detail}
+def _judge_round(rnd, overhead_gate_ms, gate_ms):
+    """Judges one round. Returns (ok, detail, measurement_error). A round
+    that did not measure cleanly (hook crashed, bad seq, either side) is a
+    measurement error: it fails closed here and is never retried."""
+    gate_kind = "overhead" if overhead_gate_ms is not None else "absolute"
+    detail = {"gate_kind": gate_kind}
+    if rnd["error"] or rnd["overhead_median_ms"] is None:
+        detail["error"] = f"measurement error: {rnd['error'] or 'round produced no paired data'}"
+        return False, detail, True
+
+    frozen_median_ms = rnd["frozen"]["median_ms"]
+    baseline_median_ms = rnd["baseline"]["median_ms"]
+    overhead_median_ms = rnd["overhead_median_ms"]
+    detail.update(
+        frozen_median_ms=frozen_median_ms,
+        baseline_median_ms=baseline_median_ms,
+        overhead_median_ms=overhead_median_ms,
+    )
+    if overhead_gate_ms is not None:
+        detail["overhead_gate_ms"] = overhead_gate_ms
+        detail["threshold_ms"] = overhead_gate_ms
+        ok = overhead_median_ms <= overhead_gate_ms
+        if not ok:
+            detail["error"] = (
+                f"median paired overhead {overhead_median_ms:.3f}ms exceeds overhead gate {overhead_gate_ms}ms "
+                f"(frozen median {frozen_median_ms:.3f}ms, baseline median {baseline_median_ms:.3f}ms)"
+            )
+    else:
+        detail["gate_ms"] = gate_ms
+        detail["threshold_ms"] = gate_ms
+        ok = frozen_median_ms <= gate_ms
+        if not ok:
+            detail["error"] = f"median {frozen_median_ms:.3f}ms exceeds gate {gate_ms}ms"
+    return ok, detail, False
 
 
 def step_hook_timing_gate(ctx):
-    """Judges step_hook_timing's frozen median against step_hook_timing_baseline's
-    baseline median, now that both have measured (#48 dry run 2, Nick's
-    overhead gate decision: Linux 59.3 vs 35.9, macOS arm64 63.6 vs 30.0,
-    Windows 84.9 vs 51.1, macOS x86_64 125.9 vs 82.7 ms median pairs --
-    the Intel runner is slow outright, and its overhead over a same-runner
-    plain-Python hook is in line with the other three).
+    """Judges the interleaved round step_hook_timing measured (#48 dry run 2,
+    Nick's overhead gate decision; interleaving and retry from #158, #160:
+    runner slowdowns used to land on one of two back-to-back blocks and move
+    the old difference of medians by tens of ms).
 
     Two gates, chosen by whether --overhead-gate-ms was given (ctx
     "overhead_gate_ms"), never by platform or OS name:
-      - absolute (default): frozen_median_ms <= gate_ms. The baseline
-        stays informational for this gate -- a baseline that failed to
-        measure cannot fail it.
-      - overhead (--overhead-gate-ms N): frozen_median_ms <=
-        baseline_median_ms + N. The baseline is required for this gate: if
-        it failed to measure, there is no threshold to judge against, so
-        this fails closed rather than silently passing.
-    """
+      - absolute (default): frozen median <= gate_ms.
+      - overhead (--overhead-gate-ms N): the median of the per-pair
+        (frozen - baseline) differences <= N. The baseline is required for
+        this gate: a baseline that failed to measure fails it closed rather
+        than silently passing.
+    Retry: if the first round misses the gate (a real verdict, not a
+    measurement error), ONE more full round is measured on fresh session ids
+    ("verify-r2", "baseline-r2") and judged the same way; the gate passes if
+    the retry passes. A measurement error (hook crashed, bad seq) fails
+    immediately with no retry. The detail carries the deciding round's
+    gate_kind, threshold_ms, frozen_median_ms, baseline_median_ms,
+    overhead_median_ms and error at top level, plus `rounds`, one summary per
+    round measured."""
     overhead_gate_ms = ctx.get("overhead_gate_ms")
-    gate_kind = "overhead" if overhead_gate_ms is not None else "absolute"
-
-    timing_result = ctx.get("hook_timing_result") or {}
-    timing_detail = timing_result.get("detail")
-    timing_detail = timing_detail if isinstance(timing_detail, dict) else {}
-    frozen_median_ms = timing_detail.get("median_ms")
-
-    if not timing_result.get("ok") or not isinstance(frozen_median_ms, (int, float)):
+    gate_ms = ctx["gate_ms"]
+    rnd = ctx.get("timing_round")
+    if not rnd:
         return {
             "ok": False,
             "detail": {
-                "gate_kind": gate_kind,
-                "frozen_median_ms": frozen_median_ms,
-                "error": "hook_timing did not produce a median to judge",
+                "gate_kind": "overhead" if overhead_gate_ms is not None else "absolute",
+                "error": "hook_timing did not produce a round to judge",
             },
         }
 
-    baseline_result = ctx.get("hook_timing_baseline_result") or {}
-    baseline_detail = baseline_result.get("detail")
-    baseline_detail = baseline_detail if isinstance(baseline_detail, dict) else {}
-    baseline_median_ms = baseline_detail.get("median_ms")
+    def _summary(number, ok, detail):
+        keys = ("overhead_median_ms", "frozen_median_ms", "baseline_median_ms", "error")
+        return {"round": number, "ok": ok, **{k: detail.get(k) for k in keys}}
 
-    if overhead_gate_ms is not None:
-        if not baseline_result.get("ok") or not isinstance(baseline_median_ms, (int, float)):
-            return {
-                "ok": False,
-                "detail": {
-                    "gate_kind": gate_kind,
-                    "overhead_gate_ms": overhead_gate_ms,
-                    "frozen_median_ms": frozen_median_ms,
-                    "baseline_median_ms": baseline_median_ms,
-                    "error": "overhead gate requires a baseline median; baseline measurement failed",
-                },
-            }
-        threshold_ms = baseline_median_ms + overhead_gate_ms
-        ok = frozen_median_ms <= threshold_ms
-        detail = {
-            "gate_kind": gate_kind,
-            "overhead_gate_ms": overhead_gate_ms,
-            "threshold_ms": threshold_ms,
-            "frozen_median_ms": frozen_median_ms,
-            "baseline_median_ms": baseline_median_ms,
-        }
-        if not ok:
-            detail["error"] = (
-                f"median {frozen_median_ms:.3f}ms exceeds overhead gate "
-                f"(baseline {baseline_median_ms:.3f}ms + {overhead_gate_ms}ms = {threshold_ms:.3f}ms)"
-            )
-        return {"ok": ok, "detail": detail}
-
-    gate_ms = ctx["gate_ms"]
-    ok = frozen_median_ms <= gate_ms
-    detail = {
-        "gate_kind": gate_kind,
-        "gate_ms": gate_ms,
-        "threshold_ms": gate_ms,
-        "frozen_median_ms": frozen_median_ms,
-        "baseline_median_ms": baseline_median_ms,
-    }
-    if not ok:
-        detail["error"] = f"median {frozen_median_ms:.3f}ms exceeds gate {gate_ms}ms"
+    ok, detail, measurement_error = _judge_round(rnd, overhead_gate_ms, gate_ms)
+    rounds = [_summary(1, ok, detail)]
+    if not ok and not measurement_error:
+        rnd2 = _measure_round(ctx, "-r2")
+        ctx["timing_round_2"] = rnd2
+        ok, detail, _ = _judge_round(rnd2, overhead_gate_ms, gate_ms)
+        rounds.append(_summary(2, ok, detail))
+    detail["rounds"] = rounds
     return {"ok": ok, "detail": detail}
 
 
@@ -1253,9 +1316,10 @@ STEPS = [
 
 # Steps whose own ok/fail never counts toward report["ok"] and never stops
 # the run on its own (#48 dry run 2): hook_timing and hook_timing_baseline
-# are both pure measurements now, run unconditionally in that order; only
-# hook_timing_gate, which judges the two of them together, decides whether
-# the hook-timing concern passes or fails the overall run.
+# are both pure measurements (two views of one interleaved round), run
+# unconditionally in that order; only hook_timing_gate, which judges the
+# round, decides whether the hook-timing concern passes or fails the
+# overall run.
 INFORMATIONAL_STEPS = {"hook_timing", "hook_timing_baseline"}
 
 
@@ -1353,14 +1417,6 @@ def main() -> int:
             report["steps"][name] = result
             status = "ok" if result.get("ok") else "FAILED"
             print(f"[verify_artifact] step {name}: {status}", file=sys.stderr)
-
-            # hook_timing and hook_timing_baseline are both informational
-            # measurements that always run in order; hook_timing_gate reads
-            # both results back out of ctx to judge them together.
-            if name == "hook_timing":
-                ctx["hook_timing_result"] = result
-            elif name == "hook_timing_baseline":
-                ctx["hook_timing_baseline_result"] = result
 
             if name in INFORMATIONAL_STEPS:
                 continue
