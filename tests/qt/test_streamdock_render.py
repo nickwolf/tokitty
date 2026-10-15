@@ -9,7 +9,7 @@ import queue
 import threading
 
 import pytest
-from PySide6.QtGui import QFontInfo, QFontMetricsF, QImage
+from PySide6.QtGui import QFont, QFontInfo, QFontMetricsF, QImage
 
 from tokitty import sprites
 from tokitty.streamdock import render
@@ -189,6 +189,13 @@ def test_font_is_registered_and_used():
     assert font.family() == family
     assert QFontInfo(font).family() == family
     assert QFontInfo(font).pixelSize() == 10
+
+
+def test_font_is_fully_hinted_without_subpixel_antialiasing():
+    render.register_font()
+    font = render._font(10)
+    assert font.hintingPreference() == QFont.HintingPreference.PreferFullHinting
+    assert font.styleStrategy() & QFont.StyleStrategy.NoSubpixelAntialias
 
 
 def test_the_ellipsis_the_preview_uses_has_a_glyph():
