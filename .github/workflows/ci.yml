@@ -53,6 +53,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libfontconfig1
       - run: pip install -e ".[dev]"
+      - name: probe 128
+        run: |
+          python tests/qt/probe_128.py probe-out | grep PROBE
+          QT_SCALE_FACTOR=2 python tests/qt/probe_128.py probe-out | grep PROBE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-128-${{ matrix.os }}
+          path: probe-out
       - run: pytest -m qt
 
   lint:
