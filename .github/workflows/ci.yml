@@ -46,6 +46,9 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The pixel report reads the reference PNGs at the pull request's base commit.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -54,6 +57,23 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libfontconfig1
       - run: pip install -e ".[dev]"
       - run: pytest -m qt
+      - name: Upload pixel diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-diff-${{ matrix.os }}
+          path: build/pixel-diff/
+          if-no-files-found: ignore
+      - name: Pixel reference report
+        if: always() && github.event_name == 'pull_request' && runner.os == 'Linux'
+        run: python tests/qt/pixel_check.py report ${{ github.event.pull_request.base.sha }}
+      - name: Upload pixel report
+        if: always() && github.event_name == 'pull_request' && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-report
+          path: build/pixel-report/
+          if-no-files-found: ignore
 
   lint:
     name: lint (ruff)

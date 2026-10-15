@@ -3,9 +3,10 @@
 Every function returns a data:image/png;base64 string, memoised on its inputs
 so a steady deck costs nothing per refresh. Images are drawn with Qt (QImage
 and QPainter) in Aileron Regular, a font that ships in tokitty/streamdock/fonts
-and is registered by register_font(), so the keys look the same on every OS
-whatever fonts the system has. PNG encoding settings are fixed so equal inputs
-give equal bytes within one process.
+and is registered by register_font(). Hinting is forced to full and subpixel
+antialiasing is off, so the keys match on Linux and Windows whatever fonts the
+system has; macOS draws the same font through CoreText, which differs. PNG
+encoding settings are fixed so equal inputs give equal bytes within one process.
 
 Rendering needs a QGuiApplication and a registered font. It runs off the GUI
 thread (DeckServer calls the image function from its request handlers), which
@@ -94,6 +95,9 @@ def _font(size: int) -> QFont:
     request handlers draw keys on several threads at once."""
     font = QFont(font_family())
     font.setPixelSize(size)
+    # Linux and Windows only rasterize the same glyphs with these two set.
+    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    font.setStyleStrategy(QFont.StyleStrategy.NoSubpixelAntialias)
     return font
 
 

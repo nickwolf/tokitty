@@ -233,19 +233,21 @@ class TokittyQtWidget(QWidget):
 
     # ---- painting -------------------------------------------------------
 
+    def _make_font(self, points: int, bold: bool) -> QFont:
+        """One of the card's fonts. The seam the pixel tests override."""
+        font = QFont(self.font())
+        if sys.platform == "win32":
+            font.setFamily("Segoe UI")
+        font.setPointSize(points)
+        font.setBold(bold)
+        return font
+
     def _font_set(self) -> Tuple[QFont, QFont, QFont]:
         if self._fonts is None:
-            def make(points: int, bold: bool) -> QFont:
-                font = QFont(self.font())
-                if sys.platform == "win32":
-                    font.setFamily("Segoe UI")
-                font.setPointSize(points)
-                font.setBold(bold)
-                return font
             self._fonts = (
-                make(T.FONT_SIZE_LABEL, True),
-                make(T.FONT_SIZE_MODEL, True),
-                make(T.FONT_SIZE_TEXT, False),
+                self._make_font(T.FONT_SIZE_LABEL, True),
+                self._make_font(T.FONT_SIZE_MODEL, True),
+                self._make_font(T.FONT_SIZE_TEXT, False),
             )
         return self._fonts
 
@@ -290,13 +292,12 @@ class TokittyQtWidget(QWidget):
             box = QRectF(left, rect.y + TK_LABEL_PAD_Y, T.CARD_WIDTH - left,
                          T.CARD_HEIGHT - rect.y - TK_LABEL_PAD_Y)
             p.setFont(self._font_set()[2])
-            p.setPen(dim)
-            p.drawText(box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            self._text(p, dim, box, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
                        | Qt.TextFlag.TextWordWrap, text)
         if "account_label" in layout and pane._label:
             p.setFont(self._font_set()[2])
-            p.setPen(dim)
-            p.drawText(_text_rect(layout["account_label"], right=True), _RIGHT_VCENTER, pane._label)
+            self._text(p, dim, _text_rect(layout["account_label"], right=True),
+                       _RIGHT_VCENTER, pane._label)
         p.restore()
 
         self._paint_cat(p, index, pane, palette, home, dpr)

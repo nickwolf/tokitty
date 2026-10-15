@@ -211,6 +211,40 @@ def test_models_view_paints_rows(qapp):
     assert image.pixelColor(bar.right - 2, bar.y + 2).name() == T.BarStyle.track
 
 
+def test_make_font_is_the_one_font_seam(qapp):
+    from PySide6.QtGui import QFont
+
+    class Probe(TokittyQtWidget):
+        def _make_font(self, points, bold):
+            font = QFont("Aileron")
+            font.setPixelSize(points)
+            font.setBold(bold)
+            return font
+
+    widget = Probe(T.Theme(), [Customization()], 1)
+    widget.anim.stop()
+    label, model, text = widget._font_set()
+    assert (label.pixelSize(), model.pixelSize(), text.pixelSize()) == (
+        T.FONT_SIZE_LABEL, T.FONT_SIZE_MODEL, T.FONT_SIZE_TEXT)
+    assert (label.bold(), model.bold(), text.bold()) == (True, True, False)
+
+
+def test_status_and_account_label_go_through_text(qapp):
+    seen = []
+
+    class Probe(TokittyQtWidget):
+        def _text(self, p, color, rect, flags, text, halo=False):
+            seen.append((text, halo))
+            super()._text(p, color, rect, flags, text, halo)
+
+    widget = Probe(T.Theme(), [Customization(label="work")], 1)
+    widget.anim.stop()
+    widget.panes[0].render("working", 42, 67, "2h", "Mon", "", None, "open Claude Code", False)
+    widget.grab()
+    assert ("work", False) in seen
+    assert ("open Claude Code", False) in seen
+
+
 def test_halo_draws_outline_pixels(qapp):
     off = make(qapp)
     on = make(qapp, theme=T.Theme(text=T.TextStyle(halo="on")))
