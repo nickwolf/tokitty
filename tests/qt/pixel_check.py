@@ -15,6 +15,8 @@ layout (card/<layout>@<dpr>x.png).
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
 import math
 import os
@@ -35,9 +37,10 @@ if __name__ == "__main__":
     sys.meta_path[:] = [f for f in sys.meta_path if "Editable" not in repr(f)]
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PIL import Image  # noqa: E402
-from PySide6.QtCore import QRectF  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
+from PySide6.QtCore import QEvent, QRectF  # noqa: E402
 from PySide6.QtGui import QFont, QImage, QPainter  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tokitty import sprites  # noqa: E402
 from tokitty import theme as T  # noqa: E402
@@ -97,7 +100,8 @@ def qimage_to_img(image: QImage) -> Img:
     return Img(w, h, b"".join(raw[r * bpl: r * bpl + w * 4] for r in range(h)))
 
 
-def read_png(path: Path) -> Img:
+def read_png(path) -> Img:
+    """`path` is a file name or a binary file object."""
     with Image.open(path) as im:
         im = im.convert("RGBA")
         return Img(im.width, im.height, im.tobytes())
@@ -162,8 +166,9 @@ def compare(actual: Img, ref: Img, rects: Sequence[Rect] = ()) -> Optional[Diff]
     return Diff(len(points), (min(xs), min(ys), max(xs), max(ys)), first, points)
 
 
-def write_compare(path: Path, old: Img, new: Img, diff: Diff) -> None:
-    """Old | new | difference side by side; differing pixels are red."""
+def write_compare(path: Path, old: Img, new: Img, diff: Diff, rects: Sequence[Rect] = ()) -> None:
+    """Old | new | difference side by side; differing pixels are red and the
+    regions that were masked out of the comparison are outlined in cyan."""
     w, h = max(old.w, new.w), max(old.h, new.h)
     gap = 4
     sheet = Image.new("RGBA", (w * 3 + gap * 2, h), (40, 40, 40, 255))
@@ -174,6 +179,10 @@ def write_compare(path: Path, old: Img, new: Img, diff: Diff) -> None:
         for x, y in diff.points:
             panel.putpixel((x, y), (255, 0, 0, 255))
         sheet.paste(panel, (w * 2 + gap * 2, 0))
+    draw = ImageDraw.Draw(sheet)
+    for x0, y0, x1, y1 in rects:
+        for panel_x in (0, w + gap, w * 2 + gap * 2):
+            draw.rectangle((panel_x + x0, y0, panel_x + x1 - 1, y1 - 1), outline=(0, 255, 255, 255))
     path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(path, "PNG")
 
@@ -188,32 +197,27 @@ def flat(name: str) -> str:
 
 # ---- the widget under test --------------------------------------------------
 
-class PixelWidget(TokittyQtWidget):
-    """The real widget with the bundled Aileron instead of the platform font
-    (so Linux and Windows rasterize alike), and a record of where its text
-    landed (so the mask can cover exactly the glyphs)."""
+class RecordingWidget(TokittyQtWidget):
+    """The real widget plus a record of where its text landed, so a mask can
+    cover exactly the glyphs and the fit check can measure them."""
 
     def __init__(self, *args, **kwargs):
         self.text_rects: List[QRectF] = []
+        self.text_log: List[Tuple[str, QRectF, int]] = []  # text, rect, line spacing
         super().__init__(*args, **kwargs)
-
-    def _make_font(self, points: int, bold: bool) -> QFont:
-        font = QFont(key_render.register_font())
-        font.setPixelSize(round(points * 96 / 72))
-        font.setBold(bold)
-        font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-        font.setStyleStrategy(QFont.StyleStrategy.NoSubpixelAntialias)
-        return font
 
     def _text(self, p: QPainter, color, rect: QRectF, flags, text: str, halo: bool = False) -> None:
         super()._text(p, color, rect, flags, text, halo)
         # After drawing: boundingRect is empty while the pen is NoPen, and the
         # card paint leaves it that way until a text sets its colour.
         if text:
-            self.text_rects.append(p.transform().mapRect(p.boundingRect(rect, int(flags), text)))
+            mapped = p.transform().mapRect(p.boundingRect(rect, int(flags), text))
+            self.text_rects.append(mapped)
+            self.text_log.append((text, mapped, p.fontMetrics().lineSpacing()))
 
     def grab_img(self) -> Img:
         self.text_rects.clear()
+        self.text_log.clear()
         return qimage_to_img(self.grab().toImage())
 
     def mask_rects(self) -> List[Rect]:
@@ -223,6 +227,26 @@ class PixelWidget(TokittyQtWidget):
             out.append((math.floor((r.left() - MASK_PAD) * dpr), math.floor((r.top() - MASK_PAD) * dpr),
                         math.ceil((r.right() + MASK_PAD) * dpr), math.ceil((r.bottom() + MASK_PAD) * dpr)))
         return out
+
+
+class PixelWidget(RecordingWidget):
+    """RecordingWidget with the bundled Aileron instead of the platform font,
+    so Linux and Windows rasterize alike."""
+
+    def _make_font(self, points: int, bold: bool) -> QFont:
+        font = QFont(key_render.register_font())
+        font.setPixelSize(round(points * 96 / 72))
+        font.setBold(bold)
+        font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        font.setStyleStrategy(QFont.StyleStrategy.NoSubpixelAntialias)
+        return font
+
+
+def destroy(widget) -> None:
+    """Delete a widget now; deleteLater alone leaves it in the QApplication
+    until an event loop runs."""
+    widget.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def _crop(image: Img, x: int, y: int, w: int, h: int) -> bytes:
@@ -237,36 +261,38 @@ def cat_sheet(state: str) -> Rendered:
     ground. The cat is drawn by the widget itself (on_top, so nothing else
     is under it) and cropped from a grab."""
     widget = PixelWidget(T.Theme(), [Customization(cat_home="on_top")], 1)
-    widget.anim.stop()
-    pane = widget.panes[0]
-    dpr = widget.devicePixelRatioF()
-    frames = sprites.get_frames(state)
-    cell = T.cell_size(dpr)
-    w, h = len(frames[0][0]) * cell, len(frames[0]) * cell
-    x, y = widget.cat_origin(0)
-    x, y = round(x * dpr), round(y * dpr)
-    pane.render(state, 42, 67, "", "", "", None, None, False)
-    lines: List[bytes] = []
-    for colorway, pattern in COATS:
-        pane.set_appearance(palette=sprites.resolve_palette(colorway, pattern))
-        cells: Dict[int, bytes] = {}
-        for _ in frames:
-            pane.draw_next_frame()
-            _frame, index = pane.current_frame()
-            cells[index] = _crop(widget.grab_img(), x, y, w, h)
-        if sorted(cells) != list(range(len(frames))):
-            raise RuntimeError(f"{state}: frames shown {sorted(cells)} for {len(frames)} frames")
-        for row in range(h):
-            lines.append(b"".join(cells[i][row * w * 4:(row + 1) * w * 4] for i in range(len(frames))))
-    widget.deleteLater()
-    return Rendered(Img(w * len(frames), h * len(COATS), b"".join(lines)), dpr=dpr)
+    try:
+        widget.anim.stop()
+        pane = widget.panes[0]
+        dpr = widget.devicePixelRatioF()
+        frames = sprites.get_frames(state)
+        cell = T.cell_size(dpr)
+        w, h = len(frames[0][0]) * cell, len(frames[0]) * cell
+        x, y = widget.cat_origin(0)
+        x, y = round(x * dpr), round(y * dpr)
+        pane.render(state, 42, 67, "", "", "", None, None, False)
+        lines: List[bytes] = []
+        for colorway, pattern in COATS:
+            pane.set_appearance(palette=sprites.resolve_palette(colorway, pattern))
+            cells: Dict[int, bytes] = {}
+            for _ in frames:
+                pane.draw_next_frame()
+                _frame, index = pane.current_frame()
+                cells[index] = _crop(widget.grab_img(), x, y, w, h)
+            if sorted(cells) != list(range(len(frames))):
+                raise RuntimeError(f"{state}: frames shown {sorted(cells)} for {len(frames)} frames")
+            for row in range(h):
+                lines.append(b"".join(cells[i][row * w * 4:(row + 1) * w * 4] for i in range(len(frames))))
+        return Rendered(Img(w * len(frames), h * len(COATS), b"".join(lines)), dpr=dpr)
+    finally:
+        destroy(widget)
 
 
 # ---- layouts ----------------------------------------------------------------
 
-def layout(name: str) -> Rendered:
-    """One widget layout with fixed inputs. Tags stay empty: a tag chip would
-    paint into the on_top cat's rect."""
+def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
+    """One widget layout with fixed inputs, rendered but not yet grabbed. Tags
+    stay empty: a tag chip would paint into the on_top cat's rect."""
     theme = T.Theme()
     home = "inside"
     if name == "halo":
@@ -280,7 +306,7 @@ def layout(name: str) -> Rendered:
         home = "on_top"
     elif name not in ("default", "models"):
         raise KeyError(name)
-    widget = PixelWidget(theme, [Customization(cat_home=home, label="work")], 1)
+    widget = cls(theme, [Customization(cat_home=home, label="work")], 1)
     widget.anim.stop()
     pane = widget.panes[0]
     if name == "models":
@@ -291,10 +317,52 @@ def layout(name: str) -> Rendered:
         pane.render_usage("working", view)
     else:
         pane.render("working", 42, 67, "resets in 2h", "Mon", "", None, "open Claude Code", False)
-    img = widget.grab_img()
-    out = Rendered(img, widget.mask_rects(), name in TRANSLUCENT_LAYOUTS, widget.devicePixelRatioF())
-    widget.deleteLater()
-    return out
+    return widget
+
+
+def layout(name: str) -> Rendered:
+    widget = layout_widget(name)
+    try:
+        img = widget.grab_img()
+        return Rendered(img, sorted(set(widget.mask_rects())), name in TRANSLUCENT_LAYOUTS,
+                        widget.devicePixelRatioF())
+    finally:
+        destroy(widget)
+
+
+# ---- Stream Dock keys -------------------------------------------------------
+
+def _palette() -> Dict[str, str]:
+    return sprites.resolve_palette("orange", "tabby")
+
+
+KEYS = {
+    "session": lambda: key_render.session_key("working", 0, _palette(), "kern"),
+    "session_accent": lambda: key_render.session_key("permission", 1, _palette(), "kern", True),
+    "usage": lambda: key_render.usage_key(42, 77),
+    "usage_warn": lambda: key_render.usage_key(91, 95, True),
+    "decision_allow": lambda: key_render.decision_key("allow"),
+    "decision_deny": lambda: key_render.decision_key("deny"),
+    "decision_always": lambda: key_render.decision_key("always"),
+    "decision_sent": lambda: key_render.decision_key("sent"),
+    "decision_cancel": lambda: key_render.decision_key("cancel"),
+    "decision_allow_disarmed": lambda: key_render.decision_key("allow", False),
+    "decision_always_disarmed": lambda: key_render.decision_key("always", False),
+    "status_word": lambda: key_render.status_key("+3"),
+    "status_words": lambda: key_render.status_key("no tab open"),
+    "preview_0": lambda: key_render.preview_keys('git commit -m "fix the card" && git push origin main', 2)[0],
+    "preview_1": lambda: key_render.preview_keys('git commit -m "fix the card" && git push origin main', 2)[1],
+}
+
+
+def key(name: str) -> Rendered:
+    """A Stream Dock key: 64x64 whatever the dpr, so decode the data URI."""
+    uri = KEYS[name]()
+    image = QImage.fromData(base64.b64decode(uri.split(",", 1)[1]))
+    img = qimage_to_img(image)
+    if (img.w, img.h) != (key_render.SIZE, key_render.SIZE):
+        raise RuntimeError(f"key {name} is {img.w}x{img.h}")
+    return Rendered(img)
 
 
 # ---- names ------------------------------------------------------------------
@@ -304,11 +372,14 @@ def all_names() -> List[str]:
     for dpr in DPRS:
         names += [f"cat/{s}@{dpr}x" for s in sprites.ALL_STATES]
         names += [f"card/{n}@{dpr}x" for n in LAYOUTS]
-    return names
+    return names + [f"keys/{n}" for n in KEYS]
 
 
-def split_name(name: str) -> Tuple[str, str, int]:
+def split_name(name: str) -> Tuple[str, str, Optional[int]]:
+    """(kind, base, dpr); keys have no dpr."""
     kind, rest = name.split("/")
+    if "@" not in rest:
+        return kind, rest, None
     base, scale = rest.rsplit("@", 1)
     return kind, base, int(scale.rstrip("x"))
 
@@ -317,8 +388,27 @@ def ref_path(name: str) -> Path:
     return REFS / f"{name}.png"
 
 
+MASKS_FILE = REFS / "card" / "masks.json"
+
+
+def load_masks() -> Dict[str, List[Rect]]:
+    """The text regions each card reference was made with, in device pixels.
+    A text that is narrower or wider on another OS still has its reference
+    glyphs masked, so the mask is the union of these and the live ones."""
+    if not MASKS_FILE.exists():
+        return {}
+    return {n: [tuple(r) for r in rects] for n, rects in json.loads(MASKS_FILE.read_text()).items()}
+
+
+def save_masks(masks: Dict[str, List[Rect]]) -> None:
+    MASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MASKS_FILE.write_text(json.dumps({n: [list(r) for r in masks[n]] for n in sorted(masks)}, sort_keys=True) + "\n")
+
+
 def render_name(name: str) -> Rendered:
     kind, base, _dpr = split_name(name)
+    if kind == "keys":
+        return key(base)
     return cat_sheet(base) if kind == "cat" else layout(base)
 
 
@@ -329,26 +419,30 @@ def matches(name: str, wanted: Sequence[str]) -> bool:
                for w in wanted)
 
 
+def process_names(dpr: int, wanted: Sequence[str]) -> List[str]:
+    """The names rendered by a process at `dpr`: its cat and card ones, and
+    the keys (which do not depend on it) in the dpr 1 process."""
+    return [n for n in all_names()
+            if matches(n, wanted) and split_name(n)[2] in (dpr, None if dpr == 1 else -1)]
+
+
 # ---- rendering at another dpr, in a child process ---------------------------
 
 def dump(outdir: Path, dpr: int, wanted: Sequence[str]) -> None:
     """Render every wanted name at this process's dpr into `outdir`."""
     import PySide6
-    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     probe = PixelWidget(T.Theme(), [Customization()], 1)
     actual = probe.devicePixelRatioF()
-    probe.deleteLater()
+    destroy(probe)
     if actual != dpr:
         raise SystemExit(f"asked for dpr {dpr}, this process has {actual}")
     import tokitty
     meta = {"tokitty_file": str(Path(tokitty.__file__).resolve()), "dpr": actual,
             "qt": PySide6.__version__, "platform": sys.platform}
     masks = {}
-    for name in all_names():
-        if split_name(name)[2] != dpr or not matches(name, wanted):
-            continue
+    for name in process_names(dpr, wanted):
         r = render_name(name)
         write_png(outdir / f"{flat(name)}.png", r.img)
         masks[name] = {"rects": r.rects, "always_mask": r.always_mask, "dpr": r.dpr}
@@ -380,14 +474,21 @@ def update(wanted: Sequence[str]) -> int:
         return 2
     changed = new = unchanged = 0
     pending: List[Tuple[str, Img]] = []
+    masks = load_masks()
+    masks_dirty = False
     for dpr in DPRS:
-        if not any(split_name(n)[2] == dpr and matches(n, wanted) for n in all_names()):
+        if not process_names(dpr, wanted):
             continue
         with tempfile.TemporaryDirectory() as tmp:
             rendered, _meta = render_child(dpr, Path(tmp), wanted)
         for name in sorted(rendered):
             img = rendered[name].img
             path = ref_path(name)
+            card = name.startswith("card/")
+            mask_moved = card and masks.get(name) != rendered[name].rects
+            if mask_moved:
+                masks[name] = rendered[name].rects
+                masks_dirty = True
             if not path.exists():
                 print(f"{name}: new")
                 new += 1
@@ -396,18 +497,68 @@ def update(wanted: Sequence[str]) -> int:
             old = read_png(path)
             diff = compare(img, old)
             if diff is None:
-                print(f"{name}: unchanged")
-                unchanged += 1
+                print(f"{name}: " + ("text regions changed" if mask_moved else "unchanged"))
+                if mask_moved:
+                    changed += 1
+                else:
+                    unchanged += 1
                 continue
-            print(f"{name}: {diff.summary()}")
+            print(f"{name}: {diff.summary()}" + ("; text regions changed" if mask_moved else ""))
             changed += 1
             write_compare(diff_dir() / f"{flat(name)}.compare.png", old, img, diff)
             pending.append((name, img))
     for name, img in pending:
         write_png(ref_path(name), img, indexed=name.startswith("cat/"))
+    if masks_dirty:
+        save_masks(masks)
     print(f"{changed} changed, {new} new, {unchanged} unchanged")
     if changed:
         print(f"old | new | difference images in {diff_dir()}")
+    return 0
+
+
+# ---- report (CI): what a pull request changed in the references -------------
+
+def report(base: str) -> int:
+    """List the reference files that differ from `base`, write old | new |
+    difference images to build/pixel-report/, and append the lines to the
+    GitHub step summary. Pure Pillow and git; no widget is built."""
+    rel = REFS.relative_to(ROOT).as_posix()
+    names = subprocess.run(["git", "-C", str(ROOT), "diff", "--name-only", base, "--", rel],
+                           capture_output=True, text=True, check=True).stdout.split()
+    out_dir = ROOT / "build" / "pixel-report"
+    lines: List[str] = []
+    for path in sorted(names):
+        label = path[len(rel) + 1:]
+        old_bytes = subprocess.run(["git", "-C", str(ROOT), "show", f"{base}:{path}"],
+                                   capture_output=True).stdout or None
+        target = ROOT / path
+        if not path.endswith(".png"):
+            lines.append(f"{label}: " + ("removed" if not target.exists() else "new" if old_bytes is None else "changed"))
+            continue
+        name = label[:-4]
+        if not target.exists():
+            lines.append(f"{name}: removed")
+            continue
+        new = read_png(target)
+        if old_bytes is None:
+            lines.append(f"{name}: new")
+            write_png(out_dir / f"{flat(name)}.new.png", new)
+            continue
+        old = read_png(io.BytesIO(old_bytes))
+        diff = compare(new, old)
+        if diff is None:
+            lines.append(f"{name}: file changed, pixels identical")
+            continue
+        lines.append(f"{name}: {diff.summary()}")
+        write_compare(out_dir / f"{flat(name)}.compare.png", old, new, diff)
+    if not lines:
+        lines = ["no reference changes"]
+    print("\n".join(lines))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write("### Pixel references against the base\n\n" + "\n".join(f"- {ln}" for ln in lines) + "\n")
     return 0
 
 
@@ -415,7 +566,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     up = sub.add_parser("update", help="show what changed, then write the references")
-    up.add_argument("names", nargs="*", help="cat/<state>, card/<layout>, either with @<n>x, or cat / card")
+    up.add_argument("names", nargs="*", help="cat/<state>, card/<layout>, keys/<key>, either with @<n>x, or cat / card / keys")
+    rp = sub.add_parser("report", help="list the references that differ from a base commit")
+    rp.add_argument("base")
     dp = sub.add_parser("dump", help="internal: render at this process's dpr")
     dp.add_argument("outdir", type=Path)
     dp.add_argument("--dpr", type=int, required=True)
@@ -423,6 +576,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "update":
         return update(args.names)
+    if args.cmd == "report":
+        return report(args.base)
     dump(args.outdir, args.dpr, args.names)
     return 0
 
