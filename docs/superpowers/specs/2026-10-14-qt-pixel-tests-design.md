@@ -1,0 +1,75 @@
+# Pixel-exact reference images for the Qt widget (design)
+
+Issue: [#128](https://github.com/nickwolf/tokitty/issues/128), milestone v0.7.0. The issue text: turn the #109 spike's 0-mismatch comparison of the drawn cat against `raster_rgba` into a CI job on Windows, macOS and Linux with `QT_QPA_PLATFORM=offscreen`; keep reference images for every state and coat at dpr 1 and 2, plus a few widget layouts (default card, low opacity, cat on top, cat beside); fail on any pixel difference; make updating a reference a deliberate step that shows the diff, so an art change in #125 shows exactly which pixels moved.
+
+Inputs: the #109 spike findings (`2026-10-10-pyside6-spike-findings.md`, section 1), the #111 spec (`2026-10-11-qt-main-widget-design.md`), the #142 spec (`2026-10-14-qt-only-design.md`, decision 3 on the Stream Dock renderer). Written against main at 3d57edd (#142 merged as PR #154). "Cat beside" in the issue predates the 2026-10-12 spot revision; the spots are now `inside`, `inside_right` and `on_top`, so the layouts here use those.
+
+## Goal
+
+A `qt`-marked test module compares the widget's real paint output, taken with `grab()`, against PNG references in the repo, on all three CI systems, and fails on any differing pixel outside the regions this spec masks. One command regenerates the references and prints, for every file, how many pixels changed and where, and writes an old/new/difference image for each changed file.
+
+## Facts this design rests on
+
+Measured on 2026-10-14 with PySide6 6.12.0, locally (WSL Ubuntu and native Windows 11 on an Intel i7-9700KF) and in CI on the draft probe PR #159 (runs 38667297202 and 38667685717; the Linux and Windows runners reported an AMD EPYC 7763, the macOS runner an Apple M1 (Virtual)). The probe hashed RGBA bytes of plain text, Stream Dock keys and widget grabs at `QT_SCALE_FACTOR` 1 and 2.
+
+1. **Windows offscreen draws text once an application font is registered.** With no application font it has no families and draws nothing (the #111 lesson). After `QFontDatabase.addApplicationFontFromData` with the bundled Aileron it reports one family and draws with it, including for a `QFont()` with no family (it falls back to the only family there is).
+2. **Linux and Windows rasterize Aileron identically only with an explicit hinting preference and no subpixel antialiasing.** With the default hinting preference the two differ (Windows behaves as `PreferFullHinting`, Linux as vertical hinting through fontconfig): 883 against 899 inked pixels for the same string. Setting `PreferFullHinting` (or `PreferNoHinting`) made standalone text byte-identical. Inside the widget it still differed, because on Linux the widget's text came out with subpixel (LCD) antialiasing, visible as colour fringes, and on Windows greyscale. Adding `QFont.StyleStrategy.NoSubpixelAntialias` made all four probed card layouts (default, `inside_right`, `on_top`, 20% opacity) byte-identical between Linux and Windows at scale 1 and 2, locally and on the CI runners.
+3. **macOS rasterizes text differently and no setting changes that.** macOS offscreen goes through CoreText: all four hinting preferences gave the same hash, and `QT_QPA_PLATFORM=offscreen:fontengine=freetype` changed nothing. Every pixel that differed between macOS and Linux in the default and 20% cards lay inside a text box widened by 2 px; outside them the grabs were identical, the cat included.
+4. **Text over a translucent card differs by CPU.** The 20% card differed in 18 pixels, each channel by at most 1, between the local Intel machine and the EPYC runners, while Linux and Windows on the same machine agreed with each other (both locally and in CI). The default, `inside_right` and `on_top` cards (text on an opaque card) were identical across both CPUs. The differing pixels are glyph edges whose destination alpha is below 255. The likely cause is an approximate reciprocal in Qt's unpremultiply path, which Intel and AMD compute differently; that is not proven, and `QT_NO_CPU_FEATURE` is not honoured by this Qt build (disabling `sse2` changed nothing), so it cannot be switched off.
+5. **The cat is exact everywhere.** The #109 spike already showed 0 mismatched pixels against `raster_rgba` from 100% to 200%; the probe adds that the cat region of the card is byte-identical on all three systems and both CPUs. `_cat_image` rasterizes at `cell = round(4 * dpr)` and sets the image's dpr, so at dpr 2 the cat is exactly the dpr 1 cat scaled up 2x with nearest neighbour.
+6. **The art.** 14 states (`sprites.ALL_STATES`), 2 frames each except `flopped` with 4, so 30 frames; 6 colourways and 9 patterns, so 54 coats; the five legacy coat names map onto these. A frame is 28x26 sprite pixels, 112x104 at dpr 1.
+7. **Sizes.** One sheet per state with every coat as a row and every frame as a column, written as an exact-palette indexed PNG (at most 38 colours per sheet, round-trip checked to give back the same RGBA bytes): 14 files, 221,572 bytes at dpr 1 and 506,270 more at dpr 2. As RGBA PNGs the same sheets were 511,899 and 914,639 bytes. The probed card grabs were 6,184 to 7,204 bytes at scale 1 and 15,443 to 18,169 at scale 2; Stream Dock keys about 1,000 to 1,600 bytes each.
+8. **The Stream Dock keys are not the same on every OS today.** `render.py`'s docstring says the bundled font makes the keys "look the same on every OS", but `_font` leaves the hinting preference at its default, so the status and usage keys differ between Linux and Windows (fact 2). With `PreferFullHinting` and `NoSubpixelAntialias` they are identical, and the Linux keys become the Windows keys.
+
+## Decisions
+
+1. **Card text uses the bundled Aileron in these tests, with explicit hinting and no subpixel antialiasing; per-OS references and masking all text are both rejected.** The test widget is a subclass that overrides one new method, `TokittyQtWidget._make_font(points, bold)`, which `_font_set` calls for each of its three fonts; the product method keeps today's behaviour (Segoe UI on Windows, the platform default elsewhere). The test override returns Aileron with `setPixelSize(round(points * 96 / 72))` (12 px for the 9 pt label, 11 px for the 8 pt texts), `PreferFullHinting` and `NoSubpixelAntialias`, so the size does not depend on the platform's logical DPI. Why: facts 1 and 2 give one shared reference set that checks text placement, alignment, wrapping, colour and the halo on Linux and Windows. Per-OS references would triple the set and the Windows ones would need text anyway. Masking all text would lose the layout checks the issue is asking for. What this does not test is the product's own fonts, which differ by OS and font stack by design and cannot be pixel-exact. The product's fonts are not changed here; whether the card should also turn off subpixel antialiasing on Linux (it draws onto a translucent window, where LCD antialiasing is questionable) is a separate question, left out of scope.
+
+2. **Text boxes are masked where facts 3 and 4 say they must be, and nowhere else.** All of the widget's text goes through `_text` (the status text and account label, which call `p.drawText` directly today, move onto it; the tag chip text already does or moves too). The test wraps `_text` to record each rect it is given, mapped through the painter's transform. The mask is the union of those rects widened by 2 logical px on every side (the halo reaches 1 px). Masked pixels are set to a fixed colour in both the grab and the reference before comparing. The mask applies on macOS to every layout (fact 3), and on every system to text drawn over a card whose alpha is below 255, which today means the low-opacity layout (fact 4). Outside the mask every pixel must match. Each masked layout records its mask in the failure output so a reviewer sees what was not compared.
+
+3. **Cat references: one indexed PNG sheet per state at dpr 1; dpr 2 is checked against that sheet scaled 2x.** Each sheet has the 54 coats as rows in `COLORWAYS` x `PATTERNS` order and the state's frames as columns, transparent background. It is built from widget grabs, not from `raster_rgba`: a one-pane widget with the cat `on_top`, so the cat sits over the transparent margin with nothing else drawn under it; for each coat and frame the test sets the pane's palette, state and frame and grabs the cat rect. At dpr 2 (a subprocess with `QT_SCALE_FACTOR=2`, as `test_cat_pixels_dpr2_in_a_subprocess` does today) the grabbed sheet must equal the dpr 1 reference scaled 2x with nearest neighbour. Why not a second set of files: fact 5 makes the dpr 2 image a pure function of the dpr 1 image, so storing it adds 506,270 bytes and makes every art change show up twice in the diff without adding information; the dpr 2 check still exercises the real dpr 2 paint path. If #125 ever gives dpr 2 its own detail, the dpr 2 sheets become real files then. The mirrored cat (`inside_right`) is covered by its layout reference. Legacy coat names are not separate rows; they resolve to rows that are already there.
+
+4. **Layout references.** Five layouts, each at dpr 1 and dpr 2 as separate files (text and antialiased card corners are not a 2x scale of dpr 1): the default card (`inside`, 100% opacity, both bars, reset text, a status line and an account label); the card at 20% opacity (halo on under the default `auto` rule); the cat `inside_right`; the cat `on_top`; and the models view (`render_usage`). All use fixed inputs (no clock, no randomness; the frame timer is stopped and the frame set explicitly). Ten RGBA PNGs, about 110 KB.
+
+5. **Stream Dock keys get references, and `render._font` gets the same two font settings.** `_font` sets `PreferFullHinting` and `NoSubpixelAntialias`, which makes the docstring's promise true on Linux and Windows (fact 8) and changes how Linux keys look (they become today's Windows keys). References: a session key (one state, one coat, a title, with and without accent), the usage key (normal and `warn`), every decision kind armed and the two that can be disarmed, a one-word and a multi-word status key, and a set of preview keys. About 14 files of about 1 to 2 KB. They are compared on Linux and Windows. On macOS the key tests skip with the reason in the message: CoreText renders the text differently (fact 3), the keys are mostly text, and the cat on the session key comes from the same `raster_frame` the cat sheets prove on macOS. The existing renderer tests stay.
+
+6. **Where things live.** References in `tests/qt/pixel_refs/` (`cat/<state>.png`, `card/<layout>@<dpr>x.png`, `keys/<name>.png`), outside the `tokitty` package so they never reach a wheel or the frozen bundle, with a `.gitattributes` line marking them binary. Shared code (building the test widget, grabbing, masking, comparing, writing diff images) in `tests/qt/pixel_check.py`, which the test module imports the way `test_widget.py` imports `cat_check.py`. Reading and writing PNGs uses Pillow (a dev dependency already); comparison is on RGBA8888 bytes.
+
+7. **Updating a reference is one explicit command.** `python tests/qt/pixel_check.py update [name ...]` renders the current output, compares it with the stored references, prints one line per file (`unchanged`, `new`, or the number of changed pixels and their bounding box), writes `old | new | difference` images for the changed files into `build/pixel-diff/` (gitignored), and only then writes the new references. Without names it updates everything. It refuses to run on macOS (fact 3: macOS output is never the reference). It runs on Linux or Windows on any CPU: the only CPU-sensitive pixels (fact 4) are inside the low-opacity layout's mask, so a reference made on one machine passes on another. The test suite itself never writes references, whatever the environment.
+
+8. **A failure shows the diff.** When a comparison fails, the test writes the actual image, the reference and the difference image into `build/pixel-diff/` (or `$TOKITTY_PIXEL_DIFF_DIR`), and the assertion message gives the file, the number of differing pixels, their bounding box and the first few coordinates with both colours. The `qt` CI job uploads `build/pixel-diff/` as an artifact when the job fails, so a failure on a system nobody has locally (macOS) can be looked at.
+
+9. **CI.** No new job: the tests are `qt`-marked and run in the existing `qt` job on all three systems. The job gains the artifact upload from decision 8. The probe step from PR #159 and `tests/qt/probe_128.py` are removed before the PR is ready.
+
+10. **The existing cat tests stay.** `test_cat_pixels_dpr1` and the dpr 2 subprocess test compare the grab with `raster_rgba` live, which proves the paint path against the art source; the references prove the art did not change. They test different things.
+
+11. **PySide6 is pinned exactly (`==6.12.0`), so references are tied to that version.** A Qt bump that changes rasterization fails these tests; the fix is to run `update`, look at the diff images, and commit them with the bump.
+
+## Size of the reference set
+
+| Set | Files | Bytes (measured or estimated) |
+|---|---|---|
+| Cat sheets, dpr 1 | 14 | 221,572 (measured, fact 7) |
+| Layouts, dpr 1 and 2 | 10 | about 110,000 (from the probe grabs) |
+| Stream Dock keys | about 14 | about 20,000 |
+| Total | about 38 | about 350,000 |
+
+The implementation records the exact counts and bytes in the PR.
+
+## Slices
+
+1. **Product seams and the key font.** `_make_font` and the `_text` routing in `tokitty/qt/widget.py`; `_font` settings in `tokitty/streamdock/render.py`; their unit tests. Small; no references.
+2. **Harness, cat sheets and layouts.** `tests/qt/pixel_check.py`, the test module, the `update` command, the cat sheets and layout references, the masking, the failure output, `.gitattributes`, `.gitignore`. Depends on slice 1.
+3. **Stream Dock key references and CI.** Key references and their tests, the artifact upload in `ci.yml`, removal of the probe, README or `tests/qt/pixel_refs/README.md` with the update procedure. Depends on slice 2.
+
+## Verification
+
+- `pytest -m qt` passes locally (WSL) and on native Windows from the worktree, and on all three CI systems.
+- A deliberate one-pixel change to one sprite template fails exactly the matching cat sheet on all three systems, at dpr 1 and dpr 2, with a diff image that shows the moved pixels; `update` then reports that file and only that file with the expected count. The change is reverted.
+- A deliberate colour change to the halo or a bar fails the low-opacity or default layout outside the mask on macOS as well.
+- `update` run twice in a row reports every file `unchanged` the second time.
+- The reference files are absent from the wheel (`pip wheel .` and list it).
+
+## Out of scope
+
+Pixel tests for the Settings, accounts, walkthrough, update and permission windows; real-display (non-offscreen) grabs; fractional dprs (the spike covered 125% to 200% against `raster_rgba`, and the existing tests keep that); turning off subpixel antialiasing in the product card on Linux; the art changes themselves (#125).
