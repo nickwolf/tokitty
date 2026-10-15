@@ -67,6 +67,13 @@ jobs:
           name: probe-128-${{ matrix.os }}
           path: probe-out
       - run: pytest -m qt
+      - name: Upload pixel diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-diff-${{ matrix.os }}
+          path: build/pixel-diff/
+          if-no-files-found: ignore
 
   lint:
     name: lint (ruff)
