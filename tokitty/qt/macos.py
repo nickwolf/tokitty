@@ -5,8 +5,9 @@ on the application.
 From the widget's winId(), which is an NSView, it reaches the NSWindow and
 then makes two changes: stop a click from activating the app (the private
 _setPreventsActivation:, proven in the #109 spike) and let the window join
-every Space and sit over full-screen apps (collectionBehavior). Each
-step is isolated, so a failure prints one line and the other still runs.
+every Space and sit over full-screen apps (collectionBehavior). With Always
+in front off it also drops the window to the normal level. Each step is
+isolated, so a failure prints one line and the others still run.
 Nothing here imports PySide6; the caller checks the Qt platform is cocoa.
 """
 from __future__ import annotations
@@ -27,9 +28,11 @@ COLLECTION_BEHAVIOR = CAN_JOIN_ALL_SPACES | FULL_SCREEN_AUXILIARY
 # roles. Qt sets MoveToActiveSpace | FullScreenAuxiliary on a Qt.Tool window
 # and FullScreenPrimary on others, so these come off before ours go on.
 CONFLICTING_BEHAVIOR = MOVE_TO_ACTIVE_SPACE | FULL_SCREEN_PRIMARY | FULL_SCREEN_NONE
+NORMAL_WINDOW_LEVEL = 0  # NSNormalWindowLevel
 
 STEP_PREVENT_ACTIVATION = "prevent_activation"
 STEP_COLLECTION_BEHAVIOR = "collection_behavior"
+STEP_NORMAL_LEVEL = "normal_level"
 
 
 class ObjC:
@@ -52,6 +55,8 @@ class ObjC:
         self._void_bool = ctypes.CFUNCTYPE(None, v, v, ctypes.c_bool)(address)
         self._ulong = ctypes.CFUNCTYPE(ctypes.c_ulong, v, v)(address)
         self._void_ulong = ctypes.CFUNCTYPE(None, v, v, ctypes.c_ulong)(address)
+        self._long = ctypes.CFUNCTYPE(ctypes.c_long, v, v)(address)
+        self._void_long = ctypes.CFUNCTYPE(None, v, v, ctypes.c_long)(address)
         lib.objc_getClass.restype = v
         lib.objc_getClass.argtypes = [ctypes.c_char_p]
 
@@ -76,14 +81,28 @@ class ObjC:
     def send_void_ulong(self, obj, sel, value: int) -> None:
         self._void_ulong(obj, sel, value)
 
+    def send_long(self, obj, sel) -> int:
+        return self._long(obj, sel)
+
+    def send_void_long(self, obj, sel, value: int) -> None:
+        self._void_long(obj, sel, value)
+
 
 def _warn(message: str) -> None:
     print(f"tokitty: macOS window helper: {message}", file=sys.stderr)
 
 
-def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform) -> List[str]:
-    """Run both steps on the window behind win_id. Returns the names of the
-    steps that succeeded. Does nothing off macOS."""
+def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform,
+          on_top: bool = True) -> List[str]:
+    """Run the steps on the window behind win_id. Returns the names of the
+    steps that succeeded. Does nothing off macOS.
+
+    on_top=False is the widget with Always in front off. Qt gives a Qt.Tool
+    window NSFloatingWindowLevel, and only the stays-on-top hint changes it,
+    so without this step the widget floats above other apps' windows. Qt
+    puts the floating level back whenever the app becomes active, so the
+    caller has to run this again then. With on_top=True (and for any other
+    window) the level stays Qt's."""
     if platform != "darwin":
         return []
     try:
@@ -114,6 +133,12 @@ def apply(win_id: int, objc: Optional[ObjC] = None, platform: str = sys.platform
         done.append(STEP_COLLECTION_BEHAVIOR)
     except Exception as exc:
         _warn(f"setCollectionBehavior: failed: {exc}")
+    if not on_top:
+        try:
+            objc.send_void_long(window, objc.sel("setLevel:"), NORMAL_WINDOW_LEVEL)
+            done.append(STEP_NORMAL_LEVEL)
+        except Exception as exc:
+            _warn(f"setLevel: failed: {exc}")
     return done
 
 

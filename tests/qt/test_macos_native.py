@@ -126,3 +126,66 @@ def test_menus_get_the_macos_helper_before_they_show():
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert proc.stdout.strip().splitlines()[-1] == "True True"
+
+
+LEVEL_SCRIPT = textwrap.dedent("""
+    import subprocess, tempfile, time
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from tokitty import theme
+    from tokitty.customize import Customization
+    from tokitty.qt import macos
+    from tokitty.qt.widget import TokittyQtWidget
+
+    app = QApplication([])
+    widget = TokittyQtWidget(theme.load_theme(tempfile.mkdtemp()), [Customization()], 1)
+    widget.show()
+    objc = macos.ObjC()
+
+    def pump(seconds=1.0, until=None):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not (until and until()):
+            app.processEvents()
+            time.sleep(0.02)
+        pump_rest = time.monotonic() + 0.3
+        while time.monotonic() < pump_rest:
+            app.processEvents()
+            time.sleep(0.02)
+
+    def state_is(state):
+        return lambda: app.applicationState() == state
+
+    def level():
+        window = objc.send_id(int(widget.winId()), objc.sel("window"))
+        return objc.send_long(window, objc.sel("level"))
+
+    pump()
+    levels = [level()]
+    widget.set_always_on_top(False)
+    pump()
+    levels.append(level())
+    # Qt puts a Qt.Tool window back to the floating level whenever the app
+    # becomes active; the widget has to drop it again. Finder takes the
+    # activation away first, through Launch Services, so no Apple events.
+    subprocess.run(["open", "-a", "Finder"], check=True)
+    pump(10.0, state_is(Qt.ApplicationState.ApplicationInactive))
+    macos.activate_app()
+    pump(10.0, state_is(Qt.ApplicationState.ApplicationActive))
+    levels.append(level())
+    widget.set_always_on_top(True)
+    pump()
+    levels.append(level())
+    print(*levels)
+""")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs AppKit")
+def test_always_in_front_off_keeps_the_normal_level_across_activation():
+    """Off has to mean NSNormalWindowLevel (0), or the widget stays above
+    other apps' windows and Tokitty's own Settings. On is Qt's
+    NSModalPanelWindowLevel (8)."""
+    env = dict(os.environ, QT_QPA_PLATFORM="cocoa")
+    proc = subprocess.run([sys.executable, "-c", LEVEL_SCRIPT], env=env, cwd=ROOT,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip().splitlines()[-1] == "8 0 0 8"

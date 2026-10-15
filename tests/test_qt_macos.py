@@ -33,9 +33,12 @@ class FakeObjC:
     def send_void_ulong(self, obj, sel, value):
         self._log("void_ulong", sel, value)
 
+    def send_void_long(self, obj, sel, value):
+        self._log("void_long", sel, value)
 
-def run(fake, platform="darwin"):
-    return macos.apply(7, fake, platform)
+
+def run(fake, platform="darwin", **kwargs):
+    return macos.apply(7, fake, platform, **kwargs)
 
 
 def test_both_steps_run_in_order():
@@ -48,6 +51,28 @@ def test_both_steps_run_in_order():
         ("ulong", "collectionBehavior"),
         ("void_ulong", "setCollectionBehavior:", 0x40 | (1 << 0) | (1 << 8)),
     ]
+
+
+def test_always_in_front_off_sets_the_normal_window_level():
+    """Qt gives a Qt.Tool window NSFloatingWindowLevel (3) and only the
+    stays-on-top hint raises it, so clearing the hint left the widget
+    floating above other apps' windows and Tokitty's own Settings."""
+    fake = FakeObjC()
+    assert run(fake, on_top=False) == ["prevent_activation", "collection_behavior", "normal_level"]
+    assert fake.calls[-1] == ("void_long", "setLevel:", 0)
+
+
+def test_always_in_front_on_leaves_the_level_to_qt():
+    fake = FakeObjC()
+    assert run(fake, on_top=True) == ["prevent_activation", "collection_behavior"]
+    assert not [c for c in fake.calls if c[0] == "void_long"]
+
+
+def test_a_failing_level_step_logs_one_line_and_the_others_still_run(capsys):
+    fake = FakeObjC(raises={"void_long"})
+    assert run(fake, on_top=False) == ["prevent_activation", "collection_behavior"]
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "setLevel:" in err[0]
 
 
 def test_collection_behavior_ors_into_the_current_value():
