@@ -1,10 +1,11 @@
-"""The install flow and the Tk-thread state machine that drives it (#77).
+"""The install flow and the GUI-thread state machine that drives it (#77).
 
 `UpdateController` runs the spec's "Installing" steps. A worker thread stages
 and self-checks a release; a second one waits for the new copy's ack. Neither
-touches Tk: they publish into lock-guarded fields that `tick()` reads on the
-Tk thread, which also does the handover itself (step 5). `TkHost` holds the
-Tk-side actions so the controller can be driven by fakes. The reasoning is in
+touches the GUI: they publish into lock-guarded fields that `tick()` reads on
+the GUI thread, which also does the handover itself (step 5). The host
+(qt/update_host.py) holds the toolkit-side actions so the controller can be
+driven by fakes. The reasoning is in
 docs/superpowers/specs/2026-10-02-auto-update-design.md.
 
 Everything the handover and the rollback need is imported at the top of this
@@ -113,76 +114,6 @@ def reclaim(lock, state_dir, backend) -> None:
             print(f"tokitty: update: autostart: {exc}", file=sys.stderr)
 
 
-class TkHost:
-    """The Tk-side actions of a handover and of its rollback. All of them run
-    on the Tk thread. `quiet` (the hidden --apply-update) opens no messagebox,
-    since nobody is there to close it; the caller reports through on_done."""
-
-    def __init__(
-        self,
-        root,
-        windows,
-        tray,
-        lock,
-        state_dir,
-        autostart_backend,
-        *,
-        quiet: bool = False,
-        messagebox=None,
-        tray_enabled: Callable[[], bool] = lambda: True,
-    ):
-        self._root = root
-        self._windows = [w for i, w in enumerate(windows) if w is not None and w not in windows[:i]]
-        self._tray = tray
-        self._lock = lock
-        self._state_dir = state_dir
-        self._backend = autostart_backend
-        self._quiet = quiet
-        self._tray_enabled = tray_enabled
-        if messagebox is None and not quiet:
-            from tkinter import messagebox
-        self._messagebox = messagebox
-
-    def hide(self) -> None:
-        """Handover step 5.3: tray off, windows away, lock released."""
-        self._tray.stop()
-        for window in self._windows:
-            window.withdraw()
-        self._root.update_idletasks()
-        self._lock.release()
-
-    def restore(self) -> None:
-        """Handover step 5.8 without the message. Raises LockAcquisitionError
-        if another copy holds the lock, in which case nothing else is done."""
-        reclaim(self._lock, self._state_dir, self._backend)
-        for window in self._windows:
-            window.deiconify()
-        if self._tray_enabled():
-            self._tray.start()
-        self._tray.refresh()
-
-    def finish(self) -> None:
-        """Close the app. Deferred, because tick() calls this and still has
-        widgets to touch, and safe to call twice."""
-        self._root.after(0, self._destroy)
-
-    def _destroy(self) -> None:
-        try:
-            self._root.destroy()
-        except Exception:
-            pass  # already destroyed
-
-    def notice(self, text: str) -> None:
-        if self._quiet:
-            return
-
-        def show() -> None:
-            self._messagebox.showwarning("Tokitty", text, parent=self._root)
-
-        # Deferred like the other startup messages, so tick() isn't held up.
-        self._root.after(0, show)
-
-
 class UpdateController:
     def __init__(
         self,
@@ -237,7 +168,7 @@ class UpdateController:
         self._cleanup_done = threading.Event()
         self._cleanup_done.set()
         self._cancel = threading.Event()
-        # Tk thread only.
+        # GUI thread only.
         self._on_progress = None
         self._on_done = None
         self._handover_state = None
@@ -258,7 +189,7 @@ class UpdateController:
 
     def refusal(self, release: Release) -> Optional[str]:
         """Why this release can't be installed from the app, or None. Writes
-        and removes a probe file, so call it from the Tk thread sparingly."""
+        and removes a probe file, so call it from the GUI thread sparingly."""
         if not self._running.installable:
             return "This copy of Tokitty can't update itself."
         if not is_newer(release.tag, self._running.version):
@@ -303,7 +234,7 @@ class UpdateController:
 
     def start_install(self, release: Release, on_progress=None, on_done=None) -> bool:
         """Stage, check and hand over to `release`. `on_progress(done, total)`
-        and `on_done(UpdateResult)` are called from tick(), on the Tk thread,
+        and `on_done(UpdateResult)` are called from tick(), on the GUI thread,
         and on_done exactly once. False if an install is already running."""
         return self._begin(release, on_progress, on_done)
 
@@ -361,13 +292,13 @@ class UpdateController:
                 verify=lambda gui: self._self_check(gui, release.tag),
             )
             result = ("ok", release, staged)
-        except BaseException as exc:  # the Tk side must always hear back
+        except BaseException as exc:  # the GUI side must always hear back
             result = ("err", release, exc)
         with self._lock:
             self._stage_result = result
 
     def tick(self) -> None:
-        """Advance the state machine; the Tk thread calls this every pass."""
+        """Advance the state machine; the GUI thread calls this every pass."""
         with self._lock:
             progress = self._progress if self._progress_dirty else None
             self._progress_dirty = False
@@ -419,7 +350,7 @@ class UpdateController:
             print(f"tokitty: update: discarding staging: {exc}", file=sys.stderr)
 
     def _handover(self, release: Release, staged: Staged) -> None:
-        """Spec step 5 on the Tk thread. Windows and Linux: pending, promote,
+        """Spec step 5 on the GUI thread. Windows and Linux: pending, promote,
         hide, launch. macOS: pending, hide, swap, launch."""
         tag, target, mac = release.tag, self._target, self._mac
         token = self._new_token()

@@ -6,7 +6,7 @@ settings the state is read from current and remembers, for this session,
 that the plugin was installed (restart_to_connect) or removed with the
 runtime still up (restart_to_finish_removal).
 
-state() is read on the Tk thread; install() and uninstall() run on a worker
+state() is read on the GUI thread; install() and uninstall() run on a worker
 thread. The only shared writes are plain attribute assignments.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ STATES = ("not_installed", "not_connected", "connected", "restart_to_connect",
           "restart_to_finish_removal", "starting", "failed")
 
 
-# What the Settings tabs show. Shared by the Tk and Qt Stream Dock tabs.
+# What the Settings tabs show. Used by the Stream Dock tab.
 MAX_LOG_LINES = 8
 
 # state -> (pill label, pill kind, detail line)

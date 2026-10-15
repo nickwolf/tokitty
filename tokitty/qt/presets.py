@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHeaderView, QTreeWidget, QTreeWidgetItem, QWidget,
 )
 
+from tokitty.qt import macos
 from tokitty.accounts import Account
 from tokitty.qt.kit import Kit, hbox, qfont, text, vbox
 from tokitty.settings import load_settings
@@ -118,6 +119,7 @@ class PresetsDialog(QWidget):
         if self.isMinimized():
             self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.show()
+        macos.activate_app()
         self.raise_()
         self.activateWindow()
 
@@ -270,6 +272,7 @@ class PresetsDialog(QWidget):
         form.save, form.name_entry, form.cwd_entry = save, name_entry, cwd_entry
         form.combo, form.error, form.browse, form.hint = combo, error, browse, hint
         form.show()
+        macos.activate_app()
         form.raise_()
         form.activateWindow()
 

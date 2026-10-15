@@ -1,7 +1,7 @@
-"""The tray icon's sprite choice, shared by the Tk and Qt trays.
+"""The tray icon's sprite choice, used by the Qt tray.
 
-Toolkit-free: tray.py pads the raster into a PIL image, qt/tray.py into a
-QImage, and neither copies the frame, scale or palette decision.
+Toolkit-free: qt/tray.py pads the raster into a QImage without copying the frame, scale
+or palette decision.
 """
 from __future__ import annotations
 

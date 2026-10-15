@@ -30,6 +30,7 @@ from tokitty.updater import Release, add_owned, drop_owned, parse_version, runni
 CHUNK = 64 * 1024
 IO_TIMEOUT = 30.0
 SELF_CHECK_TIMEOUT = 60.0
+FAILED_DETAIL_MAX = 200
 DITTO_TIMEOUT = 120.0
 MAX_SUMS_BYTES = 64 * 1024
 MAC_TOP = "Tokitty.app"
@@ -366,7 +367,7 @@ def stage(
 
 
 def run_self_check(exe, tag: str, *, runner=None, sys_platform: Optional[str] = None) -> None:
-    """Run the staged copy's `--self-check` with the real Tk window check on.
+    """Run the staged copy's `--self-check` with the real window check on.
     Raises UpdateInstallError unless every check passes and the build ID is
     the release tag."""
     sys_platform = sys.platform if sys_platform is None else sys_platform
@@ -391,6 +392,11 @@ def run_self_check(exe, tag: str, *, runner=None, sys_platform: Optional[str] = 
         raise UpdateInstallError("The new version's self-check report is incomplete.")
     failed = sorted(n for n, c in checks.items() if not (isinstance(c, dict) and c.get("ok") is True))
     if failed:
-        raise UpdateInstallError(f"The new version failed its self-check: {', '.join(failed)}.")
+        first = checks[failed[0]]
+        detail = " ".join(str(first.get("detail", "")).split()) if isinstance(first, dict) else ""
+        if len(detail) > FAILED_DETAIL_MAX:
+            detail = detail[: FAILED_DETAIL_MAX - 3] + "..."
+        suffix = f" ({failed[0]}: {detail})" if detail else ""
+        raise UpdateInstallError(f"The new version failed its self-check: {', '.join(failed)}{suffix}.")
     if report.get("build_id") != tag:
         raise UpdateInstallError(f"The new version reports build {report.get('build_id')}, not {tag}.")

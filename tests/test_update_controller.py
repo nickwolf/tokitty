@@ -8,7 +8,7 @@ import pytest
 
 from tokitty import update_controller
 from tokitty.lock import LockAcquisitionError
-from tokitty.update_controller import TkHost, UpdateController, UpdateResult, skips_ack
+from tokitty.update_controller import UpdateController, UpdateResult, skips_ack
 from tokitty.update_install import Staged, UpdateCancelled, UpdateInstallError
 from tokitty.update_swap import ack_path, write_pending
 from tokitty.updater import Release, RunningVersion, UpdateCheckError, load_update_state
@@ -227,7 +227,7 @@ def test_pending_is_written_before_the_swap_and_cleared_after_the_ack(rig):
     assert pending["staging"].endswith(".tokitty-update-v0.2.0-1")
 
 
-def test_only_the_stage_and_ack_workers_run_off_the_tk_thread(rig):
+def test_only_the_stage_and_ack_workers_run_off_the_gui_thread(rig):
     rig.run()
 
     threads = {e[0]: e[1] for e in rig.events if len(e) > 1 and isinstance(e[1], threading.Thread)}
@@ -610,124 +610,6 @@ def test_skips_ack_needs_both_variables():
     assert not skips_ack({"TOKITTY_UPDATE_TEST_NO_ACK": "1", "TOKITTY_UPDATE_API_URL": ""})
 
 
-# --- TkHost ------------------------------------------------------------------
-
-
-class _Recorder:
-    def __init__(self, log, name):
-        self._log, self._name = log, name
-
-    def __getattr__(self, method):
-        return lambda *a: self._log.append(f"{self._name}.{method}")
-
-
-class _Root(_Recorder):
-    def after(self, ms, fn):
-        self._log.append(f"root.after({ms})")
-        fn()
-
-
-def _host(tmp_path, monkeypatch, **kw):
-    log = []
-    root = _Root(log, "root")
-    content = _Recorder(log, "content")
-    tray = _Recorder(log, "tray")
-    lock = _Recorder(log, "lock")
-    monkeypatch.setattr(update_controller, "acquire_with_retry", lambda lk, timeout: log.append(f"acquire({timeout})"))
-    monkeypatch.setattr(update_controller.runner_link, "ensure_runner_link", lambda sd: log.append("link"))
-    monkeypatch.setattr(update_controller.autostart, "ensure_current", lambda sd, b: log.append(f"autostart({b})"))
-    host = TkHost(root, [root, content, content], tray, lock, tmp_path, kw.pop("backend", "BACKEND"), **kw)
-    return host, log, root
-
-
-def test_host_hide_stops_the_tray_withdraws_windows_then_releases_the_lock(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-    host.hide()
-
-    assert log == ["tray.stop", "root.withdraw", "content.withdraw", "root.update_idletasks", "lock.release"]
-
-
-def test_host_restore_retakes_the_lock_relinks_and_brings_everything_back(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-    host.restore()
-
-    assert log == [
-        "acquire(10.0)", "link", "autostart(BACKEND)", "root.deiconify", "content.deiconify", "tray.start", "tray.refresh",
-    ]
-
-
-def test_host_restore_leaves_the_tray_off_when_it_was_disabled(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True, tray_enabled=lambda: False)
-    host.restore()
-
-    assert "tray.start" not in log
-
-
-def test_host_restore_stops_when_the_lock_cannot_be_retaken(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-
-    def held(lk, timeout):
-        raise LockAcquisitionError("held")
-
-    monkeypatch.setattr(update_controller, "acquire_with_retry", held)
-    with pytest.raises(LockAcquisitionError):
-        host.restore()
-    assert log == []
-
-
-def test_host_restore_survives_relink_and_autostart_failures(tmp_path, monkeypatch, capsys):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-
-    def fail(*a):
-        raise OSError("nope")
-
-    monkeypatch.setattr(update_controller.runner_link, "ensure_runner_link", fail)
-    monkeypatch.setattr(update_controller.autostart, "ensure_current", fail)
-    host.restore()
-
-    assert "root.deiconify" in log and "tray.start" in log
-    assert "relinking hooks: nope" in capsys.readouterr().err
-
-
-def test_host_restore_skips_autostart_with_no_backend(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True, backend=None)
-    host.restore()
-
-    assert not any(line.startswith("autostart") for line in log)
-
-
-def test_host_notice_is_a_deferred_messagebox_and_silent_when_quiet(tmp_path, monkeypatch, capsys):
-    shown = []
-
-    class Box:
-        @staticmethod
-        def showwarning(title, text, parent=None):
-            shown.append((title, text, parent))
-
-    host, log, root = _host(tmp_path, monkeypatch, messagebox=Box)
-    host.notice("Tokitty v1 didn't start.")
-    assert shown == [("Tokitty", "Tokitty v1 didn't start.", root)] and "root.after(0)" in log
-
-    quiet, quiet_log, _ = _host(tmp_path, monkeypatch, quiet=True)
-    quiet.notice("hello")
-    assert quiet_log == [] and capsys.readouterr().err == ""
-    assert len(shown) == 1
-
-
-def test_host_finish_is_deferred_and_safe_twice(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-
-    class Boom(_Root):
-        def destroy(self):
-            raise RuntimeError("already destroyed")
-
-    host._root = Boom(log, "root")
-    host.finish()
-    host.finish()
-
-    assert log.count("root.after(0)") == 2
-
-
 # --- reclaim -----------------------------------------------------------------
 
 
@@ -778,10 +660,3 @@ def test_reclaim_skips_autostart_with_no_backend(tmp_path, monkeypatch):
 
     assert log == ["acquire(LOCK,10.0)", f"link({tmp_path})"]
 
-
-def test_host_restore_goes_through_reclaim(tmp_path, monkeypatch):
-    host, log, _ = _host(tmp_path, monkeypatch, quiet=True)
-    monkeypatch.setattr(update_controller, "reclaim", lambda lock, sd, backend: log.append(f"reclaim({sd},{backend})"))
-    host.restore()
-
-    assert log[0] == f"reclaim({tmp_path},BACKEND)" and log[1] == "root.deiconify"

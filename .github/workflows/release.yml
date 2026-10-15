@@ -17,12 +17,17 @@ defaults:
   run:
     shell: bash
 
+env:
+  # The last tk,qt release build (the Qt port, before Qt became the only GUI).
+  # The build job rebuilds it as v0.6.99 to test updating from a tk,qt copy
+  # in both toolkit modes. Pinned on purpose and moved deliberately.
+  TKQT_REF: 9644fc01959476781c94ed810b82981e5e7e65ba
+
 jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     env:
-      TOKITTY_BUILD_TOOLKITS: tk,qt
       TOKITTY_QT_TRIM: ${{ (github.event_name == 'workflow_dispatch' && !inputs.trim) && '0' || '1' }}
       # The release the legacy update pass starts from. Pinned on purpose
       # and moved deliberately, never to "latest".
@@ -47,11 +52,14 @@ jobs:
         with:
           python-version: '3.13'
 
-      - run: pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"
+      - run: pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock]"
 
+      # PyInstaller bundles only the libraries it finds on the build host, so
+      # these must be installed here for the archive to carry them. A host
+      # without libglib2.0-0 once produced a bundle that failed its self-check.
       - name: Install xvfb and the Qt xcb libraries (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0
+        run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libglib2.0-0 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0
 
       - name: Determine version
         id: version
@@ -124,12 +132,12 @@ jobs:
 
       - name: Verify artifact (Windows)
         if: matrix.os == 'windows-latest'
-        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt
+        run: python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/Tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt
 
       - name: Verify artifact (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt)
+          args=(--app-dir "$RUNNER_TEMP/extracted" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt)
           if [ -n "${{ matrix.overhead_gate_ms }}" ]; then
             args+=(--overhead-gate-ms "${{ matrix.overhead_gate_ms }}")
           fi
@@ -144,7 +152,11 @@ jobs:
 
       - name: Verify artifact (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits tk,qt
+        run: xvfb-run -a python freeze/verify_artifact.py --app-dir "$RUNNER_TEMP/extracted/tokitty" --work "$RUNNER_TEMP/verify" --report "$RUNNER_TEMP/report.json" --expect-toolkits qt
+
+      - name: Self-check on a clean Ubuntu 22.04 (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: bash freeze/clean_system_check.sh "$RUNNER_TEMP/extracted"
 
       - name: Install cryptography (update verifier)
         run: pip install cryptography
@@ -158,6 +170,7 @@ jobs:
           fi
           {
             echo "OLD_ARCHIVE=$RUNNER_TEMP/old/tokitty-v0.0.1-${{ matrix.target }}.$ext"
+            echo "TKQT_ARCHIVE=$RUNNER_TEMP/tkqt/tokitty-v0.6.99-${{ matrix.target }}.$ext"
             if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
               # A dry run's build ID doesn't parse as a version, so the update
               # test uses a v99.0.0 rebuild of this commit: a rehearsal. The
@@ -191,6 +204,43 @@ jobs:
               ;;
             *)
               ditto -c -k --keepParent dist-old/Tokitty.app "$OLD_ARCHIVE"
+              ;;
+          esac
+
+      - name: Check out the last tk,qt build
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TKQT_REF }}
+          path: old-tkqt
+
+      - name: Build the last tk,qt release as v0.6.99
+        env:
+          TOKITTY_BUILD_ID: v0.6.99
+          TOKITTY_BUILD_TOOLKITS: tk,qt
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-tkqt"
+          if [ -d "$RUNNER_TEMP/venv-tkqt/Scripts" ]; then
+            venv_python="$RUNNER_TEMP/venv-tkqt/Scripts/python"
+          else
+            venv_python="$RUNNER_TEMP/venv-tkqt/bin/python"
+          fi
+          cd old-tkqt
+          # The same install that commit's release.yml ran.
+          "$venv_python" -m pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"
+          "$venv_python" -m PyInstaller freeze/tokitty.spec --noconfirm --distpath ../dist-tkqt --workpath ../build-tkqt
+
+      - name: Archive the tk,qt fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/tkqt"
+          case "${{ matrix.os }}" in
+            windows-latest)
+              python -c "import os, shutil; shutil.make_archive(os.path.join(os.environ['RUNNER_TEMP'], 'tkqt', 'tokitty-v0.6.99-${{ matrix.target }}'), 'zip', 'dist-tkqt', 'Tokitty')"
+              ;;
+            ubuntu-22.04)
+              tar -czf "$TKQT_ARCHIVE" -C dist-tkqt tokitty
+              ;;
+            *)
+              ditto -c -k --keepParent dist-tkqt/Tokitty.app "$TKQT_ARCHIVE"
               ;;
           esac
 
@@ -230,18 +280,6 @@ jobs:
             python freeze/verify_update.py "${args[@]}"
           fi
 
-      - name: Verify update (Qt)
-        run: |
-          args=(--old-archive "$OLD_ARCHIVE" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --qt --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-qt" --report "$RUNNER_TEMP/update-report-qt.json")
-          if [ "$REHEARSAL" = "true" ]; then
-            args+=(--rehearsal)
-          fi
-          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
-            xvfb-run -a python freeze/verify_update.py "${args[@]}"
-          else
-            python freeze/verify_update.py "${args[@]}"
-          fi
-
       - name: Verify update from a shipped release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -253,7 +291,31 @@ jobs:
           fi
           name="tokitty-$LEGACY_TAG-${{ matrix.target }}.$ext"
           gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/legacy"
-          args=(--old-archive "$RUNNER_TEMP/legacy/$name" --old-tag "$LEGACY_TAG" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update --work "$RUNNER_TEMP/vu-legacy" --report "$RUNNER_TEMP/update-report-legacy.json")
+          args=(--old-archive "$RUNNER_TEMP/legacy/$name" --old-tag "$LEGACY_TAG" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-legacy" --report "$RUNNER_TEMP/update-report-legacy.json")
+          if [ "$REHEARSAL" = "true" ]; then
+            args+=(--rehearsal)
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            xvfb-run -a python freeze/verify_update.py "${args[@]}"
+          else
+            python freeze/verify_update.py "${args[@]}"
+          fi
+
+      - name: Verify update from the tk,qt build (tk mode)
+        run: |
+          args=(--old-archive "$TKQT_ARCHIVE" --old-tag v0.6.99 --old-mode tk --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-tkqt-tk" --report "$RUNNER_TEMP/update-report-tkqt-tk.json")
+          if [ "$REHEARSAL" = "true" ]; then
+            args+=(--rehearsal)
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            xvfb-run -a python freeze/verify_update.py "${args[@]}"
+          else
+            python freeze/verify_update.py "${args[@]}"
+          fi
+
+      - name: Verify update from the tk,qt build (qt mode)
+        run: |
+          args=(--old-archive "$TKQT_ARCHIVE" --old-tag v0.6.99 --old-mode qt --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-tkqt-qt" --report "$RUNNER_TEMP/update-report-tkqt-qt.json")
           if [ "$REHEARSAL" = "true" ]; then
             args+=(--rehearsal)
           fi
@@ -388,7 +450,7 @@ jobs:
               print(f"- no_ack_rollback: exit {rollback['apply'].get('returncode')} after {rollback['apply'].get('elapsed_s')} s")
           PY
 
-      - name: Append Qt and shipped-release update summary
+      - name: Append shipped-release and tk,qt update summary
         if: always()
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -396,11 +458,12 @@ jobs:
           import os
 
           target = "${{ matrix.target }}"
-          print(f"### {target} Qt and shipped-release update tests")
+          print(f"### {target} update tests from older builds")
           for label, file_name in (
-              ("Tk update", "update-report.json"),
-              ("Qt update", "update-report-qt.json"),
+              ("update from the rehearsal v0.0.1 build", "update-report.json"),
               (f"update from {os.environ['LEGACY_TAG']}", "update-report-legacy.json"),
+              ("update from the tk,qt build, tk mode", "update-report-tkqt-tk.json"),
+              ("update from the tk,qt build, qt mode", "update-report-tkqt-qt.json"),
           ):
               path = os.path.join(os.environ["RUNNER_TEMP"], file_name)
               if not os.path.exists(path):
@@ -409,10 +472,9 @@ jobs:
               with open(path, encoding="utf-8") as f:
                   data = json.load(f)
               print(f"- {label}: {'PASS' if data.get('ok') else 'FAIL'}")
-              if file_name == "update-report-qt.json":
-                  apply_run = data.get("steps", {}).get("apply_update", {}).get("detail", {})
-                  if isinstance(apply_run, dict) and "after_update_qt" in apply_run:
-                      print(f"  after_update_qt: `{json.dumps(apply_run['after_update_qt'])[:1500]}`")
+              for name, step in data.get("steps", {}).items():
+                  if not step.get("ok"):
+                      print(f"  FAILED `{name}`: `{json.dumps(step.get('detail'))[:1500]}`")
           PY
 
       - name: Upload archive and report
@@ -425,8 +487,9 @@ jobs:
             ${{ steps.names.outputs.archive }}.sha256
             ${{ runner.temp }}/report.json
             ${{ runner.temp }}/update-report.json
-            ${{ runner.temp }}/update-report-qt.json
             ${{ runner.temp }}/update-report-legacy.json
+            ${{ runner.temp }}/update-report-tkqt-tk.json
+            ${{ runner.temp }}/update-report-tkqt-qt.json
 
   keychain:
     name: macOS Keychain check (dry run, #48 Task 8)

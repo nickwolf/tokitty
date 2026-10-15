@@ -1,6 +1,6 @@
 """The deck model: which Stream Dock key shows what, and what a press means.
 
-Pure state, no I/O. The Tk thread owns a DeckModel and is the only caller; after
+Pure state, no I/O. The GUI thread owns a DeckModel and is the only caller; after
 each tick it publishes an immutable snapshot into a PlanBox, which is the only
 thing the HTTP thread touches. Keys are described by KeySpec values, never
 images, so the renderer and runtime stay separate from the logic here.

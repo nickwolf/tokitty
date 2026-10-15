@@ -136,6 +136,12 @@ def test_start_failure_marks_unavailable_and_leaves_no_icon(qapp, tmp_path):
     assert not tray.available
     assert tray.notify("t", "m") is False
     tray.refresh()
+    # From then on it is unavailable: a later start (the toggle, a handover's
+    # restore) does not build another icon.
+    made = len(FakeIcon.instances)
+    tray.start()
+    tray.set_enabled(True)
+    assert len(FakeIcon.instances) == made
 
 
 def test_stop_hides_and_drops_the_icon(qapp, tmp_path):

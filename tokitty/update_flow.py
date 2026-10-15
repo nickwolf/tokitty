@@ -2,8 +2,8 @@
 
 `UpdateFlow` is what the confirm dialog does: which choices a release gets,
 what each outcome shows, when the window may close. `UpdateActions` is what
-the "Update to vX.Y.Z…" and "Check for updates" items do. The Tk and Qt
-renderers draw them and add nothing, so the user-facing rules live once.
+the "Update to vX.Y.Z…" and "Check for updates" items do. The Qt
+renderer draws them and adds nothing, so the user-facing rules live once.
 The install itself is `UpdateController`'s.
 """
 from __future__ import annotations

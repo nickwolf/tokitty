@@ -1,9 +1,9 @@
 """The daily update check and what it publishes to the menus (#77).
 
-`UpdateChecker.tick()` runs on the Tk thread. The check itself runs on a
-daemon thread that never touches Tk: it publishes into a lock-guarded field
-that `tick()` reads, the way `Poller.get_latest` works. The menu label is read
-from pystray's thread, so it lives in plain Python state. The schedule is in
+`UpdateChecker.tick()` runs on the GUI thread. The check itself runs on a
+daemon thread that never touches the GUI: it publishes into a lock-guarded field
+that `tick()` reads, the way `Poller.get_latest` works. The menu label is
+plain Python state, read on the GUI thread whenever a menu is built. The schedule is in
 docs/superpowers/specs/2026-10-02-auto-update-design.md, "The check".
 """
 from __future__ import annotations
@@ -71,10 +71,10 @@ class UpdateChecker:
         self._lock = threading.Lock()
         self._checking = False
         self._result: Optional[CheckResult] = None
-        # Read by pystray's thread for the menu label, so plain state.
+        # Read by the tray's thread for the menu label, so plain state.
         self._latest: Optional[Release] = None
         self._available_tag: Optional[str] = None
-        # Tk thread only.
+        # GUI thread only.
         self._waiters: List[Callable[[CheckResult], None]] = []
         self._announced: Optional[str] = None
         state = load_update_state(state_dir)
@@ -117,7 +117,7 @@ class UpdateChecker:
 
     def check_now(self, on_result: Callable[[CheckResult], None]) -> None:
         """A manual check, which runs whatever the setting says. `on_result`
-        is called from tick() on the Tk thread. A check already in flight is
+        is called from tick() on the GUI thread. A check already in flight is
         joined rather than doubled."""
         self._waiters.append(on_result)
         self._start()
@@ -193,7 +193,7 @@ class UpdateChecker:
 
 def announcer(state_dir, tray) -> Callable[[Release], None]:
     """What to do when a newer release first turns up: nudge the tray menu
-    (pystray builds its menu once) and notify once per tag. `notified_tag`
+    (a tray may build its menu once) and notify once per tag. `notified_tag`
     is only written when the backend took the notification, so a tray that
     can't notify, or is switched off, leaves it for a later run."""
 

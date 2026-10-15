@@ -76,57 +76,23 @@ def test_run_gui_entry_swallows_a_failure_to_write_the_log(tmp_path):
     assert frozen.run_gui_entry(boom, state_dir_fn=lambda: missing) == 1
 
 
-@pytest.mark.gui
-def test_self_check_passes_in_dev(capsys):
-    """The real pystray import needs a working GTK/AppIndicator (or xorg)
-    backend, which a bare headless Linux box may not have even under xvfb --
-    see test_self_check_passes_in_dev_headless for the check-logic-only
-    version that runs everywhere. A box missing that backend raises
-    ValueError (not ImportError) out of pystray's own backend selection, so
-    skip cleanly on either rather than leaving the gui suite red; self_check()
-    itself is not weakened to work around this."""
-    try:
-        import pystray  # noqa: F401
-    except (ImportError, ValueError) as exc:
-        pytest.skip(f"pystray unavailable: {exc}")
-    assert frozen.self_check() == 0
-    report = json.loads(capsys.readouterr().out)
-    assert all(c["ok"] for c in report["checks"].values())
-
-
 def test_self_check_passes_in_dev_headless(monkeypatch, capsys):
-    """Same assertion as test_self_check_passes_in_dev, but stubs only the
-    pystray check: pystray's import can fail on a headless Linux host with
-    no GTK/AppIndicator install at all, which is an environment gap, not a
-    defect in --self-check. Every other check runs for real."""
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
+    """The Qt window check (qt_root) is off without TOKITTY_SELF_CHECK_TK, so
+    every check that runs is a plain import or file check."""
+    monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
     assert frozen.self_check() == 0
     report = json.loads(capsys.readouterr().out)
     assert all(c["ok"] for c in report["checks"].values())
 
 
 def test_self_check_omits_tk_root_without_the_env_var(monkeypatch, capsys):
-    """tkinter.Tcl() in _check_tkinter never opens a window, so without
-    TOKITTY_SELF_CHECK_TK the tk_root check must be absent, not just
+    """The window checks open a real window, so without
+    TOKITTY_SELF_CHECK_TK both tk_root and qt_root must be absent, not just
     unchecked, keeping headless unit tests headless."""
     monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
     assert frozen.self_check() == 0
     report = json.loads(capsys.readouterr().out)
-    assert "tk_root" not in report["checks"]
-
-
-@pytest.mark.gui
-def test_self_check_tk_root_when_env_var_set(monkeypatch, capsys):
-    """TOKITTY_SELF_CHECK_TK=1 opens a real tkinter.Tk() window and reports
-    its patchlevel as check tk_root, catching a bundle whose window can't
-    actually open even though tkinter.Tcl() above it passed."""
-    monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
-    assert frozen.self_check() == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["checks"]["tk_root"]["ok"] is True
-    assert report["checks"]["tk_root"]["detail"]
+    assert "tk_root" not in report["checks"] and "qt_root" not in report["checks"]
 
 
 def test_self_check_reports_env_names_not_values(monkeypatch, capsys):
@@ -140,9 +106,7 @@ def test_self_check_reports_env_names_not_values(monkeypatch, capsys):
     monkeypatch.setenv("TK_LIBRARY", "secret-value-5")
     monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
     monkeypatch.setenv("HOME_UNRELATED", "x")
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
-    # The made-up TCL_LIBRARY would break a real Tk check on Windows.
-    monkeypatch.setattr(frozen, "_check_tkinter", lambda: "8.6")
+    monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
     assert frozen.self_check() == 0
     out = capsys.readouterr().out
     report = json.loads(out)
@@ -228,37 +192,34 @@ def test_fallback_state_dir_matches_paths_state_dir_path(monkeypatch, tmp_path):
     assert Path(module._fallback_state_dir()) == paths.state_dir_path()
 
 
-# --- declared toolkits (#113) ---------------------------------------------
+# --- the Qt-only report (#142) ---------------------------------------------
 
-DEFAULT_KEYS = {"tkinter", "pil", "pystray", "prices", "hook_writer", "tls"}
+QT_ONLY_KEYS = {"qt", "prices", "hook_writer", "tls"}
+WINDOW_KEYS = {"qt_root", "tk_root", "key_font"}
 
 
-def _report(monkeypatch, capsys, toolkits=None, window=False, qt_blocked=False, qt_mode=False):
-    """Run self_check() under a declared toolkit list and return (exit code,
-    report). The Tk and Qt window checks are stubbed so this stays headless;
-    the real ones are covered by the gui and qt suites. qt_mode is a Qt-mode
-    launch (TOKITTY_QT=1), which a build that carries Tk needs for its Qt
-    checks to run (#115)."""
-    if qt_mode:
+def _report(monkeypatch, capsys, window=False, qt_blocked=False, inherited=False):
+    """Run self_check() and return (exit code, report). The Qt window check is
+    stubbed so this stays headless; the real one is covered by the qt suite.
+    `inherited` puts what an old copy's environment hands the new one in
+    os.environ: a tk,qt build's declaration and a Qt-mode launch's switch."""
+    if inherited:
+        monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "tk,qt")
         monkeypatch.setenv("TOKITTY_QT", "1")
     else:
-        monkeypatch.delenv("TOKITTY_QT", raising=False)
-    if toolkits is None:
         monkeypatch.delenv("TOKITTY_BUILD_TOOLKITS", raising=False)
-    else:
-        monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", toolkits)
+        monkeypatch.delenv("TOKITTY_QT", raising=False)
     if window:
         monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
     else:
         monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
-    monkeypatch.setattr(frozen, "_check_tk_root", lambda: "8.6.0")
     if qt_blocked:
         for name in ("PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"):
             monkeypatch.setitem(sys.modules, name, None)
     else:
         monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
         monkeypatch.setattr(frozen, "_check_qt_root", lambda: "xcb")
+    monkeypatch.setattr(frozen, "_check_key_font", lambda: "family Aileron")
     code = frozen.self_check()
     return code, json.loads(capsys.readouterr().out)
 
@@ -273,148 +234,69 @@ def _judge(report, tag="v1.2.3"):
     update_install.run_self_check("tokitty", tag, runner=runner, sys_platform="linux")
 
 
-@pytest.mark.parametrize(
-    "value, expected",
-    [
-        (None, {"tk"}),
-        ("", {"tk"}),
-        (" , ,", {"tk"}),
-        ("tk", {"tk"}),
-        ("qt", {"qt"}),
-        ("tk,qt", {"tk", "qt"}),
-        (" Qt , TK ,", {"tk", "qt"}),
-        ("qt,qt", {"qt"}),
-    ],
-)
-def test_build_toolkits_parsing(value, expected):
-    environ = {} if value is None else {"TOKITTY_BUILD_TOOLKITS": value}
-    assert frozen.build_toolkits(environ) == expected
-
-
-def test_build_toolkits_reads_os_environ_by_default(monkeypatch):
-    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
-    assert frozen.build_toolkits() == {"qt"}
-
-
-@pytest.mark.parametrize("qt_blocked", [False, True])
+@pytest.mark.parametrize("inherited", [False, True])
 @pytest.mark.parametrize("window", [False, True])
-def test_default_declaration_keeps_todays_keys(monkeypatch, capsys, window, qt_blocked):
-    code, report = _report(monkeypatch, capsys, window=window, qt_blocked=qt_blocked)
+def test_the_report_has_the_qt_only_keys_whatever_the_environment_inherited(monkeypatch, capsys, window, inherited):
+    code, report = _report(monkeypatch, capsys, window=window, inherited=inherited)
     assert code == 0
-    expected = DEFAULT_KEYS | ({"tk_root"} if window else set())
-    assert set(report["checks"]) == expected
-    assert "toolkits" not in report
-
-
-def test_explicit_tk_declaration_matches_the_default(monkeypatch, capsys):
-    _, report = _report(monkeypatch, capsys, toolkits="tk")
-    assert set(report["checks"]) == DEFAULT_KEYS
-    assert "toolkits" not in report
-
-
-def test_tk_and_qt_without_a_qt_launch_has_exactly_the_default_keys(monkeypatch, capsys):
-    # #115: the shipped updaters run this report with the window switch on.
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt")
-    assert code == 0
-    assert set(report["checks"]) == DEFAULT_KEYS
-    assert report["toolkits"] == ["qt", "tk"]
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True)
-    assert code == 0
-    assert set(report["checks"]) == DEFAULT_KEYS | {"tk_root"}
-    assert report["checks"]["tk_root"]["detail"] == "8.6.0"
-
-
-def test_tk_and_qt_passes_without_pyside6_when_not_a_qt_launch(monkeypatch, capsys):
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True, qt_blocked=True)
-    assert code == 0
-    assert set(report["checks"]) == DEFAULT_KEYS | {"tk_root"}
-    _judge(report)
-
-
-def test_tk_and_qt_adds_qt_and_qt_root_only_with_the_window_switch_in_a_qt_launch(monkeypatch, capsys):
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_mode=True)
-    assert code == 0
-    assert set(report["checks"]) == DEFAULT_KEYS | {"qt"}
-    assert report["checks"]["qt"] == {"ok": True, "detail": "6.12.0"}
-    assert report["toolkits"] == ["qt", "tk"]
-    _, report = _report(monkeypatch, capsys, toolkits="tk,qt", window=True, qt_mode=True)
-    assert set(report["checks"]) == DEFAULT_KEYS | {"qt", "qt_root", "tk_root"}
-    assert report["checks"]["tk_root"]["detail"] == "8.6.0"
-    assert report["checks"]["qt_root"]["detail"] == "xcb"
-
-
-@pytest.mark.parametrize("value", ["0", "", "true"])
-def test_only_tokitty_qt_equal_one_counts_as_a_qt_launch(monkeypatch, capsys, value):
-    monkeypatch.setenv("TOKITTY_QT", value)
-    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "tk,qt")
-    monkeypatch.delenv("TOKITTY_SELF_CHECK_TK", raising=False)
-    monkeypatch.setitem(sys.modules, "pystray", types.ModuleType("pystray"))
-    frozen.self_check()
-    assert "qt" not in json.loads(capsys.readouterr().out)["checks"]
-
-
-def test_qt_alone_drops_tkinter_and_tk_root_carries_the_qt_result(monkeypatch, capsys):
-    _, report = _report(monkeypatch, capsys, toolkits="qt")
-    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter", "pystray"}) | {"qt"}
+    assert set(report["checks"]) == QT_ONLY_KEYS | (WINDOW_KEYS if window else set())
     assert report["toolkits"] == ["qt"]
-    _, report = _report(monkeypatch, capsys, toolkits="qt", window=True)
-    assert set(report["checks"]) == (DEFAULT_KEYS - {"tkinter", "pystray"}) | {"qt", "qt_root", "tk_root"}
-    assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
-    assert report["checks"]["tk_root"] == {"ok": True, "detail": "xcb"}
+    for gone in ("tkinter", "pystray", "pil"):
+        assert gone not in report["checks"]
 
 
-def test_pystray_follows_the_tk_declaration_in_report_order(monkeypatch, capsys):
+def test_the_key_set_does_not_depend_on_the_inherited_variables(monkeypatch, capsys):
+    keys = []
+    for inherited in (False, True):
+        _, report = _report(monkeypatch, capsys, window=True, inherited=inherited)
+        keys.append(list(report["checks"]))
+    assert keys[0] == keys[1]
+
+
+def test_frozen_adds_the_hook_runner_entry(monkeypatch, capsys):
+    monkeypatch.setattr(frozen, "_check_hook_runner", lambda: "runner")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
     _, report = _report(monkeypatch, capsys)
-    assert list(report["checks"])[:3] == ["tkinter", "pil", "pystray"]
-    _, report = _report(monkeypatch, capsys, toolkits="tk,qt")
-    assert report["checks"]["pystray"]["ok"] is True
+    assert set(report["checks"]) == QT_ONLY_KEYS | {"hook_runner"}
 
 
-def test_qt_alone_passes_and_is_accepted_without_pystray_installed(monkeypatch, capsys):
-    # The Tk tray's backend is absent from a build without Tk (#114), so its
-    # check must not run there at all.
-    monkeypatch.setitem(sys.modules, "pystray", None)
-    monkeypatch.setattr(frozen, "_check_pystray", lambda: pytest.fail("pystray checked"))
-    monkeypatch.setenv("TOKITTY_BUILD_TOOLKITS", "qt")
+def test_tk_root_carries_the_qt_root_result(monkeypatch, capsys):
+    _, report = _report(monkeypatch, capsys, window=True)
+    assert report["checks"]["tk_root"] == report["checks"]["qt_root"] == {"ok": True, "detail": "xcb"}
+
+
+def test_key_font_is_never_checked_when_qt_root_failed(monkeypatch, capsys):
+    monkeypatch.setattr(frozen, "_check_key_font", lambda: pytest.fail("key_font checked"))
     monkeypatch.setenv("TOKITTY_SELF_CHECK_TK", "1")
     monkeypatch.setattr(frozen, "_check_qt", lambda: "6.12.0")
-    monkeypatch.setattr(frozen, "_check_qt_root", lambda: "xcb")
-    code = frozen.self_check()
+    monkeypatch.setattr(frozen, "_check_qt_root", lambda: (_ for _ in ()).throw(ImportError("libEGL.so.1")))
+    assert frozen.self_check() == 1
     report = json.loads(capsys.readouterr().out)
-    assert code == 0
-    assert "pystray" not in report["checks"]
-    _judge(report)
+    assert sorted(n for n, c in report["checks"].items() if not c["ok"]) == ["qt_root", "tk_root"]
+    assert "key_font" not in report["checks"]
 
 
-def test_declared_qt_with_pyside6_blocked_fails_the_qt_check(monkeypatch, capsys):
-    code, report = _report(monkeypatch, capsys, toolkits="tk,qt", qt_blocked=True, qt_mode=True)
+def test_blocked_pyside6_fails_qt_qt_root_and_tk_root_only(monkeypatch, capsys):
+    code, report = _report(monkeypatch, capsys, window=True, qt_blocked=True)
     assert code == 1
-    assert report["checks"]["qt"]["ok"] is False
-    assert report["checks"]["tkinter"]["ok"] is True
+    failed = sorted(name for name, check in report["checks"].items() if not check["ok"])
+    assert failed == ["qt", "qt_root", "tk_root"]
+    assert "key_font" not in report["checks"]
 
 
-def test_declared_qt_window_check_fails_with_pyside6_blocked(monkeypatch, capsys):
-    code, report = _report(monkeypatch, capsys, toolkits="qt", window=True, qt_blocked=True)
-    assert code == 1
-    assert report["checks"]["qt_root"]["ok"] is False
-    assert report["checks"]["tk_root"] == report["checks"]["qt_root"]
-
-
-@pytest.mark.parametrize("qt_mode", [False, True])
-@pytest.mark.parametrize("toolkits", [None, "tk,qt", "qt"])
-def test_shipped_judge_accepts_each_passing_report(monkeypatch, capsys, toolkits, qt_mode):
-    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_mode=qt_mode)
+@pytest.mark.parametrize("inherited", [False, True])
+def test_shipped_judge_accepts_the_qt_only_report(monkeypatch, capsys, inherited):
+    code, report = _report(monkeypatch, capsys, window=True, inherited=inherited)
     assert code == 0
     _judge(report)
 
 
-@pytest.mark.parametrize("toolkits", ["tk,qt", "qt"])
-def test_shipped_judge_rejects_a_failed_qt_report(monkeypatch, capsys, toolkits):
+def test_shipped_judge_rejects_a_failed_qt_report_and_names_the_detail(monkeypatch, capsys):
     from tokitty.update_install import UpdateInstallError
 
-    code, report = _report(monkeypatch, capsys, toolkits=toolkits, window=True, qt_blocked=True, qt_mode=True)
+    code, report = _report(monkeypatch, capsys, window=True, qt_blocked=True)
     assert code == 1
-    with pytest.raises(UpdateInstallError, match="failed its self-check"):
+    with pytest.raises(UpdateInstallError, match=r"failed its self-check: qt, qt_root, tk_root \(qt: .+\)\.$"):
         _judge(report)
 
 
@@ -434,23 +316,49 @@ def test_a_wayland_only_value_becomes_xcb_in_a_frozen_linux_build(capsys, value)
     assert environ["QT_QPA_PLATFORM"] == "xcb"
     err = capsys.readouterr().err
     assert err == (
-        f"tokitty: QT_QPA_PLATFORM={value} needs the Wayland plugin, which this build leaves out; using xcb\n"
+        f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using xcb\n"
     )
+
+
+@pytest.mark.parametrize("value", ["offscreen", "minimal", "eglfs", "linuxfb", "vnc", "offscreen;minimal", "Offscreen:foo=1"])
+def test_any_trimmed_platform_becomes_xcb_in_a_frozen_linux_build(capsys, value):
+    environ = {"QT_QPA_PLATFORM": value, "DISPLAY": ":0"}
+    assert _platform_env(environ) == "xcb"
+    assert environ["QT_QPA_PLATFORM"] == "xcb"
+    assert capsys.readouterr().err == f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using xcb\n"
+
+
+@pytest.mark.parametrize(
+    "platform, kept, value",
+    [("win32", "windows", "offscreen"), ("win32", "windows", "minimal;offscreen"), ("darwin", "cocoa", "offscreen"), ("darwin", "cocoa", "wayland"), ("win32", "windows", "xcb")],
+)
+def test_a_trimmed_platform_is_dropped_on_windows_and_macos(capsys, platform, kept, value):
+    environ = {"QT_QPA_PLATFORM": value, "HOME": "/h"}
+    assert _platform_env(environ, platform=platform) == kept
+    assert environ == {"HOME": "/h"}
+    assert capsys.readouterr().err == f"tokitty: QT_QPA_PLATFORM={value} names no platform this build ships; using {kept}\n"
 
 
 @pytest.mark.parametrize(
     "environ, kwargs",
     [
         ({"QT_QPA_PLATFORM": "wayland"}, {}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ""}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ""}, {}),
         ({"QT_QPA_PLATFORM": "wayland;xcb", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "offscreen;xcb", "DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "xcb", "DISPLAY": ":0"}, {}),
-        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ":0"}, {}),
+        ({"QT_QPA_PLATFORM": "XCB:foo=1", "DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "", "DISPLAY": ":0"}, {}),
         ({"DISPLAY": ":0"}, {}),
         ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"frozen": False}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "win32"}),
-        ({"QT_QPA_PLATFORM": "wayland", "DISPLAY": ":0"}, {"platform": "darwin"}),
+        ({"QT_QPA_PLATFORM": "offscreen", "DISPLAY": ":0"}, {"frozen": False}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {"platform": "win32", "frozen": False}),
+        ({"QT_QPA_PLATFORM": "windows"}, {"platform": "win32"}),
+        ({"QT_QPA_PLATFORM": "offscreen;windows:darkmode=2"}, {"platform": "win32"}),
+        ({"QT_QPA_PLATFORM": "cocoa"}, {"platform": "darwin"}),
+        ({}, {"platform": "darwin"}),
+        ({"QT_QPA_PLATFORM": "offscreen"}, {"platform": "freebsd14"}),
     ],
 )
 def test_qt_platform_env_changes_nothing_otherwise(capsys, environ, kwargs):
@@ -458,6 +366,20 @@ def test_qt_platform_env_changes_nothing_otherwise(capsys, environ, kwargs):
     assert _platform_env(environ, **kwargs) is None
     assert environ == before
     assert capsys.readouterr().err == ""
+
+
+def test_the_kept_platforms_match_what_the_trim_keeps():
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("bundle_data_for_frozen_test", root / "freeze" / "bundle_data.py")
+    bundle_data = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bundle_data)
+    plugin_files = {"linux": "libqxcb.so", "win32": "qwindows.dll", "darwin": "libqcocoa.dylib"}
+    assert set(frozen.KEPT_QT_PLATFORMS) == set(plugin_files)
+    for key, name in frozen.KEPT_QT_PLATFORMS.items():
+        assert plugin_files[key].replace("lib", "", 1).startswith(f"q{name}")
+        assert not bundle_data.qt_entry_dropped(f"PySide6/Qt/plugins/platforms/{plugin_files[key]}")
+    for dropped in ("offscreen", "minimal", "wayland", "wayland-egl", "eglfs", "linuxfb", "vkkhrdisplay", "vnc", "direct2d"):
+        assert bundle_data.qt_entry_dropped(f"PySide6/Qt/plugins/platforms/libq{dropped}.so"), dropped
 
 
 def test_qt_platform_env_defaults_to_the_process(monkeypatch):

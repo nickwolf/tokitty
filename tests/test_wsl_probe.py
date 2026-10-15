@@ -310,7 +310,7 @@ def test_credentials_cache_swallows_a_failed_sweep_and_does_not_retry():
 
 
 def test_credentials_cache_disabled_never_sweeps():
-    # run_gui disables the cache when credentials were already found
+    # The launch disables the cache when credentials were already found
     # natively. Sweeping then would wake every installed distro to answer a
     # question that is already answered.
     from tokitty.wsl_probe import WslCredentialsCache

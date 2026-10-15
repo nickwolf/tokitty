@@ -8,7 +8,7 @@ still the selected one in the foreground window, because Esc in the wrong tab
 can dismiss a different session's prompt.
 
 UIA calls can take hundreds of milliseconds, so everything here is meant to run
-on the single FocusWorker thread, never on the Tk thread or the HTTP thread.
+on the single FocusWorker thread, never on the GUI thread or the HTTP thread.
 The real UIA adapter is built lazily and only on Windows with comtypes, so this
 module imports cleanly everywhere. Tests use a fake adapter.
 """
@@ -272,7 +272,7 @@ class FocusWorker:
         self, session: SessionRef, config_dir: str, reachable: Callable[[], bool] = lambda: True
     ) -> None:
         # Reading a transcript tail is slow over \\wsl.localhost, so it lives here
-        # rather than on the Tk thread. A failure reports a None title, and so does
+        # rather than on the GUI thread. A failure reports a None title, and so does
         # a distro that stopped since the job was queued (reading would boot it).
         self._jobs.put((
             lambda f: TitleDone(session, f.title(session, config_dir) if reachable() else None),

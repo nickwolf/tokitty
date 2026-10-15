@@ -1,38 +1,20 @@
-"""Opacity for the card background, and the Windows colour-key plumbing
-that keeps the cat and the bars opaque while it fades.
+"""Opacity levels for the card background.
 
-Two mechanisms, picked by platform (see the design doc,
-docs/superpowers/specs/2026-09-03-transparency-options-design.md):
-
-  win32  two windows. A card toplevel carries the background at -alpha,
-         a content toplevel keyed on KEY_COLOR carries the cat and the
-         bars, and the content window is made a native owned window of
-         the card so a click on the card can never raise itself above it.
-  other  one window at -alpha, which fades everything together. On X11
-         with no compositor this is accepted as a silent no-op.
-
-No tkinter here, so the level arithmetic and the platform choice stay
+LEVELS are the steps the Settings window offers, DEFAULT_LEVEL is full
+opacity, and the helpers clamp a stored value to a supported level and turn it
+into a window alpha. No GUI toolkit is imported, so the level arithmetic stays
 testable on every CI OS.
 """
 from __future__ import annotations
 
-import sys
-from typing import Optional, Tuple
-
-# Every pixel painted exactly this colour on the content window is punched
-# out by Windows. Nothing else in the app may produce it: it is absent from
-# all 44 sprite palette colours and from BG_COLOR, BAR_BG, ACCENT_BG,
-# FG_COLOR and DIM_COLOR. User-picked colours are checked at render time by
-# avoid_key(), because customize.py lets the colour chooser return anything.
-KEY_COLOR = "#010203"
+from typing import Tuple
 
 LEVELS: Tuple[int, ...] = (100, 90, 80, 70, 60, 50)
 DEFAULT_LEVEL = 100
 MIN_LEVEL = min(LEVELS)
 
-# MIN_LEVEL stays well above zero on purpose: a keyed pixel is
-# click-through, so a fully transparent card would be unrecoverable without
-# the tray icon, which is itself optional.
+# MIN_LEVEL stays well above zero on purpose: a fully transparent card would
+# be unrecoverable without the tray icon, which is itself optional.
 
 
 def clamp_level(value) -> int:
@@ -60,109 +42,3 @@ def effective_level(opacity: int, accented: bool) -> int:
     opaque.
     """
     return 100 if accented else clamp_level(opacity)
-
-
-def uses_color_key(platform: Optional[str] = None) -> bool:
-    """True where -transparentcolor exists, which is Windows only. Linux Tk
-    rejects the attribute outright and macOS has never been tested here."""
-    return (platform if platform is not None else sys.platform) == "win32"
-
-
-def _rgb(color: str) -> Optional[Tuple[int, int, int]]:
-    text = color.strip().lstrip("#")
-    if len(text) != 6:
-        return None
-    try:
-        return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
-    except ValueError:
-        return None
-
-
-def collides_with_key(color: str) -> bool:
-    """Colour-key matching is exact RGB equality, so "close to the key" is
-    irrelevant and "#010203" must match "#010203 " and "#010203".upper()."""
-    key = _rgb(KEY_COLOR)
-    return color is not None and _rgb(color) == key
-
-
-def avoid_key(color: str) -> str:
-    """Shift a colour off the key by one unit of blue.
-
-    Applied when painting, never written back to customization.json: a user
-    who picks the key colour keeps the colour they picked, and only the one
-    pixel value they cannot have is substituted.
-    """
-    if not collides_with_key(color):
-        return color
-    red, green, blue = _rgb(KEY_COLOR)
-    return "#{:02x}{:02x}{:02x}".format(red, green, min(blue + 1, 255))
-
-
-def set_content_owner(content_hwnd: int, card_hwnd: int) -> bool:
-    """Make the content window a native owned window of the card window.
-
-    Windows keeps an owned window above its owner, so a click that
-    activates the card cannot raise the card over the cat. Without this a
-    single click on the card background hides the cat permanently: measured
-    at 3600 visible cat pixels before the click and 0 after. WS_EX_NOACTIVATE
-    on the card was tried and does not prevent it.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    GWLP_HWNDPARENT = -8
-    user32 = ctypes.windll.user32
-    setter = user32.SetWindowLongPtrW
-    setter.restype = ctypes.c_void_p
-    setter.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
-    getter = user32.GetWindowLongPtrW
-    getter.restype = ctypes.c_void_p
-    getter.argtypes = [wintypes.HWND, ctypes.c_int]
-
-    setter(wintypes.HWND(content_hwnd), GWLP_HWNDPARENT, ctypes.c_void_p(card_hwnd))
-    return getter(wintypes.HWND(content_hwnd), GWLP_HWNDPARENT) == card_hwnd
-
-
-def root_hwnd(widget) -> int:
-    """The toplevel HWND for a Tk widget. winfo_id gives the Tk frame
-    window, which is a child of the real toplevel on Windows."""
-    import ctypes
-    from ctypes import wintypes
-
-    GA_ROOT = 2
-    user32 = ctypes.windll.user32
-    user32.GetAncestor.restype = wintypes.HWND
-    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
-    return user32.GetAncestor(wintypes.HWND(widget.winfo_id()), GA_ROOT)
-
-
-def hide_from_taskbar(hwnd: int) -> bool:
-    """Re-assert WS_EX_TOOLWINDOW on a window, and report whether it stuck.
-
-    Tk drops the style when it recreates a wrapper window, which the first
-    `-alpha` write on an overrideredirect toplevel does -- measured on Tk
-    8.6 as ex-style 0x88 before the write and 0x8 after, and it does not
-    come back when alpha returns to 1.0. WS_EX_TOOLWINDOW is what keeps the
-    card out of the taskbar, so without this the app grows a stray "tk"
-    button the moment opacity is applied, including at the default 100%.
-    """
-    if not uses_color_key():
-        return False
-
-    import ctypes
-    from ctypes import wintypes
-
-    GWL_EXSTYLE = -20
-    WS_EX_TOOLWINDOW = 0x00000080
-    # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-    SWP_FLAGS = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
-
-    user32 = ctypes.windll.user32
-    window = wintypes.HWND(hwnd)
-    style = user32.GetWindowLongW(window, GWL_EXSTYLE) & 0xFFFFFFFF
-    user32.SetWindowLongW(window, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW)
-    # The style change is only read at the next frame calculation, so a
-    # window already on screen keeps its taskbar button until SetWindowPos
-    # forces one.
-    user32.SetWindowPos(window, None, 0, 0, 0, 0, SWP_FLAGS)
-    return bool(user32.GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)

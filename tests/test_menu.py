@@ -38,6 +38,26 @@ def test_full_structure_and_order():
         "Update to v0.3.0…", "Refresh now", "View", "Always in front", None, "Settings…", None, "Exit"]
 
 
+def test_about_follows_settings_and_runs_its_callback():
+    about = []
+    kwargs, _, _ = _kwargs(on_open_settings=lambda: None, on_about=lambda: about.append(1))
+    items = build_menu(**kwargs)
+    labels = _labels(items)
+    assert labels[labels.index("Settings…") + 1] == "About Tokitty"
+    {i.label: i for i in items if not i.separator}["About Tokitty"].action()
+    assert about == [1]
+
+
+def test_about_without_settings_still_gets_its_separator():
+    kwargs, _, _ = _kwargs(on_about=lambda: None)
+    assert _labels(build_menu(**kwargs)) == ["Refresh now", "Always in front", None, "About Tokitty", None, "Exit"]
+
+
+def test_no_about_item_without_the_seam():
+    kwargs, _, _ = _kwargs(on_open_settings=lambda: None)
+    assert "About Tokitty" not in _labels(build_menu(**kwargs))
+
+
 def test_settings_item_omitted_without_seam():
     kwargs, _, _ = _kwargs()
     assert "Settings…" not in _labels(build_menu(**kwargs))

@@ -1,9 +1,8 @@
-"""The Qt side of an update handover (#113): the counterpart of TkHost.
+"""The host an update handover (#113) drives.
 
 The controller calls four methods, all on the GUI thread. The lock, runner
-relink and autostart steps are update_controller.reclaim's, shared with Tk;
-the tray goes off with the windows and comes back after them, as in TkHost.
-Nothing here imports tkinter.
+relink and autostart steps are update_controller.reclaim's; the tray goes off
+with the windows and comes back after them.
 """
 from __future__ import annotations
 
@@ -47,7 +46,7 @@ class QtUpdateHost:
         hiding one inside exec() ends its loop as if dismissed, so restore
         does not show dialogs or menus again. Everything else comes back,
         registered or not (the presets form is a child window). The Stream
-        Dock views stay, as in Tk."""
+        Dock views stay."""
         self._hidden = True
         self._shown = []
         self._tray.stop()
@@ -62,8 +61,8 @@ class QtUpdateHost:
     def restore(self) -> None:
         """Handover step 5.8 without the message. Raises LockAcquisitionError
         if another copy holds the lock, in which case nothing is shown and the
-        tray stays stopped. The tray comes back only if it is still enabled,
-        and is refreshed either way."""
+        tray stays stopped. The tray comes back only if it is still enabled
+        and still available, and is refreshed either way."""
         update_controller.reclaim(self._lock, self._state_dir, self._backend)
         for window in self._shown:
             try:
@@ -73,7 +72,8 @@ class QtUpdateHost:
             except RuntimeError:  # the C++ window is already gone
                 pass
         self._shown = []
-        if self._tray_enabled():
+        # A tray whose start failed earlier is not tried again.
+        if getattr(self._tray, "available", True) and self._tray_enabled():
             self._tray.start()
         self._tray.refresh()
         self._hidden = False

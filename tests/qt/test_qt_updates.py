@@ -516,6 +516,7 @@ class FakeTray:
     """Stands in for QtTray: no QSystemTrayIcon, availability set per test."""
 
     available = True
+    fail_start = False  # start() then drops availability, as QtTray's does
     instances = []
 
     def __init__(self, menu_provider, state_dir, colorway="orange", pattern="tabby", *,
@@ -530,6 +531,8 @@ class FakeTray:
 
     def start(self):
         self.calls.append("start")
+        if type(self).fail_start:
+            self.available = False
 
     def stop(self):
         self.calls.append("stop")
@@ -545,12 +548,15 @@ class FakeTray:
         from tokitty.settings import update_settings
 
         update_settings(self.state_dir, tray_enabled=enabled)
-        self.calls.append("start" if enabled else "stop")
+        if enabled:
+            self.start()
+        else:
+            self.stop()
 
 
 @pytest.fixture
 def tray(monkeypatch):
-    FakeTray.instances, FakeTray.available = [], True
+    FakeTray.instances, FakeTray.available, FakeTray.fail_start = [], True, False
     monkeypatch.setattr("tokitty.qt.tray.QtTray", FakeTray)
     return SimpleNamespace(get=lambda: FakeTray.instances[0], cls=FakeTray)
 
@@ -684,6 +690,73 @@ def test_update_host_gets_a_tray_enabled_that_reads_the_settings_file(
     assert seen == [False, True]
 
 
+def test_the_toggle_and_the_update_host_read_the_same_tray_setting(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    from tokitty.qt.settings import SettingsWindow
+
+    seen = {}
+
+    def hook(widget):
+        host = host_of(fakes)
+        update_host = fakes.updates().host
+        seen["same_getter"] = update_host._tray_enabled is host.tray_enabled
+        window = SettingsWindow.open(host, 0)
+        toggle = window.tabs["general"].toggles["tray"]
+        toggle._clicked()
+        seen["on"] = (host.tray_enabled(), update_host._tray_enabled())
+        # A handover that is rolled back restores what the user chose.
+        update_host.hide()
+        tray.get().calls.clear()
+        update_host.restore()
+        seen["restore_on"] = list(tray.get().calls)
+        toggle._clicked()
+        seen["off"] = (host.tray_enabled(), update_host._tray_enabled())
+        update_host.hide()
+        tray.get().calls.clear()
+        update_host.restore()
+        seen["restore_off"] = list(tray.get().calls)
+        window.close()
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["same_getter"]
+    assert seen["on"] == (True, True) and seen["off"] == (False, False)
+    assert seen["restore_on"] == ["start", "refresh"]
+    assert seen["restore_off"] == ["refresh"]
+    assert load_settings(state_dir).tray_enabled is False
+
+
+def test_a_tray_that_fails_to_start_leaves_the_settings_row_and_the_restore(
+        qapp, state_dir, fakes, tray, monkeypatch):
+    from tokitty.qt.settings import SettingsWindow
+
+    tray.cls.fail_start = True
+    seen = {}
+
+    def hook(widget):
+        host = host_of(fakes)
+        update_host = fakes.updates().host
+        window = SettingsWindow.open(host, 0)
+        toggle = window.tabs["general"].toggles["tray"]
+        seen["before"] = (host.tray_available(), toggle.isVisibleTo(window))
+        toggle._clicked()  # writes True, then start() fails
+        seen["after"] = (host.tray_available(), toggle.isVisibleTo(window),
+                         load_settings(state_dir).tray_enabled)
+        window.close()
+        seen["reopened"] = "tray" in SettingsWindow.open(host, 0).tabs["general"].toggles
+        update_host.hide()
+        tray.get().calls.clear()
+        update_host.restore()
+        seen["restore"] = list(tray.get().calls)
+        quit_soon(qapp)
+
+    assert run_with(monkeypatch, qapp, hook) == 0
+    assert seen["before"] == (True, True)
+    assert seen["after"] == (False, False, True)
+    assert seen["reopened"] is False
+    assert seen["restore"] == ["refresh"]  # no start
+
+
 def test_the_announcer_notifies_through_the_tray(qapp, state_dir, fakes, tray, monkeypatch):
     seen = {}
 
@@ -720,3 +793,35 @@ def test_a_debug_launch_builds_no_tray(qapp, state_dir, fakes, tray, monkeypatch
     monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
     assert run_with(monkeypatch, qapp, lambda widget: quit_soon(qapp)) == 0
     assert FakeTray.instances == []
+
+
+def test_after_update_waits_for_the_old_copys_lock_then_acks(tmp_path):
+    # The handover as a shipped updater runs it: the old copy still holds the
+    # lock when it starts the new one, and releases it as it hides.
+    import time
+
+    from tokitty.lock import SingleInstanceLock
+    from tokitty.update_swap import ack_path, new_token
+
+    state = tmp_path / "scratch-state"
+    state.mkdir()
+    token = new_token()
+    old = SingleInstanceLock(state)
+    old.acquire()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TOKITTY_")}
+    env.update({"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PYTHONPATH": str(REPO_ROOT),
+                "QT_QPA_PLATFORM": "offscreen"})
+    proc = subprocess.Popen([sys.executable, "-c", DRIVER, str(state), token], cwd=REPO_ROOT,
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        time.sleep(1.5)
+        assert proc.poll() is None, "the new copy gave up on the held lock"
+        assert not ack_path(state, token).exists()
+        old.release()
+        _, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, err
+    assert ack_path(state, token).read_text(encoding="utf-8") == token
+

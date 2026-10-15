@@ -1,4 +1,4 @@
-"""Parity: app_controls.make_controls against the run_gui closures it replaced.
+"""Parity: app_controls.make_controls against the closures it replaced.
 
 tests/fixtures/old_seams.py holds the originals. For the same inputs both must
 write the same settings.json and customization.json, leave the same

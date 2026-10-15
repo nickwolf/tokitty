@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -35,36 +36,53 @@ def test_bundled_files_exist():
 def test_release_build_installs_the_streamdock_extra():
     # Without comtypes in the build environment, the frozen Windows app has no
     # Stream Dock tab switching or Interrupt, and nothing fails to say so.
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert 'pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock,qt]"' in workflow
+    workflow = _release_workflow()
+    assert 'pip install -c freeze/release-constraints.txt -e ".[packaging,streamdock]"' in workflow
 
 
 def _release_workflow():
     return (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
 
-def test_release_build_declares_both_toolkits_and_installs_the_xcb_libraries():
+def test_release_build_has_no_toolkit_switch_and_installs_the_xcb_libraries():
     workflow = _release_workflow()
-    assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow
+    # The one TOKITTY_BUILD_TOOLKITS left is the old tk,qt fixture build.
+    assert workflow.count("TOKITTY_BUILD_TOOLKITS") == 1
+    assert "TOKITTY_BUILD_TOOLKITS: tk,qt" in workflow[workflow.index("Build the last tk,qt release"):]
     apt = next(line for line in workflow.splitlines() if "apt-get install" in line)
-    for package in ("xvfb", "libegl1", "libxcb-shape0", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
+    for package in ("xvfb", "libegl1", "libglib2.0-0", "libxcb-shape0", "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1", "libxcb-xkb1", "libxkbcommon-x11-0"):
         assert package in apt
 
 
-def test_release_verifies_the_declared_toolkits_on_every_platform():
-    assert _release_workflow().count("--expect-toolkits tk,qt") == 3
-
-
-def test_release_runs_the_qt_and_shipped_release_update_passes():
+def test_release_verifies_qt_on_every_platform():
     workflow = _release_workflow()
-    assert "name: Verify update (Qt)" in workflow
-    assert "--qt --only apply_update,no_ack_rollback" in workflow
-    assert "update-report-qt.json" in workflow
+    assert workflow.count("--expect-toolkits qt") == 3
+    assert "--qt " not in workflow
+
+
+def test_release_runs_the_clean_system_check_on_linux():
+    workflow = _release_workflow()
+    assert 'bash freeze/clean_system_check.sh "$RUNNER_TEMP/extracted"' in workflow
+    script = (ROOT / "freeze" / "clean_system_check.sh").read_text(encoding="utf-8")
+    assert "ubuntu:22.04" in script
+    assert "qt qt_root tk_root" in script
+
+
+def test_release_runs_the_shipped_release_and_tkqt_update_passes():
+    workflow = _release_workflow()
     assert "name: Verify update from a shipped release" in workflow
     assert "LEGACY_TAG: v0.6.2" in workflow
     assert 'gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY"' in workflow
     assert '--old-tag "$LEGACY_TAG"' in workflow
     assert "update-report-legacy.json" in workflow
+    assert workflow.count("--only apply_update,no_ack_rollback") == 3
+    assert "--only apply_update " not in workflow
+    # The tk,qt fixture is a pinned full SHA, run once in each old toolkit mode.
+    assert re.search(r"^  TKQT_REF: [0-9a-f]{40}$", workflow, re.MULTILINE)
+    assert "ref: ${{ env.TKQT_REF }}" in workflow
+    for mode in ("tk", "qt"):
+        assert f"--old-tag v0.6.99 --old-mode {mode}" in workflow
+        assert f"update-report-tkqt-{mode}.json" in workflow
 
 
 def test_release_rehearsal_tag_sits_above_every_real_release():
@@ -290,7 +308,7 @@ def test_licence_files_exist_and_license_matches_the_repo():
     assert (licenses / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
     assert "GNU LESSER GENERAL PUBLIC LICENSE" in (licenses / "LGPL-3.0.txt").read_text(encoding="utf-8")
     assert "GNU GENERAL PUBLIC LICENSE" in (licenses / "GPL-3.0.txt").read_text(encoding="utf-8")
-    assert "LGPL" in (licenses / "pystray-NOTICE.txt").read_text(encoding="utf-8")
+    assert set(data.LICENSE_FILES) == {"LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt"}
 
 
 def test_qt_notice_names_the_pinned_version():
@@ -302,12 +320,38 @@ def test_qt_notice_names_the_pinned_version():
     assert f"PySide6 {pinned}" in notice
 
 
-def test_qt_version_is_read_from_the_qt_extra(tmp_path):
+def test_qt_version_is_read_from_the_dependencies(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
-        '[project.optional-dependencies]\nother = ["PySide6==1.0"]\nqt = ["PySide6-Essentials==6.99.1"]\n',
+        '[project]\ndependencies = ["PySide6-Essentials==6.99.1"]\n'
+        '[project.optional-dependencies]\nother = ["PySide6==1.0"]\n',
         encoding="utf-8",
     )
     assert _bundle_data().qt_version(tmp_path) == "6.99.1"
+
+
+def test_qt_version_raises_without_a_pin_in_the_dependencies(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["other"]\n[project.optional-dependencies]\nqt = ["PySide6-Essentials==6.99.1"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        _bundle_data().qt_version(tmp_path)
+
+
+def test_pyproject_pins_pyside6_as_the_only_runtime_dependency():
+    tomllib = pytest.importorskip("tomllib")
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["dependencies"] == [f"PySide6-Essentials=={QT_PIN}"]
+    extras = project["optional-dependencies"]
+    assert "qt" not in extras
+    for extra in ("packaging", "dev"):
+        assert any(dep.startswith("Pillow") for dep in extras[extra])
+    everything = " ".join(project["dependencies"] + [d for deps in extras.values() for d in deps])
+    assert "pystray" not in everything and "xlib" not in everything.lower()
+
+
+def test_info_plist_makes_the_mac_app_an_agent_app():
+    assert _bundle_data().info_plist("0.6.0")["LSUIElement"] is True
 
 
 def test_info_plist_carries_the_qt_line():
@@ -325,7 +369,7 @@ def test_spec_applies_the_trim_and_ships_the_licences():
     assert "qt_entry_dropped" in spec
     assert "LICENSE_FILES" in spec
     assert "TOKITTY_QT_TRIM" in spec
-    assert "excludes=list(QT_EXCLUDED_MODULES)" in spec
+    assert "excludes=GUI_EXCLUDES + (list(QT_EXCLUDED_MODULES) if QT_TRIM else [])" in spec
     assert '"PySide6", "shiboken6"' in spec
     assert 'Path(DISTPATH) / APP_NAME / "licenses"' in spec
 
@@ -354,10 +398,10 @@ def test_qt_notices_script_keeps_the_bundled_modules(tmp_path):
 
 
 def test_lgpl_packages_ship_as_replaceable_source():
-    # pystray, PySide6 and shiboken6 are LGPL-3.0: their Python code must sit
+    # PySide6 and shiboken6 are LGPL-3.0: their Python code must sit
     # in the bundle as .py files a user can replace, not inside the PYZ (#115).
     data = _bundle_data()
-    assert data.LGPL_SOURCE_PACKAGES == {"pystray": "py", "PySide6": "py", "shiboken6": "py", "Xlib": "py"}
+    assert data.LGPL_SOURCE_PACKAGES == {"PySide6": "py", "shiboken6": "py"}
     spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
     assert "module_collection_mode=LGPL_SOURCE_PACKAGES" in spec
 
@@ -371,37 +415,21 @@ def test_qt_notice_carries_the_icu_licence_of_the_bundled_version():
     assert "/usr/share/doc/" not in notice
 
 
-def test_notice_versions_follow_the_installed_packages(tmp_path):
-    # pystray and python-xlib are unpinned, so the spec refuses to build when a
-    # notice names a different version than the build venv has (#115).
+def test_release_constraints_pin_nothing_the_build_no_longer_ships():
+    text = (ROOT / "freeze" / "release-constraints.txt").read_text(encoding="utf-8")
+    pins = [line for line in text.splitlines() if line.split("#", 1)[0].strip()]
+    assert pins == []
+
+
+def test_the_font_and_its_notice_are_bundled_beside_the_streamdock_modules():
     data = _bundle_data()
-    (tmp_path / "pystray-NOTICE.txt").write_text("pystray\n\nVersion: 0.19.5\n", encoding="utf-8")
-    (tmp_path / "python-xlib-NOTICE.txt").write_text("python-xlib\n\nVersion: 0.33\n", encoding="utf-8")
-    versions = {"pystray": "0.19.5", "python-xlib": "0.33"}
-    assert data.notice_version_problems(tmp_path, versions.get) == []
-    versions["pystray"] = "0.19.6"
-    assert data.notice_version_problems(tmp_path, versions.get) == ["pystray-NOTICE.txt says pystray 0.19.5, the build has 0.19.6"]
-    # A package this platform does not install (python-xlib off Linux) is skipped.
-    assert data.notice_version_problems(tmp_path, {"pystray": "0.19.5"}.get) == []
+    assert "streamdock/fonts/Aileron-Regular.ttf" in data.DATA_FILES
+    assert "streamdock/fonts/NOTICE.txt" in data.DATA_FILES
 
 
-def test_the_shipped_notices_name_versions_the_spec_can_check():
-    data = _bundle_data()
-    licenses = Path(__file__).resolve().parent.parent / "freeze" / "licenses"
-    assert data.notice_version_problems(licenses, {"pystray": "0.19.5", "python-xlib": "0.33"}.get) == []
-    spec = (Path(__file__).resolve().parent.parent / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
-    assert "notice_version_problems(" in spec
-
-
-def test_release_constraints_pin_the_versions_the_notices_name():
-    # The release build installs with these pins, so a tag build cannot
-    # resolve a newer pystray or python-xlib than its notices name (#115).
-    root = Path(__file__).resolve().parent.parent
-    pins = {}
-    for line in (root / "freeze" / "release-constraints.txt").read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line:
-            name, version = line.split("==")
-            pins[name] = version
-    assert set(pins) == set(_bundle_data().VERSIONED_NOTICES)
-    assert _bundle_data().notice_version_problems(root / "freeze" / "licenses", pins.get) == []
+def test_the_spec_excludes_every_other_toolkit_and_no_tokitty_build_toolkits():
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    for name in ("tkinter", "_tkinter", "PIL", "pystray", "objc", "AppKit", "Foundation", "Xlib"):
+        assert f'"{name}"' in spec.split("GUI_EXCLUDES = [", 1)[1].split("]", 1)[0]
+    assert "TOKITTY_BUILD_TOOLKITS" not in spec
+    assert "TOKITTY_BUILD_ID" in spec

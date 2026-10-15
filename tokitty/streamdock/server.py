@@ -2,7 +2,7 @@
 
 The plugin runs as a web page inside VSD Craft's embedded Chromium. It long-polls
 the plan, draws the images tokitty sends, and forwards key events. All logic stays
-in the DeckModel on the Tk thread; this server never touches the model. It reads
+in the DeckModel on the GUI thread; this server never touches the model. It reads
 the published PlanBox snapshot and puts inbound events on a queue that the Tk
 tick drains through `apply_event`.
 

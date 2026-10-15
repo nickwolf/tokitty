@@ -291,6 +291,15 @@ def test_restore_leaves_a_disabled_tray_stopped_but_still_refreshes(setup, recla
     assert setup.tray.calls == ["tray refresh"]
 
 
+def test_restore_does_not_start_a_tray_that_became_unavailable(setup, reclaimed):
+    host, _, _ = setup.build(tray_on=True)
+    host.hide()
+    setup.tray.available = False
+    setup.tray.calls.clear()
+    host.restore()
+    assert setup.tray.calls == ["tray refresh"]
+
+
 def test_restore_that_fails_at_reclaim_leaves_the_tray_stopped(setup, reclaimed):
     host, _, _ = setup.build()
     host.hide()

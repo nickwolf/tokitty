@@ -216,7 +216,7 @@ def test_env_override_unc(tmp_path):
 
 
 def test_wsl_credentials_match_the_accounts_dialog_form(tmp_path):
-    from tokitty.accounts_ui import build_discovered_path_specs
+    from tokitty.accounts_logic import build_discovered_path_specs
 
     matches = [("Ubuntu", "/home/nick/.claude/.credentials.json")]
     cache = FakeCache(matches=matches)

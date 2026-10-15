@@ -27,13 +27,14 @@ FRAME_INTERVAL_MS = 800   # ui.FRAME_INTERVAL_MS
 MODEL_NAME_MAX = 14       # ui.render_usage's fit_tag limit
 CAT_CANVAS_SIZE = 112     # ui.CAT_CANVAS_SIZE
 CAT_CANVAS_DY = 4         # the sprite sits 4 px below its canvas origin (placement "inside")
-TAG_INSET = 6             # ui.py:525-529
+TAG_INSET = 6
 HALO_COLOR = QColor(0, 0, 0, 200)
-# A tk.Label draws its text inset by its border and padding, so the Tk card's
-# text sits this far in from the placed rect. Measured on Windows at 100%.
+# Card text sits this far in from its layout rect, the inset the original Tk
+# label drew with, kept so the card looks as it always has. Measured on
+# Windows at 100%.
 TK_LABEL_PAD_X = 3
 TK_LABEL_PAD_Y = 2
-# The chip Tk draws under a cat tag on the keyed Windows canvas (ui.py:543-550).
+# The chip under a cat tag, as the original Windows card drew it.
 TAG_CHIP_PAD_X = 3
 TAG_CHIP_PAD_Y = 1
 _HALO_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1))
@@ -57,8 +58,7 @@ def _qrect(r: T.Rect) -> QRectF:
 
 
 def _text_rect(r: T.Rect, right: bool = False) -> QRectF:
-    """A layout rect moved by Tk's label inset, so text lands where the Tk
-    card draws it. Right-aligned text moves left by the same amount."""
+    """A layout rect moved by the card text inset (TK_LABEL_PAD_X/Y). Right-aligned text moves left by the same amount."""
     dx = -TK_LABEL_PAD_X if right else TK_LABEL_PAD_X
     return QRectF(r.x + dx, r.y + TK_LABEL_PAD_Y, r.w, r.h)
 
@@ -79,7 +79,7 @@ class TokittyQtWidget(QWidget):
         self.position_path = position_path
         # The owner's model factory; called with the clicked pane on every open.
         self.build_menu_model = build_menu_model
-        # Called after a menu action ran (the Tk notify_state_changed slot).
+        # Called after a menu action ran (the host's notify_state_changed).
         self.on_menu_action_done: Optional[Callable[[], None]] = None
         self._always_on_top = True  # starts on, never persisted
         self._drag: Optional[Tuple[int, int]] = None
@@ -282,8 +282,8 @@ class TokittyQtWidget(QWidget):
             text = pane.status_text if pane._view_mode == "limits" else (
                 pane.usage_view.status_text if pane.usage_view is not None else "")
             rect = layout["status"]
-            # Wraps at the card's right edge. Tk's wraplength is 160 px in its
-            # own font metrics, and on Windows its text reaches x=298, wider than
+            # Wraps at the card's right edge. The original card wrapped at 160 px in
+            # its own font metrics, and on Windows its text reached x=298, wider than
             # the stats column; wrapping at the column put "Code" of "open
             # Claude Code" on a second line below the card.
             left = rect.x + TK_LABEL_PAD_X
@@ -374,7 +374,7 @@ class TokittyQtWidget(QWidget):
                 box = _text_rect(layout[f"{name}_percent"])
                 self._text(p, dim, box, _LEFT_VCENTER, percent, halo and T.halo_applies("percent"))
                 if reset_box is not None:
-                    # Tk draws "42% · resets ..." as one run, so the reset text
+                    # "42% · resets ..." reads as one run, so the reset text
                     # starts right after the percent rather than at its own rect.
                     start = box.left() + p.fontMetrics().horizontalAdvance(percent + " ")
                     reset_box.setLeft(start)
@@ -395,7 +395,7 @@ class TokittyQtWidget(QWidget):
                 p.setFont(text_font)
                 self._text(p, dim, _text_rect(layout[f"model_value_{i}"], right=True), _RIGHT_VCENTER,
                            row.value_text)
-            # Like Tk, the track is always there; the fill only when there is a share.
+            # The track is always there; the fill only when there is a share.
             pct = row.bar_pct if row is not None else 0.0
             fill = T.bar_fill(self.theme, view.ramp_pct if view else None, style.bar_fill_override)
             self._bar(p, layout[f"model_bar_{i}"], pct, fill)
@@ -437,7 +437,7 @@ class TokittyQtWidget(QWidget):
         return driving, tool, side
 
     def _tag(self, p, box: QRectF, flags, text: str, color: QColor, style) -> None:
-        # A chip in the card colour under the tag, as Tk draws on Windows, so
+        # A chip in the card colour under the tag, as on the Windows card, so
         # the dim text stays legible over the cat's fur.
         bounds = p.fontMetrics().boundingRect(box.toRect(), int(flags), text)
         chip = QColor(style.background)

@@ -1,8 +1,8 @@
 """Glue between the Stream Dock pieces: server, model, watchers, focus worker.
 
-Only the Tk thread touches the DeckModel. The HTTP server thread and the focus
+Only the GUI thread touches the DeckModel. The HTTP server thread and the focus
 worker thread both put what they have on one inbound queue, and `tick()` (called
-from Tk every UI_REFRESH_MS) drains it in arrival order, applies each item to
+from the GUI every UI_REFRESH_MS) drains it in arrival order, applies each item to
 the model, feeds the model fresh inputs, executes the actions that come back,
 and publishes the new plan for the server to serve. Everything Windows-specific
 is injected so this runs under pytest.
@@ -21,7 +21,6 @@ from tokitty.accounts import DEFAULT_PROVIDER, Account
 from tokitty.activity import SessionView
 from tokitty.streamdock import launch as launch_mod
 from tokitty.streamdock import pending as pending_mod
-from tokitty.streamdock.keyimages import spec_image
 from tokitty.streamdock.model import (
     CancelOverlay,
     Decide,
@@ -128,7 +127,7 @@ class StreamdockRuntime:
         self._worker_factory = worker_factory
         self._list_running = list_running_distros_fn
         # Marker touches and clears go over \\wsl.localhost and can stall, so by
-        # default they run in order on their own thread, never on Tk's.
+        # default they run in order on their own thread, never on the GUI thread.
         self._io_jobs: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
         self._io_thread: Optional[threading.Thread] = None
         self._run_io = run_io or self._io_jobs.put
@@ -138,6 +137,9 @@ class StreamdockRuntime:
         self._inbound: "queue.Queue[Any]" = queue.Queue()
         if image_fn is None:
             def image_fn(spec: KeySpec) -> str:
+                # Imported here because the renderer needs PySide6, and this
+                # module must import without it.
+                from tokitty.streamdock.keyimages import spec_image
                 return spec_image(spec, palette_fn)
         self._server = server_factory(port, token, self._box, self._inbound, image_fn=image_fn, meta_fn=self._meta)
         self._watchers: Dict[int, Any] = {a.index: watcher_factory(a) for a in accounts}
@@ -219,7 +221,7 @@ class StreamdockRuntime:
             except Exception as exc:
                 _log(f"marker: {exc}")
 
-    # Tk thread
+    # GUI thread
 
     def tick(
         self,
@@ -405,11 +407,11 @@ class StreamdockRuntime:
         return None
 
     def set_presets(self, presets: List[dict]) -> None:
-        """Swap the preset list. Tk thread, like every other method here."""
+        """Swap the preset list. GUI thread, like every other method here."""
         self._presets = list(presets)
 
     def set_hidden_accounts(self, names: List[str]) -> None:
-        """Swap the hidden-account list (name slugs). Tk thread; applies on the next tick."""
+        """Swap the hidden-account list (name slugs). GUI thread; applies on the next tick."""
         newly = {a for a in self._accounts.values() if a.account is not None
                  and a.account.name in set(names) - self._hidden}
         self._hidden = frozenset(names)

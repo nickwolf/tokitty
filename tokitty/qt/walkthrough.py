@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
+from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QWidget
 
 from tokitty import first_run, hook_guard, sprites
@@ -33,6 +33,7 @@ from tokitty.accounts_rows import run_hook_op as _hook_op
 from tokitty.app_version import version_text
 from tokitty.first_run import Candidate
 from tokitty.hooks_install import _same_config_dir
+from tokitty.qt import macos
 from tokitty.qt.kit import Kit, clear_layout, hbox, text, vbox
 from tokitty.qt.poller import QtPoller
 from tokitty.qt.settings_accounts import render_banner, render_pill
@@ -133,6 +134,8 @@ class Walkthrough(QWidget):
     backend and Accounts-tab functions."""
 
     closed = Signal()
+    # The Quit shortcut: the launch ends and onboarding stays pending.
+    quit_requested = Signal()
 
     def __init__(
         self,
@@ -203,6 +206,8 @@ class Walkthrough(QWidget):
         self.mailbox = Mailbox()
         self.poller = QtPoller(self, self.mailbox, self._on_result, self._keep_alive,
                                on_tick=self._on_tick)
+        self.quit_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Quit), self)
+        self.quit_shortcut.activated.connect(self.quit_app)
 
         shell = hbox(self)
         self.nav = self.kit.rail(STEPS, version_text())
@@ -232,6 +237,7 @@ class Walkthrough(QWidget):
     def present(self) -> None:
         """Show the window in front. It takes the foreground when it can."""
         self.show()
+        macos.activate_app()
         self.raise_()
         self.activateWindow()
 
@@ -250,6 +256,18 @@ class Walkthrough(QWidget):
     def finish(self) -> None:
         if self._writing() or self._finished:
             return
+        self.close()
+
+    def quit_app(self) -> None:
+        """The Quit shortcut: end the launch without marking onboarding done,
+        so the walkthrough shows again next time. Refused while an install
+        runs, as Skip is. The walkthrough runs before the widget and the tray
+        exist, so nothing else offers a way out."""
+        if self._writing() or self._finished:
+            return
+        self._finished = True
+        self.poller.cancel()
+        self.quit_requested.emit()
         self.close()
 
     def closeEvent(self, event) -> None:

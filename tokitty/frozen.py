@@ -63,27 +63,6 @@ def _check(fn) -> dict:
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 
 
-def _check_tkinter():
-    import tkinter
-
-    return tkinter.Tcl().eval("info patchlevel")
-
-
-def _check_tk_root():
-    """tkinter.Tcl() above only starts the Tcl interpreter; it never opens
-    a window, so a bundle whose Tk can't actually initialise (missing
-    display, broken Tcl/Tk libs in the onedir layout) would still pass.
-    Gated behind TOKITTY_SELF_CHECK_TK so headless unit tests stay headless."""
-    import tkinter
-
-    root = tkinter.Tk()
-    try:
-        root.update_idletasks()
-        return root.eval("info patchlevel")
-    finally:
-        root.destroy()
-
-
 def _check_qt():
     from PySide6 import QtCore, QtWidgets  # noqa: F401
 
@@ -91,9 +70,10 @@ def _check_qt():
 
 
 def _check_qt_root():
-    """The Qt counterpart of _check_tk_root: a QApplication on the real
-    platform plugin (not forced offscreen), one widget shown and its events
-    processed, so a bundle whose plugin can't load fails here."""
+    """A QApplication on the real platform plugin (not forced offscreen), one
+    widget shown and its events processed, so a bundle whose plugin can't
+    load fails here. Gated behind TOKITTY_SELF_CHECK_TK so headless unit tests
+    stay headless."""
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication, QWidget
 
@@ -109,41 +89,55 @@ def _check_qt_root():
         widget.close()
 
 
+# The one Qt platform plugin each OS's frozen build ships (the trim drops the
+# rest: offscreen, minimal, wayland*, eglfs and so on). A test ties this to
+# freeze/bundle_data.qt_entry_dropped, which this module cannot import at run time.
+KEPT_QT_PLATFORMS = {"linux": "xcb", "win32": "windows", "darwin": "cocoa"}
+
+
 def qt_platform_env(environ=None, *, frozen=None, platform=None) -> Optional[str]:
-    """The frozen Linux build leaves out Qt's Wayland plugin (#115), and an
-    explicit QT_QPA_PLATFORM replaces Qt's fallback list, so a session that
-    exports only Wayland platforms would make Qt abort. Map that to xcb when
-    DISPLAY says XWayland or X is there. Returns the new value, or None when
-    nothing was changed. Toolkit-free: it only touches the environment."""
+    """The frozen build ships one Qt platform plugin per OS, and an explicit
+    QT_QPA_PLATFORM replaces Qt's fallback list, so an inherited value that
+    names only plugins the trim removed (offscreen, wayland, minimal...) would
+    make Qt abort before anything prints (#115). On Linux map it to xcb when
+    DISPLAY says XWayland or X is there; on Windows and macOS drop it so Qt
+    uses its default. A value that includes the shipped platform, and a source
+    run, are left alone. Returns the new value (the default's name when the
+    variable was dropped), or None when nothing was changed. Toolkit-free: it
+    only touches the environment."""
     environ = os.environ if environ is None else environ
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     platform = sys.platform if platform is None else platform
-    if not frozen or not platform.startswith("linux"):
+    if not frozen:
+        return None
+    kept = next((name for key, name in KEPT_QT_PLATFORMS.items() if platform.startswith(key)), None)
+    if kept is None:
         return None
     requested = environ.get("QT_QPA_PLATFORM")
-    if not requested or not environ.get("DISPLAY"):
+    if not requested:
         return None
     names = [entry.split(":", 1)[0].strip().lower() for entry in requested.split(";") if entry.strip()]
-    if not names or not all(name.startswith("wayland") for name in names):
+    if not names or kept in names:
         return None
-    environ["QT_QPA_PLATFORM"] = "xcb"
+    if platform.startswith("linux"):
+        if not environ.get("DISPLAY"):
+            return None
+        environ["QT_QPA_PLATFORM"] = kept
+    else:
+        del environ["QT_QPA_PLATFORM"]
     print(
-        f"tokitty: QT_QPA_PLATFORM={requested} needs the Wayland plugin, which this build leaves out; using xcb",
+        f"tokitty: QT_QPA_PLATFORM={requested} names no platform this build ships; using {kept}",
         file=sys.stderr,
     )
-    return "xcb"
+    return kept
 
 
-def _check_pil():
-    from PIL import Image
+def _check_key_font():
+    """The Stream Dock key font loads from the bundle. Needs the QGuiApplication
+    that _check_qt_root creates, so it only runs after it."""
+    from tokitty.streamdock import render
 
-    return Image.new("RGBA", (1, 1))
-
-
-def _check_pystray():
-    import pystray
-
-    return pystray
+    return f"family {render.register_font()}"
 
 
 def _check_prices():
@@ -189,17 +183,6 @@ def _check_tls():
     return f"{count} CA certificates from {source}"
 
 
-def build_toolkits(environ=None) -> set:
-    """The GUI toolkits this build declares (TOKITTY_BUILD_TOOLKITS, a comma
-    list baked in by the runtime hook, read from the environment in a source
-    run). Unset or empty means Tk only. Declared rather than guessed: a build
-    that merely has PySide6 installed must not be failed for it."""
-    environ = os.environ if environ is None else environ
-    names = {part.strip().lower() for part in environ.get("TOKITTY_BUILD_TOOLKITS", "").split(",")}
-    names.discard("")
-    return names or {"tk"}
-
-
 def env_names(environ=None) -> list:
     """Sorted names of the environment variables the bootloader may have set."""
     environ = os.environ if environ is None else environ
@@ -210,44 +193,33 @@ def self_check() -> int:
     """Hidden --self-check: prove a bundle carries what the app needs.
     The release CI verifier depends on this, including the state_dir
     field, to fail closed rather than trust a bundle that merely
-    launched."""
+    launched.
+
+    Qt is the only toolkit (#142). Nothing here reads TOKITTY_BUILD_TOOLKITS
+    or TOKITTY_QT: both are inherited from the old copy's environment during
+    an update, and a copy that obeyed them would fail checks the bundle no
+    longer has."""
     from tokitty import paths
 
-    toolkits = build_toolkits()
-    checks = {}
-    if "tk" in toolkits:
-        checks["tkinter"] = _check(_check_tkinter)
-    # A build that carries Tk runs the Qt checks only for a Qt-mode launch:
-    # every shipped updater runs this report with the window switch on and
-    # refuses any failed entry, and on Linux a missing xcb library makes Qt
-    # abort the whole process, which would block a Tk user's updates (#115).
-    run_qt_checks = "qt" in toolkits and ("tk" not in toolkits or os.environ.get("TOKITTY_QT") == "1")
-    if run_qt_checks:
-        checks["qt"] = _check(_check_qt)
-    checks["pil"] = _check(_check_pil)
-    if "tk" in toolkits:
-        # Only the Tk tray uses pystray; a build without Tk does not carry it,
-        # and a failed entry would make every shipped updater refuse it (#114).
-        checks["pystray"] = _check(_check_pystray)
-    checks.update(
-        {
-            "prices": _check(_check_prices),
-            "hook_writer": _check(_check_hook_writer),
-            "tls": _check(_check_tls),
-        }
-    )
+    checks = {
+        "qt": _check(_check_qt),
+        "prices": _check(_check_prices),
+        "hook_writer": _check(_check_hook_writer),
+        "tls": _check(_check_tls),
+    }
     if getattr(sys, "frozen", False):
         checks["hook_runner"] = _check(_check_hook_runner)
     if os.environ.get("TOKITTY_SELF_CHECK_TK") == "1":
-        if "tk" in toolkits:
-            checks["tk_root"] = _check(_check_tk_root)
-        if run_qt_checks:
-            checks["qt_root"] = _check(_check_qt_root)
-            if "tk" not in toolkits:
-                # Every shipped updater requires a tk_root entry in the report
-                # of the build it installs, so a Qt-only build carries the Qt
-                # window result under that name (#142).
-                checks["tk_root"] = checks["qt_root"]
+        checks["qt_root"] = _check(_check_qt_root)
+        # Every shipped updater requires a tk_root entry in the report of the
+        # build it installs (update_install.run_self_check, unchanged since
+        # v0.6.2), so the Qt window result is also carried under that name.
+        checks["tk_root"] = checks["qt_root"]
+        # Needs the application qt_root created, so it is absent (not failed)
+        # when qt_root failed: a system without libEGL must report exactly qt,
+        # qt_root and tk_root. Old judges accept extra ok entries.
+        if checks["qt_root"]["ok"]:
+            checks["key_font"] = _check(_check_key_font)
 
     report = {
         "checks": checks,
@@ -256,9 +228,8 @@ def self_check() -> int:
         "build_id": os.environ.get("TOKITTY_BUILD_ID"),
         "state_dir": str(paths.state_dir_path()),
         "env": env_names(),
+        "toolkits": ["qt"],
     }
-    if toolkits != {"tk"}:
-        report["toolkits"] = sorted(toolkits)
     if sys.stdout is not None:
         print(json.dumps(report))
     return 0 if all(check["ok"] for check in checks.values()) else 1

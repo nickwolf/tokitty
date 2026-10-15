@@ -2,9 +2,8 @@
 
 One master is drawn here and written as .icns for Tokitty.app and .ico for
 Tokitty.exe by freeze/tokitty.spec at build time, so the icon always matches
-the sprites in the build. A source run on macOS also uses it for the Dock
-tile, which would otherwise be the Python rocket. Needs Pillow, which ships
-everywhere the tray does; the hook executable never imports this.
+the sprites in the build. Needs Pillow at build time; the hook executable
+never imports this.
 """
 from __future__ import annotations
 
@@ -73,13 +72,3 @@ def write_icns(path) -> None:
 
 def write_ico(path) -> None:
     render(256).save(path, format="ICO", sizes=ICO_SIZES)
-
-
-def photo(master, size: int = 256):
-    """A Tk PhotoImage of the icon, for root.iconphoto on a source run."""
-    import io
-    import tkinter as tk
-
-    buffer = io.BytesIO()
-    render(size).save(buffer, format="PNG")
-    return tk.PhotoImage(master=master, data=buffer.getvalue(), format="png")

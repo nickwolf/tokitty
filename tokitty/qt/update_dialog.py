@@ -1,9 +1,8 @@
-"""The Qt update confirm dialog (#113): the counterpart of update_dialog.
+"""The update confirm dialog (#113).
 
 `QtUpdateDialog` only draws what `UpdateFlow` decides (which choices a release
 gets, what each outcome says, when the window may close), so the rules live
-once in update_flow and the Tk dialog shares them. One window per process:
-open() raises the existing one. Nothing here imports tkinter.
+once in update_flow. One window per process: open() raises the existing one.
 """
 from __future__ import annotations
 
@@ -12,6 +11,7 @@ from typing import List, Optional
 
 from PySide6.QtWidgets import QLayout, QPushButton, QWidget
 
+from tokitty.qt import macos
 from tokitty.qt.kit import Kit, clear_layout, hbox, text, vbox
 from tokitty.settings_style import FONT_BODY
 from tokitty.update_flow import WRAP_PX, Buttons, UpdateFlow
@@ -42,11 +42,13 @@ class QtUpdateDialog(QWidget):
         existing = _instance
         if existing is not None and existing.alive:
             existing.show()
+            macos.activate_app()
             existing.raise_()
             existing.activateWindow()
             return existing
         dialog = cls(host, release, running, controller, open_url)
         dialog.show()
+        macos.activate_app()
         dialog.raise_()
         dialog.activateWindow()
         return dialog

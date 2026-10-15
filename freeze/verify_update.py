@@ -19,16 +19,19 @@ Usage:
   verify_update.py --old-archive <old.zip|.tar.gz> --new-archive <new archive> \\
       --new-sums <new archive>.sha256 --tag <tag> --work <empty scratch dir> \\
       --report <report.json> [--rehearsal] [--repo-root <repo>] [--only a,b] \\
-      [--old-tag <tag>] [--qt]
+      [--old-tag <tag>] [--old-mode tk|qt]
 
 --old-archive is the v0.0.1 fixture, archived the way the release job archives
 (zip on Windows, ditto on macOS, tar.gz on Linux) and unpacked here with the
 same tools. --old-tag (default v0.0.1) is the build ID that archive was built
-with, so a shipped release can stand in for the fixture. --qt runs the pass in
-Qt mode: every child gets TOKITTY_QT=1 and no QT_QPA_PLATFORM or
-WAYLAND_DISPLAY (the rehearsal must run on a real platform plugin), and
-apply_update also requires the new copy's after-update-qt.json to say a window
-was exposed before the ack (#115); pair it with --only apply_update,no_ack_rollback.
+with, so a shipped release can stand in for the fixture. The new copy is Qt,
+the only toolkit (#142): no child gets QT_QPA_PLATFORM or WAYLAND_DISPLAY (the
+rehearsal must run on a real platform plugin), and apply_update requires the
+new copy's after-update-qt.json to say a window was exposed before the ack.
+--old-mode (default tk) alone decides whether TOKITTY_QT=1 is in the OLD
+process's environment, since a tk,qt launcher picks its toolkit from it; the
+new copy ignores it either way. Legacy passes pair it with
+--only apply_update,no_ack_rollback.
 --new-archive must be named tokitty-<tag>-<target>.<ext>, and
 --new-sums holds its sha256sum line. --repo-root (default: the parent of this
 script's directory) is put on sys.path to import the updater's own
@@ -91,7 +94,7 @@ CLEANUP_TIMEOUT = 60
 REPO_API_PATH = "/repos/nickwolf/tokitty/releases"
 ENV_PREFIXES = ("TOKITTY_UPDATE", "SSL_CERT_FILE", "PYINSTALLER_RESET_ENVIRONMENT")
 AFTER_UPDATE_QT_FILE = "after-update-qt.json"  # tokitty.qt.app.AFTER_UPDATE_QT_FILE; this script never imports Qt code
-# Removed from every child's environment under --qt, so Qt picks a real platform plugin.
+# Removed from every child's environment, so Qt picks a real platform plugin.
 QT_MODE_UNSET = ("QT_QPA_PLATFORM", "WAYLAND_DISPLAY")
 
 
@@ -299,10 +302,18 @@ def single_process_problems(procs: Sequence[dict], new_exe, old_pid: Optional[in
 
 
 def qt_mode_env(env: dict) -> dict:
-    """`env` as a Qt-mode pass runs it: TOKITTY_QT=1, and none of the variables
-    that would force Qt onto the offscreen or Wayland platform."""
-    env = {k: v for k, v in env.items() if k not in QT_MODE_UNSET}
-    env["TOKITTY_QT"] = "1"
+    """`env` as every pass runs it: none of the variables that would force Qt
+    onto the offscreen or Wayland platform, and no TOKITTY_QT (the new copy
+    ignores it; old_process_env sets it for the old copy)."""
+    return {k: v for k, v in env.items() if k not in QT_MODE_UNSET and k != "TOKITTY_QT"}
+
+
+def old_process_env(env: dict, old_mode: str) -> dict:
+    """`env` for the OLD process: TOKITTY_QT=1 under --old-mode qt, absent
+    under tk. A tk,qt launcher picks its toolkit from it (#142)."""
+    env = {k: v for k, v in env.items() if k != "TOKITTY_QT"}
+    if old_mode == "qt":
+        env["TOKITTY_QT"] = "1"
     return env
 
 
@@ -587,7 +598,9 @@ class Scenario:
         self.ctx, self.name = ctx, name
         self.dir = ctx["work"] / name
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.env = scratch_env(self.dir, qt=ctx.get("qt", False))
+        self.env = scratch_env(self.dir)
+        # The old copy's own environment; the new copy is always run with self.env.
+        self.old_env = old_process_env(self.env, ctx.get("old_mode", "tk"))
         self.old_tag = ctx["old_tag"]
         self.plat = sys.platform
         if self.plat == "darwin":
@@ -622,7 +635,7 @@ class Scenario:
     def read_state_dir(self, gui: Path) -> Path:
         """The state dir as the frozen child itself reports it, which must lie
         under this scenario: nothing here may ever touch a real one."""
-        proc, err = run_child([str(gui), "--self-check"], self.env)
+        proc, err = run_child([str(gui), "--self-check"], self.old_env if gui == self.old_gui else self.env)
         if err:
             raise RuntimeError(err)
         try:
@@ -661,7 +674,7 @@ class Scenario:
             return None
 
     def apply_env(self, ctx: dict, extra: Optional[dict] = None) -> dict:
-        env = dict(self.env)
+        env = dict(self.old_env)
         env["TOKITTY_UPDATE_API_URL"] = ctx["server_url"]
         env["SSL_CERT_FILE"] = str(ctx["certs"]["ca"])
         env.update(extra or {})
@@ -676,10 +689,10 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def scratch_env(scn_dir: Path, qt: bool = False) -> dict:
+def scratch_env(scn_dir: Path) -> dict:
     """verify_artifact's scratch environment plus every other per-user
-    location, minus any TOKITTY_UPDATE_* or SSL_CERT_FILE the runner had; with
-    `qt`, set up for a Qt-mode pass (qt_mode_env)."""
+    location, minus any TOKITTY_UPDATE_* or SSL_CERT_FILE the runner had, and
+    set up for Qt (qt_mode_env)."""
     env = _scratch_env(scn_dir)
     for key in [k for k in env if k.startswith(ENV_PREFIXES)]:
         del env[key]
@@ -692,7 +705,7 @@ def scratch_env(scn_dir: Path, qt: bool = False) -> dict:
     for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "LOCALAPPDATA", "APPDATA", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"):
         if key in env and str(env[key]).startswith(str(scn_dir)):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
-    return qt_mode_env(env) if qt else env
+    return qt_mode_env(env)
 
 
 def unpack_archive(archive, dest) -> None:
@@ -853,7 +866,7 @@ def tls_github_verdict(returncode: int, report) -> Tuple[bool, dict]:
 
 def step_tls_github(ctx):
     scn = Scenario(ctx, "tls").prepare_old()
-    proc, err = run_child([str(scn.old_gui), "--check-for-update"], scn.env, timeout=90)
+    proc, err = run_child([str(scn.old_gui), "--check-for-update"], scn.old_env, timeout=90)
     if err:
         return {"ok": False, "detail": err}
     try:
@@ -934,12 +947,11 @@ def step_apply_update(ctx):
         detail["new_build_id"] = build
         if build != ctx["tag"]:
             problems.append(f"the new copy's --self-check reports {build}, expected {ctx['tag']}")
-        if ctx.get("qt"):
-            problems += after_update_qt_problems(scn.state_dir)
-            try:
-                detail["after_update_qt"] = json.loads((scn.state_dir / AFTER_UPDATE_QT_FILE).read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
+        problems += after_update_qt_problems(scn.state_dir)
+        try:
+            detail["after_update_qt"] = json.loads((scn.state_dir / AFTER_UPDATE_QT_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
         quarantine, info = _quarantine_problems(scn)
         detail["quarantine"] = info
         problems += quarantine
@@ -1166,7 +1178,12 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--only", default=None, help="comma-separated step names to run after prepare (debugging)")
     parser.add_argument("--old-tag", default=OLD_TAG, help="the build ID of --old-archive (default: %(default)s)")
-    parser.add_argument("--qt", action="store_true", help="run every child in Qt mode and require after-update-qt.json in apply_update")
+    parser.add_argument(
+        "--old-mode",
+        choices=("tk", "qt"),
+        default="tk",
+        help="whether TOKITTY_QT=1 is in the OLD process's environment (a tk,qt launcher picks its toolkit from it); the new copy ignores it",
+    )
     args = parser.parse_args(argv)
 
     report_path = Path(args.report)
@@ -1176,7 +1193,7 @@ def main(argv: Optional[list] = None) -> int:
         "tag": args.tag,
         "rehearsal": args.rehearsal,
         "old_tag": args.old_tag,
-        "qt": args.qt,
+        "old_mode": args.old_mode,
         "platform": sys.platform,
         "work": str(work_arg),
         "repo_root": str(repo_root),
@@ -1200,7 +1217,7 @@ def main(argv: Optional[list] = None) -> int:
         "tag": args.tag,
         "rehearsal": args.rehearsal,
         "old_tag": args.old_tag,
-        "qt": args.qt,
+        "old_mode": args.old_mode,
     }
     only = set(args.only.split(",")) if args.only else None
     for name, fn in STEPS:

@@ -1,5 +1,5 @@
 """(stored value, label) pairs for the three usage choices, toolkit-free so
-the Tk menu and both Settings windows share one copy. ui.py re-exports them."""
+the menu and the Settings window share one copy."""
 from __future__ import annotations
 
 VIEW_MODE_ITEMS = [("limits", "Limits"), ("models", "Per-model")]

@@ -185,6 +185,22 @@ def test_tray_and_update_rows_appear_when_their_seams_exist(make_world):
     assert general.update_pill.text() == "v9 is out"
 
 
+def test_the_tray_row_follows_the_trays_live_availability(make_world):
+    world = make_world()
+    state = {"tray": False, "available": True}
+    world.host.on_toggle_tray = lambda: state.update(tray=not state["tray"])
+    world.host.tray_enabled = lambda: state["tray"]
+    world.host.tray_available = lambda: state["available"]
+    window = open_window(world)
+    toggle = window.tabs["general"].toggles["tray"]
+    assert toggle.isVisibleTo(window)
+    state["available"] = False  # start() failed while the window was open
+    world.host.notify_state_changed()
+    assert not toggle.isVisibleTo(window)
+    window.close()
+    assert "tray" not in open_window(world).tabs["general"].toggles
+
+
 # ---- Look -------------------------------------------------------------------
 
 def test_look_writes_go_to_the_selected_pane(make_world):

@@ -27,7 +27,7 @@ There is a burn-rate projection too. When your current pace would hit a cap befo
 
 ## Install
 
-Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS.
+Download the matching archive from [GitHub Releases](https://github.com/nickwolf/tokitty/releases): `tokitty-<version>-windows-x64.zip` for Windows, `tokitty-<version>-macos-arm64.zip` for Apple Silicon Macs, `tokitty-<version>-macos-x86_64.zip` for Intel Macs, `tokitty-<version>-linux-x86_64.tar.gz` for Linux. Unzip it anywhere and run `Tokitty.exe`, `Tokitty.app`, or `tokitty`. These builds are unsigned, so Windows and macOS block the first launch until you clear their warning; see below for each OS. The builds need macOS 14 or later, Windows 10 version 1809 or later, or Linux x86_64 with glibc 2.35 or newer (Ubuntu 22.04 or newer).
 
 With a downloaded build, hooks (the live activity feature below) need Claude Code 2.1.139 or newer, the first version that can run a hook command without a shell. They run through a link that Tokitty repoints at itself every time it starts (`current`, inside its per-user state directory), so after unpacking a release by hand or moving the folder to a new location, launch the new copy once before deleting the old one. The in-app update (see [Updating](#updating)) does that for you. Open Claude Code sessions keep working across that switch and nothing needs re-approving. If Tokitty can't set up the link, it says so and points hooks at the release folder directly, which means re-approving them in Codex and restarting open Claude Code sessions after every update.
 
@@ -47,15 +47,15 @@ Move Tokitty to Applications before turning on **Start at login** or adding an a
 
 ### Linux
 
-Nothing to do on first launch. The tray icon in this build only supports X11 (xorg).
+Nothing to do on first launch. The build uses Qt's X11 (xcb) platform; on a Wayland desktop it runs through XWayland.
 
-The Qt window (the default from v0.7.0, reachable before that with `TOKITTY_QT=1`) needs a few X11 libraries that some desktops leave out. On Debian or Ubuntu, `sudo apt install libegl1 libxcb-shape0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1 libxkbcommon-x11-0` covers them. Translucency on Linux depends on your compositor and is best-effort.
+On Debian or Ubuntu the only package to install is `sudo apt install libegl1`, which some minimal desktops leave out. The other X11 libraries Qt needs are inside the archive. Translucency on Linux depends on your compositor and is best-effort.
 
 ## Updating
 
 Tokitty checks GitHub Releases for a newer version about a minute after startup and then once a day, and it never installs anything without a click. **Check for updates automatically** in Settings ▸ General turns the daily check off. **Check now** in the same place runs one on demand, whatever that setting is.
 
-When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and, where there is one, the tray menu. On Windows the tray also shows one notification per version. The Linux tray has no notifications and macOS has no tray icon, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
+When a newer release exists, **Update to vX.Y.Z…** appears at the top of the right-click menu and, where there is one, the tray menu. On Windows the tray also shows one notification per version. The Linux tray has no notifications and neither does the macOS menu-bar cat, so the menu item is the only notice there. The item opens a dialog with Install, Release notes and Later.
 
 Install downloads the archive for your platform, checks it against the release's `SHA256SUMS`, unpacks it, and runs the new build's self-check before touching anything. On Windows and Linux the new copy goes into a new `v<version>` folder next to the current one, so `releases\v0.2.1\Tokitty` becomes `releases\v0.3.0\Tokitty`. On macOS the new bundle is swapped in at the same path, and that folder has to be writable. A standard user with Tokitty in `/Applications` gets the release page instead, and so does a bundle that isn't named `Tokitty.app`.
 
@@ -100,7 +100,7 @@ On the primary Windows+WSL2 setup, Claude Code itself lives inside WSL, not in t
 
 ## Autostart
 
-Optional, off by default. Open Settings ▸ General (right-click any pane or the tray icon and choose **Settings…**) and check **Start at login** to have tokitty launch itself automatically the next time you log in: no installer, no admin rights, nothing outside your own user account. Unchecking it removes the same registration.
+Optional, off by default. Open Settings ▸ General (right-click any pane or the tray icon, or the menu-bar cat on macOS, and choose **Settings…**) and check **Start at login** to have tokitty launch itself automatically the next time you log in: no installer, no admin rights, nothing outside your own user account. Unchecking it removes the same registration.
 
 The mechanism is native to each OS and needs no third-party dependency: the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value on Windows, a `LaunchAgent` plist at `~/Library/LaunchAgents/com.nickwolf.tokitty.plist` on macOS, and a `.desktop` file at `~/.config/autostart/tokitty.desktop` on Linux. The checkbox reflects the real OS registration, read when tokitty starts and again after you toggle it. Nothing is cached on disk, so removing the entry by hand is picked up the next time tokitty starts. It is not picked up mid-session: remove the entry externally while tokitty is running and the checkbox keeps showing the state it read at startup until you restart. On macOS, checking the box writes the plist but doesn't load it into the running session, so the change takes effect at your next login, not immediately.
 
@@ -278,12 +278,9 @@ Multi-account mode (above) extends this picture the same way single-account mode
 ## Platforms tested
 
 - **Windows 11 + WSL2** (native Python via `pythonw.exe`, Claude Code running inside WSL2): the primary, recommended setup, verified end-to-end by hand. The full pipeline (credential resolution, WSL fallback, live API polling, mood/wake-sequence logic, rendering) runs against a real account, and the window itself (drag, always-on-top, sizing, text legibility, animation) is visually confirmed on a real desktop.
-- **Linux, macOS, Windows, automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the real Tk window is booted headlessly on Linux (under `xvfb`) to confirm it constructs. So the shared logic (credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering) and, on Linux, GUI construction are covered wherever the badge is green.
-- **macOS 15 (Apple silicon, python.org Python 3.14 + Tk 9.0), hands-on, with caveats:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) confirmed by hand on 2026-08-04. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. Two caveats, both tracked:
-  - There is no tray icon on macOS. The tray is disabled there automatically, whatever `tray_enabled` is set to, and the **Show tray icon** setting is hidden. pystray's darwin backend needs `NSApplication.run()` on the main thread, and Tk's `mainloop()` already owns it, so starting a tray aborts the process rather than failing gracefully ([#45](https://github.com/nickwolf/tokitty/issues/45)). Nothing is lost from the menu: every action, **Refresh now** included, is on the window's right-click menu. A native menu-bar item would be the real fix ([#44](https://github.com/nickwolf/tokitty/issues/44) touches the same main-thread question).
-  - The system menu bar stays. Removing it needs a real `.app` bundle with `LSUIElement=1`; no runtime call can do it, because Tk owns and rebuilds that menu ([#44](https://github.com/nickwolf/tokitty/issues/44)).
-
-  One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live.
+- **Linux, macOS, Windows, automated (CI badge above):** the full test suite runs on all three, on Python 3.10 and 3.14, for every change, and the Qt tests run on all three under Qt's offscreen platform. So the shared logic (credential resolution, WSL-path handling, mood/wake sequencing, layout and sprite rendering) and GUI construction are covered wherever the badge is green. Every release build is also checked before it is published: the Linux archive is self-checked in a bare Ubuntu 22.04 container with only `libegl1` added, and each target updates from older builds on the runner.
+- **macOS (Apple silicon), hands-on, Tk build:** credential resolution from the login Keychain, live API polling against a real account, and the window itself (drag, always-on-top, right-click menu, **Refresh now**) were confirmed by hand on macOS 15 on 2026-08-04, on the earlier Tk window. The denial path was exercised for real: deny the Keychain prompt, get the dimmed card with a recovery hint, then recover via **Refresh now** without restarting. One path is covered by tests but *not* by hand: a Keychain denial that happens **after** a successful poll, where a cached snapshot is already on screen. Reproducing it needs an expired access token, so it was not practical to trigger live. The Qt build on a Mac has a hands-on checklist in `docs/superpowers/plans/2026-10-14-qt-only-macos-check.md` that has not been run yet.
+- **macOS app shape:** The release build runs as an agent app. It has no Dock icon and no menu bar of its own, and the cat in the menu bar carries the same menu as a right-click on the window, **About Tokitty** included. Notifications still don't show on macOS.
 - **Not yet hands-on:** interactive desktop use on native Linux (real-account polling and live window behaviour). The shared code paths are covered above, so it should work, but nobody has run it there interactively yet.
 
 ## Running from source
@@ -292,8 +289,8 @@ This is the developer path. Most people should use Install above instead.
 
 ### Windows (Claude Code in WSL2, recommended path)
 
-1. Install Python 3.10+ from [python.org](https://www.python.org/) (bundles tkinter).
-2. `git clone` this repo, then from the repo root: `pythonw.exe -m tokitty`
+1. Install Python 3.10+ from [python.org](https://www.python.org/).
+2. `git clone` this repo, then from the repo root: `pip install -e .` (this pulls PySide6) and `pythonw.exe -m tokitty`
 
 ### Windows (Claude Code installed natively, no WSL)
 
@@ -301,13 +298,13 @@ Same as above: `resolve_credentials_source()` finds `~/.claude/.credentials.json
 
 ### Linux
 
-1. `sudo apt install python3-tk` (or your distro's equivalent).
+1. `sudo apt install libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0` (or your distro's equivalent), then `pip install -e .` from the repo root, which pulls PySide6. A source install uses the system's X11 libraries, which the release archive carries itself, so it needs the longer list.
 2. `python3 -m tokitty`
 
 ### macOS
 
-1. Install Python from [python.org](https://www.python.org/), recommended over Apple's system Python (3.9, below this project's 3.10 floor) or some Homebrew builds, which can have flaky Tcl/Tk.
-2. `python3 -m tokitty`
+1. Install Python from [python.org](https://www.python.org/), recommended over Apple's system Python (3.9, below this project's 3.10 floor).
+2. `pip install -e .` from the repo root, which pulls PySide6, then `python3 -m tokitty`
 
 Claude Code on macOS keeps its OAuth credentials in your **login Keychain**, not in `~/.claude/.credentials.json`, so tokitty reads them from there. The first read raises a macOS authorization prompt; choose **Always Allow** unless you want to re-authorize roughly once an hour. If you deny it, the cat shows "Keychain denied, Refresh to retry" and stops asking. Grant access, then right-click ▸ **Refresh now** to recover, no restart needed.
 
@@ -325,7 +322,7 @@ For a visual check without waiting for a state to happen for real, `TOKITTY_DEBU
 
 ## How this was built
 
-Tokitty was built with [Claude](https://claude.com/product/claude-code) (Fable 5) using a subagent-driven-development workflow: an owner session designed the spec and implementation plan, then dispatched a fresh implementer subagent per task with a reviewer subagent checking spec compliance and code quality before each task landed. Model tiers were deliberately mixed: cheaper/faster models handled the mechanical, fully-specified logic modules (credentials, API client, locking, mood/wake-sequence state machine, formatting), while a standard-tier model handled the threading/integration work. The pixel-art sprites, the tkinter window, and the animation loop were built directly by the owner session rather than delegated, since that's the part where a bit of craft mattered most. The sprite templates were generated procedurally (simple shapes stamped onto a grid) to avoid hand-counting errors, then hand-tuned and baked in as static data.
+Tokitty was built with [Claude](https://claude.com/product/claude-code) (Fable 5) using a subagent-driven-development workflow: an owner session designed the spec and implementation plan, then dispatched a fresh implementer subagent per task with a reviewer subagent checking spec compliance and code quality before each task landed. Model tiers were deliberately mixed: cheaper/faster models handled the mechanical, fully-specified logic modules (credentials, API client, locking, mood/wake-sequence state machine, formatting), while a standard-tier model handled the threading/integration work. The pixel-art sprites, the window, and the animation loop were built directly by the owner session rather than delegated, since that's the part where a bit of craft mattered most. The sprite templates were generated procedurally (simple shapes stamped onto a grid) to avoid hand-counting errors, then hand-tuned and baked in as static data.
 
 The review loop caught and fixed several real bugs along the way: a monkeypatch self-recursion bug in a test, a refresh-request race condition in the polling worker (found by review, "fixed" once by the owner session in a way that introduced a *worse* regression, caught again by review, fixed properly on the third pass), a `wsl.exe` argv-mangling quirk found only by actually running the WSL-fallback code path against a real account instead of trusting mocked tests, and an unconditional `tkinter` import that would have silently broken the no-GUI-toolkit-needed `--debug-print` path. The commit history is the actual record of that process, not just the finished result.
 
@@ -333,7 +330,7 @@ The review loop caught and fixed several real bugs along the way: a monkeypatch 
 
 - This uses `api.anthropic.com/api/oauth/usage`, an **undocumented endpoint** that may change or disappear without notice.
 - Codex support reads Codex's rollout files, an internal format with no compatibility promise. The rules it relies on were measured against Codex CLI 0.147.0 and 0.155.0-alpha.9, and are written up in `docs/superpowers/specs/2026-09-22-codex-token-ledger-design.md`.
-- Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run: `python3-tk` isn't installed in the reference dev environment.
+- Running Tokitty *inside* WSL (via WSLg) is architecturally supported (same credential-resolution code path as native Linux), but has never actually been run.
 - In-app updates are exercised on the release CI runners for every target, including the bundle swap on both Macs. Outside CI, the macOS swap and how SmartScreen treats an updated unsigned exe on Windows haven't been seen yet. If the new copy doesn't start, the old one keeps running and says so.
 - Sprite art is composed from three reusable 28x26 pose templates (sitting calm, sitting alert, lying down) with per-state substitutions, not a fully independent illustration per state.
 
@@ -345,4 +342,4 @@ The five planned phases (finer sprites, live activity with a permission flag, mu
 
 MIT, see [LICENSE](LICENSE).
 
-The release builds also include Qt and PySide6 (LGPL-3.0), pystray (LGPL-3.0) and, on Linux, python-xlib (LGPL-2.1-or-later). Their licence files are in the `licenses` folder beside the executable on Windows and Linux, and in `Tokitty.app/Contents/Resources/licenses` on macOS. Qt, PySide6, shiboken6, pystray and python-xlib ship as separate files you can replace, and `Qt-NOTICE.txt` in that folder explains how.
+The release builds also include Qt and PySide6 (LGPL-3.0). Their licence files are in the `licenses` folder beside the executable on Windows and Linux, and in `Tokitty.app/Contents/Resources/licenses` on macOS. Qt, PySide6 and shiboken6 ship as separate files you can replace, and `Qt-NOTICE.txt` in that folder explains how.

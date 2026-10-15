@@ -110,7 +110,7 @@ def mark_customization_migration_complete(state_dir: Path, key: str) -> None:
 def absorb_implicit_default(
     customization_store: Dict[str, Customization], new_slug: str
 ) -> Dict[str, Customization]:
-    """Called by accounts_ui.py's Add flow, exactly once, only when
+    """Called by the Accounts window's Add flow, exactly once, only when
     accounts.json did not exist before this Add: the brand-new first
     explicit account inherits the running "default" look instead of a
     random one. "default" is left in place afterward (harmless, unused

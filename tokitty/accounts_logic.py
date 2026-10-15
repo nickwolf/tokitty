@@ -1,7 +1,6 @@
 """The Accounts dialog's pure logic and worker launchers, toolkit-free.
 
-Split out of accounts_ui so the Qt Accounts window can share it. accounts_ui
-re-exports every name; tests that fake default_codex_home or
+Shared by the Qt Accounts window. Tests that fake default_codex_home or
 apply_account_mutation patch this module, where those names are looked up.
 """
 from __future__ import annotations
@@ -151,7 +150,7 @@ def describe_codex_capabilities(has_rollouts: bool) -> Tuple[str, str]:
 
 
 def build_row_specs(accounts: List[Account], customization_store: Dict[str, Customization]) -> List[RowSpec]:
-    """Pure, Tk-free: one display row per account. Never shows the raw
+    """Pure, toolkit-free: one display row per account. Never shows the raw
     slug as a fallback label -- it's an opaque SHA-256-derived string."""
     remove_enabled = len(accounts) > 1
     rows = []
@@ -186,7 +185,7 @@ def discover_local_codex_home(accounts: Sequence[Account]) -> Optional[str]:
 
     Local only. Probing each WSL distro for a .codex dir would need
     wsl.exe, which boots stopped distros; the Claude discovery already pays
-    that cost off the Tk thread, and this runs on it.
+    that cost off the GUI thread, and this runs on it.
     """
     home = default_codex_home()
     try:

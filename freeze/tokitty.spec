@@ -1,8 +1,6 @@
 # PyInstaller spec for Tokitty. Build from the repo root:
 #   python -m PyInstaller freeze/tokitty.spec --noconfirm --distpath <dist> --workpath <work>
 # TOKITTY_BUILD_ID (optional) is baked into both executables; see --self-check.
-# TOKITTY_BUILD_TOOLKITS (optional, default "tk"; a comma list such as "tk,qt")
-# declares which GUI toolkits the build carries; --self-check checks those.
 # TOKITTY_QT_TRIM=0 builds without the Qt trim, to measure what it saves (#115).
 import os
 import shutil
@@ -12,7 +10,7 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
 from bundle_data import (  # noqa: E402
-    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, notice_version_problems, project_version,
+    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, project_version,
     qt_toc_entry_dropped,
 )
 
@@ -20,20 +18,6 @@ APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
 QT_TRIM = os.environ.get("TOKITTY_QT_TRIM", "1") != "0"
 
-
-def _installed(name):
-    from importlib import metadata
-
-    try:
-        return metadata.version(name)
-    except metadata.PackageNotFoundError:
-        return None
-
-
-# A notice must name the version the bundle ships; pip resolves these unpinned.
-_stale = notice_version_problems(ROOT / "freeze" / "licenses", _installed)
-if _stale:
-    raise SystemExit("licence notice out of date: " + "; ".join(_stale))
 
 # Licence notices (#115). macOS keeps them inside the .app; Windows and Linux
 # get a folder beside the executable, copied after COLLECT, since data files
@@ -60,17 +44,21 @@ rthook = Path(workpath) / "rthook_build_id.py"
 rthook.parent.mkdir(parents=True, exist_ok=True)
 rthook.write_text(
     "import os\n"
-    f"os.environ['TOKITTY_BUILD_ID'] = {os.environ.get('TOKITTY_BUILD_ID', 'dev')!r}\n"
-    f"os.environ['TOKITTY_BUILD_TOOLKITS'] = {os.environ.get('TOKITTY_BUILD_TOOLKITS', 'tk')!r}\n",
+    f"os.environ['TOKITTY_BUILD_ID'] = {os.environ.get('TOKITTY_BUILD_ID', 'dev')!r}\n",
     encoding="utf-8",
 )
+
+# Qt is the only toolkit (#142). Pillow stays installed in the build venv for
+# app_icon above, so it is excluded here along with everything else that must
+# not reach the bundle; a stray import then fails at run time in CI.
+GUI_EXCLUDES = ["tkinter", "_tkinter", "PIL", "pystray", "objc", "AppKit", "Foundation", "Xlib"]
 
 gui = Analysis(
     [str(ROOT / "freeze" / "gui_entry.py")],
     pathex=[str(ROOT)],
     datas=datas,
     runtime_hooks=[str(rthook)],
-    excludes=list(QT_EXCLUDED_MODULES) if QT_TRIM else [],
+    excludes=GUI_EXCLUDES + (list(QT_EXCLUDED_MODULES) if QT_TRIM else []),
     # The LGPL packages ship as plain .py files beside their binaries rather
     # than inside the PYZ archive, so a user can replace them (#115).
     module_collection_mode=LGPL_SOURCE_PACKAGES,

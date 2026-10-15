@@ -1,6 +1,5 @@
-"""Pure, injectable startup decisions for run_gui, kept separate from
-TokittyWindow so the gui-marked tests that construct it directly never
-touch WSL. The first-run decision lives in first_run.py.
+"""Pure, injectable startup decisions for the launch, kept separate from
+the window so tests that construct it directly never touch WSL. The first-run decision lives in first_run.py.
 """
 from __future__ import annotations
 

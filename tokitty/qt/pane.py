@@ -1,8 +1,7 @@
 """State of one pane in the Qt widget: what the last render said, nothing more.
 
-The public surface mirrors ui.Pane (render, render_usage, set_appearance,
-draw_next_frame and the attributes __main__ reads) so a PaneUpdate's kwargs
-apply to either pane unchanged. There is no painting here and no PySide6
+The public surface (render, render_usage, set_appearance, draw_next_frame)
+takes a PaneUpdate's kwargs unchanged. There is no painting here and no PySide6
 import: every state change calls on_change and the widget repaints.
 """
 from __future__ import annotations
@@ -32,7 +31,7 @@ class QtPane:
         self.customization = customization if customization is not None else Customization()
         # The widget sets this; it repaints on any state change.
         self.on_change = on_change
-        # Set by the owner, as on ui.Pane (window alpha is recomputed there).
+        # Set by the owner (window alpha is recomputed there).
         self.on_accent_changed = None
         self._palette: Dict[str, str] = effective_palette(self.customization)
         self._label = label or self.customization.label
@@ -63,10 +62,10 @@ class QtPane:
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None,
                        colorway=None, pattern=None) -> None:
-        """Live re-style. None leaves a slot unchanged, as on ui.Pane."""
+        """Live re-style. None leaves a slot unchanged, """
         overrides = dict(self.customization.overrides)
         if card_bg is not None:
-            # Tk callers pass its default colour to mean "no override"; keep
+            # The card's default colour means "no override"; keep
             # that from pinning the card against a themed background.
             if card_bg and card_bg != CardStyle.background:
                 overrides["card_bg"] = card_bg

@@ -1,5 +1,4 @@
-"""Render the shared menu model (menu.MenuItem) into a QMenu, the Qt
-counterpart of ui._render_tk_menu. One renderer serves the right-click menu
+"""Render the shared menu model (menu.MenuItem) into a QMenu. One renderer serves the right-click menu
 (rebuilt on every open) and the tray menu (built once, then updated in place
 through the sync() that render_menu returns)."""
 from __future__ import annotations
@@ -15,7 +14,7 @@ AfterAction = Callable[[Optional[Callable[[], None]]], Optional[Callable[[], Non
 
 def render_menu(qmenu, items: List[MenuItem], after_action: AfterAction) -> Callable[[], None]:
     """Fill qmenu from items. after_action wraps every item's action (None
-    stays None), as ui._after_menu_action does, so the caller can refresh
+    stays None), so the caller can refresh
     whatever else shows the same state.
 
     Returns a sync() that re-reads every rendered getter in place (dynamic
@@ -24,7 +23,7 @@ def render_menu(qmenu, items: List[MenuItem], after_action: AfterAction) -> Call
     created, hidden while its getter has no text. The tray renders once and
     syncs; the right-click menu is rebuilt on each open and ignores it."""
     syncs: List[Callable[[], None]] = []
-    group: Optional[QActionGroup] = None  # one radio group per menu level, as in Tk
+    group: Optional[QActionGroup] = None  # one radio group per menu level
     for item in items:
         if item.dynamic_label is not None:
             getter = item.dynamic_label

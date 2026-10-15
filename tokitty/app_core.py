@@ -1,9 +1,8 @@
 """The toolkit-free half of the app: unit construction, the per-unit tick step,
 onboarding and background discovery.
 
-Both entry points (the Tk one in __main__ and the Qt one) build their units
-here and call step_unit from their own tick, so what a pane shows is decided
-in one place. This module imports no GUI toolkit, and never imports from
+The Qt entry point builds its units here and calls step_unit from its own
+tick, so what a pane shows is decided in one place. This module imports no GUI toolkit, and never imports from
 tokitty.__main__: under `python -m tokitty` the entry module is loaded as
 __main__, so importing it by its package name would load a second copy.
 """
@@ -421,10 +420,9 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
 
 
 def make_usage_state(settings: Settings) -> dict:
-    """Plain-Python shadow state: menu.py's contract is that every getter is
-    read by pystray on its OWN thread, so none of these may ever become a
-    toolkit variable. UsageWatcher reads usage_state["window"] from its worker
-    thread for the same reason."""
+    """Plain-Python shadow state, never a toolkit object: UsageWatcher reads
+    usage_state["window"] from its worker thread, and the menu getters
+    (menu.py) read the rest whenever a menu is built."""
     return {
         "view": settings.view_mode,
         "window": settings.usage_window,
@@ -451,7 +449,7 @@ def refresh_units(units: List[dict]) -> None:
 
 def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None]) -> Callable:
     """The one-shot onboarding step. `on_changed` runs after the switch so the
-    caller can refresh whatever shows the view mode (the Tk tray menu)."""
+    caller can refresh whatever shows the view mode (the tray menu)."""
     from tokitty.settings import update_settings
 
     def maybe_onboard(unit, latest, breakdown) -> None:
@@ -518,13 +516,11 @@ class Discovery:
     Written by run_discovery() on a background thread, read by the UI thread
     (the tick and the accounts dialog); the lock guards every access from either
     side. run_discovery must never touch the UI toolkit (not even a scheduled
-    callback such as Tk's root.after): in Tk, calling anything from a background
-    thread before root.mainloop() has actually started raises "main thread is
-    not in main loop" *and the call is silently dropped forever*, not merely
-    delayed -- confirmed by direct reproduction. Qt's cross-thread rules are no
-    friendlier. The UI thread's own tick is the mechanism both toolkits already
-    use for exactly this producer/consumer shape (Poller/ActivityWatcher
-    results), so the hook warnings reuse it through take_hook_warnings().
+    callback such as a timer): a GUI call from a background thread before the
+    event loop has started can be dropped, or touch widgets from the wrong
+    thread. The UI thread's own tick is the mechanism already used for exactly
+    this producer/consumer shape (Poller/ActivityWatcher results), so the hook
+    warnings reuse it through take_hook_warnings().
     """
 
     def __init__(self, state_dir, *, accounts_state: str, env_override_set: bool,

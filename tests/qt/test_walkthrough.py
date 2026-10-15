@@ -590,3 +590,38 @@ def test_the_defaults_discover_through_the_shared_cache_and_save_for_real(qapp, 
     finally:
         w.close()
         w.deleteLater()
+
+
+# ---- the Quit shortcut -----------------------------------------------------------
+
+
+def test_the_quit_shortcut_is_the_standard_quit_key_and_ends_without_marking_done(qapp, tmp_path):
+    from PySide6.QtGui import QKeySequence
+
+    first_run.classify(tmp_path, load_settings(tmp_path), excluded=False)
+    assert load_settings(tmp_path).first_run == "pending"
+    walk = Walkthrough(tmp_path, discover=lambda: [], save=lambda picked: [])
+    events = []
+    walk.quit_requested.connect(lambda: events.append("quit"))
+    walk.closed.connect(lambda: events.append("closed"))
+    walk.show()
+    assert walk.quit_shortcut.key() == QKeySequence(QKeySequence.StandardKey.Quit)
+
+    walk.quit_shortcut.activated.emit()
+
+    assert events == ["quit"]  # no `closed`: that is the Skip path
+    assert not walk.isVisible() and not walk.alive()
+    assert load_settings(tmp_path).first_run == "pending"
+
+
+def test_the_quit_shortcut_is_refused_while_an_install_runs(qapp, tmp_path):
+    walk = Walkthrough(tmp_path, discover=lambda: [], save=lambda picked: [])
+    events = []
+    walk.quit_requested.connect(lambda: events.append("quit"))
+    walk.show()
+    walk._finishing = True  # the same flag that makes Skip refuse
+    walk.quit_shortcut.activated.emit()
+    assert events == [] and walk.isVisible()
+    walk._finishing = False
+    walk._finished = True
+    walk.close()
