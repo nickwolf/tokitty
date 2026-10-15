@@ -29,7 +29,7 @@ def emit(name, img):
     print(f"PROBE {tag} {name} {img.width()}x{img.height()} {digest}")
 
 
-H = {"default": QFont.HintingPreference.PreferDefaultHinting,
+H = {} if os.environ.get("ONLYCARD") else {"default": QFont.HintingPreference.PreferDefaultHinting,
      "none": QFont.HintingPreference.PreferNoHinting,
      "full": QFont.HintingPreference.PreferFullHinting,
      "vert": QFont.HintingPreference.PreferVerticalHinting}
@@ -52,7 +52,7 @@ for hn, hv in H.items():
 
 import base64  # noqa: E402
 
-for name, uri in [("status", R.status_key("hello")), ("usage", R.usage_key(42, 77)),
+for name, uri in [] if os.environ.get("ONLYCARD") else [("status", R.status_key("hello")), ("usage", R.usage_key(42, 77)),
                   ("decision", R.decision_key("allow"))]:
     emit(f"key_{name}", QImage.fromData(base64.b64decode(uri.split(",", 1)[1])))
 
