@@ -357,6 +357,7 @@ KEYS = {
 
 def key(name: str) -> Rendered:
     """A Stream Dock key: 64x64 whatever the dpr, so decode the data URI."""
+    key_render.register_font()
     uri = KEYS[name]()
     image = QImage.fromData(base64.b64decode(uri.split(",", 1)[1]))
     img = qimage_to_img(image)
@@ -454,7 +455,7 @@ def dump(outdir: Path, dpr: int, wanted: Sequence[str]) -> None:
 def render_child(dpr: int, outdir: Path, wanted: Sequence[str] = ()) -> Tuple[Dict[str, Rendered], dict]:
     """Run `dump` in a child with QT_SCALE_FACTOR=dpr and load what it wrote."""
     env = dict(os.environ, QT_SCALE_FACTOR=str(dpr), QT_QPA_PLATFORM="offscreen")
-    cmd = [sys.executable, str(Path(__file__).resolve()), "dump", str(outdir), "--dpr", str(dpr), *wanted]
+    cmd = [sys.executable, str(Path(__file__).resolve()), "dump", str(outdir), *wanted, "--dpr", str(dpr)]
     proc = subprocess.run(cmd, env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
     if proc.returncode != 0:
         raise RuntimeError(f"pixel_check dump at dpr {dpr} failed:\n{proc.stdout}\n{proc.stderr}")
