@@ -589,7 +589,7 @@ class Walkthrough(QWidget):
 
     def _build_done(self) -> None:
         self.kit.page_header(self.page, "Done", "Your desktop cats are ready.")
-        where = ("Choose Tokitty ▸ Settings… from the menu bar, or right-click any cat,"
+        where = ("Click the cat in the menu bar and choose Settings…, or right-click any cat,"
                  if self._platform == "darwin" else "Right-click any cat and choose Settings…")
         self._hero("You're set", f"{where} to manage accounts, hooks, looks, and the Stream Dock.", 40)
 

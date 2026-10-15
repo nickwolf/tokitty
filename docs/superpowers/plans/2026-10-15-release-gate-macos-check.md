@@ -70,7 +70,7 @@ Every check uses a real launch, `./Tokitty.app/Contents/MacOS/Tokitty` from `~/D
     HOME=/tmp/tk117-home TOKITTY_UPDATE_TEST_NO_ACK=1 TOKITTY_UPDATE_API_URL=https://127.0.0.1:PORT SSL_CERT_FILE=/tmp/tk117-certs/ca.pem /tmp/tk117/a/Tokitty.app/Contents/MacOS/Tokitty
     ```
 
-    Check now ▸ Install again. Pass: a box says "Tokitty v99.0.0 didn't start. Still running v0.6.2.", the v0.6.2 widget is still there, and `/tmp/tk117/a/Tokitty.app` is still v0.6.2 (`defaults read /tmp/tk117/a/Tokitty.app/Contents/Info CFBundleShortVersionString`). Exit, stop the feed with Ctrl+C, `rm -rf /tmp/tk117 /tmp/tk117-home /tmp/tk117-certs /tmp/tk117-feed`.
+    Check now ▸ Install again. Pass: a box says "Tokitty v99.0.0 didn't start. Still running v0.6.2.", the v0.6.2 widget is still there, and `/tmp/tk117/a/Tokitty.app` is still v0.6.2: `HOME=/tmp/tk117-home /tmp/tk117/a/Tokitty.app/Contents/MacOS/Tokitty --self-check` reports Tk, not build v99.0.0 with Qt (`Info.plist` can't tell them apart: the rehearsal's also says 0.6.2). Exit, stop the feed with Ctrl+C, `rm -rf /tmp/tk117 /tmp/tk117-home /tmp/tk117-certs /tmp/tk117-feed`.
 
 Afterwards: put back `position.json` and `customization.json` from the `.bak` copies, and launch the installed Tokitty once so the hook command points back at it.
 

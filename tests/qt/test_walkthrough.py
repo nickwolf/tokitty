@@ -550,11 +550,11 @@ def test_unsupported_rows_show_a_pill_and_no_button(rig):
     assert r.walk.hook_rows[0]["install"] is None
 
 
-def test_done_points_mac_users_at_the_app_menu(rig):
+def test_done_points_mac_users_at_the_menu_bar_cat(rig):
     r = rig(platform="darwin")
     r.to_hooks()
     r.walk.primary_button.click()
-    assert any("Tokitty ▸ Settings…" in t for t in r.texts())
+    assert any("cat in the menu bar and choose Settings…" in t for t in r.texts())
 
 
 def test_done_says_right_click_elsewhere(rig):
