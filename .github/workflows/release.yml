@@ -491,6 +491,17 @@ jobs:
             ${{ runner.temp }}/update-report-tkqt-tk.json
             ${{ runner.temp }}/update-report-tkqt-qt.json
 
+      # The dry-run archive can't be installed (its build ID isn't a version),
+      # so a manual update test serves this v99.0.0 rebuild of the same commit.
+      - name: Upload rehearsal archive (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokitty-rehearsal-${{ matrix.target }}
+          path: |
+            ${{ env.NEW_ARCHIVE }}
+            ${{ env.NEW_SUMS }}
+
   keychain:
     name: macOS Keychain check (dry run, #48 Task 8)
     if: github.event_name == 'workflow_dispatch'
