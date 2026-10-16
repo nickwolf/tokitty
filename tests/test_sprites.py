@@ -218,8 +218,9 @@ def test_inner_ear_pink_preserved_and_symmetric():
 def test_lying_tail_sweep_paints_only_tail_chars():
     """The sweeping tail must paint the tail chars so it takes the pattern's
     tail tones; painting it "o" leaves a two-tone tail under van/colorpoint.
-    Rows 11-15, columns 23-27 hold nothing but the tail tip."""
-    for state in ("flopped", "stirring"):
+    Rows 11-15, columns 23-27 hold nothing but the tail tip of the belly-down
+    pose (flopped now lies on its back)."""
+    for state in ("stirring",):
         for frame in get_frames(state):
             tip = {frame[r][c] for r in range(11, 16) for c in range(23, 28)}
             assert tip <= {".", "y", "Y"}, (state, tip)
@@ -419,7 +420,7 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "a0473043aeffdb42576f8a585459025124358d61391901d62737ba0d7f916cd7"
+    assert digest == "c56a73beab2cef487067fcadb02b29f52088cfab79065895cea17255cb10c788"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

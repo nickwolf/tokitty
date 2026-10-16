@@ -1013,14 +1013,9 @@ _FLOP_TIP_D = _tail((16, 25, 25), (15, 25, 26), (14, 25, 26), (13, 25, 26), (12,
 _FLOP_TIP_E = _tail((15, 26, 27), (14, 26, 27), (13, 27, 27), (12, 27, 27))
 # Eyes sit symmetric about the face: cols 5-6 and 10-11 on row 11.
 _FLOP_EYES_SHUT = {(11, 5): LID_CHAR, (11, 6): LID_CHAR, (11, 10): LID_CHAR, (11, 11): LID_CHAR}
-_FLOP_EYES_PEEK = {**_FLOP_EYES_SHUT, (11, 5): "e", (11, 6): "o"}
 _FLOP_EYES_OPEN = {(11, 5): "e", (11, 6): "o", (11, 10): "o", (11, 11): "e"}
-_FLOP_EAR_REST = _cells("x", (3, 12, 13))
-_FLOP_EAR_FLICK = _cells("x", (3, 13, 14))
 _FLOP_EARS_UP = {**_cells("x", (3, 12, 13)), (2, 5): "x", (2, 12): "x"}
 _FLOP_EARS_DOWN = _cells("x", (3, 12, 13))
-# The back rises a row on each breath in.
-_FLOP_INHALE = _cells("o", (13, 16, 20))
 
 
 def _lift_head(template: List[str], top: int = 3, bottom: int = 14, width: int = 15) -> List[str]:
@@ -1032,14 +1027,61 @@ def _lift_head(template: List[str], top: int = 3, bottom: int = 14, width: int =
     return ["".join(r) for r in rows]
 
 
-_FL_TMPL, (_FL_A, _FL_B, _FL_C, _FL_D, _FL_E) = _pose_cells(
-    _FLOP_BASE, [_FLOP_TIP_A, _FLOP_TIP_B, _FLOP_TIP_C, _FLOP_TIP_D, _FLOP_TIP_E])
-_FL_TMPL, (_FL_SHUT, _FL_PEEK) = _pose_cells(_FL_TMPL, [_FLOP_EYES_SHUT, _FLOP_EYES_PEEK])
-_FL_TMPL, (_FL_EAR_REST, _FL_EAR_FLICK) = _pose_cells(_FL_TMPL, [_FLOP_EAR_REST, _FLOP_EAR_FLICK])
-_FL_TMPL, (_FL_EXHALE, _FL_INHALE) = _pose_cells(_FL_TMPL, [{}, _FLOP_INHALE])
+# flopped: capped and spent, lolling on its back with its paws in the air,
+# head rolled over onto the floor, tongue out. The belly rises and falls, a
+# limp front paw droops, the tail tip curls, and now and then one eye checks
+# the clock. Rolling over into stirring is the (flopped, stirring) transition.
+FLOPPED_BACK_TEMPLATE: List[str] = [
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "................mm..........",
+    "...........mm...mmoo....mm..",
+    "...........mmOO...oo...OOm..",
+    ".........mmooOO...oo...OO...",
+    "....ooo..mmooOO...ooo.OO....",
+    ".xxooooo...ooOO..oooo.OO....",
+    "xxpoooRoo..ooOO..ooooOO..yy.",
+    ".xxoooRoxoooouuuuuooooOoo.yy",
+    "..osoooxwxouuuuuuuuuoooOo.YY",
+    "..osoooxwwouuuuuuuuuuoooo.YY",
+    "..osoooAnwoooooooooooooOo.yy",
+    "..osoooxwwosoosoosooooOoo.yy",
+    "..osoooxwxosoosoosooooOoo.YY",
+    ".xxoooLoxOoooooooooooOooo.YY",
+    "xxpOOOLOOoooooooooooOooooOyy",
+    ".xxOOOOOOOOOOooooooOOOOOOyy.",
+    "....OOO....OOOOOOOOOOOO.....",
+    "............................",
+    "............................",
+    "............................",
+]
+# The head lies rolled 90 degrees, ears on the floor to the left, so each
+# eye is a two-cell vertical bar: R on rows 12-13, L on rows 19-20, col 6.
+_BACK_EYES_SHUT = {(12, 6): LID_CHAR, (13, 6): LID_CHAR, (19, 6): LID_CHAR, (20, 6): LID_CHAR}
+_BACK_EYES_PEEK = {**_BACK_EYES_SHUT, (12, 6): "o", (13, 6): "e"}
+# The belly band rises a row between the leg pairs on each breath in.
+_BACK_EXHALE = {(12, 15): ".", (12, 16): "."}
+_BACK_INHALE = {(12, 15): "u", (12, 16): "u"}
+# The near front paw droops a row from its limp wrist.
+_BACK_PAW_REST = _cells("m", (9, 9, 10), (10, 9, 10))
+_BACK_PAW_DROOP = _cells("m", (10, 9, 10), (11, 9, 10))
+# The tail rises up the right side of the rump; its hooked tip straightens.
+_BACK_TAIL_REST = _tail((12, 25, 26), (13, 26, 27))
+_BACK_TAIL_CURL = _tail((12, 26, 27), (13, 26, 27))
 
-# flopped: sprawled and sulking. Slow breaths, a lazy five-stroke tail sweep
-# that eases at each end, eyes shut but for the odd look at the clock.
+_FL_TMPL, (_FL_SHUT, _FL_PEEK) = _pose_cells(FLOPPED_BACK_TEMPLATE, [_BACK_EYES_SHUT, _BACK_EYES_PEEK])
+_FL_TMPL, (_FL_EXHALE, _FL_INHALE) = _pose_cells(_FL_TMPL, [_BACK_EXHALE, _BACK_INHALE])
+_FL_TMPL, (_FL_PAW_REST, _FL_PAW_DROOP) = _pose_cells(_FL_TMPL, [_BACK_PAW_REST, _BACK_PAW_DROOP])
+_FL_TMPL, (_FL_TAIL_REST, _FL_TAIL_CURL) = _pose_cells(_FL_TMPL, [_BACK_TAIL_REST, _BACK_TAIL_CURL])
+# Out cold, not asleep: now and then a single small Z drifts up off the head,
+# sparser than sleeping's and never the big one.
+_FL_TMPL, (_FL_Z_NONE, _FL_Z_DOT, _FL_Z_LOW, _FL_Z_HIGH) = _pose_cells(_FL_TMPL, [
+    {}, _cells("z", (9, 7, 7)), _shift(_ZZZ_SMALL, 0, -19), _shift(_ZZZ_SMALL, -2, -18)])
+
 FLOPPED_ANIMATION = Animation(_FL_TMPL, (
     Track("eyes", (
         Frame({**_FL_SHUT, **_NOSE}, (15000, 30000)),
@@ -1049,21 +1091,21 @@ FLOPPED_ANIMATION = Animation(_FL_TMPL, (
         Frame(_FL_EXHALE, (2300, 2700)),
         Frame(_FL_INHALE, (1800, 2200)),
     )),
-    Track("tail", (
-        Frame(_FL_B, (600, 1500)),
-        Frame(_FL_C, 140),
-        Frame(_FL_D, 120),
-        Frame(_FL_E, (300, 600)),
-        Frame(_FL_D, 120),
-        Frame(_FL_C, 140),
-        Frame(_FL_B, 160),
-        Frame(_FL_A, (400, 900)),
+    Track("paw", (
+        Frame(_FL_PAW_REST, (5000, 12000)),
+        Frame(_FL_PAW_DROOP, 160),
+        Frame(_FL_PAW_REST, 140),
+        Frame(_FL_PAW_DROOP, 160),
     )),
-    Track("ears", (
-        Frame(_FL_EAR_REST, (8000, 20000)),
-        Frame(_FL_EAR_FLICK, 100),
-        Frame(_FL_EAR_REST, 120),
-        Frame(_FL_EAR_FLICK, 100),
+    Track("tail", (
+        Frame(_FL_TAIL_REST, (3000, 8000)),
+        Frame(_FL_TAIL_CURL, 400),
+    )),
+    Track("zzz", (
+        Frame(_FL_Z_NONE, (6000, 12000)),
+        Frame(_FL_Z_DOT, 500),
+        Frame(_FL_Z_LOW, 700),
+        Frame(_FL_Z_HIGH, 800),
     )),
 ))
 
