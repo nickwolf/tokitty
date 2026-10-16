@@ -425,6 +425,23 @@ def test_jumps_land_on_the_spot_they_head_for_within_the_headroom():
     assert -top - rise <= theme.HOP_HEADROOM // SCALE
 
 
+def test_walk_pieces_chain_and_keep_the_paws_on_the_edge():
+    from tokitty.shadow import ground_row
+    from tokitty.sprites import MOVES, _WALK_STRIDE
+
+    start, walk, stop = (MOVES[m].tracks[0].frames for m in ("walk_start", "walk", "walk_stop"))
+    # turning and sitting happen in place; the stride moves a cell a frame, flat
+    assert all(f.offset == (0, 0) for f in start + stop)
+    assert [f.offset for f in walk] == [(i, 0) for i in range(1, _WALK_STRIDE + 1)]
+    # walk_start ends in the standing pose walk_stop starts from, and walk is drawn
+    # from that same pose, so start, strides and stop join without a jump
+    assert start[-1].template == stop[0].template == MOVES["walk"].template
+    assert start[0].template == stop[-1].template  # sits as it sat
+    # every frame stands on the same row as the sitting cat, so it walks on the edge
+    sitting = ground_row(start[0].template)
+    assert all(ground_row(f.template) == sitting for f in start + walk + stop)
+
+
 def _touching(cell, cells, diagonal=True):
     r, c = cell
     return any((r + dr, c + dc) in cells for dr in (-1, 0, 1) for dc in (-1, 0, 1)
@@ -468,7 +485,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "f254945ff47db236eb5fc3fc5eee871cf17bd98f0acf4b437c6ffc127c36226c"
+    assert digest == "b86d4ea581d2a1c794c1f3af954aaef3cab270c2b2a32c2eaf86367e0f49031b"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

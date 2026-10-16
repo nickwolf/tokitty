@@ -1876,5 +1876,93 @@ MOVES["jump_down"] = single_track(_hop_frame(), [
     Frame({}, 400, template=_hop_frame(), offset=_down(_JUMP_ROWS)),
 ], loop_from=None)
 
+# walk_start / walk / walk_stop: walking along the card's top edge, in side
+# profile facing right (a mirrored cat walks left). walk_start turns the
+# sitting cat side on, walk is one stride of four frames that covers
+# _WALK_STRIDE cells and is played back to back for longer walks, and
+# walk_stop sits back down facing out.
+_WALK_STRIDE = 4
+
+_WALK_BODY = [
+    "............................",
+    "............................",
+    "............................",
+    "...................x....x...",
+    "..................xpx..xpx..",
+    "..................xppooopx..",
+    ".................oosssooooo.",
+    ".................ooooooooooo",
+    "................oooooooeoxxo",
+    "................oooooooxwwwn",
+    "................ooooooxwwwww",
+    ".................Oooooxwwwww",
+    ".....ooosssoooooOOooooxwww..",
+    "....oossssooossooooOOOOOO...",
+    "....ossssooossoooooccO......",
+    "....oooooooooooooooccO......",
+    "....osssoooooooooocccO......",
+    "....Oooouuuuuuuuuuuo........",
+    ".....OOuuuuuuuuuuuO.........",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+]
+
+# Foot columns (near front, far front, near hind, far hind) for each stride
+# pose: a contact pose with the legs spread, a passing pose with them under
+# the body, then the same with the other pair leading. The far legs are shaded.
+_WALK_FEET = {
+    "stand": (17, 15, 6, 4),
+    "contact": (19, 15, 4, 8),
+    "pass": (17, 16, 6, 7),
+    "contact2": (15, 19, 8, 4),
+    "pass2": (16, 17, 7, 6),
+}
+_WALK_TAILS = {
+    "up": ((13, 4), (12, 3), (11, 2), (10, 2), (9, 2), (8, 2), (7, 3), (6, 4)),
+    "sway": ((13, 4), (12, 3), (11, 3), (10, 2), (9, 2), (8, 1), (7, 1), (6, 2)),
+}
+
+
+def _walk_frame(feet: str = "stand", tail: str = "up") -> List[str]:
+    rows = [list(row) for row in _WALK_BODY]
+    near_front, far_front, near_hind, far_hind = _WALK_FEET[feet]
+    # far legs first, so the near ones cover them where they cross
+    for hip, foot, fur in ((16, far_front, "O"), (5, far_hind, "O"),
+                           (17, near_front, "o"), (6, near_hind, "o")):
+        # two cells wide from under the body (row 19) to the paw on row 25
+        for i, r in enumerate(range(19, 25)):
+            c = round(hip + (foot - hip) * i / 5)
+            rows[r][c] = rows[r][c + 1] = fur
+        rows[25][foot] = rows[25][foot + 1] = "m"
+    for i, (r, c) in enumerate(_WALK_TAILS[tail]):
+        rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
+    return ["".join(row) for row in rows]
+
+
+_WALK_STAND = _walk_frame()
+
+MOVES["walk_start"] = single_track(_hop_frame(), [
+    Frame({}, 150, template=_hop_frame()),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 200, template=_WALK_STAND),
+], loop_from=None)
+
+MOVES["walk"] = single_track(_WALK_STAND, [
+    Frame({}, 130, template=_walk_frame(feet, tail), offset=(step, 0))
+    for step, (feet, tail) in enumerate(
+        (("contact", "up"), ("pass", "sway"), ("contact2", "up"), ("pass2", "sway")), 1)
+], loop_from=None)
+
+MOVES["walk_stop"] = single_track(_WALK_STAND, [
+    Frame({}, 150, template=_WALK_STAND),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 300, template=_hop_frame()),
+], loop_from=None)
+
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 _check_transitions()
