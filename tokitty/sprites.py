@@ -545,6 +545,7 @@ _SIT_TAIL_NEUTRAL = _cells("y", (14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 2
 _SIT_TAIL_IN = _cells("y", (13, 20, 21), (14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24))
 _SIT_TAIL_OUT = _cells("y", (14, 22, 23), (15, 23, 24), (16, 23, 24), (17, 23, 24))
 _SIT_TAIL_UP = _cells("y", (14, 24, 25), (15, 24, 25), (16, 24, 25), (17, 24, 25))
+_SIT_TAIL_HIGH = _cells("y", *((r, 24, 25) for r in range(12, 18)))
 # Right ear: the tip pixel twitches one cell outward.
 _SIT_EAR_REST = _cells("x", (1, 18, 18))
 _SIT_EAR_FLICK = _cells("x", (1, 19, 19))
@@ -666,23 +667,37 @@ def _sink_head(template: List[str], neck_row: int = 13, width: int = 21) -> List
     return ["".join(r) for r in rows]
 
 
-# sleeping: eyes shut, the head rising and sinking with each breath, Zs
-# drifting up off the head, now and then an ear twitch or a tail curl.
+# sleeping: eyes shut but for the odd peek, the head rising and sinking with each breath, Zs
+# drifting up off the head, now and then an ear twitch or a lazy tail swish.
 _ZZZ_BIG = _cells("z", (0, 22, 26), (1, 25, 25), (2, 24, 24), (3, 23, 23), (4, 22, 26))
 _ZZZ_SMALL = _cells("z", (5, 22, 25), (6, 24, 24), (7, 23, 23), (8, 22, 25))
 _ZZZ_DOT = _cells("z", (9, 22, 22))
 
-_SLEEP_TEMPLATE, (_SLEEP_TAIL_NEUTRAL, _SLEEP_TAIL_IN) = _pose_cells(
-    SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN], "aijlqrvC")
+_SLEEP_TEMPLATE, (_SLEEP_TAIL_NEUTRAL, _SLEEP_TAIL_IN, _SLEEP_TAIL_OUT, _SLEEP_TAIL_UP,
+                  _SLEEP_TAIL_HIGH) = _pose_cells(
+    SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN, _SIT_TAIL_OUT, _SIT_TAIL_UP, _SIT_TAIL_HIGH],
+    "aijlqrvC")
 _SLEEP_TEMPLATE, (_SLEEP_EAR_REST, _SLEEP_EAR_FLICK) = _pose_cells(
     _SLEEP_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK], "DEF")
-_SLEEP_TEMPLATE, (_SLEEP_EYES,) = _pose_cells(_SLEEP_TEMPLATE, [_SIT_EYES_LINE], _EYE_POOL)
+# Now and then one eye peeks open, looks left and right ("anyone there?
+# no?") and shuts again.
+_SLEEP_PEEK = {**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "e", (8, 17): "o"}
+_SLEEP_PEEK_LEFT = {**_SIT_EYES_LINE, (8, 15): "e", (8, 16): "o", (8, 17): "o"}
+_SLEEP_PEEK_RIGHT = {**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "x", (8, 17): "e"}
+_SLEEP_TEMPLATE, (_SLEEP_SHUT, _SLEEP_OPEN, _SLEEP_LOOK_L, _SLEEP_LOOK_R) = _pose_cells(
+    _SLEEP_TEMPLATE, [_SIT_EYES_LINE, _SLEEP_PEEK, _SLEEP_PEEK_LEFT, _SLEEP_PEEK_RIGHT], _EYE_POOL)
 _SLEEP_TEMPLATE, (_Z_BIG, _Z_NONE, _Z_DOT, _Z_SMALL) = _pose_cells(
     _SLEEP_TEMPLATE, [_ZZZ_BIG, {}, _ZZZ_DOT, _ZZZ_SMALL], "UVWX")
 _SLEEP_EXHALE_TEMPLATE = _sink_head(_SLEEP_TEMPLATE)
 
 SLEEPING_ANIMATION = Animation(_SLEEP_TEMPLATE, (
-    Track("face", (Frame({**_SLEEP_EYES, **_NOSE}),)),
+    Track("eyes", (
+        Frame({**_SLEEP_SHUT, **_NOSE}, (20000, 45000)),
+        Frame({**_SLEEP_OPEN, **_NOSE}, 600),
+        Frame({**_SLEEP_LOOK_L, **_NOSE}, 450),
+        Frame({**_SLEEP_LOOK_R, **_NOSE}, 450),
+        Frame({**_SLEEP_OPEN, **_NOSE}, 300),
+    )),
     Track("breath", (
         Frame({}, (1700, 2000)),
         Frame({}, (2000, 2500), template=_SLEEP_EXHALE_TEMPLATE),
@@ -699,9 +714,17 @@ SLEEPING_ANIMATION = Animation(_SLEEP_TEMPLATE, (
         Frame(_SLEEP_EAR_REST, 140),
         Frame(_SLEEP_EAR_FLICK, 100),
     )),
+    # A slow, lazy swish: the tail lifts high, hangs there, comes back down
+    # and settles into a curl.
     Track("tail", (
         Frame(_SLEEP_TAIL_NEUTRAL, (6000, 15000)),
-        Frame(_SLEEP_TAIL_IN, (2000, 4000)),
+        Frame(_SLEEP_TAIL_OUT, 300),
+        Frame(_SLEEP_TAIL_UP, 300),
+        Frame(_SLEEP_TAIL_HIGH, (800, 1400)),
+        Frame(_SLEEP_TAIL_UP, 300),
+        Frame(_SLEEP_TAIL_OUT, 300),
+        Frame(_SLEEP_TAIL_NEUTRAL, (500, 900)),
+        Frame(_SLEEP_TAIL_IN, (1200, 2500)),
     )),
 ))
 

@@ -400,7 +400,7 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "e26f15ed876c15858e6ffa6548f12020fadb2f44802c06bdba75b825b8a3ee0e"
+    assert digest == "78fcacfe52b8cd121b951223c4aebd6f0d5c3b216a8939c1725e5d7326d3cff0"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
