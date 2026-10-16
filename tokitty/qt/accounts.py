@@ -40,7 +40,7 @@ from tokitty.accounts_logic import (
     CODEX_KIND, _needs_off_thread_validation, _run_mutation_off_thread,
     _run_retry_off_thread, _run_validation_off_thread, _same_dir, build_discovered_path_specs,
     build_row_specs, codex_hook_text, describe_capabilities, describe_codex_capabilities,
-    discover_local_codex_home, local_capabilities, local_codex_facts, reconcile_before_save,
+    discover_local_codex_home, local_capabilities, local_codex_facts, move_account, reconcile_before_save,
     validate_account_path,
 )
 from tokitty.customize import (
@@ -322,13 +322,13 @@ class AccountsManager(QWidget):
         kit = self.kit
         column = vbox(self)
         column.setContentsMargins(20, 18, 20, 16)
-        kit.page_header(self, "Accounts", "Add, rename or remove the profiles tokitty watches.")
+        kit.page_header(self, "Accounts", "Add, rename, reorder or remove the profiles tokitty watches.")
         self.rows_box = QWidget()
         vbox(self.rows_box, spacing=3)
         column.addWidget(self.rows_box)
         self._build_usage_section()
         notice = text(
-            "Tokitty restart needed for new panes. Claude Code session restart needed for hooks.",
+            "Tokitty restart needed for new panes and a new order. Claude Code session restart needed for hooks.",
             color=DIM_COLOR, font=FONT_SMALL)
         notice.setWordWrap(True)
         notice.setContentsMargins(0, 12, 0, 10)
@@ -487,10 +487,20 @@ class AccountsManager(QWidget):
             return
         accounts = result.accounts
         store = load_customization(self.state_dir)
-        for row in build_row_specs(accounts, store):
+        rows = build_row_specs(accounts, store)
+        for row in rows:
             frame, info = self._new_row()
             info.layout().addWidget(text(row.display_label, font=FONT_MEDIUM))
             self._render_capability_facts(info, row.config_dir, row.provider)
+            if len(rows) > 1:
+                for arrow, step, enabled in (
+                    ("↑", -1, row.move_up_enabled), ("↓", 1, row.move_down_enabled),
+                ):
+                    self._mutation_button(
+                        frame, arrow, "secondary",
+                        lambda s=row.slug, c=row.config_dir, p=row.provider, d=step:
+                            self._on_move(s, c, p, d),
+                        enabled=enabled)
             frame.layout().addWidget(self.kit.button(
                 "Rename…", "secondary", lambda s=row.slug: self._on_rename(s), compact=True))
             self._mutation_button(
@@ -576,8 +586,15 @@ class AccountsManager(QWidget):
         operation = getattr(self, "_mutation_operation", None)
         if operation is not None:
             _complete_operation(self._state_key, operation, outcome)
-        failed = isinstance(outcome, Exception) or not outcome.ok
         self._mutation_in_flight = False
+        if getattr(self, "_mutation_state", {}).get("op") == "move":
+            # No hook work ran, so a failure is only the save: nothing to retry.
+            self._refresh_rows()
+            if isinstance(outcome, Exception):
+                QMessageBox.critical(
+                    self, "Accounts", f"Couldn't save the new order: {outcome}")
+            return
+        failed = isinstance(outcome, Exception) or not outcome.ok
         self._pending_hook_failure = failed
         self._refresh_rows()
         if isinstance(outcome, Exception):
@@ -608,6 +625,9 @@ class AccountsManager(QWidget):
             return
         state_key, operation, claimed = _claim_operation(self.state_dir, "mutation")
         self._state_key = state_key
+        if claimed:
+            # Read back in _finish_mutation, also by a reopened window.
+            operation.state["op"] = op
         self._watch_operation(operation)
         if not claimed:
             return
@@ -669,6 +689,26 @@ class AccountsManager(QWidget):
         remaining = [a for a in remaining if a.name != slug]
 
         self._start_mutation(remaining, "remove", config_dir, provider)
+
+    def _on_move(self, slug: str, config_dir: str, provider: str, step: int) -> None:
+        """Swap the account with its neighbour and save. No hook work."""
+        if self._busy():
+            return
+        load_result = self._load_accounts_for_mutation()
+        if load_result is None:
+            return
+        try:
+            accounts = reconcile_before_save(self.state_dir, load_result.accounts)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Accounts", str(exc))
+            return
+        # Moved on the reconciled list: the row may be stale, and another
+        # window's change must not be overwritten by this one's order.
+        moved = move_account(accounts, slug, step)
+        if moved is None:
+            self._refresh_rows()
+            return
+        self._start_mutation(moved, "move", config_dir, provider)
 
     def _on_add(self) -> None:
         if self._busy():

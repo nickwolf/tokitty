@@ -37,6 +37,8 @@ class RowSpec:
     display_label: str
     remove_enabled: bool
     provider: str = DEFAULT_PROVIDER
+    move_up_enabled: bool = False
+    move_down_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,8 +163,22 @@ def build_row_specs(accounts: List[Account], customization_store: Dict[str, Cust
             slug=account.name, config_dir=account.config_dir,
             display_label=label, remove_enabled=remove_enabled,
             provider=account.provider,
+            move_up_enabled=index > 0,
+            move_down_enabled=index < len(accounts) - 1,
         ))
     return rows
+
+
+def move_account(accounts: List[Account], slug: str, step: int) -> Optional[List[Account]]:
+    """Pure, toolkit-free: the list with the account `slug` swapped with its
+    neighbour `step` places away (-1 up, +1 down). None when the account is
+    gone or the move would leave the list, so a stale row changes nothing."""
+    index = next((i for i, a in enumerate(accounts) if a.name == slug), None)
+    if index is None or not 0 <= index + step < len(accounts):
+        return None
+    moved = list(accounts)
+    moved[index], moved[index + step] = moved[index + step], moved[index]
+    return moved
 
 
 def build_discovered_path_specs(
