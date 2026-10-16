@@ -21,7 +21,8 @@ move as "move:name" (move-<name>.gif). A state whose frames move the sprite
 (Frame.offset) gets a canvas that holds every offset, each frame drawn at its
 own. --spot {inside,inside_right,on_top} draws each frame in context instead:
 the card, the cat at that spot (a plain state plays as its variant for the spot
-when it has one) and its ground shadow, cropped to the cat's side of the card.
+when it has one) and its ground shadow, cropped to the cat's side of the card
+and widened when the frames move the cat out of it.
 """
 from __future__ import annotations
 
@@ -131,21 +132,35 @@ def _paint(canvas: List[List[bytes]], cx: int, cy: int, scale: int, px: bytes, a
                 line[x] = bytes((u * (255 - alpha) + p * alpha) // 255 for u, p in zip(line[x], px))
 
 
-def scene_size(scale: int) -> Tuple[int, int]:
-    """Device px (width, height) of a --spot frame."""
-    return SCENE_W // CELL * scale, (SCENE_ABOVE + theme.CARD_HEIGHT) // CELL * scale
+def scene_span(spot: str, offsets: Sequence[Tuple[int, int]] = ()) -> Tuple[int, int]:
+    """Logical px (left, width) of a --spot scene in card coordinates: the
+    cat's side of the card, widened so the cat stays in view at every offset
+    (a walk along the edge), with a cell to spare."""
+    place = theme.placement(spot)
+    left = theme.CARD_WIDTH - SCENE_W if spot == "inside_right" else 0
+    right = left + SCENE_W
+    for dx, _ in offsets:
+        x = place.origin[0] + (-dx if place.mirrored else dx) * CELL
+        left, right = min(left, x - CELL), max(right, x + theme.SPRITE_W + CELL)
+    return left, right - left
+
+
+def scene_size(scale: int, width: int = SCENE_W) -> Tuple[int, int]:
+    """Device px (width, height) of a --spot frame `width` logical px wide."""
+    return width // CELL * scale, (SCENE_ABOVE + theme.CARD_HEIGHT) // CELL * scale
 
 
 def scene_frame(frame: List[str], offset: Tuple[int, int], rest: List[str], spot: str,
-                palette, scale: int) -> List[List[bytes]]:
+                palette, scale: int, span: Optional[Tuple[int, int]] = None) -> List[List[bytes]]:
     """One frame in context: the backdrop, the card, the cat's ground shadow
-    and the cat at `spot` moved by `offset`, cropped to the cat's side of the
-    card (card coordinates scaled by scale / sprites.SCALE). `rest` is the
-    animation's frame 0."""
+    and the cat at `spot` moved by `offset`, cropped to `span` (scene_span;
+    by default the cat's side of the card), in card coordinates scaled by
+    scale / sprites.SCALE. `rest` is the animation's frame 0."""
     place = theme.placement(spot)
-    crop_x = (theme.CARD_WIDTH - SCENE_W if spot == "inside_right" else 0) // CELL
+    left, span_w = scene_span(spot) if span is None else span
+    crop_x = left // CELL
     crop_y = -SCENE_ABOVE // CELL
-    width, height = scene_size(scale)
+    width, height = scene_size(scale, span_w)
     canvas = [[_hex_to_rgb(SCENE_BACKDROP)] * width for _ in range(height)]
     card = _hex_to_rgb(theme.Theme().card.background)
     for cy in range(theme.CARD_HEIGHT // CELL):
@@ -205,7 +220,8 @@ def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
     cell_w = (max(len(g[0]) for _, _, grids, _, _ in rows for g in grids) + max_dx - min_dx) * scale
     sprite_h = (max(len(g) for _, _, grids, _, _ in rows for g in grids) + max_dy - min_dy) * scale
     if spot is not None:
-        cell_w, sprite_h = scene_size(scale)
+        span = scene_span(spot, [o for _, _, _, offsets, _ in rows for o in offsets])
+        cell_w, sprite_h = scene_size(scale, span[1])
     cell_h = sprite_h + STRIP_GAP + STRIP_H + MARK_H
     # One scale for every strip, so bars compare across states.
     full_ms = max(MIN_STRIP_FULL_MS, max(frame_ms_max(f) for _, t, *_ in rows for f in t.frames))
@@ -225,7 +241,8 @@ def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
                 dx, dy = offsets[frame_i]
                 _blit(grid, frame, palette, x0 + (dx - min_dx) * scale, y0 + (dy - min_dy) * scale, scale)
             else:
-                scene = scene_frame(frame, offsets[frame_i], get_frames(state)[0], spot, palette, scale)
+                scene = scene_frame(frame, offsets[frame_i], get_frames(state)[0], spot, palette, scale,
+                                    span)
                 for y, scan in enumerate(scene):
                     grid[y0 + y][x0:x0 + len(scan)] = scan
             ms = track.frames[frame_i].ms
@@ -273,6 +290,7 @@ def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
     played = simulate_frames(state, seconds, random.Random(seed), from_state)
     rest = get_frames(state)[0]
     min_dx, min_dy, max_dx, max_dy = _bounds([offset for _, _, offset in played])
+    span = None if spot is None else scene_span(spot, [offset for _, _, offset in played])
     width = (max(len(g[0]) for g, _, _ in played) + max_dx - min_dx) * scale
     height = (max(len(g) for g, _, _ in played) + max_dy - min_dy) * scale
     images, durations = [], []
@@ -281,7 +299,7 @@ def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
             px = [[bg] * width for _ in range(height)]
             _blit(px, frame, palette, (dx - min_dx) * scale, (dy - min_dy) * scale, scale)
         else:
-            px = scene_frame(frame, (dx, dy), rest, spot, palette, scale)
+            px = scene_frame(frame, (dx, dy), rest, spot, palette, scale, span)
         raw = b"".join(b"".join(row) for row in px)
         images.append(Image.frombytes("RGB", (len(px[0]), len(px)), raw))
         durations.append(ms)

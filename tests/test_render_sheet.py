@@ -359,6 +359,23 @@ def test_spot_scene_mirrors_the_cat_for_inside_right():
     assert moved[y][180 + (27 - c) * 4 - 172 - 8] == bytes(want)
 
 
+def test_spot_scene_widens_to_keep_a_walking_cat_in_view():
+    from render_sheet import SCENE_W, scene_frame, scene_span
+
+    # no offsets: the cat's side of the card, as before
+    assert scene_span("inside") == (0, SCENE_W)
+    assert scene_span("inside_right") == (300 - SCENE_W, SCENE_W)
+    # 30 cells right from on_top (x 8): the sprite ends at 8 + 120 + 112 = 240, plus a cell
+    assert scene_span("on_top", [(0, 0), (30, 0)]) == (0, 244)
+    # the mirrored cat walks left, so its scene grows to the left
+    assert scene_span("inside_right", [(30, 0)]) == (180 - 120 - 4, 300 - (180 - 120 - 4))
+    palette = sprites.resolve_palette("orange", "tabby")
+    grid = sprites.get_frames("content")[0]
+    span = scene_span("on_top", [(30, 0)])
+    far = scene_frame(grid, (30, 0), grid, "on_top", palette, 4, span)
+    assert len(far[0]) == 244 and any(px != far[0][0] for px in far[60][200:240])
+
+
 def test_spot_gif_and_variant_resolution(tmp_path, monkeypatch):
     PIL = pytest.importorskip("PIL.Image")
     from render_sheet import resolve_states, write_gifs
