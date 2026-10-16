@@ -25,6 +25,12 @@ def test_ground_row_and_footprint_ignore_accents():
     assert ground_row(low) == 24 and footprint(low) == (3, 5)
 
 
+def test_a_tail_hanging_below_the_feet_is_not_the_ground():
+    # a cat on the card's edge with its tail draped down over the card
+    g = _grid("..oooooo..", "..mmmmmm.y", ".........Y", ".........y")
+    assert ground_row(g) == 23 and footprint(g) == (2, 7)
+
+
 def test_footprint_spans_the_two_lowest_body_rows():
     g = _grid("oooooooo", "..oo", "...pp")
     assert footprint(g) == (2, 4)

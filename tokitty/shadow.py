@@ -14,9 +14,11 @@ from typing import List, Optional, Sequence, Tuple
 from tokitty import theme
 from tokitty.sprites import SCALE
 
-# Transparent plus the floating accents (zzz, sparkles, !, ?): they never
-# cast a shadow or define a footprint. Everything else, props included, is body.
-NON_BODY = frozenset(".zh!?")
+# Transparent, the floating accents (zzz, sparkles, !, ?) and the tail bands:
+# none of them stand on anything, so they never define the feet or the
+# footprint (a tail draped over the card's edge hangs below the feet).
+# Everything else, props included, is body.
+NON_BODY = frozenset(".zh!?yY")
 COLOR = (0, 0, 0)
 CORE_ALPHA = 77  # out of 255
 RIM_ALPHA = 38
