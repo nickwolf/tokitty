@@ -220,4 +220,7 @@ def test_render_media_writes_a_gif_per_transition(tmp_path, transition, monkeypa
 
     monkeypatch.setattr(render_media, "ALL_STATES", [])
     render_media.write_anims(tmp_path, 1)
-    assert [p.name for p in tmp_path.iterdir()] == ["anim-sa-to-sb.gif"]
+    # one file per TRANSITIONS entry: the synthetic one and the real ones
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        f"anim-{a}-to-{b}.gif" for a, b in sprites.TRANSITIONS)
+    assert (tmp_path / "anim-sa-to-sb.gif").exists()

@@ -1184,8 +1184,41 @@ ALL_STATES = tuple(ANIMATIONS)
 # another (#134), before the new state's own loop starts. Keyed by
 # (from, to); a pair with no entry is a plain cut. Every track plays once
 # (loop_from None) and the transition ends when its longest track does.
-TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
 TRANSITION_SEP = ">"
+
+
+# The flopped cat rolls over into stirring: an eye opens, the paws tuck in,
+# a curled half-roll seen from its back, then it lands on stirring's frame 0
+# so the hand-off to stirring's own loop is seamless.
+_ROLL_CURL: List[str] = [
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    ".......xx..xx...............",
+    "......xpxxxpx...............",
+    ".....ooooooooooo............",
+    "....ooosssooosssoo..........",
+    "...oooooooooooooooo.........",
+    "...oosssoooosssooooo........",
+    "...oooooooooooooooooo.......",
+    "...oossooooossoooooooo......",
+    "....oooooooooooooooooo......",
+    ".....OOOOOOOOOOOOOOOOyy.....",
+    "......OOOOOOOOOOOOOOYYY.....",
+    "........mm.mm.....YYY.......",
+    "............................",
+    "............................",
+    "............................",
+]
+TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
 
 
 def transition_name(from_state: str, to_state: str) -> str:
@@ -1203,7 +1236,6 @@ def _check_transitions() -> None:
             raise ValueError(f"transition {from_state}->{to_state} must play once")
 
 
-_check_transitions()
 
 for _anim_state in ANIMATIONS.values():
     check_animation(_anim_state)
@@ -1296,3 +1328,24 @@ def get_frames(state: str) -> List[List[str]]:
     grids stay at their positions as the same object). Entry 0 is always
     "everything at frame 0", which the icons and previews use."""
     return _enumeration(state)[2]
+
+
+def _flopped_to_stirring() -> Animation:
+    on_back = list(get_frames("flopped")[0])
+    peek = _overlay(on_back, {(12, 6): "o", (13, 6): "e"})
+    # paws tucked in: the legs fold down onto the chest, both eyes open
+    tucked = _overlay(peek, {**{(r, c): "." for r in range(6, 13) for c in range(9, 26)
+                                if on_back[r][c] not in "yY"},
+                             (12, 11): "m", (12, 12): "m", (12, 18): "m", (12, 19): "m",
+                             (19, 6): "o", (20, 6): "e"})
+    landed = list(get_frames("stirring")[0])
+    return single_track(on_back, [
+        Frame({}, 250, template=peek),
+        Frame({}, 120, template=tucked),
+        Frame({}, 140, template=_ROLL_CURL),
+        Frame({}, 100, template=landed),
+    ], loop_from=None)
+
+
+TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
+_check_transitions()
