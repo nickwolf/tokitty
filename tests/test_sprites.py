@@ -412,3 +412,20 @@ def test_shut_eyes_use_the_fur_darkened_not_the_outline():
             palette = resolve_palette(colorway, pattern)
             assert palette[LID_CHAR] == lid_tone(palette["o"]), (colorway, pattern)
     assert LID_CHAR not in BASE_PALETTE and LID_CHAR not in REGION_CHARS
+
+
+def test_plain_tail_is_the_patterns_own_and_ringed_paints_the_bands():
+    from tokitty.sprites import TAIL_STYLES
+
+    assert TAIL_STYLES["ringed"] == ("coat", "mark")  # the default ring pair
+    for colorway, tones in COLORWAYS.items():
+        for pattern in PATTERNS:
+            assert resolve_palette(colorway, pattern, "plain") == resolve_palette(colorway, pattern)
+            for style, pair in TAIL_STYLES.items():
+                if pair is None:
+                    continue
+                palette = resolve_palette(colorway, pattern, style)
+                assert (palette["y"], palette["Y"]) == (tones[pair[0]], tones[pair[1]])
+                plain = resolve_palette(colorway, pattern)
+                assert {k: v for k, v in palette.items() if k not in "yY"} == \
+                    {k: v for k, v in plain.items() if k not in "yY"}

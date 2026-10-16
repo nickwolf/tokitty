@@ -112,10 +112,24 @@ LEGACY_COAT_MAP: Dict[str, Tuple[str, str]] = {
 }
 
 
-def resolve_palette(colorway: str = "orange", pattern: str = "tabby") -> Dict[str, str]:
-    """Full char->color map for one colorway x pattern. The colorway supplies
-    the tone slots; the pattern maps each coat-driven char to a tone token or a
-    literal hex. Every other char is BASE_PALETTE unchanged."""
+# The tail, a third axis beside colorway and pattern (#43): "plain" keeps the
+# pattern's own tail; a ringed style paints the tail's two bands (y, Y) in a
+# pair of the colorway's tones, on any pattern.
+TAIL_STYLES: Dict[str, Optional[Tuple[str, str]]] = {
+    "plain": None,
+    "ringed": ("coat", "mark"),
+    "ringed_light": ("light", "mark"),
+    "ringed_shade": ("shade", "mark"),
+    "ringed_pale": ("light", "shade"),
+}
+
+
+def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
+                    tail: str = "plain") -> Dict[str, str]:
+    """Full char->color map for one colorway x pattern x tail. The colorway
+    supplies the tone slots; the pattern maps each coat-driven char to a tone
+    token or a literal hex; a ringed tail overrides the two tail bands. Every
+    other char is BASE_PALETTE unchanged."""
     cw = COLORWAYS[colorway]
     tones = {
         "coat": cw["coat"], "shade": cw["shade"], "mark": cw["mark"],
@@ -125,6 +139,9 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby") -> Dict[st
     merged["p"] = cw["ear"]
     for char, src in PATTERNS[pattern].items():
         merged[char] = tones.get(src, src)  # tone token -> tone, else literal hex
+    rings = TAIL_STYLES[tail]
+    if rings is not None:
+        merged["y"], merged["Y"] = tones[rings[0]], tones[rings[1]]
     merged[LID_CHAR] = lid_tone(merged["o"])
     return merged
 
