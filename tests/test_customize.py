@@ -1,4 +1,6 @@
 
+import pytest
+
 from tokitty import sprites
 from tokitty.customize import (
     SINGLE_KEY,
@@ -201,3 +203,37 @@ def test_coat_override_carries_into_the_shut_eye_tone():
     custom = Customization(overrides={"coat_base": "#4080c0"})
     palette = effective_palette(custom)
     assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0") == "#204060"
+
+
+def test_tail_round_trips(tmp_path):
+    save_customization(tmp_path, {SINGLE_KEY: Customization(tail="ringed_pale")})
+    assert load_customization(tmp_path)[SINGLE_KEY].tail == "ringed_pale"
+
+
+@pytest.mark.parametrize("raw", ['"tail": "nope"', '"tail": 3', '"tail": null', '"tail": ["ringed"]', '"x": 1'])
+def test_missing_or_invalid_tail_loads_plain(tmp_path, raw):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"colorway": "gray", "pattern": "solid", ' + raw + '}}', encoding="utf-8")
+    got = load_customization(tmp_path)[SINGLE_KEY]
+    assert got.tail == "plain"
+    assert (got.colorway, got.pattern) == ("gray", "solid")
+
+
+def test_legacy_coat_file_loads_plain_tail(tmp_path):
+    (tmp_path / "customization.json").write_text('{"default": {"coat": "calico"}}', encoding="utf-8")
+    assert load_customization(tmp_path)[SINGLE_KEY].tail == "plain"
+
+
+def test_effective_palette_uses_the_tail():
+    plain = effective_palette(Customization())
+    ringed = effective_palette(Customization(tail="ringed"))
+    assert plain == dict(sprites.resolve_palette("orange", "tabby"))
+    assert ringed == dict(sprites.resolve_palette("orange", "tabby", "ringed"))
+    assert (ringed["y"], ringed["Y"]) != (plain["y"], plain["Y"])
+
+
+def test_coat_override_still_rederives_the_lid_with_a_tail():
+    palette = effective_palette(Customization(tail="ringed", overrides={"coat_base": "#4080c0"}))
+    assert palette["o"] == "#4080c0"
+    assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0")
+    assert palette["y"] == sprites.resolve_palette("orange", "tabby", "ringed")["y"]

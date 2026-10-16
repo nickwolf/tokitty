@@ -41,6 +41,7 @@ class Customization:
     overrides: Dict[str, str] = field(default_factory=dict)
     label: str = ""
     cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
+    tail: str = "plain"  # a sprites.TAIL_STYLES name
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -97,12 +98,16 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         cat_home = entry.get("cat_home")
         if not (isinstance(cat_home, str) and cat_home in SPOTS):
             cat_home = "inside"
+        tail = entry.get("tail")
+        if not (isinstance(tail, str) and tail in sprites.TAIL_STYLES):
+            tail = "plain"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
             overrides=_clean_overrides(entry.get("overrides")),
             label=label,
             cat_home=cat_home,
+            tail=tail,
         )
     return result
 
@@ -141,7 +146,7 @@ def rename_account(state_dir: Path, slug: str, label: str) -> None:
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:
-    palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern))
+    palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern, custom.tail))
     if "coat_base" in custom.overrides:
         palette["o"] = custom.overrides["coat_base"]
         palette[sprites.LID_CHAR] = sprites.lid_tone(palette["o"])

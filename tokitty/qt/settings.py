@@ -245,6 +245,8 @@ class LookTab(_Tab):
                                      lambda i, name: host.on_customization_changed(i, "colorway", name))
         self.pattern = self._choice(choice_row, "Pattern", list(sprites.PATTERNS),
                                     lambda i, name: host.on_customization_changed(i, "pattern", name))
+        self.tail = self._choice(choice_row, "Tail", list(sprites.TAIL_STYLES),
+                                 lambda i, name: host.on_customization_changed(i, "tail", name))
         left_col.addWidget(choices)
         left_col.addSpacing(8)
 
@@ -326,6 +328,7 @@ class LookTab(_Tab):
             self.name_entry.setText(pane._label or "")
         self.colorway.set(pane._colorway)
         self.pattern.set(pane._pattern)
+        self.tail.set(pane._tail)
         for _caption, field in _COLOR_ROWS:
             self.color_rows[field].set(host.pane_color(index, field))
         count = len(host.panes)

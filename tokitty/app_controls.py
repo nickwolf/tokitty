@@ -84,6 +84,9 @@ def make_controls(
         elif field == "pattern":
             if value in sprites.PATTERNS:
                 custom = replace(custom, pattern=value)
+        elif field == "tail":
+            if value in sprites.TAIL_STYLES:
+                custom = replace(custom, tail=value)
         elif field == "cat_home":
             if value in theme.SPOTS:
                 custom = replace(custom, cat_home=value)
@@ -91,7 +94,7 @@ def make_controls(
             cw, pat = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
             custom = replace(custom, colorway=cw, pattern=pat)
         elif field == "reset":
-            custom = replace(custom, overrides={})
+            custom = replace(custom, overrides={}, tail="plain")
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
             if value:
                 overrides = dict(custom.overrides)

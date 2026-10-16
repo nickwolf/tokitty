@@ -46,7 +46,7 @@ def apply_customization(pane, custom) -> None:
         palette=effective_palette(custom),
         card_bg=custom.overrides.get("card_bg", ""),
         bar_fill=custom.overrides.get("bar_fill", ""),
-        colorway=custom.colorway, pattern=custom.pattern,
+        colorway=custom.colorway, pattern=custom.pattern, tail=custom.tail,
     )
 
 
@@ -392,7 +392,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # After the randomizing, so the icon wears pane 0's final colours.
         pane0 = widget.panes[0]
         tray = QtTray(lambda: menu_model(0), state_dir,
-                      colorway=pane0._colorway, pattern=pane0._pattern,
+                      colorway=pane0._colorway, pattern=pane0._pattern, tail=pane0._tail,
                       on_action_done=host.notify_state_changed)
         host.tray_refresh = tray.refresh
         # stop() schedules deleteLater, which Qt never processes once the loop
