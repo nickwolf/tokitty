@@ -11,7 +11,7 @@ import math
 import sys
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -20,7 +20,7 @@ from tokitty.customize import Customization
 from tokitty.menu import MenuItem
 from tokitty.qt import macos, position
 from tokitty.qt.menu import render_menu
-from tokitty.qt.pane import QtPane, fit_tag, monotonic_ms
+from tokitty.qt.pane import QtPane, fit_tag, monotonic_ms, palette_signature  # noqa: F401
 from tokitty.sprite_raster import raster_rgba
 from tokitty.sprites import known_grids
 from tokitty.usage_display import ROW_SLOTS
@@ -38,6 +38,12 @@ TK_LABEL_PAD_Y = 2
 # The chip under a cat tag, as the original Windows card drew it.
 TAG_CHIP_PAD_X = 3
 TAG_CHIP_PAD_Y = 1
+# Frame ticks run this far ahead of the clock so panes whose frames fall due a
+# few ms apart advance and repaint together instead of waking the loop twice.
+COALESCE_MS = 8
+# How far a pane's cached card image reaches past the card on every side, for
+# the halo offsets, the border and any text that overflows its box.
+CARD_PAD = 4
 _HALO_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1))
 
 _LEFT_VCENTER = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -62,11 +68,6 @@ def _text_rect(r: T.Rect, right: bool = False) -> QRectF:
     """A layout rect moved by the card text inset (TK_LABEL_PAD_X/Y). Right-aligned text moves left by the same amount."""
     dx = -TK_LABEL_PAD_X if right else TK_LABEL_PAD_X
     return QRectF(r.x + dx, r.y + TK_LABEL_PAD_Y, r.w, r.h)
-
-
-def palette_signature(palette: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
-    """Hashable stand-in for a palette dict in the image cache key."""
-    return tuple(sorted(palette.items()))
 
 
 class TokittyQtWidget(QWidget):
@@ -114,6 +115,14 @@ class TokittyQtWidget(QWidget):
         # Keyed by the frame grid's identity (sprites keeps the grids alive
         # for the process), so repeated frames share one image.
         self._images: Dict[tuple, QImage] = {}
+        # Per pane: (inputs signature, card image, window-space origin of the
+        # image). The card is drawn once and blitted until an input changes.
+        self._cards: Dict[int, tuple] = {}
+        # Per pane: ((theme, customization, accent), PaneStyle).
+        self._styles: Dict[int, tuple] = {}
+        # Window-space origin of the card image being drawn (0, 0 otherwise),
+        # for the pixel tests that map text rects back to window coordinates.
+        self._card_origin = (0.0, 0.0)
         self._fonts: Optional[Tuple[QFont, QFont, QFont]] = None
         self._watched = None  # the QWindow whose screenChanged is connected
 
@@ -155,6 +164,8 @@ class TokittyQtWidget(QWidget):
         self.theme = theme
         self._layouts.clear()
         self._images.clear()
+        self._cards.clear()
+        self._styles.clear()
         count = len(self.panes)
         homes = [T.resolve_home(pane.customization.cat_home, i, count)
                  for i, pane in enumerate(self.panes)]
@@ -206,7 +217,7 @@ class TokittyQtWidget(QWidget):
         live_grids = {id(grid) for pane in self.panes
                       for name in {pane.playing, pane._current_state}
                       for grid in known_grids(name)}
-        live_palettes = {palette_signature(pane.palette) for pane in self.panes}
+        live_palettes = {pane.palette_key for pane in self.panes}
         for key in [k for k in self._images if k[0] not in live_grids or k[1] not in live_palettes]:
             del self._images[key]
 
@@ -219,7 +230,10 @@ class TokittyQtWidget(QWidget):
         self.anim.start(max(0, math.ceil(min(dues) - self._clock())))
 
     def _next_frames(self) -> None:
-        now = self._clock()
+        # Ticking ahead of the clock advances every frame due within the
+        # window now. Each track's next due time still counts from its own
+        # schedule, so the shift does not accumulate.
+        now = self._clock() + COALESCE_MS
         for index, pane in enumerate(self.panes):
             if pane.tick(now):
                 # Only the cat changed: repaint its rect, not the window.
@@ -238,7 +252,7 @@ class TokittyQtWidget(QWidget):
         return rect.adjusted(-1, -1, 1, 1).toAlignedRect()
 
     def _cat_rect(self, index: int, pane: QtPane) -> QRectF:
-        grid, _ = pane.current_frame()
+        grid = pane.grid()
         cell = T.cell_size(self.devicePixelRatioF())
         dpr = self.devicePixelRatioF()
         x, y = self.cat_origin(index)
@@ -249,6 +263,7 @@ class TokittyQtWidget(QWidget):
 
     def _drop_images(self) -> None:
         self._images.clear()
+        self._cards.clear()
         self.update()
 
     def _watch_screen(self) -> None:
@@ -280,9 +295,9 @@ class TokittyQtWidget(QWidget):
 
     # ---- cat images -----------------------------------------------------
 
-    def _cat_image(self, frame, palette, dpr: float, mirrored: bool) -> QImage:
+    def _cat_image(self, frame, palette, palette_key, dpr: float, mirrored: bool) -> QImage:
         cell = T.cell_size(dpr)
-        key = (id(frame), palette_signature(palette), cell, mirrored)
+        key = (id(frame), palette_key, cell, mirrored)
         image = self._images.get(key)
         if image is None:
             w, h, data = raster_rgba(frame, palette, cell)
@@ -329,8 +344,7 @@ class TokittyQtWidget(QWidget):
                     dirty: QRectF) -> None:
         """Paint what intersects `dirty`, in the same order as a full repaint
         (card, then cat, then tags), so a cat-only update stays correct."""
-        style = T.resolve_pane_style(
-            self.theme, pane.customization, pane._accent, index, len(self.panes))
+        style = self._style_for(index, pane)
         # The pane's own palette wins: set_appearance may have been handed one.
         palette = pane.palette
         home = self.homes[index]
@@ -338,9 +352,10 @@ class TokittyQtWidget(QWidget):
         layout = self._layout_for(pane._view_mode, home)
 
         # A little slack for the halo offsets and the card border.
-        card = QRectF(ox, oy, T.CARD_WIDTH, T.CARD_HEIGHT).adjusted(-2, -2, 2, 2)
+        card = QRectF(ox, oy, T.CARD_WIDTH, T.CARD_HEIGHT).adjusted(
+            -CARD_PAD, -CARD_PAD, CARD_PAD, CARD_PAD)
         if card.intersects(dirty):
-            self._paint_card_contents(p, pane, style, layout, ox, oy)
+            self._draw_card(p, index, pane, style, layout, ox, oy, dpr)
         if self._cat_rect(index, pane).adjusted(-1, -1, 1, 1).intersects(dirty):
             self._paint_cat(p, index, pane, palette, home, dpr)
         if self._tags_shown(pane):
@@ -348,6 +363,60 @@ class TokittyQtWidget(QWidget):
             pad = TAG_CHIP_PAD_X + 1
             if driving.united(tool).adjusted(-pad, -pad, pad, pad).intersects(dirty):
                 self._paint_tags(p, index, pane, style, home)
+
+    def _style_for(self, index: int, pane: QtPane) -> T.PaneStyle:
+        """The pane's resolved style, redone only when the theme or the
+        customization is a different object or the accent flipped
+        (set_appearance and set_customization replace the customization,
+        never mutate it)."""
+        entry = self._styles.get(index)
+        if (entry is not None and entry[0] is self.theme and entry[1] is pane.customization
+                and entry[2] == pane._accent):
+            return entry[3]
+        style = T.resolve_pane_style(
+            self.theme, pane.customization, pane._accent, index, len(self.panes))
+        self._styles[index] = (self.theme, pane.customization, pane._accent, style)
+        return style
+
+    def _card_signature(self, pane: QtPane, style: T.PaneStyle, layout, ox, oy, dpr) -> tuple:
+        """Everything _paint_card_contents reads, so the cached card image is
+        redrawn exactly when one of them changes."""
+        models = pane._view_mode == "models"
+        if models:
+            body = (pane.usage_view,)
+        else:
+            body = (pane.session_pct, pane.weekly_pct, pane.session_reset_text,
+                    pane.weekly_reset_text, pane.status_text)
+        return (id(self.theme), id(layout), dpr, ox, oy, models, pane._dimmed, pane._label,
+                style.background, style.foreground, style.dim, style.opacity,
+                style.bar_fill_override, id(self._fonts), body)
+
+    def _draw_card(self, p: QPainter, index: int, pane: QtPane, style, layout,
+                   ox, oy, dpr: float) -> None:
+        """Blit the pane's card from its cached image, drawing the image first
+        when an input changed. The image holds device pixels aligned to the
+        window's, so the blit lands the same pixels a direct draw would."""
+        self._font_set()  # before the signature: it keys on the font set
+        sig = self._card_signature(pane, style, layout, ox, oy, dpr)
+        entry = self._cards.get(index)
+        if entry is None or entry[0] != sig:
+            px = math.floor(round((ox - CARD_PAD) * dpr, 6))
+            py = math.floor(round((oy - CARD_PAD) * dpr, 6))
+            lx, ly = px / dpr, py / dpr
+            size = QSize(math.ceil((T.CARD_WIDTH + 2 * CARD_PAD) * dpr) + 1,
+                         math.ceil((T.CARD_HEIGHT + 2 * CARD_PAD) * dpr) + 1)
+            image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            image.setDevicePixelRatio(dpr)
+            ip = QPainter(image)
+            ip.translate(-lx, -ly)  # window coordinates, as in a direct draw
+            self._card_origin = (lx, ly)
+            self._paint_card_contents(ip, pane, style, layout, ox, oy)
+            ip.end()
+            self._card_origin = (0.0, 0.0)
+            entry = self._cards[index] = (sig, image, lx, ly)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        p.drawImage(QPointF(entry[2], entry[3]), entry[1])
 
     def _paint_card_contents(self, p: QPainter, pane: QtPane, style, layout, ox, oy) -> None:
         p.save()
@@ -479,8 +548,7 @@ class TokittyQtWidget(QWidget):
             self._bar(p, layout[f"model_bar_{i}"], pct, fill)
 
     def _paint_cat(self, p, index, pane, palette, home, dpr) -> None:
-        frame, _index = pane.current_frame()
-        image = self._cat_image(frame, palette, dpr, T.placement(home).mirrored)
+        image = self._cat_image(pane.grid(), palette, pane.palette_key, dpr, T.placement(home).mirrored)
         x, y = self.cat_origin(index)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         p.drawImage(QPointF(x, y), image)

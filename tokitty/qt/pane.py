@@ -15,7 +15,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import replace
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
@@ -28,6 +28,11 @@ TOOL_LABEL_MAX = 12
 
 def monotonic_ms() -> int:
     return int(time.monotonic() * 1000)
+
+
+def palette_signature(palette: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
+    """Hashable stand-in for a palette dict in the image cache key."""
+    return tuple(sorted(palette.items()))
 
 
 def fit_tag(text: str, limit: int = TOOL_LABEL_MAX) -> str:
@@ -48,6 +53,8 @@ class QtPane:
         # Set by the owner (window alpha is recomputed there).
         self.on_accent_changed = None
         self._palette: Dict[str, str] = effective_palette(self.customization)
+        self._key_of: Optional[Dict[str, str]] = None
+        self._key: Tuple[Tuple[str, str], ...] = ()
         self._label = label or self.customization.label
         self._colorway = self.customization.colorway
         self._pattern = self.customization.pattern
@@ -73,6 +80,15 @@ class QtPane:
     @property
     def palette(self) -> Dict[str, str]:
         return self._palette
+
+    @property
+    def palette_key(self) -> Tuple[Tuple[str, str], ...]:
+        """palette_signature of the palette, sorted once per palette object
+        instead of on every paint."""
+        if self._key_of is not self._palette:
+            self._key = palette_signature(self._palette)
+            self._key_of = self._palette
+        return self._key
 
     def _changed(self) -> None:
         if self.on_change is not None:
@@ -211,6 +227,11 @@ class QtPane:
         restart from now so the live timer stays coherent."""
         self._player.step(self._clock())
         self._changed()
+
+    def grid(self):
+        """The grid on screen now, without the enumeration index
+        current_frame() also works out."""
+        return self._player.grid()
 
     def current_frame(self):
         """(grid, index) on screen now. The index is the grid's place in

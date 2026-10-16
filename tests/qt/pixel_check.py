@@ -212,12 +212,15 @@ class RecordingWidget(TokittyQtWidget):
         # card paint leaves it that way until a text sets its colour.
         if text:
             mapped = p.transform().mapRect(p.boundingRect(rect, int(flags), text))
+            # The card is drawn into its own image; map back to the window.
+            mapped.translate(*self._card_origin)
             self.text_rects.append(mapped)
             self.text_log.append((text, mapped, p.fontMetrics().lineSpacing()))
 
     def grab_img(self) -> Img:
         self.text_rects.clear()
         self.text_log.clear()
+        self._cards.clear()  # a cached card would paint no text to record
         return qimage_to_img(self.grab().toImage())
 
     def mask_rects(self) -> List[Rect]:

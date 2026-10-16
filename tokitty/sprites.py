@@ -30,6 +30,7 @@ the old linear frame list did.
 """
 from __future__ import annotations
 
+import functools
 import random
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -130,7 +131,13 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
     """Full char->color map for one colorway x pattern x tail. The colorway
     supplies the tone slots; the pattern maps each coat-driven char to a tone
     token or a literal hex; a ringed tail overrides the two tail bands. Every
-    other char is BASE_PALETTE unchanged."""
+    other char is BASE_PALETTE unchanged. Pure, so computed once per input;
+    each call returns a fresh dict the caller may mutate."""
+    return dict(_resolved_palette(colorway, pattern, tail))
+
+
+@functools.lru_cache(maxsize=None)
+def _resolved_palette(colorway: str, pattern: str, tail: str) -> Dict[str, str]:
     cw = COLORWAYS[colorway]
     tones = {
         "coat": cw["coat"], "shade": cw["shade"], "mark": cw["mark"],
@@ -170,6 +177,7 @@ DIM_CHARS: Dict[str, str] = {"o": "(", "O": ")", "x": "[", "s": "]", "c": "{", "
 DIM_FACTOR = 0.5
 
 
+@functools.lru_cache(maxsize=None)
 def dim_tone(color: str) -> str:
     r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
     return "#%02x%02x%02x" % tuple(round(v * DIM_FACTOR) for v in (r, g, b))
@@ -180,6 +188,7 @@ GLOW_LIGHT = "#c8f2ff"  # the bright screen glow, BASE_PALETTE "B"
 GLOW_MIX = 0.55
 
 
+@functools.lru_cache(maxsize=None)
 def glow_tone(fur: str) -> str:
     """Fur lit by the laptop screen: the fur colour pulled toward the glow."""
     a = [int(fur[i:i + 2], 16) for i in (1, 3, 5)]
@@ -187,6 +196,7 @@ def glow_tone(fur: str) -> str:
     return "#%02x%02x%02x" % tuple(round(x + (y - x) * GLOW_MIX) for x, y in zip(a, b))
 
 
+@functools.lru_cache(maxsize=None)
 def lid_tone(fur: str) -> str:
     r, g, b = (int(fur[i:i + 2], 16) for i in (1, 3, 5))
     return "#%02x%02x%02x" % tuple(round(v * (1 - LID_DARKEN)) for v in (r, g, b))

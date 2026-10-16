@@ -463,3 +463,11 @@ def test_dark_room_and_glow_tones_derive_from_each_look():
             for char, dark in DIM_CHARS.items():
                 assert palette[dark] == dim_tone(palette[char]), (colorway, pattern, char)
     assert not set(DIM_CHARS.values()) & (set(BASE_PALETTE) | set(REGION_CHARS))
+
+
+def test_resolve_palette_returns_independent_equal_dicts():
+    first, second = resolve_palette("gray", "calico", "ringed"), resolve_palette("gray", "calico", "ringed")
+    assert first == second and first is not second
+    first["o"] = "#010203"
+    assert resolve_palette("gray", "calico", "ringed") == second
+    assert resolve_palette("gray", "calico") != second

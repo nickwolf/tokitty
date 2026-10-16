@@ -135,7 +135,7 @@ def test_paint_skips_items_outside_the_dirty_rect(qapp, synth):
     for pane in widget.panes:
         render(pane, "fast")
     painted = {"cards": 0, "cats": 0}
-    orig_card, orig_cat = widget._paint_card_contents, widget._paint_cat
+    orig_card, orig_cat = widget._draw_card, widget._paint_cat
 
     def card(*a, **k):
         painted["cards"] += 1
@@ -145,7 +145,7 @@ def test_paint_skips_items_outside_the_dirty_rect(qapp, synth):
         painted["cats"] += 1
         return orig_cat(*a, **k)
 
-    widget._paint_card_contents, widget._paint_cat = card, cat
+    widget._draw_card, widget._paint_cat = card, cat
     target = QPixmap(widget.size())
     widget.render(target)
     assert painted == {"cards": 2, "cats": 2}
@@ -212,4 +212,98 @@ def test_timer_wakes_for_the_end_of_a_transition(qapp, synth, monkeypatch):
     clock.now = 300
     widget._next_frames()
     assert widget.panes[0].playing == "fast" and widget.panes[0].next_due_ms() == 400
+    widget.anim.stop()
+
+
+def test_card_is_drawn_once_and_blitted_on_cat_ticks(qapp, synth):
+    clock = Clock()
+    widget = make(2, clock, homes=["inside", "inside"])
+    widget.anim.stop()
+    for pane in widget.panes:
+        render(pane, "fast")
+    builds = []
+    orig = widget._paint_card_contents
+    widget._paint_card_contents = lambda *a, **k: (builds.append(1), orig(*a, **k))[1]
+    widget.grab()
+    assert len(builds) == 2
+    # A cat frame tick, a repaint and a poll that re-renders the same values
+    # all reuse the cached cards.
+    clock.now = 100
+    widget._next_frames()
+    widget.anim.stop()
+    widget.grab()
+    render(widget.panes[0], "fast")
+    widget.grab()
+    assert len(builds) == 2
+
+
+def test_card_is_redrawn_when_its_inputs_change(qapp, synth):
+    widget = make(2, homes=["inside", "inside"])
+    widget.anim.stop()
+    for pane in widget.panes:
+        render(pane, "fast")
+    first = widget.grab().toImage()
+    pane = widget.panes[0]
+    pane.render("fast", 90, 67, "2h", "Mon", "", None, None, False)
+    widget.anim.stop()
+    second = widget.grab().toImage()
+    assert second != first
+    # only pane 0's card changed
+    ox, oy = widget.window_layout.pane_origins[1]
+    rect = QRect(ox, oy, T.CARD_WIDTH, T.CARD_HEIGHT)
+    assert second.copy(rect) == first.copy(rect)
+    # a theme swap and an accent flip repaint with the new values too
+    pane.render("fast", 90, 67, "2h", "Mon", "", None, None, False, accent=True)
+    widget.anim.stop()
+    accent = widget.grab().toImage()
+    assert accent != second
+    pane.set_appearance(card_bg="#123456")
+    pane.render("fast", 90, 67, "2h", "Mon", "", None, None, False)
+    widget.anim.stop()
+    assert widget.grab().toImage() != second
+
+
+def test_cached_card_matches_a_fresh_widget(qapp, synth):
+    """A widget that has painted other values first ends up pixel-identical to
+    one that only ever painted the final values."""
+    old = make(1)
+    old.anim.stop()
+    render(old.panes[0], "fast")
+    old.grab()
+    old.panes[0].render("fast", 10, 20, "5h", "Tue", "", None, "hint", True)
+    old.anim.stop()
+    fresh = make(1)
+    fresh.anim.stop()
+    fresh.panes[0].render("fast", 10, 20, "5h", "Tue", "", None, "hint", True)
+    fresh.anim.stop()
+    assert old.grab().toImage() == fresh.grab().toImage()
+
+
+def test_due_frames_within_the_window_tick_together(qapp, synth):
+    clock = Clock()
+    widget = make(2, clock, homes=["inside", "inside"])
+    widget.anim.stop()
+    render(widget.panes[0], "fast")
+    clock.now = 4  # pane 1 starts 4 ms later, so its first frame is due 4 ms later
+    render(widget.panes[1], "fast")
+    widget.anim.stop()
+    rects = []
+    widget.update = lambda *a: rects.append(a)
+    clock.now = 100
+    widget._next_frames()
+    assert len(rects) == 2  # both panes advanced in the one wakeup
+    assert [p.current_frame()[1] for p in widget.panes] == [1, 1]
+    # their next frames stay on the original schedule, not shifted by the window
+    assert widget.panes[0].next_due_ms() == 200 and widget.panes[1].next_due_ms() == 204
+    widget.anim.stop()
+
+
+def test_a_frame_far_from_due_is_not_ticked_early(qapp, synth):
+    clock = Clock()
+    widget = make(1, clock)
+    widget.anim.stop()
+    render(widget.panes[0], "fast")
+    clock.now = 80
+    widget._next_frames()
+    assert widget.panes[0].current_frame()[1] == 0
     widget.anim.stop()

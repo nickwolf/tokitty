@@ -245,3 +245,22 @@ def test_coat_overrides_carry_into_every_derived_tone():
     assert palette[sprites.GLOW_CHAR] == sprites.glow_tone("#4080c0")
     assert palette[sprites.DIM_CHARS["o"]] == sprites.dim_tone("#4080c0")
     assert palette[sprites.DIM_CHARS["O"]] == sprites.dim_tone("#204060")
+
+
+def test_effective_palette_is_memoized_but_independent():
+    custom = Customization(colorway="gray", pattern="tabby")
+    first, second = effective_palette(custom), effective_palette(custom)
+    assert first == second and first is not second
+    first["o"] = "#000001"  # a caller mutating its copy must not leak
+    assert effective_palette(custom) == second
+
+
+def test_effective_palette_follows_override_changes():
+    base = effective_palette(Customization())
+    tinted = effective_palette(Customization(overrides={"coat_base": "#4080c0"}))
+    shaded = effective_palette(Customization(overrides={"coat_shade": "#102030"}))
+    assert tinted["o"] == "#4080c0" and tinted != base and shaded["O"] == "#102030"
+    assert tinted["-"] != base["-"]  # derived tones re-derived from the override
+    # unrelated overrides do not change the sprite palette
+    assert effective_palette(Customization(overrides={"card_bg": "#222222"})) == base
+    assert effective_palette(Customization()) == base
