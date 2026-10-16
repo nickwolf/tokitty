@@ -466,3 +466,50 @@ def test_resolve_palette_returns_independent_equal_dicts():
     first["o"] = "#010203"
     assert resolve_palette("gray", "calico", "ringed") == second
     assert resolve_palette("gray", "calico") != second
+
+
+def test_offsets_live_on_one_track_and_compose():
+    from tokitty.sprites import Animation, Track, check_animation, compose_offset
+
+    hop = Track("body", (Frame({}, ms=100), Frame({}, ms=100, offset=(0, -3))), None)
+    anim = Animation(SITTING_TEMPLATE, (hop, Track("eyes", (Frame({"L": "e"}, ms=100),), None)))
+    check_animation(anim)
+    clash = Animation(SITTING_TEMPLATE, (hop, Track("tail", (Frame({}, ms=100, offset=(1, 0)),), None)))
+    with pytest.raises(ValueError):
+        check_animation(clash)
+    for state in ALL_STATES:
+        assert compose_offset(state, [0] * len(get_animation(state).tracks)) == (0, 0)
+
+
+def test_spot_variants_and_moves_resolve_and_are_checked(monkeypatch):
+    from tokitty import sprites
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, _check_transitions, compose_offset, move_name,
+        spot_state, transition_name,
+    )
+
+    once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100,
+                                                 offset=(0, -29))], None)
+    looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
+    assert spot_state("sleeping", "on_top") == "sleeping"
+    monkeypatch.setitem(SPOT_VARIANTS, ("sleeping", "on_top"), looping)
+    assert spot_state("sleeping", "on_top") == "sleeping@on_top"
+    assert get_animation("sleeping@on_top") is looping
+    with pytest.raises(KeyError):
+        get_animation("content@on_top")
+    # a transition may name a variant on either side
+    monkeypatch.setitem(TRANSITIONS, ("sleeping@on_top", "content"), once)
+    assert get_animation(transition_name("sleeping@on_top", "content")) is once
+    _check_transitions()
+    monkeypatch.setitem(MOVES, "jump_up", once)
+    assert get_animation(move_name("jump_up")) is once
+    assert compose_offset(move_name("jump_up"), [0]) == (0, -29)
+    _check_transitions()
+    monkeypatch.setitem(MOVES, "walk", looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    monkeypatch.delitem(MOVES, "walk")
+    monkeypatch.setitem(SPOT_VARIANTS, ("nope", "on_top"), looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    assert sprites.SPOT_SEP not in "".join(ALL_STATES)

@@ -468,6 +468,11 @@ class Frame:
     ms: Duration = DEFAULT_FRAME_MS
     # Overrides the animation's template for this frame only.
     template: Optional[List[str]] = None
+    # Moves the whole sprite (dx, dy) cells from its spot while this frame is
+    # up, dy < 0 being up: motion the 28x26 grid cannot hold, like a hop's
+    # height or a jump onto the card's top edge. Facing right; a mirrored cat
+    # moves by -dx. Icons, previews and keys draw the grid only.
+    offset: Tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -523,9 +528,9 @@ def check_animation(anim: Animation) -> None:
     """Raise ValueError if an animation breaks the track rules: unique track
     names, holds that are multiples of the step and at least MIN_FRAME_MS
     (lo <= hi for ranges), a valid loop_from per track, template overrides
-    with the animation template's dimensions on at most one track, and
-    substitution keys that no two tracks share (so the order tracks are
-    composed in can never matter)."""
+    with the animation template's dimensions on at most one track, offsets
+    on at most one track, and substitution keys that no two tracks share (so
+    the order tracks are composed in can never matter)."""
     if not anim.tracks:
         raise ValueError("animation has no tracks")
     names = [t.name for t in anim.tracks]
@@ -534,6 +539,7 @@ def check_animation(anim: Animation) -> None:
     dims = (len(anim.template), len(anim.template[0]))
     owners: Dict[str, str] = {}
     template_tracks = []
+    offset_tracks = []
     for track in anim.tracks:
         if not track.frames:
             raise ValueError(f"track {track.name!r} has no frames")
@@ -555,8 +561,12 @@ def check_animation(anim: Animation) -> None:
                     raise ValueError(f"track {track.name!r}: template size differs")
                 if track.name not in template_tracks:
                     template_tracks.append(track.name)
+            if frame.offset != (0, 0) and track.name not in offset_tracks:
+                offset_tracks.append(track.name)
     if len(template_tracks) > 1:
         raise ValueError(f"tracks {template_tracks} all override the template")
+    if len(offset_tracks) > 1:
+        raise ValueError(f"tracks {offset_tracks} all move the sprite")
 
 
 # The flopped tail wags through three 2px-thick positions. Template
@@ -1438,6 +1448,20 @@ _ROLL_CURL: List[str] = [
 ]
 TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
 
+# A state's own look in one cat spot (theme.SPOTS), keyed by (state, spot):
+# the cat lying along the card's top edge where it would sit inside. Goes by
+# "state@spot"; a state with no entry for a spot plays as usual there.
+# TRANSITIONS may name a variant on either side.
+SPOT_SEP = "@"
+SPOT_VARIANTS: Dict[Tuple[str, str], Animation] = {}
+
+# Moves from one spot to another (#116), played once by the wandering (#22):
+# the jumps between the card and its top edge, the walk along it. Each starts
+# at the spot it leaves, and its last frame's offset is where it lands
+# relative to that spot. Goes by "move:name".
+MOVE_PREFIX = "move:"
+MOVES: Dict[str, Animation] = {}
+
 
 def transition_name(from_state: str, to_state: str) -> str:
     """The name a transition goes by wherever a state name is expected
@@ -1445,13 +1469,36 @@ def transition_name(from_state: str, to_state: str) -> str:
     return f"{from_state}{TRANSITION_SEP}{to_state}"
 
 
+def spot_state(state: str, spot: str) -> str:
+    """The name to play `state` under in `spot`: its variant's "state@spot"
+    when SPOT_VARIANTS has one, else the state itself."""
+    return f"{state}{SPOT_SEP}{spot}" if (state, spot) in SPOT_VARIANTS else state
+
+
+def move_name(move: str) -> str:
+    return f"{MOVE_PREFIX}{move}"
+
+
+def _plays_once(anim: Animation) -> bool:
+    return all(track.loop_from is None for track in anim.tracks)
+
+
 def _check_transitions() -> None:
+    for (state, _spot), anim in SPOT_VARIANTS.items():
+        if state not in ANIMATIONS:
+            raise ValueError(f"spot variant names an unknown state {state!r}")
+        check_animation(anim)
+    known = set(ANIMATIONS) | {spot_state(*key) for key in SPOT_VARIANTS}
     for (from_state, to_state), anim in TRANSITIONS.items():
-        if from_state not in ANIMATIONS or to_state not in ANIMATIONS:
+        if from_state not in known or to_state not in known:
             raise ValueError(f"transition {from_state}->{to_state} names an unknown state")
         check_animation(anim)
-        if any(track.loop_from is not None for track in anim.tracks):
+        if not _plays_once(anim):
             raise ValueError(f"transition {from_state}->{to_state} must play once")
+    for move, anim in MOVES.items():
+        check_animation(anim)
+        if not _plays_once(anim):
+            raise ValueError(f"move {move!r} must play once")
 
 
 
@@ -1474,14 +1521,21 @@ _ENUMERATIONS: Dict[str, Tuple[Animation, List[Tuple[int, ...]], List[List[str]]
 
 
 def get_animation(state: str) -> Animation:
-    """The track table for a mood/sub-state name, or for a transition by its
+    """The track table for a mood/sub-state name, a spot variant
+    ("state@spot"), a move ("move:name"), or a transition by its
     transition_name ("from>to")."""
     if state in ANIMATIONS:
         return ANIMATIONS[state]
+    if state.startswith(MOVE_PREFIX) and state[len(MOVE_PREFIX):] in MOVES:
+        return MOVES[state[len(MOVE_PREFIX):]]
     if TRANSITION_SEP in state:
         pair = tuple(state.split(TRANSITION_SEP, 1))
         if pair in TRANSITIONS:
             return TRANSITIONS[pair]
+    elif SPOT_SEP in state:
+        key = tuple(state.split(SPOT_SEP, 1))
+        if key in SPOT_VARIANTS:
+            return SPOT_VARIANTS[key]
     raise KeyError(f"Unknown sprite state: {state!r}")
 
 
@@ -1508,6 +1562,16 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
     grid = _GRIDS.setdefault(tuple(rows), rows)
     _COMPOSED[key] = (anim, grid)
     return grid
+
+
+def compose_offset(state: str, positions: Sequence[int]) -> Tuple[int, int]:
+    """Where the sprite is moved, in cells, with every track at the given
+    frame position: the offset of the one track that moves it, else (0, 0)."""
+    for track, pos in zip(get_animation(state).tracks, positions):
+        offset = track.frames[pos].offset
+        if offset != (0, 0):
+            return offset
+    return (0, 0)
 
 
 def _enumeration(state: str):
