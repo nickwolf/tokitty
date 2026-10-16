@@ -4,6 +4,8 @@ import random
 
 import pytest
 
+from tokitty import sprites
+
 from tokitty.sprites import (
     ALERT_TEMPLATE,
     ALL_STATES,
@@ -26,6 +28,7 @@ from tokitty.sprites import (
     frame_ms,
     get_animation,
     get_frames,
+    get_tracks,
     get_palette,
     single_track,
     resolve_palette,
@@ -280,11 +283,10 @@ def test_frame_templates_match_the_animation_template_dimensions():
                 assert all(len(row) == len(anim.template[0]) for row in tmpl), state
 
 
-def test_every_current_state_is_one_main_track_of_800ms_frames_looping():
-    for state, anim in ANIMATIONS.items():
-        assert [t.name for t in anim.tracks] == ["main"], state
-        assert anim.tracks[0].loop_from == 0
-        assert all(f.ms == 800 for f in anim.tracks[0].frames), state
+def test_frame_zero_of_every_state_has_all_tracks_at_rest():
+    # Icons and previews draw get_frames(state)[0]: every track at frame 0.
+    for state in ALL_STATES:
+        assert get_frames(state)[0] is sprites.compose(state, [0] * len(get_tracks(state))), state
 
 
 def test_check_animation_rejects_rule_breaks():
@@ -393,9 +395,9 @@ def test_frame_ms_resolution():
     assert frame_ms(Frame({}, ms=(50, 50)), rng) == 50
 
 
-def test_current_art_is_unchanged_by_the_timing_refactor():
-    # Pins the pre-#125 art byte for byte. The art passes change pixels on
-    # purpose: update this hash with them.
+def test_art_is_pinned():
+    # Pins the art byte for byte, so a change to any frame is deliberate.
+    # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "eabd139e9fee9e3e1abcc32ce10e1a6367e5dc988b63354f2efa200b915779db"
+    assert digest == "435dd3693c13ead05d1766717747c695f1e11d9836097b20bdd0a836f223af7e"

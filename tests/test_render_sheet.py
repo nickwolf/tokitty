@@ -8,7 +8,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from render_sheet import render_sheet
-from tokitty.sprites import ALL_STATES, get_frames
+from tokitty import sprites
+from tokitty.sprites import ALL_STATES, get_tracks
 
 
 def _png_size(path):
@@ -20,34 +21,43 @@ def _png_size(path):
 
 def _geometry(scale, states=ALL_STATES, wrap=8):
     """Expected sheet size: per frame a sprite cell plus the duration strip,
-    wrapped onto continuation rows, one block of rows per state."""
+    wrapped onto continuation rows, one block of rows per track."""
     gap = 4
-    frames = {s: get_frames(s) for s in states}
-    cell_w = max(len(f[0][0]) for f in frames.values()) * scale
-    cell_h = max(len(f[0]) for f in frames.values()) * scale + 2 + 4 + 4
-    per_row = min(wrap, max(len(f) for f in frames.values()))
-    rows = sum(-(-len(f) // per_row) for f in frames.values())
+    counts = [len(t.frames) for s in states for t in get_tracks(s)]
+    cell_w = 28 * scale
+    cell_h = 26 * scale + 2 + 4 + 4
+    per_row = min(wrap, max(counts))
+    rows = sum(-(-n // per_row) for n in counts)
     return gap + per_row * (cell_w + gap), gap + rows * (cell_h + gap)
+
+
+@pytest.fixture
+def plain(monkeypatch):
+    """A one-track, two-frame state at the old 800 ms, independent of the art."""
+    monkeypatch.setitem(sprites.ANIMATIONS, "plain", sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({"L": "e", "R": "e", "A": "n"}), sprites.Frame({"L": "k", "R": "k", "A": "n"})]))
 
 
 def test_sheet_is_valid_png_with_expected_dimensions(tmp_path):
     out = tmp_path / "sheet.png"
     order = render_sheet(out, scale=2)
-    assert order == list(ALL_STATES)
+    assert order == [s if len(get_tracks(s)) == 1 else f"{s}/{t.name}"
+                     for s in ALL_STATES for t in get_tracks(s)]
     assert _png_size(out) == _geometry(2)
 
 
-def test_sheet_wraps_long_states_onto_continuation_rows(tmp_path):
+def test_sheet_wraps_long_states_onto_continuation_rows(tmp_path, plain):
     out = tmp_path / "sheet.png"
-    render_sheet(out, scale=2, states=["flopped", "content"], wrap=3)
-    assert _png_size(out) == _geometry(2, ["flopped", "content"], wrap=3)
-    # flopped has 4 frames: 2 rows at wrap 3, content 1 row
-    assert _geometry(2, ["flopped", "content"], wrap=3)[1] == 4 + 3 * (52 + 10 + 4)
+    render_sheet(out, scale=2, states=["flopped", "plain"], wrap=3)
+    assert _png_size(out) == _geometry(2, ["flopped", "plain"], wrap=3)
+    # flopped has 4 frames: 2 rows at wrap 3, plain 1 row
+    assert _geometry(2, ["flopped", "plain"], wrap=3)[1] == 4 + 3 * (52 + 10 + 4)
 
 
-def test_state_selection_keeps_the_requested_order(tmp_path):
+def test_state_selection_keeps_the_requested_order(tmp_path, plain):
     out = tmp_path / "sheet.png"
-    assert render_sheet(out, scale=1, states=["flopped", "content"]) == ["flopped", "content"]
+    assert render_sheet(out, scale=1, states=["flopped", "plain"]) == ["flopped", "plain"]
 
 
 def _pixel(path, x, y):
@@ -91,10 +101,10 @@ def test_duration_strip_and_loop_marker(tmp_path, monkeypatch):
     assert _pixel(out, x0 + 1, mark_y) == rgb(bg)
 
 
-def test_legend_line():
+def test_legend_line(plain):
     from render_sheet import legend
 
-    assert legend(["content"]) == ["content: 800 800 (loop from 0)"]
+    assert legend(["plain"]) == ["plain: 800 800 (loop from 0)"]
     assert legend(["flopped"]) == ["flopped: 800 800 800 800 (loop from 0)"]
 
 
@@ -110,17 +120,17 @@ def _two_track(monkeypatch):
     monkeypatch.setitem(sprites.ANIMATIONS, "synth", anim)
 
 
-def test_multi_track_state_gets_one_row_per_track(tmp_path, monkeypatch):
+def test_multi_track_state_gets_one_row_per_track(tmp_path, monkeypatch, plain):
     from render_sheet import legend
 
     _two_track(monkeypatch)
     out = tmp_path / "sheet.png"
-    labels = render_sheet(out, scale=2, states=["synth", "content"])
-    assert labels == ["synth/eyes", "synth/tail", "content"]
-    assert legend(["synth", "content"]) == [
+    labels = render_sheet(out, scale=2, states=["synth", "plain"])
+    assert labels == ["synth/eyes", "synth/tail", "plain"]
+    assert legend(["synth", "plain"]) == [
         "synth/eyes: 100-400 60 (play once)",
         "synth/tail: 500 500 500 (loop from 1)",
-        "content: 800 800 (loop from 0)",
+        "plain: 800 800 (loop from 0)",
     ]
     assert _png_size(out)[1] == 4 + 3 * (52 + 10 + 4)
 

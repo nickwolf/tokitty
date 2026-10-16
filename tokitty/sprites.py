@@ -160,8 +160,8 @@ SITTING_TEMPLATE: List[str] = [
     ".....osssouuuuuuucccoo..yy..",
     "......oooouuuuuuuccco...yy..",
     "......ooouuuuuuuuucco..yy...",
-    "......oooouuuuuuuoooo.yy....",
-    ".......ooouuuuuuuooo.yy.....",
+    "......oooouuuuuuuooooyyy....",
+    ".......ooouuuuuuuoooyyy.....",
     "........oommmmmmmOO.........",
     ".........oooooooOO..........",
 ]
@@ -492,11 +492,84 @@ _TAIL_POSE_1 = {"1": "y", "4": "y", "2": ".", "5": ".", "3": "."}
 _TAIL_POSE_2 = {"2": "y", "4": "y", "5": "y", "1": ".", "3": "."}
 _TAIL_POSE_3 = {"3": "y", "5": "y", "1": ".", "2": ".", "4": "."}
 
+
+def _pose_cells(template: List[str], poses: Sequence[Dict[Tuple[int, int], str]],
+                pool: str) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Stamp alternative poses of one body part (a tail tip, an ear) into a
+    template, for a track to switch between. Each pose maps (row, col) to the
+    char it paints there. Every cell any pose touches becomes a marker char
+    from `pool`, one per distinct "what each pose paints here" pattern, and
+    pose i's subs paint its own cells and blank the rest. Returns the marked
+    template and one subs dict per pose."""
+    cells = sorted({cell for pose in poses for cell in pose})
+    patterns = sorted({tuple(pose.get(cell, ".") for pose in poses) for cell in cells})
+    if len(patterns) > len(pool):
+        raise ValueError(f"{len(patterns)} cell patterns need more than the {len(pool)} pool chars")
+    marker = dict(zip(patterns, pool))
+    marked = _overlay(template, {cell: marker[tuple(pose.get(cell, ".") for pose in poses)]
+                                 for cell in cells})
+    subs = [{marker[pat]: pat[i] for pat in patterns} for i in range(len(poses))]
+    return marked, subs
+
+
+def _cells(char: str, *runs: Tuple[int, int, int]) -> Dict[Tuple[int, int], str]:
+    """(row, first col, last col) runs painted with one char."""
+    return {(r, c): char for r, c0, c1 in runs for c in range(c0, c1 + 1)}
+
+
+# The sitting cat's tail tip (rows 13-17; the curl below row 17 never moves).
+# Neutral is the resting curl and frame 0, so the icons keep it.
+_SIT_TAIL_NEUTRAL = _cells("y", (14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24))
+_SIT_TAIL_IN = _cells("y", (13, 20, 21), (14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24))
+_SIT_TAIL_OUT = _cells("y", (14, 22, 23), (15, 23, 24), (16, 23, 24), (17, 23, 24))
+_SIT_TAIL_UP = _cells("y", (14, 24, 25), (15, 24, 25), (16, 24, 25), (17, 24, 25))
+# Right ear: the tip pixel twitches one cell outward.
+_SIT_EAR_REST = _cells("x", (1, 18, 18))
+_SIT_EAR_FLICK = _cells("x", (1, 19, 19))
+
+_CONTENT_TEMPLATE, _CONTENT_TAIL = _pose_cells(
+    SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN, _SIT_TAIL_OUT, _SIT_TAIL_UP], "aijlqrvC")
+_CONTENT_TEMPLATE, _CONTENT_EAR = _pose_cells(
+    _CONTENT_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK], "DEF")
+_TAIL_NEUTRAL, _TAIL_IN, _TAIL_OUT, _TAIL_UP = _CONTENT_TAIL
+_EAR_REST, _EAR_FLICK = _CONTENT_EAR
+_EYES_OPEN = {"L": "e", "R": "e", "A": "n"}
+_EYES_SHUT = {"L": "k", "R": "k", "A": "n"}
+
+CONTENT_ANIMATION = Animation(_CONTENT_TEMPLATE, (
+    # Blinks at random gaps, with a quick double blink and a slow blink
+    # ("I trust you") in the cycle so it never reads as a metronome.
+    Track("eyes", (
+        Frame(_EYES_OPEN, (2500, 6000)),
+        Frame(_EYES_SHUT, 150),
+        Frame(_EYES_OPEN, (3000, 7000)),
+        Frame(_EYES_SHUT, 140),
+        Frame(_EYES_OPEN, 120),
+        Frame(_EYES_SHUT, 140),
+        Frame(_EYES_OPEN, (2500, 6000)),
+        Frame(_EYES_SHUT, 700),
+    )),
+    # A lazy sway: up and out, back through neutral, a curl in.
+    Track("tail", (
+        Frame(_TAIL_NEUTRAL, (800, 2000)),
+        Frame(_TAIL_OUT, 220),
+        Frame(_TAIL_UP, (600, 1100)),
+        Frame(_TAIL_OUT, 220),
+        Frame(_TAIL_NEUTRAL, (700, 1600)),
+        Frame(_TAIL_IN, (500, 900)),
+    )),
+    Track("ears", (
+        Frame(_EAR_REST, (8000, 20000)),
+        Frame(_EAR_FLICK, 100),
+        Frame(_EAR_REST, 120),
+        Frame(_EAR_FLICK, 100),
+    )),
+))
+
 ANIMATIONS: Dict[str, Animation] = {
     "sleeping": _anim(SITTING_TEMPLATE, [
         {"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}]),
-    "content": _anim(SITTING_TEMPLATE, [
-        {"L": "e", "R": "e", "A": "n"}, {"L": "k", "R": "k", "A": "n"}]),
+    "content": CONTENT_ANIMATION,
     "interested": _anim(SITTING_TEMPLATE, [
         {"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "k", "A": "n"}]),
     "alert": _anim(ALERT_TEMPLATE, [
