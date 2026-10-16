@@ -1,5 +1,5 @@
 """Render README media: per-state PNG stills, a dual-cat card, the flag GIF,
-an animated GIF of every state drawn on tracks (anim-<state>.gif), and one of
+an animated GIF of every animated state (anim-<state>.gif), and one of
 every transition (anim-<from>-to-<to>.gif).
 
 Stills reuse render_sheet's stdlib rasterizer; the GIF is assembled with
@@ -39,10 +39,10 @@ TRANSITION_TAIL_SECONDS = 3  # the target state played after a transition, then 
 
 
 def write_anims(out: Path, scale: int) -> None:
-    """anim-<state>.gif for every state with more than one track, played with
+    """anim-<state>.gif for every animated state (more than one frame), played with
     seed 0 so a rerun on unchanged art writes the same file."""
     for state in ALL_STATES:
-        if len(get_tracks(state)) > 1:
+        if len(get_frames(state)) > 1:
             seconds = ANIM_SECONDS_FOR.get(state, ANIM_SECONDS)
             frames = write_gif(out / f"anim-{state}.gif", state, scale=scale, seconds=seconds)
             print(f"anim-{state}.gif ({frames} frames)")

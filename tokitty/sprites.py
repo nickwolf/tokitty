@@ -1323,6 +1323,50 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
     )),
 ))
 
+
+# done_hop: the happy hop when a task finishes, played once. A butt wiggle
+# before the jump, a launch, a hang at the top with the paws tucked up and
+# sparkles,
+# a squash on landing and a proud settle with squinting eyes. The earth line
+# stays put underneath, so the gap opens and closes. activity.DONE_HOP_S
+# keeps the state up long enough for all of it.
+_HOP_SPARKS = _cells("h", (3, 2, 2), (6, 1, 1), (2, 24, 24), (5, 26, 26))
+
+
+def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
+               sparks: bool = False) -> List[str]:
+    grid = _overlay(SITTING_TEMPLATE, _SIT_EYES_ARCH if eyes == "arch" else _SIT_EYES_OPEN)
+    grid = [row.replace("A", "n") for row in grid]
+    if pose == "crouch":
+        grid = _sink_head(grid)
+    if dx:
+        grid = _shift_template(grid, dx)
+    if up:
+        grid = _shift_up(grid, up)
+    if pose == "tucked":
+        # paws pulled up under the body: the two lowest rows go, so the gap
+        # under the cat grows without the ears leaving the top of the grid
+        bottom = max(r for r, row in enumerate(grid) if row.strip("."))
+        grid = _overlay(grid, {(r, c): "." for r in (bottom - 1, bottom) for c in range(28)})
+    if sparks:
+        grid = _overlay(grid, _HOP_SPARKS)
+    return _overlay(grid, {(25, c): "G" for c in range(3, 25) if grid[25][c] == "."})
+
+
+DONE_HOP_ANIMATION = single_track(_hop_frame(), [
+    Frame({}, 200, template=_hop_frame()),
+    Frame({}, 150, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(up=1)),
+    Frame({}, 420, template=_hop_frame(up=1, pose="tucked", eyes="arch", sparks=True)),
+    Frame({}, 110, template=_hop_frame(up=1)),
+    Frame({}, 160, template=_hop_frame(pose="crouch")),
+    Frame({}, 400, template=_hop_frame(eyes="arch")),
+], loop_from=None)
+
 ANIMATIONS: Dict[str, Animation] = {
     "sleeping": SLEEPING_ANIMATION,
     "content": CONTENT_ANIMATION,
@@ -1339,12 +1383,7 @@ ANIMATIONS: Dict[str, Animation] = {
     "working": WORKING_ANIMATION,
     "thinking": THINKING_ANIMATION,
     "permission": PERMISSION_ANIMATION,
-    # done_hop is the only state whose frames use different base grids
-    # (whole-cat translate): each frame carries its own template.
-    "done_hop": single_track(DONE_HOP_GROUNDED_TEMPLATE, [
-        Frame({"L": "e", "R": "e", "A": "h"}, template=DONE_HOP_GROUNDED_TEMPLATE),
-        Frame({"L": "e", "R": "e", "A": "h"}, template=DONE_HOP_AIRBORNE_TEMPLATE),  # airborne
-    ]),
+    "done_hop": DONE_HOP_ANIMATION,
 }
 
 ALL_STATES = tuple(ANIMATIONS)

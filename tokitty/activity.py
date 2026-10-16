@@ -15,7 +15,7 @@ ACTIVITY_STATES = ("permission", "working", "thinking", "done_hop", "idle")
 IDLE_DECAY_S = 180.0
 GONE_S = 1800.0
 PERMISSION_STALE_S = 600.0
-DONE_HOP_S = 1.5
+DONE_HOP_S = 2.5  # long enough for the whole hop animation (sprites done_hop, about 2 s)
 WORK_STRETCH_MIN_S = 20.0
 
 _KNOWN_EVENTS = frozenset(
