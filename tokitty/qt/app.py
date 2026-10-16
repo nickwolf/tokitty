@@ -219,7 +219,6 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
     from tokitty.qt.tray import QtTray
-    from tokitty.qt.update_dialog import QtUpdateDialog
     from tokitty.qt.update_host import QtUpdateHost
     from tokitty.qt.widget import TokittyQtWidget
     from tokitty.wsl_probe import WslCredentialsCache
@@ -437,8 +436,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             defer=lambda fn: QTimer.singleShot(0, lambda: update_host.when_shown(fn)),
             error=update_box(QMessageBox.critical),
             info=update_box(QMessageBox.information),
-            offer=lambda release: QtUpdateDialog.open(host, release, updates.running.version, updates),
+            offer=lambda release: SettingsWindow.open(host, tab="updates"),
+            changed=host.notify_state_changed,
         )
+        host.update_actions = update_actions
         host.update_available_label = checker.menu_label
         host.on_install_update = update_actions.install
         host.on_check_updates = update_actions.check_now

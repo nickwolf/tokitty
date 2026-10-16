@@ -181,7 +181,7 @@ def test_the_menu_shows_the_update_item_first_only_while_a_release_is_known(
     assert seen["action"] == seen["install"]
 
 
-def test_general_shows_the_updates_rows_and_the_toggle_writes_settings(
+def test_the_updates_tab_has_the_rows_and_the_toggle_writes_settings(
         qapp, state_dir, fakes, monkeypatch):
     from tokitty.qt.settings import SettingsWindow
 
@@ -189,17 +189,18 @@ def test_general_shows_the_updates_rows_and_the_toggle_writes_settings(
 
     def hook(widget):
         window = SettingsWindow.open(host_of(fakes), 0)
-        general = window.tabs["general"]
-        seen["rows"] = (general.update_toggle is not None, general.update_pill is not None)
+        updates = window.tabs["updates"]
+        seen["rows"] = (updates.update_toggle is not None, updates.update_pill is not None,
+                        hasattr(window.tabs["general"], "update_toggle"))
         seen["before"] = load_settings(state_dir).update_check
-        general.update_toggle._clicked()
+        updates.update_toggle._clicked()
         seen["after"] = load_settings(state_dir).update_check
         seen["shadow"] = fakes.checker().enabled()
         window.close()
         QTimer.singleShot(0, qapp.quit)
 
     assert run_with(monkeypatch, qapp, hook) == 0
-    assert seen["rows"] == (True, True)
+    assert seen["rows"] == (True, True, False)
     assert seen["before"] is True
     assert seen["after"] is False and seen["shadow"] is False
 
@@ -214,12 +215,11 @@ def boxes(monkeypatch):
 
 
 def test_check_now_shows_the_right_box_for_each_result(qapp, state_dir, fakes, monkeypatch, boxes):
-    from tokitty.qt.update_dialog import QtUpdateDialog
+    from tokitty.qt.settings import SettingsWindow
 
     offered = []
-    monkeypatch.setattr(QtUpdateDialog, "open", classmethod(
-        lambda cls, host, release, running, controller, open_url=None:
-        offered.append((release, running, controller))))
+    monkeypatch.setattr(SettingsWindow, "open", classmethod(
+        lambda cls, host, pane_index=None, tab=None: offered.append(tab)))
     results = [CheckResult(error="offline"), CheckResult(RELEASE, newer=True),
                CheckResult(RELEASE, newer=False)]
     seen = {}
@@ -242,16 +242,16 @@ def test_check_now_shows_the_right_box_for_each_result(qapp, state_dir, fakes, m
         ("critical", "Check for updates", "Couldn't check for updates: offline"),
         ("information", "Check for updates", "Tokitty 0.0.1 is the latest version."),
     ]
-    assert offered == [(RELEASE, "0.0.1", seen["updates"])]
+    assert offered == ["updates"]
 
 
 def test_install_offers_the_known_release_and_checks_first_otherwise(
         qapp, state_dir, fakes, monkeypatch, boxes):
-    from tokitty.qt.update_dialog import QtUpdateDialog
+    from tokitty.qt.settings import SettingsWindow
 
     offered = []
-    monkeypatch.setattr(QtUpdateDialog, "open", classmethod(
-        lambda cls, host, release, running, controller, open_url=None: offered.append(release)))
+    monkeypatch.setattr(SettingsWindow, "open", classmethod(
+        lambda cls, host, pane_index=None, tab=None: offered.append(tab)))
     seen = {}
 
     def hook(widget):
@@ -265,7 +265,7 @@ def test_install_offers_the_known_release_and_checks_first_otherwise(
 
     assert run_with(monkeypatch, qapp, hook) == 0
     assert seen["waiting"] == 1
-    assert offered == [RELEASE]
+    assert offered == ["updates"]
 
 
 def test_the_tick_polls_the_update_core_and_speeds_up_while_busy(qapp, state_dir, fakes, monkeypatch):
@@ -335,12 +335,12 @@ def test_a_check_result_waits_while_the_update_host_is_hidden(
     """Staging can finish and hide the app in the same tick that delivers a
     manual check: the result must not reopen the dialog over a handover."""
     from tokitty import update_controller
-    from tokitty.qt.update_dialog import QtUpdateDialog
+    from tokitty.qt.settings import SettingsWindow
 
     monkeypatch.setattr(update_controller, "reclaim", lambda lock, state_dir, backend: None)
     offered = []
-    monkeypatch.setattr(QtUpdateDialog, "open", classmethod(
-        lambda cls, host, release, running, controller, open_url=None: offered.append(release)))
+    monkeypatch.setattr(SettingsWindow, "open", classmethod(
+        lambda cls, host, pane_index=None, tab=None: offered.append(tab)))
     seen = {}
 
     def hook(widget):
@@ -360,7 +360,7 @@ def test_a_check_result_waits_while_the_update_host_is_hidden(
 
     assert run_with(monkeypatch, qapp, hook) == 0
     assert seen["hidden"] == ([], [])
-    assert seen["restored"] == ([RELEASE], [("critical", "Check for updates", "Couldn't check for updates: offline")])
+    assert seen["restored"] == (["updates"], [("critical", "Check for updates", "Couldn't check for updates: offline")])
 
 
 # ---- hand-offs --------------------------------------------------------------

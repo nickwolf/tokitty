@@ -7,11 +7,8 @@ import pytest
 from tokitty.accounts import Account
 from tokitty.qt import macos
 from tokitty.streamdock.pending import PendingRequest
-from tokitty.updater import Release
 
 pytestmark = pytest.mark.qt
-
-RELEASE = Release("v0.3.0", "https://example.test/notes", "https://example.test/a", 10, "https://example.test/s")
 
 
 @pytest.fixture
@@ -91,20 +88,6 @@ def test_the_accounts_manager_activates_the_app(make_world, activations, monkeyp
         assert len(activations) == 1
     finally:
         manager.close()
-
-
-def test_the_update_dialog_activates_the_app_new_and_existing(make_world, activations):
-    from tokitty.qt import update_dialog as ud
-
-    world = make_world(1)
-    controller = SimpleNamespace(refusal=lambda release: None, cancel=lambda: None)
-    dialog = ud.QtUpdateDialog.open(world.host, RELEASE, "v0.2.0", controller, lambda url: None)
-    try:
-        ud.QtUpdateDialog.open(world.host, RELEASE, "v0.2.0", controller, lambda url: None)
-        assert len(activations) == 2
-    finally:
-        dialog._flow.close()
-        ud._instance = None
 
 
 def test_the_presets_window_activates_the_app(qapp, tmp_path, activations):

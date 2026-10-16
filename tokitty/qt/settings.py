@@ -36,6 +36,7 @@ _instance: Optional["SettingsWindow"] = None
 
 TABS = (
     ("general", "General"),
+    ("updates", "Updates"),
     ("look", "Look"),
     ("theme", "Theme"),
     ("usage", "Usage"),
@@ -116,6 +117,9 @@ class _Tab:
     """One page of the stack. build() once, refresh() whenever shown or
     state changes; refresh() only ever calls control.set()."""
 
+    # A tab that fills the window's height itself takes no trailing stretch.
+    fills = False
+
     def __init__(self, owner: "SettingsWindow"):
         self.owner = owner
         self.host = owner.host
@@ -123,7 +127,8 @@ class _Tab:
         self.frame = QWidget()
         vbox(self.frame)
         self.build()
-        self.frame.layout().addStretch(1)
+        if not self.fills:
+            self.frame.layout().addStretch(1)
 
     def build(self) -> None:
         raise NotImplementedError
@@ -133,6 +138,10 @@ class _Tab:
 
     def close(self) -> None:
         """The window is going away: cancel any poll this tab scheduled."""
+
+    def close_blocked(self) -> bool:
+        """True while the window must stay open (an install is running)."""
+        return False
 
     def write(self, action: Callable[[], None]) -> None:
         """Run a seam, then re-sync every view (this one included)."""
@@ -181,27 +190,6 @@ class GeneralTab(_Tab):
             add("surprise", "Surprise me", "New random cat look at every launch",
                 lambda _v: self.write(host.on_toggle_surprise))
 
-        self.update_toggle = None
-        self.update_pill = None
-        if host.update_check_enabled is not None or host.on_check_updates is not None:
-            kit.section_header(self.frame, "Updates", top=10)
-            card = self.card()
-            if host.update_check_enabled is not None and host.on_toggle_update_check is not None:
-                self.update_toggle = kit.toggle(
-                    "Check for updates automatically",
-                    on_change=lambda _v: self.write(host.on_toggle_update_check))
-                self.update_toggle.setContentsMargins(12, 9, 12, 6)
-                kit.add(card, self.update_toggle)
-            lower, row = _hrow()
-            row.setContentsMargins(12, 3, 12, 9)
-            self.update_pill = kit.pill("", "good")
-            row.addWidget(self.update_pill)
-            row.addStretch(1)
-            if host.on_check_updates is not None:
-                row.addWidget(kit.button("Check now", "secondary", compact=True,
-                                         command=lambda: self.write(host.on_check_updates)))
-            kit.add(card, lower)
-
     def _tray_available(self) -> bool:
         available = self.host.tray_available
         return available is None or bool(available())
@@ -216,14 +204,6 @@ class GeneralTab(_Tab):
                             ("surprise", host.surprise_me)):
             if key in self.toggles and getter is not None:
                 self.toggles[key].set(getter())
-        if self.update_toggle is not None:
-            self.update_toggle.set(host.update_check_enabled())
-        if self.update_pill is not None:
-            label = host.update_available_label() if host.update_available_label else None
-            if label:
-                self.kit.set_pill(self.update_pill, label, "warn")
-            else:
-                self.kit.set_pill(self.update_pill, f"Up to date · {version_text()}", "good")
 
 
 class LookTab(_Tab):
@@ -720,13 +700,20 @@ class ThemeTab(_Tab):
             self.kit.set_entry_error(holder, False)
 
 
+def has_update_controls(host) -> bool:
+    """The Updates tab shows only where the host wires the update seams."""
+    return host.update_check_enabled is not None or host.on_check_updates is not None
+
+
 def _tab_classes() -> Dict[str, type]:
     # Imported here because these tabs subclass _Tab from this module.
     from tokitty.qt.settings_accounts import AccountsTab
     from tokitty.qt.settings_streamdock import StreamDockTab
+    from tokitty.qt.settings_updates import UpdatesTab
 
     return {
         "general": GeneralTab,
+        "updates": UpdatesTab,
         "look": LookTab,
         "theme": ThemeTab,
         "usage": UsageTab,
@@ -739,16 +726,26 @@ class SettingsWindow(QWidget):
     """The Settings window. Use SettingsWindow.open(), never the constructor."""
 
     @classmethod
-    def open(cls, host, pane_index: int = 0) -> "SettingsWindow":
+    def open(cls, host, pane_index: Optional[int] = None, tab: Optional[str] = None) -> "SettingsWindow":
+        """Open the window, or raise the one already open. `pane_index` None
+        keeps the open window's pane; `tab` is a key of TABS to show."""
         global _instance
         existing = _instance
         if existing is not None and existing.alive() and existing.host is host:
-            existing.set_pane(pane_index)
+            if pane_index is not None:
+                existing.set_pane(pane_index)
+            existing.select_tab(tab)
             existing.raise_window()
             return existing
         if existing is not None:
             existing.close()
-        instance = _instance = cls(host, pane_index)
+            if not existing._closed:
+                # An install holds it open: use that window.
+                existing.select_tab(tab)
+                existing.raise_window()
+                return existing
+        instance = _instance = cls(host, pane_index or 0)
+        instance.select_tab(tab)
         instance.raise_window()
         return instance
 
@@ -766,7 +763,9 @@ class SettingsWindow(QWidget):
         host.register_window(self)
 
         shell = hbox(self)
-        self.rail = self.kit.rail(TABS, version_text(), on_select=self._show)
+        self._tab_keys = [(key, title) for key, title in TABS
+                          if key != "updates" or has_update_controls(host)]
+        self.rail = self.kit.rail(self._tab_keys, version_text(), on_select=self._show)
         shell.addWidget(self.rail)
         body = QWidget()
         body_col = vbox(body)
@@ -802,7 +801,7 @@ class SettingsWindow(QWidget):
         body_col.addWidget(self.footer)
 
         classes = _tab_classes()
-        self.tabs = {key: classes[key](self) for key, _title in TABS}
+        self.tabs = {key: classes[key](self) for key, _title in self._tab_keys}
         for tab in self.tabs.values():
             tab.frame.setVisible(False)
             self._stack.layout().addWidget(tab.frame)
@@ -831,6 +830,10 @@ class SettingsWindow(QWidget):
             tab.frame.setVisible(tab_key == key)
         self.scroll.verticalScrollBar().setValue(0)
         self.refresh()
+
+    def select_tab(self, key: Optional[str]) -> None:
+        if key in self.tabs:
+            self._show(key)
 
     # -- panes ---------------------------------------------------------------
 
@@ -877,6 +880,9 @@ class SettingsWindow(QWidget):
             tab.refresh()
 
     def closeEvent(self, event) -> None:
+        if any(tab.close_blocked() for tab in self.tabs.values()):
+            event.ignore()
+            return
         self._release()
         super().closeEvent(event)
 

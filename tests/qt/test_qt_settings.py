@@ -126,7 +126,7 @@ def test_general_has_no_transparency_row_and_hides_missing_seams(make_world):
     world = make_world()
     window = open_window(world)
     assert set(window.tabs["general"].toggles) == {"aot", "surprise"}
-    assert window.tabs["general"].update_pill is None
+    assert "updates" not in window.tabs
     assert not hasattr(window.tabs["general"], "transparency")
 
 
@@ -177,12 +177,12 @@ def test_tray_and_update_rows_appear_when_their_seams_exist(make_world):
     world.host.on_check_updates = lambda: None
     world.host.update_available_label = lambda: "v9 is out"
     window = open_window(world)
-    general = window.tabs["general"]
+    general, updates = window.tabs["general"], window.tabs["updates"]
     assert "tray" in general.toggles
     general.toggles["tray"]._clicked()
-    general.update_toggle._clicked()
+    updates.update_toggle._clicked()
     assert state == {"tray": True, "updates": False}
-    assert general.update_pill.text() == "v9 is out"
+    assert updates.update_pill.text() == "v9 is out"
 
 
 def test_the_tray_row_follows_the_trays_live_availability(make_world):
