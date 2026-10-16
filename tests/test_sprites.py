@@ -425,6 +425,22 @@ def test_jumps_land_on_the_spot_they_head_for_within_the_headroom():
     assert -top - rise <= theme.HOP_HEADROOM // SCALE
 
 
+def test_state_hops_stay_inside_the_room_above_the_cat():
+    # A state plays in any spot, so its highest hop has to fit both inside the
+    # card (above the inside cat's canvas) and in the headroom kept over an
+    # on_top cat. Moves are #22's to place and are checked on their own.
+    from tokitty import theme
+    from tokitty.sprites import SPOT_VARIANTS
+
+    inside_room = theme.placement("inside").origin[1] // SCALE
+    anims = list(ANIMATIONS.values()) + list(SPOT_VARIANTS.values())
+    for anim in anims:
+        for track in anim.tracks:
+            for frame in track.frames:
+                rise = -frame.offset[1]
+                assert rise <= min(inside_room, theme.HOP_HEADROOM // SCALE), (track.name, frame.offset)
+
+
 def test_walk_pieces_chain_and_keep_the_paws_on_the_edge():
     from tokitty.shadow import ground_row
     from tokitty.sprites import MOVES, _WALK_STRIDE
@@ -485,7 +501,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "b1f3ae95dddfc6ebc8888b1716da4c15f655f4baab674d326ac129b033a5a29d"
+    assert digest == "b6953dd950f3891f9b80e9125ff3a086a9b2d437d613ab7d8e343a6dde7c1713"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

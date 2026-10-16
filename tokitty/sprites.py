@@ -910,8 +910,9 @@ ALERT_ANIMATION = Animation(_AL_TMPL, (
     )),
 ))
 
-# panicked: the whole cat shakes in bursts, the "!" flashes, and on the way
-# in the tail fluffs up (plain, bristled tip, full puff) and stays puffed.
+# panicked: the whole cat shakes in bursts, each opening with a startle hop
+# two rows up that settles into smaller bounces, the "!" flashes, and on the
+# way in the tail fluffs up (plain, bristled tip, full puff) and stays puffed.
 _ALERT_TAIL_PLAIN = _tail((14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24), (18, 24, 25),
                           (19, 24, 25), (20, 24, 25), (21, 23, 24), (22, 20, 22), (23, 19, 21))
 _ALERT_TAIL_BRISTLE = _tail((12, 21, 21), (13, 20, 23), (14, 21, 23), (15, 22, 24), (16, 23, 25),
@@ -931,10 +932,10 @@ PANICKED_ANIMATION = Animation(_PN_TMPL, (
     Track("face", (Frame({**_PN_OPEN, **_NOSE}),)),
     Track("shake", (
         Frame({}, (400, 700)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, -1), offset=(0, -2)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, 1), offset=(0, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, 1), offset=(0, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
     )),
