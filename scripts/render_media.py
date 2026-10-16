@@ -1,11 +1,12 @@
-"""Render README media: per-state PNG stills, a dual-cat card, and one GIF.
+"""Render README media: per-state PNG stills, a dual-cat card, the flag GIF,
+and an animated GIF of every state drawn on tracks (anim-<state>.gif).
 
 Stills reuse render_sheet's stdlib rasterizer; the GIF is assembled with
 Pillow, which is a dev-only dependency of this script (the shipped app
 stays stdlib-only). Frames render on the ui.py card background so the
 media matches what the widget actually looks like.
 
-Usage: python3 scripts/render_media.py --out docs/media [--scale 6]
+Usage: python3 scripts/render_media.py --out docs/media [--scale 6] [--anim-only]
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tokitty.sprites import LEGACY_COAT_MAP, get_frames, resolve_palette
+from tokitty.sprites import ALL_STATES, LEGACY_COAT_MAP, get_frames, get_tracks, resolve_palette
 from render_sheet import BG, _hex_to_rgb, _write_png, write_gif
 from tokitty.sprite_raster import raster_frame
 
@@ -26,6 +27,20 @@ STILL_STATES = ["content", "interested", "alert", "working", "thinking",
                 "permission", "flopped", "sleeping", "done_hop"]
 GIF_STATE = "permission"  # the flag animation, per spec ("flag or wake")
 GIF_SECONDS = 6.4  # a whole number of 800 ms loops, so the GIF loops without a seam
+ANIM_SECONDS = 30  # long enough for the random holds to show their range
+# Seconds for states whose rare moments need longer to come round: the
+# sleeping cat's peek is 20 to 45 s apart.
+ANIM_SECONDS_FOR = {"sleeping": 50}
+
+
+def write_anims(out: Path, scale: int) -> None:
+    """anim-<state>.gif for every state with more than one track, played with
+    seed 0 so a rerun on unchanged art writes the same file."""
+    for state in ALL_STATES:
+        if len(get_tracks(state)) > 1:
+            seconds = ANIM_SECONDS_FOR.get(state, ANIM_SECONDS)
+            frames = write_gif(out / f"anim-{state}.gif", state, scale=scale, seconds=seconds)
+            print(f"anim-{state}.gif ({frames} frames)")
 
 
 def _png_from_grid(path: Path, grid: List[List[bytes]]) -> None:
@@ -36,8 +51,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--scale", type=int, default=6)
+    parser.add_argument("--anim-only", action="store_true",
+                        help="write only the anim-<state>.gif files")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.anim_only:
+        write_anims(args.out, args.scale)
+        return 0
 
     bg = _hex_to_rgb(BG)
     palette = resolve_palette("orange", "tabby")
@@ -64,6 +84,7 @@ def main() -> int:
     frames = write_gif(args.out / f"{GIF_STATE}.gif", GIF_STATE, scale=args.scale,
                        seconds=GIF_SECONDS)
     print(f"{GIF_STATE}.gif ({frames} frames)")
+    write_anims(args.out, args.scale)
     return 0
 
 
