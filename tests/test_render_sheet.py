@@ -224,3 +224,158 @@ def test_render_media_writes_a_gif_per_transition(tmp_path, transition, monkeypa
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
         f"anim-{a}-to-{b}.gif" for a, b in sprites.TRANSITIONS)
     assert (tmp_path / "anim-sa-to-sb.gif").exists()
+
+
+@pytest.fixture
+def hop(monkeypatch):
+    """A play-once move: down-left, then up three and right two, on one grid."""
+    monkeypatch.setitem(sprites.MOVES, "hop", sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({}, ms=100, offset=(-1, 1)), sprites.Frame({}, ms=100, offset=(2, -3))],
+        loop_from=None))
+    return sprites.move_name("hop")
+
+
+def test_sheet_cell_grows_to_hold_every_offset(tmp_path, hop):
+    out = tmp_path / "sheet.png"
+    assert render_sheet(out, scale=2, states=[hop]) == [hop]
+    # 3 cells wider (-1..2) and 4 taller (-3..1) than the plain 28x26 cell
+    assert _png_size(out) == (4 + 2 * (31 * 2 + 4), 4 + (30 * 2 + 2 + 4 + 4) + 4)
+
+
+def test_sheet_draws_each_frame_at_its_offset(tmp_path, hop):
+    out = tmp_path / "sheet.png"
+    render_sheet(out, scale=1, states=[hop])
+    palette = sprites.resolve_palette("orange", "tabby")
+    grid = sprites.get_frames(hop)[0]
+    r, c = next((r, c) for r, row in enumerate(grid) for c, ch in enumerate(row) if palette.get(ch))
+    color = tuple(int(palette[grid[r][c]][i:i + 2], 16) for i in (1, 3, 5))
+    cell_w = 28 + 3
+    # canvas origin is (-1, -3) cells from the unmoved sprite
+    assert _pixel(out, 4 + 1 + (-1) + c, 4 + 3 + 1 + r) == color
+    assert _pixel(out, 4 + cell_w + 4 + 1 + 2 + c, 4 + 3 - 3 + r) == color
+
+
+def test_state_without_offsets_keeps_the_old_cell(tmp_path, plain):
+    out = tmp_path / "sheet.png"
+    render_sheet(out, scale=2, states=["plain"])
+    assert _png_size(out) == _geometry(2, ["plain"])
+
+
+def test_gif_canvas_holds_the_offsets(tmp_path, hop):
+    PIL = pytest.importorskip("PIL.Image")
+    from render_sheet import gif_name, write_gifs
+
+    assert gif_name(hop) == "move-hop.gif"
+    paths = write_gifs(tmp_path, [hop], scale=1, seconds=1.0)
+    with PIL.open(paths[0]) as gif:
+        assert gif.size == (31, 30) and gif.n_frames == 2
+
+
+def test_cli_accepts_variant_and_move_names(tmp_path, monkeypatch, hop):
+    import render_sheet as rs
+
+    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("plain", "on_top"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"})]))
+    monkeypatch.setitem(sprites.ANIMATIONS, "plain", sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"})]))
+    out = tmp_path / "sheet.png"
+    for name in ("plain@on_top", hop):
+        monkeypatch.setattr(sys, "argv", ["render_sheet", "--out", str(out), "--state", name])
+        assert rs.main() == 0
+    monkeypatch.setattr(sys, "argv", ["render_sheet", "--out", str(out), "--state", "plain@inside"])
+    with pytest.raises(SystemExit):
+        rs.main()
+
+
+def _rgb(color):
+    return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _scene_pixel(path, spot, scale, x, y):
+    """Pixel at card coordinate (x, y) of a one-frame --spot sheet."""
+    crop = 172 if spot == "inside_right" else 0
+    return _pixel(path, 4 + (x - crop) * scale // 4, 4 + (y + 116) * scale // 4)
+
+
+@pytest.fixture
+def still(monkeypatch):
+    """A one-frame sitting cat, so a --spot sheet is a single scene."""
+    monkeypatch.setitem(sprites.ANIMATIONS, "still", sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"L": "e", "R": "e", "A": "n"})]))
+
+
+@pytest.mark.parametrize("spot", ["inside", "inside_right", "on_top"])
+def test_spot_sheet_has_the_card_and_a_shadow_under_a_sitting_cat(tmp_path, still, spot):
+    from render_sheet import SCENE_BACKDROP, scene_size
+    from tokitty.theme import placement
+
+    out = tmp_path / "sheet.png"
+    assert render_sheet(out, scale=4, states=["still"], spot=spot) == ["still"]
+    w, h = scene_size(4)
+    assert (w, h) == (32 * 4, 61 * 4) and _png_size(out)[0] == 4 + w + 4
+    card, backdrop = _rgb("#1c1c22"), _rgb(SCENE_BACKDROP)
+    side = 296 if spot == "inside_right" else 4  # in the 8 px margin beside the sprite
+    # the card body is at its real place: a pixel inside it, one above its top edge
+    assert _scene_pixel(out, spot, 4, side, 60) == card
+    assert _scene_pixel(out, spot, 4, side, -8) == backdrop
+    # the shadow darkens the surface under the paws (columns 8..18 of the grid)
+    cols = (27 - 18, 27 - 8) if placement(spot).mirrored else (8, 18)
+    x = placement(spot).origin[0] + (cols[0] + 3) * 4
+    if spot == "on_top":
+        # straddles the top edge: darkened on the card, and on the backdrop
+        # at the rim cell beside the paws (the paws cover the rest)
+        rim = placement(spot).origin[0] + (cols[0] - 1) * 4
+        assert all(a < b for a, b in zip(_scene_pixel(out, spot, 4, rim, -2), backdrop))
+        assert all(a < b for a, b in zip(_scene_pixel(out, spot, 4, x, 2), card))
+    else:
+        assert all(a < b for a, b in zip(_scene_pixel(out, spot, 4, x, 118), card))
+    # clear of the shadow the card is untouched
+    assert _scene_pixel(out, spot, 4, side, 118) == card
+
+
+def test_spot_scene_mirrors_the_cat_for_inside_right():
+    from render_sheet import scene_frame
+
+    palette = sprites.resolve_palette("orange", "tabby")
+    grid = sprites.get_frames("content")[0]
+    row = 20
+    c = next(c for c in range(28) if palette.get(grid[row][c])
+             and palette.get(grid[row][27 - c]) != palette.get(grid[row][c]))
+    want = _rgb(palette[grid[row][c]])
+    y = 12 + row * 4 + 116
+    plain = scene_frame(grid, (0, 0), grid, "inside", palette, 4)
+    right = scene_frame(grid, (0, 0), grid, "inside_right", palette, 4)
+    assert plain[y][8 + c * 4] == bytes(want)
+    # card x 180 + 4 * (27 - c), minus the crop of 172
+    assert right[y][180 + (27 - c) * 4 - 172] == bytes(want)
+    # dx is negated for the mirrored cat
+    moved = scene_frame(grid, (2, 0), grid, "inside_right", palette, 4)
+    assert moved[y][180 + (27 - c) * 4 - 172 - 8] == bytes(want)
+
+
+def test_spot_gif_and_variant_resolution(tmp_path, monkeypatch):
+    PIL = pytest.importorskip("PIL.Image")
+    from render_sheet import resolve_states, write_gifs
+
+    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("content", "on_top"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"}), sprites.Frame({"A": "z"})]))
+    assert resolve_states(["content", "alert"], "on_top") == ["content@on_top", "alert"]
+    assert resolve_states(["content"], None) == ["content"]
+    paths = write_gifs(tmp_path, ["content@on_top"], scale=2, seconds=1.6, spot="on_top")
+    assert [p.name for p in paths] == ["content-at-on_top.gif"]
+    with PIL.open(paths[0]) as gif:
+        assert gif.size == (32 * 2, 61 * 2) and gif.n_frames == 2
+
+
+def test_render_media_writes_gifs_for_moves_and_variants(tmp_path, hop, monkeypatch):
+    pytest.importorskip("PIL.Image")
+    import render_media
+
+    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("content", "on_top"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"}), sprites.Frame({"A": "z"})]))
+    monkeypatch.setattr(render_media, "ALL_STATES", [])
+    monkeypatch.setattr(sprites, "TRANSITIONS", {})
+    monkeypatch.setattr(render_media, "TRANSITIONS", {})
+    render_media.write_anims(tmp_path, 1)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["anim-content-at-on_top.gif", "anim-move-hop.gif"]

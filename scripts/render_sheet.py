@@ -5,7 +5,7 @@ Exists because this repo's dev environment has no GUI: art review
 happens by eyeballing the emitted PNG, not a live tkinter window.
 
 Usage: python3 scripts/render_sheet.py --out sheet.png [--scale 8] [--colorway orange] [--pattern tabby]
-                                       [--state NAME ...] [--wrap 8]
+                                       [--state NAME ...] [--wrap 8] [--spot SPOT]
                                        [--gif DIR [--seed 0] [--gif-seconds 12]]
        python3 scripts/render_sheet.py --grid --out grid.png [--scale 6]
 Prints one legend line per track (top to bottom; "state" for a one-track state,
@@ -16,6 +16,12 @@ other tracks at frame 0. --gif DIR also writes one GIF per selected state
 (needs Pillow): the tracks played together for --gif-seconds with --seed.
 --state also takes a transition as "from>to"; its GIF plays the transition
 and then the target, and is named <from>-to-<to>.gif (no ">" in a filename).
+It also takes a spot variant as "state@spot" (<state>-at-<spot>.gif) and a
+move as "move:name" (move-<name>.gif). A state whose frames move the sprite
+(Frame.offset) gets a canvas that holds every offset, each frame drawn at its
+own. --spot {inside,inside_right,on_top} draws each frame in context instead:
+the card, the cat at that spot (a plain state plays as its variant for the spot
+when it has one) and its ground shadow, cropped to the cat's side of the card.
 """
 from __future__ import annotations
 
@@ -25,16 +31,21 @@ import struct
 import sys
 import zlib
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tokitty import shadow, theme
 from tokitty.sprites import (
-    ALL_STATES, COLORWAYS, PATTERNS, TRANSITION_SEP, TRANSITIONS, compose, frame_ms_max,
-    get_tracks, resolve_palette, transition_name,
+    ALL_STATES, COLORWAYS, MOVE_PREFIX, MOVES, PATTERNS, SCALE as CELL, SPOT_SEP, SPOT_VARIANTS,
+    TRANSITION_SEP, TRANSITIONS, compose, compose_offset, frame_ms_max, get_frames, get_tracks,
+    move_name, resolve_palette, spot_state, transition_name,
 )
 
 BG = "#1c1c22"  # ui.py card background
+SCENE_BACKDROP = "#3c3c48"  # outside the card in a --spot scene; BG would hide the card's edge
+SCENE_W = 128  # logical px of a --spot scene: the cat's side of the card
+SCENE_ABOVE = theme.SPRITE_H + 12  # logical px kept above the card, for the on_top cat
 GAP = 4  # background pixels between sprites, in device px
 DEFAULT_GIF_SECONDS = 12  # simulated playback length of a --gif
 DEFAULT_WRAP = 8  # frames per row before a state wraps onto a continuation row
@@ -85,18 +96,83 @@ def _fill(grid: List[List[bytes]], x0: int, y0: int, w: int, h: int, px: bytes) 
 
 
 def _rows(states: Sequence[str]):
-    """(label, track, grids) per sheet row: one per track of every state. A
-    track's grids show its frames with every other track at frame 0, so a
-    row reads as that strand alone; a one-track state is labelled with just
-    its name."""
+    """(label, track, grids, offsets, state) per sheet row: one per track of
+    every state. A track's grids show its frames with every other track at
+    frame 0, so a row reads as that strand alone; a one-track state is
+    labelled with just its name."""
     rows = []
     for state in states:
         tracks = get_tracks(state)
         for t, track in enumerate(tracks):
-            grids = [compose(state, [i if k == t else 0 for k in range(len(tracks))])
-                     for i in range(len(track.frames))]
-            rows.append((state if len(tracks) == 1 else f"{state}/{track.name}", track, grids))
+            at = [[i if k == t else 0 for k in range(len(tracks))] for i in range(len(track.frames))]
+            rows.append((state if len(tracks) == 1 else f"{state}/{track.name}", track,
+                         [compose(state, pos) for pos in at],
+                         [compose_offset(state, pos) for pos in at], state))
     return rows
+
+
+def _bounds(offsets: Sequence[Tuple[int, int]]) -> Tuple[int, int, int, int]:
+    """(min dx, min dy, max dx, max dy) over the offsets and (0, 0), in cells."""
+    xs, ys = [0] + [o[0] for o in offsets], [0] + [o[1] for o in offsets]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _paint(canvas: List[List[bytes]], cx: int, cy: int, scale: int, px: bytes, alpha: int = 255) -> None:
+    """One cell at cell position (cx, cy), clipped; alpha < 255 blends `px`
+    over what is already there."""
+    if not (0 <= cy * scale < len(canvas) and 0 <= cx * scale < len(canvas[0])):
+        return
+    for y in range(cy * scale, (cy + 1) * scale):
+        line = canvas[y]
+        for x in range(cx * scale, (cx + 1) * scale):
+            if alpha >= 255:
+                line[x] = px
+            else:
+                line[x] = bytes((u * (255 - alpha) + p * alpha) // 255 for u, p in zip(line[x], px))
+
+
+def scene_size(scale: int) -> Tuple[int, int]:
+    """Device px (width, height) of a --spot frame."""
+    return SCENE_W // CELL * scale, (SCENE_ABOVE + theme.CARD_HEIGHT) // CELL * scale
+
+
+def scene_frame(frame: List[str], offset: Tuple[int, int], rest: List[str], spot: str,
+                palette, scale: int) -> List[List[bytes]]:
+    """One frame in context: the backdrop, the card, the cat's ground shadow
+    and the cat at `spot` moved by `offset`, cropped to the cat's side of the
+    card (card coordinates scaled by scale / sprites.SCALE). `rest` is the
+    animation's frame 0."""
+    place = theme.placement(spot)
+    crop_x = (theme.CARD_WIDTH - SCENE_W if spot == "inside_right" else 0) // CELL
+    crop_y = -SCENE_ABOVE // CELL
+    width, height = scene_size(scale)
+    canvas = [[_hex_to_rgb(SCENE_BACKDROP)] * width for _ in range(height)]
+    card = _hex_to_rgb(theme.Theme().card.background)
+    for cy in range(theme.CARD_HEIGHT // CELL):
+        for cx in range(theme.CARD_WIDTH // CELL):
+            _paint(canvas, cx - crop_x, cy - crop_y, scale, card)
+    cast = shadow.shadow_for(rest, frame, offset, spot, place.mirrored)
+    if cast is not None:
+        for r, alphas in enumerate(cast.cells):
+            for c, alpha in enumerate(alphas):
+                if alpha:
+                    _paint(canvas, cast.x // CELL + c - crop_x, cast.y // CELL + r - crop_y,
+                           scale, bytes(shadow.COLOR), alpha)
+    dx, dy = offset
+    ox = place.origin[0] // CELL + (-dx if place.mirrored else dx) - crop_x
+    oy = place.origin[1] // CELL + dy - crop_y
+    for r, row in enumerate(frame):
+        for c, ch in enumerate(row):
+            color = palette.get(ch, "")
+            if color:
+                _paint(canvas, ox + (len(row) - 1 - c if place.mirrored else c), oy + r,
+                       scale, _hex_to_rgb(color))
+    return canvas
+
+
+def resolve_states(states: Sequence[str], spot: Optional[str]) -> List[str]:
+    """With a spot, each plain state as its variant for that spot if it has one."""
+    return list(states) if spot is None else [spot_state(s, spot) for s in states]
 
 
 def legend_line(label: str, track) -> str:
@@ -108,40 +184,50 @@ def legend_line(label: str, track) -> str:
 
 
 def legend(states: Optional[Sequence[str]] = None) -> List[str]:
-    return [legend_line(label, track) for label, track, _ in _rows(ALL_STATES if states is None else states)]
+    return [legend_line(label, track) for label, track, *_ in _rows(ALL_STATES if states is None else states)]
 
 
 def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
                  pattern: str = "tabby", states: Optional[Sequence[str]] = None,
-                 wrap: int = DEFAULT_WRAP) -> List[str]:
+                 wrap: int = DEFAULT_WRAP, spot: Optional[str] = None) -> List[str]:
     """One block per track (a one-track state is one block): its frames left
     to right, wrapping onto continuation rows after `wrap` frames, each with
     a duration strip under it. The strip's length is proportional to the hold
     (a range is drawn as a solid lo plus a lighter lo-to-hi tail); a marker
     under the loop_from frame shows where the loop restarts. Returns the row
-    labels, top to bottom."""
+    labels, top to bottom. Frames that move the sprite get a cell that holds
+    every offset; with a `spot`, each cell is the frame in context instead."""
     palette = resolve_palette(colorway, pattern)
     bg = _hex_to_rgb(BG)
-    rows = _rows(list(ALL_STATES if states is None else states))
+    rows = _rows(resolve_states(ALL_STATES if states is None else states, spot))
 
-    cell_w = max(len(g[0]) for _, _, grids in rows for g in grids) * scale
-    sprite_h = max(len(g) for _, _, grids in rows for g in grids) * scale
+    min_dx, min_dy, max_dx, max_dy = _bounds([o for _, _, _, offsets, _ in rows for o in offsets])
+    cell_w = (max(len(g[0]) for _, _, grids, _, _ in rows for g in grids) + max_dx - min_dx) * scale
+    sprite_h = (max(len(g) for _, _, grids, _, _ in rows for g in grids) + max_dy - min_dy) * scale
+    if spot is not None:
+        cell_w, sprite_h = scene_size(scale)
     cell_h = sprite_h + STRIP_GAP + STRIP_H + MARK_H
     # One scale for every strip, so bars compare across states.
-    full_ms = max(MIN_STRIP_FULL_MS, max(frame_ms_max(f) for _, t, _ in rows for f in t.frames))
-    per_row = max(1, min(wrap, max(len(grids) for _, _, grids in rows)))
-    lines = sum(-(-len(grids) // per_row) for _, _, grids in rows)
+    full_ms = max(MIN_STRIP_FULL_MS, max(frame_ms_max(f) for _, t, *_ in rows for f in t.frames))
+    per_row = max(1, min(wrap, max(len(row[2]) for row in rows)))
+    lines = sum(-(-len(grids) // per_row) for _, _, grids, *_ in rows)
     width = GAP + per_row * (cell_w + GAP)
     height = GAP + lines * (cell_h + GAP)
 
     grid = [[bg] * width for _ in range(height)]
     solid, light, mark = (_hex_to_rgb(c) for c in (STRIP_SOLID, STRIP_LIGHT, STRIP_MARK))
     line = 0
-    for _label, track, grids in rows:
+    for _label, track, grids, offsets, state in rows:
         for frame_i, frame in enumerate(grids):
             x0 = GAP + (frame_i % per_row) * (cell_w + GAP)
             y0 = GAP + (line + frame_i // per_row) * (cell_h + GAP)
-            _blit(grid, frame, palette, x0, y0, scale)
+            if spot is None:
+                dx, dy = offsets[frame_i]
+                _blit(grid, frame, palette, x0 + (dx - min_dx) * scale, y0 + (dy - min_dy) * scale, scale)
+            else:
+                scene = scene_frame(frame, offsets[frame_i], get_frames(state)[0], spot, palette, scale)
+                for y, scan in enumerate(scene):
+                    grid[y0 + y][x0:x0 + len(scan)] = scan
             ms = track.frames[frame_i].ms
             lo, hi = (ms, ms) if isinstance(ms, int) else ms
             sy = y0 + sprite_h + STRIP_GAP
@@ -154,33 +240,48 @@ def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
         line += -(-len(grids) // per_row)
 
     _write_png(out_path, [b"".join(row) for row in grid], width)
-    return [label for label, _, _ in rows]
+    return [row[0] for row in rows]
 
 
 def gif_name(state: str) -> str:
-    """The GIF file name for a state or a "from>to" transition."""
-    return state.replace(TRANSITION_SEP, "-to-") + ".gif"
+    """The GIF file name for a state, a "from>to" transition, a "state@spot"
+    variant or a "move:name" move (none of ">", "@", ":" in a filename)."""
+    if state.startswith(MOVE_PREFIX):
+        state = "move-" + state[len(MOVE_PREFIX):]
+    return state.replace(TRANSITION_SEP, "-to-").replace(SPOT_SEP, "-at-") + ".gif"
 
 
 def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
               pattern: str = "tabby", seed: int = 0, seconds: float = DEFAULT_GIF_SECONDS,
-              from_state: Optional[str] = None) -> int:
+              from_state: Optional[str] = None, spot: Optional[str] = None) -> int:
     """Write one animated GIF of a state: the tracks played together on their
     own clocks for `seconds` of simulated time with a seeded rng, one GIF
-    frame per change of the composed grid and the exact holds between them.
-    A from_state with a transition into `state` plays that first.
-    Returns the frame count. Pillow is only needed here, so it is imported
-    lazily."""
+    frame per change of the composed grid or offset and the exact holds
+    between them. A from_state with a transition into `state` plays that
+    first. The canvas holds every offset the play reaches; with a `spot` each
+    frame is drawn in context instead (see scene_frame). Returns the frame
+    count. Pillow is only needed here, so it is imported lazily."""
     from PIL import Image
 
-    from tokitty.animation import simulate
-    from tokitty.sprite_raster import raster_frame
+    from tokitty.animation import simulate_frames
 
     palette = resolve_palette(colorway, pattern)
     bg = _hex_to_rgb(BG)
+    if spot is not None:
+        state = spot_state(state, spot)
+        from_state = None if from_state is None else spot_state(from_state, spot)
+    played = simulate_frames(state, seconds, random.Random(seed), from_state)
+    rest = get_frames(state)[0]
+    min_dx, min_dy, max_dx, max_dy = _bounds([offset for _, _, offset in played])
+    width = (max(len(g[0]) for g, _, _ in played) + max_dx - min_dx) * scale
+    height = (max(len(g) for g, _, _ in played) + max_dy - min_dy) * scale
     images, durations = [], []
-    for grid, ms in simulate(state, seconds, random.Random(seed), from_state):
-        px = raster_frame(grid, palette, scale, bg)
+    for frame, ms, (dx, dy) in played:
+        if spot is None:
+            px = [[bg] * width for _ in range(height)]
+            _blit(px, frame, palette, (dx - min_dx) * scale, (dy - min_dy) * scale, scale)
+        else:
+            px = scene_frame(frame, (dx, dy), rest, spot, palette, scale)
         raw = b"".join(b"".join(row) for row in px)
         images.append(Image.frombytes("RGB", (len(px[0]), len(px)), raw))
         durations.append(ms)
@@ -242,8 +343,14 @@ def main() -> int:
     parser.add_argument("--colorway", default="orange")
     parser.add_argument("--pattern", default="tabby")
     parser.add_argument("--grid", action="store_true")
-    parser.add_argument("--state", action="append", choices=list(ALL_STATES) + [transition_name(*pair) for pair in TRANSITIONS],
-                        help="only this state or from>to transition (repeatable; default all)")
+    parser.add_argument("--state", action="append",
+                        choices=(list(ALL_STATES) + [transition_name(*pair) for pair in TRANSITIONS]
+                                 + [spot_state(*key) for key in SPOT_VARIANTS]
+                                 + [move_name(name) for name in MOVES]),
+                        help="only this state, from>to transition, state@spot variant or move:name "
+                             "move (repeatable; default all)")
+    parser.add_argument("--spot", choices=theme.SPOTS,
+                        help="draw each frame in context: the card, the cat at this spot, its shadow")
     parser.add_argument("--wrap", type=int, default=DEFAULT_WRAP,
                         help="max frames per row before wrapping")
     parser.add_argument("--gif", type=Path, metavar="DIR",
@@ -255,14 +362,15 @@ def main() -> int:
         for label in render_grid(args.out, scale=args.scale):
             print(label)
     else:
-        states = args.state or list(ALL_STATES)
+        states = resolve_states(args.state or list(ALL_STATES), args.spot)
         render_sheet(args.out, scale=args.scale, colorway=args.colorway,
-                     pattern=args.pattern, states=states, wrap=args.wrap)
+                     pattern=args.pattern, states=states, wrap=args.wrap, spot=args.spot)
         for line in legend(states):
             print(line)
         if args.gif is not None:
             write_gifs(args.gif, states, scale=args.scale, colorway=args.colorway,
-                       pattern=args.pattern, seed=args.seed, seconds=args.gif_seconds)
+                       pattern=args.pattern, seed=args.seed, seconds=args.gif_seconds,
+                       spot=args.spot)
     return 0
 
 

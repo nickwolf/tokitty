@@ -4,7 +4,7 @@ import random
 import pytest
 
 from tokitty import sprites
-from tokitty.animation import Player, simulate
+from tokitty.animation import Player, simulate, simulate_frames
 
 
 @pytest.fixture
@@ -155,3 +155,29 @@ def test_simulate_plays_the_transition_then_the_target(trans):
     # no transition for the pair: just the state
     plain = simulate("b", 1, random.Random(0), from_state="c")
     assert plain == simulate("b", 1, random.Random(0))
+
+
+@pytest.fixture
+def hop(monkeypatch):
+    """A play-once move whose frames share one grid and differ only by offset."""
+    monkeypatch.setitem(sprites.MOVES, "hop", sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({}, ms=100), sprites.Frame({}, ms=100, offset=(0, -3)),
+         sprites.Frame({}, ms=100, offset=(2, -3))], loop_from=None))
+    return sprites.move_name("hop")
+
+
+def test_tick_reports_an_offset_only_change(hop):
+    player = Player(hop, random.Random(0), 0)
+    assert player.offset() == (0, 0)
+    grid = player.grid()
+    assert player.tick(100) is True and player.grid() is grid and player.offset() == (0, -3)
+    assert player.tick(150) is False
+    assert player.tick(200) is True and player.offset() == (2, -3)
+
+
+def test_simulate_frames_splits_on_offset_and_simulate_merges(hop):
+    out = simulate_frames(hop, 1, random.Random(0))
+    assert [(ms, off) for _, ms, off in out] == [(100, (0, 0)), (100, (0, -3)), (800, (2, -3))]
+    assert out[0][0] is out[1][0] is out[2][0]
+    assert simulate(hop, 1, random.Random(0)) == [(out[0][0], 1000)]
