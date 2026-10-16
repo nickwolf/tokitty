@@ -165,6 +165,13 @@ def test_select_latest_reports_urls_and_size():
     assert got.installable_from_app is True
 
 
+def test_select_latest_keeps_a_string_body_and_ignores_anything_else():
+    assert select_latest([{**_release("v0.3.0"), "body": "## Notes"}], TARGET).body == "## Notes"
+    assert select_latest([_release("v0.3.0")], TARGET).body is None
+    for bad in (None, 5, ["x"], {"a": 1}):
+        assert select_latest([{**_release("v0.3.0"), "body": bad}], TARGET).body is None
+
+
 def test_missing_sums_is_not_installable():
     got = select_latest([_release("v0.3.0", sums=False)], TARGET)
     assert got.sums_url is None

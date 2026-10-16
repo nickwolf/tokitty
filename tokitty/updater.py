@@ -108,6 +108,7 @@ class Release:
     asset_url: Optional[str]
     asset_size: Optional[int]
     sums_url: Optional[str]
+    body: Optional[str] = None
 
     @property
     def installable_from_app(self) -> bool:
@@ -165,12 +166,14 @@ def select_latest(releases, target: Optional[str]) -> Optional[Release]:
     sums = assets.get(SUMS_NAME)
     size = wanted.get("size") if wanted else None
     html_url = entry.get("html_url")
+    body = entry.get("body")
     return Release(
         tag=tag,
         html_url=html_url if isinstance(html_url, str) else None,
         asset_url=_url(wanted),
         asset_size=size if isinstance(size, int) and not isinstance(size, bool) else None,
         sums_url=_url(sums),
+        body=body if isinstance(body, str) else None,
     )
 
 

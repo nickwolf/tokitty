@@ -50,6 +50,8 @@ class QtHost:
         self.on_check_updates = None
         self.update_available_label = None
         self.on_install_update = None
+        # The UpdateActions behind the Updates tab's status, notes and install.
+        self.update_actions = None
         self._windows: List[QWidget] = []
 
     def attach(self, controls) -> None:
