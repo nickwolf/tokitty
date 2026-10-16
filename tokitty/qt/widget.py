@@ -7,6 +7,7 @@ theme.py; this module only turns them into QPainter calls. Input, the
 """
 from __future__ import annotations
 
+import math
 import sys
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -19,11 +20,11 @@ from tokitty.customize import Customization
 from tokitty.menu import MenuItem
 from tokitty.qt import macos, position
 from tokitty.qt.menu import render_menu
-from tokitty.qt.pane import QtPane, fit_tag
+from tokitty.qt.pane import QtPane, fit_tag, monotonic_ms
 from tokitty.sprite_raster import raster_rgba
+from tokitty.sprites import known_grids
 from tokitty.usage_display import ROW_SLOTS
 
-FRAME_INTERVAL_MS = 800   # ui.FRAME_INTERVAL_MS
 MODEL_NAME_MAX = 14       # ui.render_usage's fit_tag limit
 CAT_CANVAS_SIZE = 112     # ui.CAT_CANVAS_SIZE
 CAT_CANVAS_DY = 4         # the sprite sits 4 px below its canvas origin (placement "inside")
@@ -71,7 +72,8 @@ def palette_signature(palette: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
 class TokittyQtWidget(QWidget):
     def __init__(self, theme: T.Theme, customizations: Sequence[Customization],
                  pane_count: int, *, parent=None, position_path=None,
-                 build_menu_model: Optional[Callable[[int], List[MenuItem]]] = None):
+                 build_menu_model: Optional[Callable[[int], List[MenuItem]]] = None,
+                 clock: Callable[[], int] = monotonic_ms):
         super().__init__(parent)
         if len(customizations) != pane_count:
             raise ValueError("need one customization per pane")
@@ -96,8 +98,11 @@ class TokittyQtWidget(QWidget):
         # Without this Qt hides a Tool window on macOS whenever the app is inactive.
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
 
+        # One monotonic ms clock for the panes' schedules and the timer.
+        self._clock = clock
         self.panes: List[QtPane] = [
-            QtPane(c, on_change=self.update) for c in customizations
+            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock())
+            for c in customizations
         ]
         self.homes: List[str] = [
             T.resolve_home(c.cat_home, i, pane_count) for i, c in enumerate(customizations)
@@ -106,13 +111,19 @@ class TokittyQtWidget(QWidget):
         self.setFixedSize(*self.window_layout.size)
 
         self._layouts: Dict[Tuple[str, str], T.CardLayout] = {}
+        # Keyed by the frame grid's identity (sprites keeps the grids alive
+        # for the process), so repeated frames share one image.
         self._images: Dict[tuple, QImage] = {}
         self._fonts: Optional[Tuple[QFont, QFont, QFont]] = None
         self._watched = None  # the QWindow whose screenChanged is connected
 
+        # Single-shot, armed for the earliest frame any pane has due. Precise
+        # so a 40 ms blink is not rounded to Qt's 5% coarse granularity.
         self.anim = QTimer(self)
+        self.anim.setSingleShot(True)
+        self.anim.setTimerType(Qt.TimerType.PreciseTimer)
         self.anim.timeout.connect(self._next_frames)
-        self.anim.start(FRAME_INTERVAL_MS)
+        self._arm()
 
         app = QGuiApplication.instance()
         if app is not None:
@@ -134,6 +145,7 @@ class TokittyQtWidget(QWidget):
         if dx or dy:
             self.move(self.x() - dx, self.y() - dy)
         self._update_mask()
+        self._arm()
         self.update()
 
     def set_theme(self, theme: T.Theme) -> None:
@@ -183,9 +195,55 @@ class TokittyQtWidget(QWidget):
 
     # ---- timers and screen changes --------------------------------------
 
+    def _pane_changed(self) -> None:
+        """A pane re-rendered: repaint, forget images no pane shows any more (state or coat),
+        and re-arm (a new state restarts its loop, so its due time moved)."""
+        self.update()
+        self._prune_images()
+        self._arm()
+
+    def _prune_images(self) -> None:
+        live_grids = {id(grid) for pane in self.panes for grid in known_grids(pane._current_state)}
+        live_palettes = {palette_signature(pane.palette) for pane in self.panes}
+        for key in [k for k in self._images if k[0] not in live_grids or k[1] not in live_palettes]:
+            del self._images[key]
+
+    def _arm(self) -> None:
+        """Wake at the earliest frame due on any pane; nothing due, no timer."""
+        dues = [d for d in (pane.next_due_ms() for pane in self.panes) if d is not None]
+        if not dues:
+            self.anim.stop()
+            return
+        self.anim.start(max(0, math.ceil(min(dues) - self._clock())))
+
     def _next_frames(self) -> None:
-        for pane in self.panes:
-            pane.draw_next_frame()
+        now = self._clock()
+        for index, pane in enumerate(self.panes):
+            if pane.tick(now):
+                # Only the cat changed: repaint its rect, not the window.
+                self.update(self._cat_dirty_rect(index, pane))
+        self._arm()
+
+    def _cat_dirty_rect(self, index: int, pane: QtPane):
+        """Window rect (device-independent) a cat frame change can touch: the
+        sprite, plus the tag boxes drawn over it, padded so nothing clips."""
+        rect = self._cat_rect(index, pane)
+        if self._tags_shown(pane):
+            driving, tool, _side = self.tag_boxes(index, self.homes[index])
+            pad = TAG_CHIP_PAD_X + 1
+            rect = rect.united(driving.adjusted(-pad, -pad, pad, pad)).united(
+                tool.adjusted(-pad, -pad, pad, pad))
+        return rect.adjusted(-1, -1, 1, 1).toAlignedRect()
+
+    def _cat_rect(self, index: int, pane: QtPane) -> QRectF:
+        grid, _ = pane.current_frame()
+        cell = T.cell_size(self.devicePixelRatioF())
+        dpr = self.devicePixelRatioF()
+        x, y = self.cat_origin(index)
+        return QRectF(x, y, len(grid[0]) * cell / dpr, len(grid) * cell / dpr)
+
+    def _tags_shown(self, pane: QtPane) -> bool:
+        return "cat_tags" in self.theme.text.show and bool(pane._driving_tag or pane._tool_label)
 
     def _drop_images(self) -> None:
         self._images.clear()
@@ -220,10 +278,9 @@ class TokittyQtWidget(QWidget):
 
     # ---- cat images -----------------------------------------------------
 
-    def _cat_image(self, state: str, frame_index: int, frame, palette, dpr: float,
-                   mirrored: bool) -> QImage:
+    def _cat_image(self, frame, palette, dpr: float, mirrored: bool) -> QImage:
         cell = T.cell_size(dpr)
-        key = (state, frame_index, palette_signature(palette), cell, mirrored)
+        key = (id(frame), palette_signature(palette), cell, mirrored)
         image = self._images.get(key)
         if image is None:
             w, h, data = raster_rgba(frame, palette, cell)
@@ -255,17 +312,21 @@ class TokittyQtWidget(QWidget):
             )
         return self._fonts
 
-    def paintEvent(self, _event) -> None:
+    def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         dpr = self.devicePixelRatioF()
+        dirty = QRectF(event.rect())
         for i, pane in enumerate(self.panes):
-            self._paint_pane(p, i, pane, dpr)
+            self._paint_pane(p, i, pane, dpr, dirty)
         p.end()
 
-    def _paint_pane(self, p: QPainter, index: int, pane: QtPane, dpr: float) -> None:
+    def _paint_pane(self, p: QPainter, index: int, pane: QtPane, dpr: float,
+                    dirty: QRectF) -> None:
+        """Paint what intersects `dirty`, in the same order as a full repaint
+        (card, then cat, then tags), so a cat-only update stays correct."""
         style = T.resolve_pane_style(
             self.theme, pane.customization, pane._accent, index, len(self.panes))
         # The pane's own palette wins: set_appearance may have been handed one.
@@ -274,6 +335,19 @@ class TokittyQtWidget(QWidget):
         ox, oy = self.window_layout.pane_origins[index]
         layout = self._layout_for(pane._view_mode, home)
 
+        # A little slack for the halo offsets and the card border.
+        card = QRectF(ox, oy, T.CARD_WIDTH, T.CARD_HEIGHT).adjusted(-2, -2, 2, 2)
+        if card.intersects(dirty):
+            self._paint_card_contents(p, pane, style, layout, ox, oy)
+        if self._cat_rect(index, pane).adjusted(-1, -1, 1, 1).intersects(dirty):
+            self._paint_cat(p, index, pane, palette, home, dpr)
+        if self._tags_shown(pane):
+            driving, tool, _side = self.tag_boxes(index, home)
+            pad = TAG_CHIP_PAD_X + 1
+            if driving.united(tool).adjusted(-pad, -pad, pad, pad).intersects(dirty):
+                self._paint_tags(p, index, pane, style, home)
+
+    def _paint_card_contents(self, p: QPainter, pane: QtPane, style, layout, ox, oy) -> None:
         p.save()
         p.translate(ox, oy)
         self._paint_card(p, style)
@@ -303,9 +377,6 @@ class TokittyQtWidget(QWidget):
             self._text(p, dim, _text_rect(layout["account_label"], right=True),
                        _RIGHT_VCENTER, pane._label)
         p.restore()
-
-        self._paint_cat(p, index, pane, palette, home, dpr)
-        self._paint_tags(p, index, pane, style, home)
 
     def _paint_card(self, p: QPainter, style: T.PaneStyle) -> None:
         card = self.theme.card
@@ -406,9 +477,8 @@ class TokittyQtWidget(QWidget):
             self._bar(p, layout[f"model_bar_{i}"], pct, fill)
 
     def _paint_cat(self, p, index, pane, palette, home, dpr) -> None:
-        frame, frame_index = pane.current_frame()
-        image = self._cat_image(pane._current_state, frame_index, frame, palette, dpr,
-                                T.placement(home).mirrored)
+        frame, _index = pane.current_frame()
+        image = self._cat_image(frame, palette, dpr, T.placement(home).mirrored)
         x, y = self.cat_origin(index)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         p.drawImage(QPointF(x, y), image)

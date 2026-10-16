@@ -1,19 +1,33 @@
+import hashlib
+import json
+import random
+
 import pytest
 
 from tokitty.sprites import (
     ALERT_TEMPLATE,
     ALL_STATES,
+    ANIMATIONS,
     BASE_PALETTE,
     COLORWAYS,
     FLOPPED_TEMPLATE,
     LEGACY_COAT_MAP,
+    MIN_FRAME_MS,
     PALETTE,
     PATTERNS,
     REGION_CHARS,
     SCALE,
     SITTING_TEMPLATE,
+    Animation,
+    Frame,
+    Track,
+    check_animation,
+    compose,
+    frame_ms,
+    get_animation,
     get_frames,
     get_palette,
+    single_track,
     resolve_palette,
 )
 
@@ -201,11 +215,11 @@ def test_inner_ear_pink_preserved_and_symmetric():
 def test_flopped_tail_sweep_paints_tail_region():
     """The wag sweep must paint the tail char so it takes the pattern's tail
     tone; painting it "o" leaves a two-tone tail under van/colorpoint."""
-    from tokitty.sprites import FLOPPED_FRAME_SPECS
+    from tokitty.sprites import ANIMATIONS
 
-    for state, specs in FLOPPED_FRAME_SPECS.items():
-        for spec in specs:
-            painted = {v for k, v in spec.items() if k in "12345" and v != "."}
+    for state in ("flopped", "stirring"):
+        for frame in ANIMATIONS[state].tracks[0].frames:
+            painted = {v for k, v in frame.subs.items() if k in "12345" and v != "."}
             assert painted <= {"y"}, (state, painted)
 
 
@@ -221,3 +235,167 @@ def test_silhouette_patterns_present_and_covered():
     # van: white body, colored ears + tail
     van = PATTERNS["van"]
     assert van["o"] == "white" and van["x"] == "coat" and van["y"] == "coat"
+
+
+# ---- animation timing and tracks (#125) -------------------------------------
+
+def _frames(*chars, ms=800):
+    ms = ms if isinstance(ms, (list, tuple)) and len(ms) == len(chars) else [ms] * len(chars)
+    return [Frame({"A": c}, ms=m) for c, m in zip(chars, ms)]
+
+
+def test_all_states_follows_the_animation_table():
+    assert ALL_STATES == tuple(ANIMATIONS)
+    assert len(ALL_STATES) == 14 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
+
+
+def test_the_table_passes_the_track_rules():
+    for anim in ANIMATIONS.values():
+        check_animation(anim)
+
+
+def test_every_hold_is_valid():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            for frame in track.frames:
+                ends = (frame.ms,) if isinstance(frame.ms, int) else tuple(frame.ms)
+                if len(ends) == 2:
+                    assert ends[0] <= ends[1], state
+                for ms in ends:
+                    assert ms >= MIN_FRAME_MS and ms % 10 == 0, (state, ms)
+
+
+def test_loop_from_is_none_or_a_valid_index():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            assert track.loop_from is None or 0 <= track.loop_from < len(track.frames), state
+
+
+def test_frame_templates_match_the_animation_template_dimensions():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            for frame in track.frames:
+                tmpl = frame.template if frame.template is not None else anim.template
+                assert len(tmpl) == len(anim.template), state
+                assert all(len(row) == len(anim.template[0]) for row in tmpl), state
+
+
+def test_every_current_state_is_one_main_track_of_800ms_frames_looping():
+    for state, anim in ANIMATIONS.items():
+        assert [t.name for t in anim.tracks] == ["main"], state
+        assert anim.tracks[0].loop_from == 0
+        assert all(f.ms == 800 for f in anim.tracks[0].frames), state
+
+
+def test_check_animation_rejects_rule_breaks():
+    tmpl = ["A.", ".."]
+    other = ["AA", ".."]
+    bad = {
+        "no tracks": Animation(tmpl, ()),
+        "dup names": Animation(tmpl, (Track("a", tuple(_frames("x"))), Track("a", tuple(_frames("y"))))),
+        "short hold": single_track(tmpl, _frames("x", "y", ms=30)),
+        "odd hold": single_track(tmpl, _frames("x", "y", ms=125)),
+        "lo > hi": single_track(tmpl, _frames("x", "y", ms=[(200, 100), 100])),
+        "loop_from out of range": single_track(tmpl, _frames("x", "y"), loop_from=2),
+        "shared keys": Animation(tmpl, (Track("a", tuple(_frames("x"))), Track("b", tuple(_frames("y"))))),
+        "two template tracks": Animation(tmpl, (
+            Track("a", (Frame({"A": "x"}, template=other),)),
+            Track("b", (Frame({"B": "x"}, template=other),)))),
+        "template size": single_track(tmpl, [Frame({"A": "x"}, template=["A"])]),
+    }
+    for name, anim in bad.items():
+        with pytest.raises(ValueError):
+            check_animation(anim)
+        assert name
+    good = Animation(tmpl, (Track("a", tuple(_frames("x"))),
+                            Track("b", (Frame({"B": "y"}), Frame({"B": "z"}), ))))
+    check_animation(good)
+
+
+@pytest.fixture
+def two_tracks(monkeypatch):
+    """Track a swaps A, track b swaps B; frame 2 of a equals frame 1 of a's
+    twin content-wise only through dedup of identical compositions."""
+    tmpl = ["AB", ".."]
+    anim = Animation(tmpl, (
+        Track("a", (Frame({"A": "1"}, ms=100), Frame({"A": "2"}, ms=100), Frame({"A": "3"}, ms=100))),
+        Track("b", (Frame({"B": "x"}, ms=350), Frame({"B": "y"}, ms=350))),
+    ))
+    monkeypatch.setitem(ANIMATIONS, "two", anim)
+    return anim
+
+
+def test_get_frames_single_track_is_the_frame_list():
+    anim = ANIMATIONS["flopped"]
+    assert len(get_frames("flopped")) == len(anim.tracks[0].frames) == 4
+
+
+def test_get_frames_enumeration_order(two_tracks):
+    assert [tuple(g) for g in get_frames("two")] == [
+        ("1x", ".."),                       # all tracks at 0
+        ("2x", ".."), ("3x", ".."),        # track a frames 1.., b at 0
+        ("1y", ".."),                       # track b frame 1, a at 0
+    ]
+    from tokitty.sprites import enumeration_positions
+    assert enumeration_positions("two") == [(0, 0), (1, 0), (2, 0), (0, 1)]
+
+
+def test_composition_merges_every_tracks_current_frame(two_tracks):
+    assert compose("two", (2, 1)) == ["3y", ".."]
+
+
+def test_composed_grids_are_interned_by_content(monkeypatch):
+    tmpl = ["AB", ".."]
+    anim = Animation(tmpl, (
+        Track("a", (Frame({"A": "1"}), Frame({"A": "1"}))),  # a second frame identical to the first
+        Track("b", (Frame({"B": "x"}), Frame({"B": "y"}))),
+    ))
+    monkeypatch.setitem(ANIMATIONS, "dup", anim)
+    frames = get_frames("dup")
+    assert len(frames) == 3  # nothing is dropped
+    assert frames[1] is frames[0]  # but equal content is one object
+    assert compose("dup", (1, 0)) is frames[0]
+    assert get_frames("dup") is get_frames("dup")
+
+
+def test_template_override_comes_from_the_one_track_that_has_it(monkeypatch):
+    base, hop = ["A.", ".."], [".A", ".."]
+    anim = Animation(base, (
+        Track("body", (Frame({}), Frame({}, template=hop))),
+        Track("eyes", (Frame({"A": "o"}), Frame({"A": "c"}))),
+    ))
+    # keys overlap between tracks only through the template char; subs are disjoint
+    monkeypatch.setitem(ANIMATIONS, "ovr", anim)
+    assert compose("ovr", (0, 0)) == ["o.", ".."]
+    assert compose("ovr", (1, 1)) == [".c", ".."]
+
+
+def test_get_animation_unknown_state_raises():
+    with pytest.raises(KeyError):
+        get_animation("nonexistent-mood")
+    with pytest.raises(KeyError):
+        get_frames("nonexistent-mood")
+
+
+def test_get_frames_returns_the_same_grids_every_call():
+    for state in ALL_STATES:
+        a, b = get_frames(state), get_frames(state)
+        assert a is b and all(x is y for x, y in zip(a, b))
+
+
+def test_frame_ms_resolution():
+    assert frame_ms(Frame({}, ms=120)) == 120
+    assert frame_ms(Frame({}, ms=(40, 100))) == 70  # no rng: the midpoint
+    assert frame_ms(Frame({}, ms=(40, 90))) == 70   # 65 rounds to a multiple of 10
+    rng = random.Random(7)
+    drawn = {frame_ms(Frame({}, ms=(40, 200)), rng) for _ in range(200)}
+    assert drawn <= set(range(40, 201, 10)) and len(drawn) > 3
+    assert frame_ms(Frame({}, ms=(50, 50)), rng) == 50
+
+
+def test_current_art_is_unchanged_by_the_timing_refactor():
+    # Pins the pre-#125 art byte for byte. The art passes change pixels on
+    # purpose: update this hash with them.
+    frames = {s: get_frames(s) for s in ALL_STATES}
+    digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
+    assert digest == "eabd139e9fee9e3e1abcc32ce10e1a6367e5dc988b63354f2efa200b915779db"

@@ -3,19 +3,31 @@
 The public surface (render, render_usage, set_appearance, draw_next_frame)
 takes a PaneUpdate's kwargs unchanged. There is no painting here and no PySide6
 import: every state change calls on_change and the widget repaints.
+
+Each pane also owns an animation Player: which frame each track shows and
+when it is next due, on a monotonic millisecond clock the caller can inject.
+The widget asks next_due_ms() when to wake and calls tick(); a frame advance
+is not a state change, so tick() never calls on_change (the widget repaints
+just the cat).
 """
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import replace
 from typing import Callable, Dict, Optional
 
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
-from tokitty.sprites import get_frames
+from tokitty.animation import Player
 from tokitty.theme import CardStyle
 
 # ui.fit_tag's limit: the longest label the table produces is 10 characters.
 TOOL_LABEL_MAX = 12
+
+
+def monotonic_ms() -> int:
+    return int(time.monotonic() * 1000)
 
 
 def fit_tag(text: str, limit: int = TOOL_LABEL_MAX) -> str:
@@ -27,7 +39,9 @@ def fit_tag(text: str, limit: int = TOOL_LABEL_MAX) -> str:
 
 class QtPane:
     def __init__(self, customization: Optional[Customization] = None, label: str = "",
-                 on_change: Optional[Callable[[], None]] = None):
+                 on_change: Optional[Callable[[], None]] = None,
+                 clock: Callable[[], int] = monotonic_ms,
+                 rng: Optional[random.Random] = None):
         self.customization = customization if customization is not None else Customization()
         # The widget sets this; it repaints on any state change.
         self.on_change = on_change
@@ -43,8 +57,8 @@ class QtPane:
         self._driving_tag = ""
         self._tool_label = ""
         self._view_mode = "limits"
-        self._frame_index = 0   # the next frame draw_next_frame will show
-        self._shown_index = 0   # the frame on screen now
+        self._clock = clock
+        self._player = Player("sleeping", rng if rng is not None else random.Random(), clock())
         self.session_pct = 0.0
         self.weekly_pct = 0.0
         self.session_reset_text = ""
@@ -115,7 +129,7 @@ class QtPane:
         accent: bool = False,
         dimmed: bool = False,
     ) -> None:
-        self._current_state = state
+        self._set_state(state)
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
@@ -140,7 +154,7 @@ class QtPane:
         accent: bool = False,
         projection_text: Optional[str] = None,
     ) -> None:
-        self._current_state = state
+        self._set_state(state)
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
@@ -158,13 +172,33 @@ class QtPane:
         if self.on_accent_changed is not None:
             self.on_accent_changed()
 
+    # ---- animation schedule ----------------------------------------------
+
+    def _set_state(self, state: str) -> None:
+        """Polls re-render the same state every second or so; only a real
+        change of sprite state may restart the loop."""
+        self._current_state = state
+        if state != self._player.state:
+            self._player.restart(state, self._clock())
+
+    def next_due_ms(self) -> Optional[int]:
+        """Clock ms when tick() will next change a track's frame, or None."""
+        return self._player.next_due()
+
+    def tick(self, now_ms: int) -> bool:
+        """Advance every track whose time has passed. True iff the composed
+        grid changed. Never calls on_change: the widget repaints only the cat."""
+        return self._player.tick(now_ms)
+
     def draw_next_frame(self) -> None:
-        frames = get_frames(self._current_state)
-        self._shown_index = self._frame_index % len(frames)
-        self._frame_index += 1
+        """Step to the next get_frames() entry (wrapping), ignoring the
+        schedule. Deterministic stepping for the pixel checks; the due times
+        restart from now so the live timer stays coherent."""
+        self._player.step(self._clock())
         self._changed()
 
     def current_frame(self):
-        """The frame grid on screen now, for the state of the last render."""
-        frames = get_frames(self._current_state)
-        return frames[self._shown_index % len(frames)], self._shown_index % len(frames)
+        """(grid, index) on screen now. The index is the grid's place in
+        sprites.get_frames(state), or None when the tracks are in a
+        combination that list does not hold."""
+        return self._player.grid(), self._player.enum_index()

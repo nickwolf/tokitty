@@ -15,10 +15,24 @@ shapes (ellipses/triangles stamped onto a grid) to avoid hand-counting
 errors, then hand-tuned and baked in here as plain static data --
 exactly the format a future session can edit directly, per the design
 spec's roadmap for further art passes.
+
+Animation model (the standard for every state): an Animation is a template
+plus independent TRACKS ("main", "tail", "eyes", "ears", ...). A track is a
+list of Frames, each with a substitution dict and a hold in ms (a (lo, hi)
+range is a random hold drawn each time the frame is shown), and its own
+loop_from (None plays once and holds the last frame). Each track runs on its
+own clock; the grid on screen is the template with the substitutions of
+every track's current frame merged. Tracks must use disjoint substitution
+keys, so composition order never matters, and at most one track may swap the
+template (Frame.template). check_animation enforces the rules, and the tests
+run it over the whole table. A state with one track named "main" behaves as
+the old linear frame list did.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+import random
+from dataclasses import dataclass
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
 
@@ -184,7 +198,7 @@ ALERT_TEMPLATE: List[str] = [
 ]
 
 # Lying down, for the capped/wake sequence. L is the visible (near)
-# eye; 1-5 mark the three tail-sweep poses (see FLOPPED_FRAME_SPECS).
+# eye; 1-5 mark the three tail-sweep poses (see the flopped animation).
 FLOPPED_TEMPLATE: List[str] = [
     "............................",
     "............................",
@@ -362,19 +376,112 @@ DONE_HOP_AIRBORNE_TEMPLATE: List[str] = _overlay(
         (24, 9): "B", (24, 10): "B", (24, 15): "B", (24, 16): "B",
     })
 
-SITTING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "sleeping": [{"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}],
-    "content": [{"L": "e", "R": "e", "A": "n"}, {"L": "k", "R": "k", "A": "n"}],
-    "interested": [{"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "k", "A": "n"}],
-}
+# Timing. Every frame carries its own hold so art passes can mix fast frames
+# (blinks) with slow ones (breathing, long random holds between blinks).
+DEFAULT_FRAME_MS = 800  # what every frame held when one global timer drove all states
+MIN_FRAME_MS = 40       # shortest hold a frame may ask for
+FRAME_MS_STEP = 10      # holds are whole multiples of this
 
-ALERT_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "alert": [{"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "e", "A": "!"}],
-    "panicked": [{"L": "e", "R": "e", "A": "!"}, {"L": "e", "R": "e", "A": "n"}],
-    "confused": [{"L": "e", "R": "k", "A": "?"}, {"L": "k", "R": "e", "A": "?"}],
-    "waking": [{"L": "e", "R": "k", "A": "n"}, {"L": "k", "R": "e", "A": "n"}],
-    "activate": [{"L": "e", "R": "e", "A": "h"}, {"L": "e", "R": "e", "A": "n"}],
-}
+Duration = Union[int, Tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class Frame:
+    subs: Mapping[str, str]
+    # (lo, hi) is a random hold in [lo, hi], chosen each time the frame is shown.
+    ms: Duration = DEFAULT_FRAME_MS
+    # Overrides the animation's template for this frame only.
+    template: Optional[List[str]] = None
+
+
+@dataclass(frozen=True)
+class Track:
+    """One independent strand of an animation ("main", "tail", "eyes", ...),
+    with its own clock, holds and loop."""
+    name: str
+    frames: Tuple[Frame, ...]
+    # After the last frame, continue at this index. None plays once and holds
+    # the last frame.
+    loop_from: Optional[int] = 0
+
+
+@dataclass(frozen=True)
+class Animation:
+    template: List[str]
+    tracks: Tuple[Track, ...]
+
+
+def _round_step(ms: float) -> int:
+    return int((ms + FRAME_MS_STEP / 2) // FRAME_MS_STEP) * FRAME_MS_STEP
+
+
+def frame_ms(frame: Frame, rng: Optional[random.Random] = None) -> int:
+    """How long to hold a frame. A fixed hold is itself; a (lo, hi) range is
+    drawn from rng (rounded to the step, so it stays inside the range), or
+    its midpoint when there is no rng."""
+    ms = frame.ms
+    if isinstance(ms, int):
+        return ms
+    lo, hi = ms
+    if rng is None:
+        return _round_step((lo + hi) / 2)
+    return min(max(_round_step(rng.randint(lo, hi)), lo), hi)
+
+
+def frame_ms_max(frame: Frame) -> int:
+    """The longest a frame can be held."""
+    return frame.ms if isinstance(frame.ms, int) else frame.ms[1]
+
+
+def single_track(template: List[str], frames: Sequence[Frame], loop_from: Optional[int] = 0,
+                 name: str = "main") -> Animation:
+    """An animation with one track, the shape every state had before tracks."""
+    return Animation(template, (Track(name, tuple(frames), loop_from),))
+
+
+def _anim(template: List[str], specs: List[Dict[str, str]]) -> Animation:
+    return single_track(template, [Frame(subs) for subs in specs])
+
+
+def check_animation(anim: Animation) -> None:
+    """Raise ValueError if an animation breaks the track rules: unique track
+    names, holds that are multiples of the step and at least MIN_FRAME_MS
+    (lo <= hi for ranges), a valid loop_from per track, template overrides
+    with the animation template's dimensions on at most one track, and
+    substitution keys that no two tracks share (so the order tracks are
+    composed in can never matter)."""
+    if not anim.tracks:
+        raise ValueError("animation has no tracks")
+    names = [t.name for t in anim.tracks]
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate track names {names}")
+    dims = (len(anim.template), len(anim.template[0]))
+    owners: Dict[str, str] = {}
+    template_tracks = []
+    for track in anim.tracks:
+        if not track.frames:
+            raise ValueError(f"track {track.name!r} has no frames")
+        if track.loop_from is not None and not 0 <= track.loop_from < len(track.frames):
+            raise ValueError(f"track {track.name!r}: loop_from {track.loop_from} out of range")
+        for frame in track.frames:
+            ends = (frame.ms,) if isinstance(frame.ms, int) else tuple(frame.ms)
+            if len(ends) == 2 and ends[0] > ends[1]:
+                raise ValueError(f"track {track.name!r}: range {frame.ms} has lo > hi")
+            for ms in ends:
+                if ms < MIN_FRAME_MS or ms % FRAME_MS_STEP:
+                    raise ValueError(f"track {track.name!r}: bad hold {ms}")
+            for key in frame.subs:
+                if owners.setdefault(key, track.name) != track.name:
+                    raise ValueError(
+                        f"key {key!r} used by tracks {owners[key]!r} and {track.name!r}")
+            if frame.template is not None:
+                if (len(frame.template), len(frame.template[0])) != dims:
+                    raise ValueError(f"track {track.name!r}: template size differs")
+                if track.name not in template_tracks:
+                    template_tracks.append(track.name)
+    if len(template_tracks) > 1:
+        raise ValueError(f"tracks {template_tracks} all override the template")
+
 
 # The flopped tail wags through three 2px-thick positions. Template
 # markers: "1"/"2"/"3" = cells unique to sweep pose 1/2/3; "4" = cells
@@ -385,97 +492,143 @@ _TAIL_POSE_1 = {"1": "y", "4": "y", "2": ".", "5": ".", "3": "."}
 _TAIL_POSE_2 = {"2": "y", "4": "y", "5": "y", "1": ".", "3": "."}
 _TAIL_POSE_3 = {"3": "y", "5": "y", "1": ".", "2": ".", "4": "."}
 
-FLOPPED_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
+ANIMATIONS: Dict[str, Animation] = {
+    "sleeping": _anim(SITTING_TEMPLATE, [
+        {"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}]),
+    "content": _anim(SITTING_TEMPLATE, [
+        {"L": "e", "R": "e", "A": "n"}, {"L": "k", "R": "k", "A": "n"}]),
+    "interested": _anim(SITTING_TEMPLATE, [
+        {"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "k", "A": "n"}]),
+    "alert": _anim(ALERT_TEMPLATE, [
+        {"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "e", "A": "!"}]),
+    "panicked": _anim(ALERT_TEMPLATE, [
+        {"L": "e", "R": "e", "A": "!"}, {"L": "e", "R": "e", "A": "n"}]),
+    "confused": _anim(ALERT_TEMPLATE, [
+        {"L": "e", "R": "k", "A": "?"}, {"L": "k", "R": "e", "A": "?"}]),
+    "waking": _anim(ALERT_TEMPLATE, [
+        {"L": "e", "R": "k", "A": "n"}, {"L": "k", "R": "e", "A": "n"}]),
+    "activate": _anim(ALERT_TEMPLATE, [
+        {"L": "e", "R": "e", "A": "h"}, {"L": "e", "R": "e", "A": "n"}]),
     # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
     # (left, up, right, up, left, ...) instead of snapping right-to-left.
-    "flopped": [
+    "flopped": _anim(FLOPPED_TEMPLATE, [
         {"L": "k", **_TAIL_POSE_1},
         {"L": "k", **_TAIL_POSE_2},
         {"L": "k", **_TAIL_POSE_3},
         {"L": "k", **_TAIL_POSE_2},
-    ],
-    "stirring": [
+    ]),
+    "stirring": _anim(FLOPPED_TEMPLATE, [
         {"L": "k", **_TAIL_POSE_2},
         {"L": "e", **_TAIL_POSE_3},
-    ],
-}
-
-WORKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "working": [
+    ]),
+    "working": _anim(WORKING_TEMPLATE, [
         {"L": "e", "R": "e", "A": "n", "S": "b", "P": "g"},
         # typing pulse: lidded eyes, looking down at the bright screen
         {"L": "k", "R": "k", "A": "n", "S": "B", "P": "w"},
-    ],
-}
-
-THINKING_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "thinking": [
+    ]),
+    "thinking": _anim(THINKING_TEMPLATE, [
         {"L": "e", "R": "e", "A": "n", "t": "?", "T": "."},
         # bubble grows, one eye squints, nose flashes the accent
         {"L": "e", "R": "k", "A": "?", "t": "?", "T": "?"},
-    ],
-}
-
-PERMISSION_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "permission": [
+    ]),
+    "permission": _anim(PERMISSION_TEMPLATE, [
         {"L": "e", "R": "e", "A": "!", "8": "d", "6": "f", "7": "."},
         {"L": "e", "R": "e", "A": "!", "8": "d", "6": ".", "7": "f"},
-    ],
+    ]),
+    # done_hop is the only state whose frames use different base grids
+    # (whole-cat translate): each frame carries its own template.
+    "done_hop": single_track(DONE_HOP_GROUNDED_TEMPLATE, [
+        Frame({"L": "e", "R": "e", "A": "h"}, template=DONE_HOP_GROUNDED_TEMPLATE),
+        Frame({"L": "e", "R": "e", "A": "h"}, template=DONE_HOP_AIRBORNE_TEMPLATE),  # airborne
+    ]),
 }
 
-# done_hop pairs a template WITH each frame's substitutions -- the only
-# state whose two frames use different base grids (whole-cat translate).
-DONE_HOP_FRAME_SPECS: Dict[str, List[Dict[str, str]]] = {
-    "done_hop": [
-        {"L": "e", "R": "e", "A": "h"},  # grounded
-        {"L": "e", "R": "e", "A": "h"},  # airborne (shifted template)
-    ],
-}
+ALL_STATES = tuple(ANIMATIONS)
 
-DONE_HOP_FRAME_TEMPLATES: List[List[str]] = [
-    DONE_HOP_GROUNDED_TEMPLATE,
-    DONE_HOP_AIRBORNE_TEMPLATE,
-]
-
-ALL_STATES = (
-    tuple(SITTING_FRAME_SPECS.keys())
-    + tuple(ALERT_FRAME_SPECS.keys())
-    + tuple(FLOPPED_FRAME_SPECS.keys())
-    + tuple(WORKING_FRAME_SPECS.keys())
-    + tuple(THINKING_FRAME_SPECS.keys())
-    + tuple(PERMISSION_FRAME_SPECS.keys())
-    + tuple(DONE_HOP_FRAME_SPECS.keys())
-)
+for _anim_state in ANIMATIONS.values():
+    check_animation(_anim_state)
+del _anim_state
 
 
-def _apply(template: List[str], subs: Dict[str, str]) -> List[str]:
+def _apply(template: List[str], subs: Mapping[str, str]) -> List[str]:
     return ["".join(subs.get(ch, ch) for ch in row) for row in template]
+
+
+# Composed grids are cached per (state, track positions) and interned by
+# content, so equal grids are one list object for the process and callers
+# (the widget's image cache) can key on its identity. The cache entries
+# remember their Animation so a replaced table entry (tests) rebuilds.
+_GRIDS: Dict[tuple, List[str]] = {}
+_COMPOSED: Dict[Tuple[str, Tuple[int, ...]], Tuple[Animation, List[str]]] = {}
+_ENUMERATIONS: Dict[str, Tuple[Animation, List[Tuple[int, ...]], List[List[str]]]] = {}
+
+
+def get_animation(state: str) -> Animation:
+    """The track table for a mood/sub-state name."""
+    try:
+        return ANIMATIONS[state]
+    except KeyError:
+        raise KeyError(f"Unknown sprite state: {state!r}") from None
+
+
+def get_tracks(state: str) -> Tuple[Track, ...]:
+    """The tracks (names, frames with holds, loop_from) of a state."""
+    return get_animation(state).tracks
+
+
+def compose(state: str, positions: Sequence[int]) -> List[str]:
+    """The grid with every track at the given frame position: the template
+    (or the one frame template override) with all tracks' substitutions."""
+    anim = get_animation(state)
+    key = (state, tuple(positions))
+    cached = _COMPOSED.get(key)
+    if cached is not None and cached[0] is anim:
+        return cached[1]
+    template, subs = anim.template, {}
+    for track, pos in zip(anim.tracks, positions):
+        frame = track.frames[pos]
+        subs.update(frame.subs)
+        if frame.template is not None:
+            template = frame.template
+    rows = _apply(template, subs)
+    grid = _GRIDS.setdefault(tuple(rows), rows)
+    _COMPOSED[key] = (anim, grid)
+    return grid
+
+
+def _enumeration(state: str):
+    anim = get_animation(state)
+    cached = _ENUMERATIONS.get(state)
+    if cached is None or cached[0] is not anim:
+        zero = [0] * len(anim.tracks)
+        positions = [tuple(zero)]
+        for t, track in enumerate(anim.tracks):
+            for i in range(1, len(track.frames)):
+                positions.append(tuple(i if k == t else 0 for k in range(len(zero))))
+        cached = _ENUMERATIONS[state] = (
+            anim, positions, [compose(state, pos) for pos in positions])
+    return cached
+
+
+def known_grids(state: str) -> List[List[str]]:
+    """Every grid of a state composed so far, enumeration entries included:
+    what an image cache must keep for a state that is on screen."""
+    anim = get_animation(state)
+    grids = list(_enumeration(state)[2])
+    grids += [g for (st, _), (a, g) in _COMPOSED.items() if st == state and a is anim]
+    return grids
+
+
+def enumeration_positions(state: str) -> List[Tuple[int, ...]]:
+    """The track positions behind each get_frames() entry, in the same order."""
+    return _enumeration(state)[1]
 
 
 def get_frames(state: str) -> List[List[str]]:
     """Return the list of frame grids (each a list of equal-length row
-    strings) for the given mood/sub-state name."""
-    if state in SITTING_FRAME_SPECS:
-        template, specs = SITTING_TEMPLATE, SITTING_FRAME_SPECS[state]
-    elif state in ALERT_FRAME_SPECS:
-        template, specs = ALERT_TEMPLATE, ALERT_FRAME_SPECS[state]
-    elif state in FLOPPED_FRAME_SPECS:
-        template, specs = FLOPPED_TEMPLATE, FLOPPED_FRAME_SPECS[state]
-    elif state in WORKING_FRAME_SPECS:
-        template, specs = WORKING_TEMPLATE, WORKING_FRAME_SPECS[state]
-    elif state in THINKING_FRAME_SPECS:
-        template, specs = THINKING_TEMPLATE, THINKING_FRAME_SPECS[state]
-    elif state in PERMISSION_FRAME_SPECS:
-        template, specs = PERMISSION_TEMPLATE, PERMISSION_FRAME_SPECS[state]
-    elif state in DONE_HOP_FRAME_SPECS:
-        # per-frame templates: the airborne frame translates the cat
-        return [
-            _apply(tmpl, subs)
-            for tmpl, subs in zip(
-                DONE_HOP_FRAME_TEMPLATES, DONE_HOP_FRAME_SPECS[state]
-            )
-        ]
-    else:
-        raise KeyError(f"Unknown sprite state: {state!r}")
-
-    return [_apply(template, subs) for subs in specs]
+    strings) for the given mood/sub-state name. One track: its frames in
+    order. Several: every track at frame 0 first, then for each track in
+    order each of its frames from 1 with the other tracks at frame 0 (equal
+    grids stay at their positions as the same object). Entry 0 is always
+    "everything at frame 0", which the icons and previews use."""
+    return _enumeration(state)[2]

@@ -79,17 +79,17 @@ def test_tk_default_card_bg_clears_the_override():
     assert "card_bg" not in pane.customization.overrides
 
 
-def test_draw_next_frame_cycles_like_the_tk_pane():
+def test_draw_next_frame_steps_through_every_frame_and_wraps():
     pane = QtPane()
     state = next(s for s in sprites.ALL_STATES if len(sprites.get_frames(s)) > 1)
-    _render(pane)
-    pane._current_state = state
+    pane.render(state, 42, 67, "2h", "Mon", "tag", None, None, False)
     frames = sprites.get_frames(state)
     shown = []
     for _ in range(len(frames) + 1):
         pane.draw_next_frame()
         shown.append(pane.current_frame()[0])
-    assert shown == [frames[i % len(frames)] for i in range(len(frames) + 1)]
+    # render shows frame 0, so each draw steps to the next one
+    assert shown == [frames[(i + 1) % len(frames)] for i in range(len(frames) + 1)]
 
 
 def test_fit_tag():
@@ -114,3 +114,232 @@ def test_set_customization_replaces_the_whole_customization_and_keeps_the_label(
 
     pane.set_customization(custom, label="Other")
     assert pane._label == "Other"
+
+
+# ---- animation schedule (#125) ----------------------------------------------
+
+import random  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+class Clock:
+    def __init__(self, now=1000):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def synth(monkeypatch):
+    """Synthetic animations: current art is all 800 ms two-frame loops."""
+    def install(name, ms, loop_from=0, template=None):
+        template = template or sprites.SITTING_TEMPLATE
+        anim = sprites.single_track(
+            template,
+            [sprites.Frame({"L": "e", "R": "e", "A": c}, ms=m) for c, m in zip("nz!?hB", ms)],
+            loop_from,
+        )
+        monkeypatch.setitem(sprites.ANIMATIONS, name, anim)
+        return anim
+    return install
+
+
+def _pane(clock, **kw):
+    return QtPane(clock=clock, rng=kw.pop("rng", random.Random(1)), **kw)
+
+
+def _shown(pane):
+    return pane.current_frame()[1]
+
+
+def test_state_change_restarts_at_frame_zero(synth):
+    synth("a", [100, 100, 100])
+    clock = Clock()
+    pane = _pane(clock)
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.tick(clock.now + 100) and _shown(pane) == 1
+    clock.now += 150
+    pane.render("working", 0, 0, "", "", "", None, None, False)
+    assert _shown(pane) == 0
+    assert pane.next_due_ms() == clock.now + 800
+
+
+def test_same_state_rerender_does_not_restart(synth):
+    synth("a", [100, 100, 100])
+    clock = Clock()
+    pane = _pane(clock)
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    pane.tick(clock.now + 100)
+    due = pane.next_due_ms()
+    clock.now += 120
+    pane.render("a", 1, 1, "", "", "", None, None, False)
+    pane.render_usage("a", object())
+    assert _shown(pane) == 1 and pane.next_due_ms() == due
+
+
+def test_tick_advances_by_durations_exactly(synth):
+    synth("a", [100, 250, 40])
+    clock = Clock(0)
+    pane = _pane(clock)
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.next_due_ms() == 100
+    assert pane.tick(99) is False and _shown(pane) == 0
+    assert pane.tick(100) is True and _shown(pane) == 1 and pane.next_due_ms() == 350
+    assert pane.tick(349) is False
+    assert pane.tick(350) is True and _shown(pane) == 2 and pane.next_due_ms() == 390
+    assert pane.tick(390) is True and _shown(pane) == 0 and pane.next_due_ms() == 490
+
+
+def test_tick_catches_up_over_several_frames(synth):
+    synth("a", [100, 100, 100, 100])
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.tick(250) is True
+    assert _shown(pane) == 2 and pane.next_due_ms() == 300
+
+
+def test_tick_returns_false_when_the_frame_did_not_change(synth):
+    synth("a", [100, 100])
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.tick(50) is False
+    # two frames passed: back on frame 0, so no visible change
+    assert pane.tick(200) is False and _shown(pane) == 0
+
+
+def test_ranged_hold_draws_from_the_rng(synth):
+    synth("a", [(100, 400), 100])
+    rng = random.Random(5)
+    expected = [random.Random(5).randint(100, 400)]
+    expected[0] = int((expected[0] + 5) // 10 * 10)
+    pane = _pane(Clock(0), rng=rng)
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.next_due_ms() == expected[0]
+    assert 100 <= pane.next_due_ms() <= 400 and pane.next_due_ms() % 10 == 0
+
+
+def test_loop_from_wraps_to_the_right_index(synth):
+    synth("a", [100, 100, 100], loop_from=1)
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    seen = []
+    for t in (100, 200, 300, 400, 500):
+        pane.tick(t)
+        seen.append(_shown(pane))
+    assert seen == [1, 2, 1, 2, 1]
+
+
+def test_loop_from_none_holds_the_last_frame(synth):
+    synth("a", [100, 100, 100], loop_from=None)
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.tick(1000) is True
+    assert _shown(pane) == 2 and pane.next_due_ms() is None
+    assert pane.tick(5000) is False and _shown(pane) == 2
+
+
+def test_single_frame_animation_has_nothing_scheduled(synth):
+    synth("a", [100])
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    assert pane.next_due_ms() is None and pane.tick(10_000) is False
+
+
+def test_long_stall_skips_ahead_instead_of_replaying(synth):
+    synth("a", [100, 100, 100])
+    pane = _pane(Clock(0))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    stalled = 3_600_000
+    pane.tick(stalled)
+    assert stalled < pane.next_due_ms() <= stalled + 100
+    assert _shown(pane) in (0, 1, 2)
+
+
+def test_tick_does_not_call_on_change(synth):
+    synth("a", [100, 100])
+    calls = []
+    pane = _pane(Clock(0), on_change=lambda: calls.append(1))
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    calls.clear()
+    assert pane.tick(100)
+    assert calls == []
+
+
+def test_draw_next_frame_steps_one_frame_and_reschedules(synth):
+    synth("a", [100, 100, 100])
+    clock = Clock(0)
+    pane = _pane(clock)
+    pane.render("a", 0, 0, "", "", "", None, None, False)
+    clock.now = 30
+    pane.draw_next_frame()
+    assert _shown(pane) == 1 and pane.next_due_ms() == 130
+
+
+def _multi(monkeypatch):
+    """Track a holds 100 ms, track b 350 ms, on independent clocks."""
+    anim = sprites.Animation(sprites.SITTING_TEMPLATE, (
+        sprites.Track("a", tuple(sprites.Frame({"A": c}, ms=100) for c in "nz!")),
+        sprites.Track("b", tuple(sprites.Frame({"L": c}, ms=350) for c in "ek")),
+    ))
+    monkeypatch.setitem(sprites.ANIMATIONS, "multi", anim)
+    return anim
+
+
+def test_tracks_run_on_independent_clocks(monkeypatch):
+    _multi(monkeypatch)
+    pane = _pane(Clock(0))
+    pane.render("multi", 0, 0, "", "", "", None, None, False)
+    positions = lambda: tuple(pane._player.positions)  # noqa: E731
+    assert pane.next_due_ms() == 100 and positions() == (0, 0)
+    assert pane.tick(100) and positions() == (1, 0) and pane.next_due_ms() == 200
+    assert pane.tick(200) and positions() == (2, 0) and pane.next_due_ms() == 300
+    assert pane.tick(300) and positions() == (0, 0) and pane.next_due_ms() == 350
+    # track b is due at 350, a again at 400: only the b change is visible at 350
+    seen = []
+    for t in (350, 400, 450, 500, 600, 700):
+        before = pane.current_frame()[0]
+        changed = pane.tick(t)
+        assert changed == (pane.current_frame()[0] is not before)
+        seen.append((t, positions()))
+    assert seen == [(350, (0, 1)), (400, (1, 1)), (450, (1, 1)), (500, (2, 1)),
+                    (600, (0, 1)), (700, (1, 0))]
+    assert pane.next_due_ms() == 800
+
+
+def test_multi_track_state_change_resets_every_track(monkeypatch):
+    _multi(monkeypatch)
+    clock = Clock(0)
+    pane = _pane(clock)
+    pane.render("multi", 0, 0, "", "", "", None, None, False)
+    pane.tick(450)
+    clock.now = 450
+    pane.render("working", 0, 0, "", "", "", None, None, False)
+    pane.render("multi", 0, 0, "", "", "", None, None, False)
+    assert pane._player.positions == [0, 0] and pane.next_due_ms() == 550
+
+
+def test_draw_next_frame_walks_the_enumeration(monkeypatch):
+    _multi(monkeypatch)
+    pane = _pane(Clock(0))
+    pane.render("multi", 0, 0, "", "", "", None, None, False)
+    frames = sprites.get_frames("multi")
+    assert len(frames) == 4
+    shown = []
+    for _ in range(5):
+        pane.draw_next_frame()
+        shown.append(pane.current_frame())
+    assert [i for _, i in shown] == [1, 2, 3, 0, 1]
+    assert all(g is frames[i] for g, i in shown)
+
+
+def test_current_frame_index_is_none_off_the_enumeration(monkeypatch):
+    _multi(monkeypatch)
+    pane = _pane(Clock(0))
+    pane.render("multi", 0, 0, "", "", "", None, None, False)
+    pane.tick(100)
+    pane.tick(350)  # a at 1 (100, 200, 300 -> a back at 0), then move on
+    pane._player.positions = [1, 1]
+    grid, index = pane.current_frame()
+    assert index is None and grid is sprites.compose("multi", (1, 1))

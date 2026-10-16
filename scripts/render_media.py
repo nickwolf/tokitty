@@ -17,7 +17,7 @@ from typing import List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tokitty.sprites import LEGACY_COAT_MAP, get_frames, resolve_palette
-from render_sheet import BG, _hex_to_rgb, _write_png
+from render_sheet import BG, _hex_to_rgb, _write_png, write_gif
 from tokitty.sprite_raster import raster_frame
 
 # The states worth photographing, per the Phase 5 spec: mood ladder,
@@ -25,7 +25,7 @@ from tokitty.sprite_raster import raster_frame
 STILL_STATES = ["content", "interested", "alert", "working", "thinking",
                 "permission", "flopped", "sleeping", "done_hop"]
 GIF_STATE = "permission"  # the flag animation, per spec ("flag or wake")
-GIF_FRAME_MS = 800  # matches ui.FRAME_INTERVAL_MS
+GIF_SECONDS = 6.4  # a whole number of 800 ms loops, so the GIF loops without a seam
 
 
 def _png_from_grid(path: Path, grid: List[List[bytes]]) -> None:
@@ -61,17 +61,9 @@ def main() -> int:
     _png_from_grid(args.out / "dual-card.png", pad(top) + gap + pad(bottom))
     print("dual-card.png")
 
-    from PIL import Image
-
-    frames = get_frames(GIF_STATE)
-    images = []
-    for frame in frames:
-        grid = raster_frame(frame, palette, args.scale, bg)
-        raw = b"".join(b"".join(row) for row in grid)
-        images.append(Image.frombytes("RGB", (len(grid[0]), len(grid)), raw))
-    images[0].save(args.out / f"{GIF_STATE}.gif", save_all=True,
-                   append_images=images[1:], duration=GIF_FRAME_MS, loop=0)
-    print(f"{GIF_STATE}.gif ({len(images)} frames)")
+    frames = write_gif(args.out / f"{GIF_STATE}.gif", GIF_STATE, scale=args.scale,
+                       seconds=GIF_SECONDS)
+    print(f"{GIF_STATE}.gif ({frames} frames)")
     return 0
 
 
