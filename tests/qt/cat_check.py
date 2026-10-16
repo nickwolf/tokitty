@@ -51,7 +51,7 @@ def check(widget: TokittyQtWidget, index: int = 0) -> dict:
     mirrored = T.placement(home).mirrored
     if mirrored:
         ref = _mirror(ref, w, h)
-    x, y = widget.cat_origin(index)
+    x, y = widget.cat_origin(index, pane.offset())
     ox, oy = round(x * dpr), round(y * dpr)
 
     with_cat = widget.grab().toImage()
@@ -72,8 +72,9 @@ def check(widget: TokittyQtWidget, index: int = 0) -> dict:
     return {
         "home": home, "mirrored": mirrored, "dpr": dpr, "image_dpr": with_cat.devicePixelRatio(),
         "opaque": opaque, "bad_opaque": bad_opaque, "bad_clear": bad_clear,
-        # Only an empty margin lets the whole block, clear cells included, match.
-        "block_equal": got == ref if home == "on_top" else None,
+        # Only an empty margin lets the whole block, clear cells included, match;
+        # a frame drawn lower (the loaf on the edge) has the card behind it.
+        "block_equal": got == ref if home == "on_top" and pane.offset()[1] <= 0 else None,
     }
 
 
@@ -90,7 +91,7 @@ def run_all() -> list:
                 widget.panes[0].draw_next_frame()  # frame 0 shown; advance
                 widget.panes[0].draw_next_frame()  # and a second frame
                 results.append(check(widget))
-                widget.panes[0]._player.restart(state, 0)
+                widget.panes[0]._player.restart(sprites.spot_state(state, home), 0)
                 widget.panes[0].draw_next_frame()
             widget.deleteLater()
     return results

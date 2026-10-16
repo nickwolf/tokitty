@@ -267,6 +267,9 @@ def cat_sheet(state: str) -> Rendered:
     try:
         widget.anim.stop()
         pane = widget.panes[0]
+        # Drawn on top but played as the plain state: content and sleeping
+        # would otherwise play their on_top variants (pinned by the art hash).
+        pane.set_spot("inside")
         dpr = widget.devicePixelRatioF()
         frames = sprites.get_frames(state)
         cell = T.cell_size(dpr)

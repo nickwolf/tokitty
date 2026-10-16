@@ -1345,15 +1345,15 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
 
 
 # done_hop: the happy hop when a task finishes, played once. A butt wiggle
-# before the jump, a launch, a hang at the top with the paws tucked up and
-# sparkles,
-# a squash on landing and a proud settle with squinting eyes. No ground line:
-# the card is the floor, and the ground shadow (#137) can show the height.
+# before the jump, a launch, a hang three rows up with the paws tucked and
+# sparkles, a squash on landing and a proud settle with squinting eyes. The
+# height is a sprite offset, so the whole cat leaves the grid's bottom and
+# the ground shadow (#137) shows how high it went.
 # activity.DONE_HOP_S keeps the state up long enough for all of it.
 _HOP_SPARKS = _cells("h", (3, 2, 2), (6, 1, 1), (2, 24, 24), (5, 26, 26))
 
 
-def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
+def _hop_frame(pose: str = "sit", eyes: str = "open", dx: int = 0,
                sparks: bool = False) -> List[str]:
     grid = _overlay(SITTING_TEMPLATE, _SIT_EYES_ARCH if eyes == "arch" else _SIT_EYES_OPEN)
     grid = [row.replace("A", "n") for row in grid]
@@ -1361,16 +1361,17 @@ def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
         grid = _sink_head(grid)
     if dx:
         grid = _shift_template(grid, dx)
-    if up:
-        grid = _shift_up(grid, up)
     if pose == "tucked":
-        # paws pulled up under the body: the two lowest rows go, so the gap
-        # under the cat grows without the ears leaving the top of the grid
+        # paws pulled up under the body: the two lowest rows go
         bottom = max(r for r, row in enumerate(grid) if row.strip("."))
         grid = _overlay(grid, {(r, c): "." for r in (bottom - 1, bottom) for c in range(28)})
     if sparks:
         grid = _overlay(grid, _HOP_SPARKS)
     return grid
+
+
+def _up(rows: int) -> Tuple[int, int]:
+    return (0, -rows)
 
 
 DONE_HOP_ANIMATION = single_track(_hop_frame(), [
@@ -1380,9 +1381,11 @@ DONE_HOP_ANIMATION = single_track(_hop_frame(), [
     Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
     Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
     Frame({}, 120, template=_hop_frame(pose="crouch")),
-    Frame({}, 110, template=_hop_frame(up=1)),
-    Frame({}, 420, template=_hop_frame(up=1, pose="tucked", eyes="arch", sparks=True)),
-    Frame({}, 110, template=_hop_frame(up=1)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(1)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(2)),
+    Frame({}, 420, template=_hop_frame(pose="tucked", eyes="arch", sparks=True), offset=_up(3)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(2)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(1)),
     Frame({}, 160, template=_hop_frame(pose="crouch")),
     Frame({}, 400, template=_hop_frame(eyes="arch")),
 ], loop_from=None)
@@ -1628,6 +1631,137 @@ def _flopped_to_stirring() -> Animation:
         Frame({}, 100, template=landed),
     ], loop_from=None)
 
+
+# Lying on the card's top edge (#116): a loaf, the sitting head dropped onto
+# a low wide body with the front paws tucked under the chest, the tail hanging
+# down over the front of the card. It replaces content and sleeping when the
+# cat's spot is on_top. Same placeholders as the sitting template (L, R, A).
+LOAF_TEMPLATE: List[str] = [
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "........x.........x.........",
+    ".......xxx...o...xxx........",
+    "......xxxxoooooooxxxx.......",
+    "......xxpxxsssssxxpxx.......",
+    ".....ooocccoooooooooOO......",
+    ".......occsssosssoOO........",
+    "......ooooooooooooooO.......",
+    ".....oooooLxxxxxRoooooO.....",
+    "....oooooooxxwxxoooooooO....",
+    "...ooooooxxwwAwwxxooooOO....",
+    "...sssooxxwwwwwwwxoooooOO...",
+    "...ooooooxxwwwwwxooooooOO...",
+    "...sssoooooxxwxxoooooooOO...",
+    "...ooooooouuuuuuuoccoooOO...",
+    "...oooooouuuuuuuuucccooOO...",
+    "....oooommmmooommmmoooOO....",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+]
+_LOAF_HEAD_DROP = 5  # rows the sitting head sits lower on the loaf
+# The loaf's paws are on row 21; it is drawn this much lower than a sitting
+# cat on the edge, so the paws rest on the card's top edge and the tail
+# hangs over the card.
+_LOAF_DROP = (0, len(LOAF_TEMPLATE) - 1 - 21)
+
+
+def _loaf_tail(tip: str) -> Dict[Tuple[int, int], str]:
+    tips = {"left": ((23, 24, 25), (24, 23, 24), (25, 23, 23)),
+            "mid": ((23, 25, 26), (24, 25, 26), (25, 25, 25)),
+            "right": ((23, 26, 27), (24, 26, 27), (25, 27, 27))}
+    return _tail((19, 25, 25), (20, 25, 26), (21, 25, 26), (22, 25, 26), *tips[tip])
+
+
+# The flanks fill out by a pixel on each breath in.
+_LOAF_INHALE = {**_cells("o", *((r, 2, 2) for r in range(16, 21))),
+                **_cells("O", *((r, 25, 25) for r in range(15, 19)))}
+
+_LF_TMPL, (_LF_TAIL_MID, _LF_TAIL_LEFT, _LF_TAIL_RIGHT) = _pose_cells(
+    LOAF_TEMPLATE, [_loaf_tail("mid"), _loaf_tail("left"), _loaf_tail("right")])
+_LF_TMPL, (_LF_EXHALE, _LF_INHALE) = _pose_cells(_LF_TMPL, [{}, _LOAF_INHALE])
+_LF_TMPL, (_LF_EAR_REST, _LF_EAR_FLICK) = _pose_cells(
+    _LF_TMPL, [_shift(_SIT_EAR_REST, _LOAF_HEAD_DROP), _shift(_SIT_EAR_FLICK, _LOAF_HEAD_DROP)])
+_LF_TMPL, (_LF_OPEN, _LF_SHUT, _LF_ARCH, _LF_PEEK, _LF_LOOK_L, _LF_LOOK_R) = _pose_cells(
+    _LF_TMPL, [_shift(eyes, _LOAF_HEAD_DROP) for eyes in (
+        _SIT_EYES_OPEN, _SIT_EYES_LINE, _SIT_EYES_ARCH,
+        _SLEEP_PEEK, _SLEEP_PEEK_LEFT, _SLEEP_PEEK_RIGHT)])
+_LF_TMPL, (_LF_Z_BIG, _LF_Z_NONE, _LF_Z_DOT, _LF_Z_SMALL) = _pose_cells(
+    _LF_TMPL, [_ZZZ_BIG, {}, _ZZZ_DOT, _ZZZ_SMALL])
+_LF_TMPL = [row.replace("A", "n") for row in _LF_TMPL]
+
+# The breath track carries the drop, so every frame of it sits on the edge.
+LOAF_CONTENT_ANIMATION = Animation(_LF_TMPL, (
+    Track("eyes", (
+        Frame(_LF_OPEN, (2500, 6000)),
+        Frame(_LF_SHUT, 150),
+        Frame(_LF_OPEN, (3000, 7000)),
+        Frame(_LF_SHUT, 140),
+        Frame(_LF_OPEN, 120),
+        Frame(_LF_SHUT, 140),
+        Frame(_LF_OPEN, (2500, 6000)),
+        Frame(_LF_ARCH, 900),
+    )),
+    # The tip swings over the card like a lazy pendulum.
+    Track("tail", (
+        Frame(_LF_TAIL_MID, (1200, 2600)),
+        Frame(_LF_TAIL_RIGHT, (600, 900)),
+        Frame(_LF_TAIL_MID, (500, 700)),
+        Frame(_LF_TAIL_LEFT, (600, 900)),
+    )),
+    Track("breath", (
+        Frame(_LF_EXHALE, (2500, 3500), offset=_LOAF_DROP),
+        Frame(_LF_INHALE, (1800, 2400), offset=_LOAF_DROP),
+    )),
+    Track("ears", (
+        Frame(_LF_EAR_REST, (8000, 20000)),
+        Frame(_LF_EAR_FLICK, 100),
+        Frame(_LF_EAR_REST, 120),
+        Frame(_LF_EAR_FLICK, 100),
+    )),
+    Track("zzz", (Frame(_LF_Z_NONE, 1000),), None),
+))
+
+LOAF_SLEEPING_ANIMATION = Animation(_LF_TMPL, (
+    Track("eyes", (
+        Frame(_LF_SHUT, (20000, 45000)),
+        Frame(_LF_PEEK, 600),
+        Frame(_LF_LOOK_L, 450),
+        Frame(_LF_LOOK_R, 450),
+        Frame(_LF_PEEK, 300),
+    )),
+    Track("breath", (
+        Frame(_LF_EXHALE, (2000, 2500), offset=_LOAF_DROP),
+        Frame(_LF_INHALE, (1700, 2000), offset=_LOAF_DROP),
+    )),
+    Track("zzz", (
+        Frame(_LF_Z_BIG, 800),
+        Frame(_LF_Z_NONE, (1200, 2200)),
+        Frame(_LF_Z_DOT, 500),
+        Frame(_LF_Z_SMALL, 600),
+    )),
+    Track("ears", (
+        Frame(_LF_EAR_REST, (15000, 40000)),
+        Frame(_LF_EAR_FLICK, 100),
+        Frame(_LF_EAR_REST, 140),
+        Frame(_LF_EAR_FLICK, 100),
+    )),
+    Track("tail", (
+        Frame(_LF_TAIL_MID, (6000, 15000)),
+        Frame(_LF_TAIL_RIGHT, 500),
+        Frame(_LF_TAIL_MID, 400),
+        Frame(_LF_TAIL_LEFT, 500),
+        Frame(_LF_TAIL_MID, (500, 900)),
+    )),
+))
+
+SPOT_VARIANTS[("content", "on_top")] = LOAF_CONTENT_ANIMATION
+SPOT_VARIANTS[("sleeping", "on_top")] = LOAF_SLEEPING_ANIMATION
 
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 _check_transitions()

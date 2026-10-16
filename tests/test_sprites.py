@@ -413,9 +413,17 @@ def test_frame_ms_resolution():
 def test_art_is_pinned():
     # Pins the art byte for byte, so a change to any frame is deliberate.
     # The #125 art passes change pixels on purpose: update this hash with them.
-    frames = {s: get_frames(s) for s in ALL_STATES}
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, compose_offset, enumeration_positions, move_name,
+        spot_state, transition_name,
+    )
+
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
+              for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "71b3badb6b1b76f4eb018d9c50eecd48c3e715f99fb85424a8c44086fce1254c"
+    assert digest == "0a03c54678bb499fe49a8cf66316721b985944a84e37e3f511b26bd50c5c2530"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
@@ -491,15 +499,15 @@ def test_spot_variants_and_moves_resolve_and_are_checked(monkeypatch):
     once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100,
                                                  offset=(0, -29))], None)
     looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
-    assert spot_state("sleeping", "on_top") == "sleeping"
-    monkeypatch.setitem(SPOT_VARIANTS, ("sleeping", "on_top"), looping)
-    assert spot_state("sleeping", "on_top") == "sleeping@on_top"
-    assert get_animation("sleeping@on_top") is looping
+    assert spot_state("alert", "on_top") == "alert"
+    monkeypatch.setitem(SPOT_VARIANTS, ("alert", "on_top"), looping)
+    assert spot_state("alert", "on_top") == "alert@on_top"
+    assert get_animation("alert@on_top") is looping
     with pytest.raises(KeyError):
-        get_animation("content@on_top")
+        get_animation("confused@on_top")
     # a transition may name a variant on either side
-    monkeypatch.setitem(TRANSITIONS, ("sleeping@on_top", "content"), once)
-    assert get_animation(transition_name("sleeping@on_top", "content")) is once
+    monkeypatch.setitem(TRANSITIONS, ("alert@on_top", "content"), once)
+    assert get_animation(transition_name("alert@on_top", "content")) is once
     _check_transitions()
     monkeypatch.setitem(MOVES, "jump_up", once)
     assert get_animation(move_name("jump_up")) is once

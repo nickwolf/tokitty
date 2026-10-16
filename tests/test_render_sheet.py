@@ -24,8 +24,11 @@ def _geometry(scale, states=ALL_STATES, wrap=8):
     wrapped onto continuation rows, one block of rows per track."""
     gap = 4
     counts = [len(t.frames) for s in states for t in get_tracks(s)]
-    cell_w = 28 * scale
-    cell_h = 26 * scale + 2 + 4 + 4
+    # the cell also holds every frame's offset (done_hop rises three rows)
+    offsets = [f.offset for s in states for t in get_tracks(s) for f in t.frames] + [(0, 0)]
+    xs, ys = [o[0] for o in offsets], [o[1] for o in offsets]
+    cell_w = (28 + max(xs) - min(xs)) * scale
+    cell_h = (26 + max(ys) - min(ys)) * scale + 2 + 4 + 4
     per_row = min(wrap, max(counts))
     rows = sum(-(-n // per_row) for n in counts)
     return gap + per_row * (cell_w + gap), gap + rows * (cell_h + gap)
@@ -219,6 +222,8 @@ def test_render_media_writes_a_gif_per_transition(tmp_path, transition, monkeypa
     import render_media
 
     monkeypatch.setattr(render_media, "ALL_STATES", [])
+    monkeypatch.setattr(render_media, "SPOT_VARIANTS", {})
+    monkeypatch.setattr(render_media, "MOVES", {})
     render_media.write_anims(tmp_path, 1)
     # one file per TRANSITIONS entry: the synthetic one and the real ones
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
@@ -372,8 +377,9 @@ def test_render_media_writes_gifs_for_moves_and_variants(tmp_path, hop, monkeypa
     pytest.importorskip("PIL.Image")
     import render_media
 
-    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("content", "on_top"), sprites.single_track(
-        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"}), sprites.Frame({"A": "z"})]))
+    monkeypatch.setattr(sprites, "SPOT_VARIANTS", {("content", "on_top"): sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"}), sprites.Frame({"A": "z"})])})
+    monkeypatch.setattr(render_media, "SPOT_VARIANTS", sprites.SPOT_VARIANTS)
     monkeypatch.setattr(render_media, "ALL_STATES", [])
     monkeypatch.setattr(sprites, "TRANSITIONS", {})
     monkeypatch.setattr(render_media, "TRANSITIONS", {})
