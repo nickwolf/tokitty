@@ -195,3 +195,9 @@ def test_cat_home_roundtrip(tmp_path):
     }
     save_customization(tmp_path, data)
     assert load_customization(tmp_path) == data
+
+
+def test_coat_override_carries_into_the_shut_eye_tone():
+    custom = Customization(overrides={"coat_base": "#4080c0"})
+    palette = effective_palette(custom)
+    assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0") == "#204060"

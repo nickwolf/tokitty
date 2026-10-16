@@ -400,4 +400,15 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "435dd3693c13ead05d1766717747c695f1e11d9836097b20bdd0a836f223af7e"
+    assert digest == "e26f15ed876c15858e6ffa6548f12020fadb2f44802c06bdba75b825b8a3ee0e"
+
+
+def test_shut_eyes_use_the_fur_darkened_not_the_outline():
+    from tokitty.sprites import LID_CHAR, lid_tone
+
+    assert lid_tone("#e8823c") == "#74411e"
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            assert palette[LID_CHAR] == lid_tone(palette["o"]), (colorway, pattern)
+    assert LID_CHAR not in BASE_PALETTE and LID_CHAR not in REGION_CHARS

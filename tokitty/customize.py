@@ -144,6 +144,7 @@ def effective_palette(custom: Customization) -> Dict[str, str]:
     palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern))
     if "coat_base" in custom.overrides:
         palette["o"] = custom.overrides["coat_base"]
+        palette[sprites.LID_CHAR] = sprites.lid_tone(palette["o"])
     if "coat_shade" in custom.overrides:
         palette["O"] = custom.overrides["coat_shade"]
     return palette

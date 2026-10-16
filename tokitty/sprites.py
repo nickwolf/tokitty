@@ -123,7 +123,20 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby") -> Dict[st
     merged["p"] = cw["ear"]
     for char, src in PATTERNS[pattern].items():
         merged[char] = tones.get(src, src)  # tone token -> tone, else literal hex
+    merged[LID_CHAR] = lid_tone(merged["o"])
     return merged
+
+
+# Shut eyes are drawn in the fur colour darkened, not the outline black,
+# which read as harsh on every coat. Derived from "o", so a coat override
+# has to re-derive it (customize.effective_palette does).
+LID_CHAR = "-"
+LID_DARKEN = 0.5
+
+
+def lid_tone(fur: str) -> str:
+    r, g, b = (int(fur[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(v * (1 - LID_DARKEN)) for v in (r, g, b))
 
 
 def get_palette(coat: str = "orange_tabby") -> Dict[str, str]:
@@ -501,7 +514,16 @@ def _pose_cells(template: List[str], poses: Sequence[Dict[Tuple[int, int], str]]
     from `pool`, one per distinct "what each pose paints here" pattern, and
     pose i's subs paint its own cells and blank the rest. Returns the marked
     template and one subs dict per pose."""
+    used = set("".join(template)) | set(BASE_PALETTE) | set(REGION_CHARS) | {"p"}
+    if used & set(pool):
+        raise ValueError(f"pool chars {sorted(used & set(pool))} are already in use")
     cells = sorted({cell for pose in poses for cell in pose})
+    # A pose that leaves a cell unpainted blanks it, so the cells may only
+    # hold the part being replaced, never another part of the cat.
+    part = {ch for pose in poses for ch in pose.values()} | {".", "L", "R"}
+    clash = [cell for cell in cells if template[cell[0]][cell[1]] not in part]
+    if clash:
+        raise ValueError(f"pose cells {clash} would erase template pixels")
     patterns = sorted({tuple(pose.get(cell, ".") for pose in poses) for cell in cells})
     if len(patterns) > len(pool):
         raise ValueError(f"{len(patterns)} cell patterns need more than the {len(pool)} pool chars")
@@ -527,14 +549,37 @@ _SIT_TAIL_UP = _cells("y", (14, 24, 25), (15, 24, 25), (16, 24, 25), (17, 24, 25
 _SIT_EAR_REST = _cells("x", (1, 18, 18))
 _SIT_EAR_FLICK = _cells("x", (1, 19, 19))
 
+# The sitting cat's eyes. Each eye is one pixel on row 8 between the fur and
+# the mask, so a pose repaints the cells around both eyes: _SIT_EYE_CELLS is
+# the face with no eyes, and each pose stamps over it. A single dark pixel
+# reads as an open dark eye, so shut eyes are a 3px line in the lid tone
+# (LID_CHAR), and the happy
+# squint of a slow blink is an arch.
+_SIT_EYE_CELLS = {(8, 9): "o", (8, 10): "o", (8, 11): "x", (8, 15): "x", (8, 16): "o", (8, 17): "o",
+                  (9, 9): "o", (9, 10): "o", (9, 11): "x", (9, 15): "x", (9, 16): "o", (9, 17): "o"}
+
+
+def _sit_eyes(*cells: Tuple[int, int], char: str = "e") -> Dict[Tuple[int, int], str]:
+    return {**_SIT_EYE_CELLS, **{cell: char for cell in cells}}
+
+
+_SIT_EYES_OPEN = _sit_eyes((8, 10), (8, 16))
+_SIT_EYES_LINE = _sit_eyes((8, 9), (8, 10), (8, 11), (8, 15), (8, 16), (8, 17), char=LID_CHAR)
+_SIT_EYES_ARCH = _sit_eyes((9, 9), (8, 10), (9, 11), (9, 15), (8, 16), (9, 17), char=LID_CHAR)
+_SIT_EYES_LEFT = {**_sit_eyes((8, 9), (8, 15)), (8, 10): "x", (8, 16): "o"}
+_SIT_EYES_RIGHT = {**_sit_eyes((8, 11), (8, 17)), (8, 16): "x"}
+_EYE_POOL = "IJKMNPQZ0"
+
 _CONTENT_TEMPLATE, _CONTENT_TAIL = _pose_cells(
     SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN, _SIT_TAIL_OUT, _SIT_TAIL_UP], "aijlqrvC")
 _CONTENT_TEMPLATE, _CONTENT_EAR = _pose_cells(
     _CONTENT_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK], "DEF")
+_CONTENT_TEMPLATE, _CONTENT_EYES = _pose_cells(
+    _CONTENT_TEMPLATE, [_SIT_EYES_OPEN, _SIT_EYES_LINE, _SIT_EYES_ARCH], _EYE_POOL)
 _TAIL_NEUTRAL, _TAIL_IN, _TAIL_OUT, _TAIL_UP = _CONTENT_TAIL
 _EAR_REST, _EAR_FLICK = _CONTENT_EAR
-_EYES_OPEN = {"L": "e", "R": "e", "A": "n"}
-_EYES_SHUT = {"L": "k", "R": "k", "A": "n"}
+_NOSE = {"A": "n"}
+_EYES_OPEN, _EYES_SHUT, _EYES_ARCH = ({**eyes, **_NOSE} for eyes in _CONTENT_EYES)
 
 CONTENT_ANIMATION = Animation(_CONTENT_TEMPLATE, (
     # Blinks at random gaps, with a quick double blink and a slow blink
@@ -547,7 +592,7 @@ CONTENT_ANIMATION = Animation(_CONTENT_TEMPLATE, (
         Frame(_EYES_OPEN, 120),
         Frame(_EYES_SHUT, 140),
         Frame(_EYES_OPEN, (2500, 6000)),
-        Frame(_EYES_SHUT, 700),
+        Frame(_EYES_ARCH, 700),
     )),
     # A lazy sway: up and out, back through neutral, a curl in.
     Track("tail", (
@@ -566,12 +611,104 @@ CONTENT_ANIMATION = Animation(_CONTENT_TEMPLATE, (
     )),
 ))
 
+
+# interested: eyes glance left and right (the 1px eye moves a cell, the
+# fur or mask fills in behind it), ears perk one at a time, the tail tip
+# twitches.
+_SIT_EAR_PERK_LEFT = {**_SIT_EAR_REST, **_cells("x", (0, 8, 8))}
+_SIT_EAR_PERK_RIGHT = {**_SIT_EAR_REST, **_cells("x", (0, 18, 18))}
+
+_INTERESTED_TEMPLATE, (_INT_TAIL_NEUTRAL, _INT_TAIL_OUT, _INT_TAIL_UP) = _pose_cells(
+    SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP], "aijlqrvC")
+_INTERESTED_TEMPLATE, (_INT_AHEAD, _INT_LEFT, _INT_RIGHT, _INT_SHUT) = _pose_cells(
+    _INTERESTED_TEMPLATE, [_SIT_EYES_OPEN, _SIT_EYES_LEFT, _SIT_EYES_RIGHT, _SIT_EYES_LINE], _EYE_POOL)
+_INTERESTED_TEMPLATE, (_INT_EAR_REST, _INT_EAR_FLICK, _INT_PERK_L, _INT_PERK_R) = _pose_cells(
+    _INTERESTED_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK, _SIT_EAR_PERK_LEFT, _SIT_EAR_PERK_RIGHT], "DEFH")
+INTERESTED_ANIMATION = Animation(_INTERESTED_TEMPLATE, (
+    Track("eyes", (
+        Frame({**_INT_AHEAD, **_NOSE}, (1500, 3000)),
+        Frame({**_INT_LEFT, **_NOSE}, (700, 1400)),
+        Frame({**_INT_AHEAD, **_NOSE}, 250),
+        Frame({**_INT_RIGHT, **_NOSE}, (700, 1400)),
+        Frame({**_INT_AHEAD, **_NOSE}, (1200, 2500)),
+        Frame({**_INT_SHUT, **_NOSE}, 140),
+    )),
+    Track("tail", (
+        Frame(_INT_TAIL_NEUTRAL, (1500, 3000)),
+        Frame(_INT_TAIL_OUT, 120),
+        Frame(_INT_TAIL_NEUTRAL, 120),
+        Frame(_INT_TAIL_OUT, 120),
+        Frame(_INT_TAIL_NEUTRAL, (1000, 2000)),
+        Frame(_INT_TAIL_UP, 160),
+        Frame(_INT_TAIL_OUT, 160),
+    )),
+    Track("ears", (
+        Frame(_INT_EAR_REST, (1500, 3500)),
+        Frame(_INT_PERK_L, (600, 1200)),
+        Frame(_INT_EAR_REST, (800, 1500)),
+        Frame(_INT_PERK_R, (600, 1200)),
+        Frame(_INT_EAR_REST, (2000, 4000)),
+        Frame(_INT_EAR_FLICK, 100),
+        Frame(_INT_EAR_REST, 120),
+        Frame(_INT_EAR_FLICK, 100),
+    )),
+))
+
+
+def _sink_head(template: List[str], neck_row: int = 13, width: int = 21) -> List[str]:
+    """The head (rows above neck_row, columns below width) dropped one row
+    onto the chest, the sleeping cat's exhale. The columns to the right (the
+    tail tip, the Zs) stay where they are."""
+    rows = [list(r) for r in template]
+    for r in range(neck_row, 0, -1):
+        rows[r][:width] = rows[r - 1][:width]
+    rows[0][:width] = ["."] * width
+    return ["".join(r) for r in rows]
+
+
+# sleeping: eyes shut, the head rising and sinking with each breath, Zs
+# drifting up off the head, now and then an ear twitch or a tail curl.
+_ZZZ_BIG = _cells("z", (0, 22, 26), (1, 25, 25), (2, 24, 24), (3, 23, 23), (4, 22, 26))
+_ZZZ_SMALL = _cells("z", (5, 22, 25), (6, 24, 24), (7, 23, 23), (8, 22, 25))
+_ZZZ_DOT = _cells("z", (9, 22, 22))
+
+_SLEEP_TEMPLATE, (_SLEEP_TAIL_NEUTRAL, _SLEEP_TAIL_IN) = _pose_cells(
+    SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN], "aijlqrvC")
+_SLEEP_TEMPLATE, (_SLEEP_EAR_REST, _SLEEP_EAR_FLICK) = _pose_cells(
+    _SLEEP_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK], "DEF")
+_SLEEP_TEMPLATE, (_SLEEP_EYES,) = _pose_cells(_SLEEP_TEMPLATE, [_SIT_EYES_LINE], _EYE_POOL)
+_SLEEP_TEMPLATE, (_Z_BIG, _Z_NONE, _Z_DOT, _Z_SMALL) = _pose_cells(
+    _SLEEP_TEMPLATE, [_ZZZ_BIG, {}, _ZZZ_DOT, _ZZZ_SMALL], "UVWX")
+_SLEEP_EXHALE_TEMPLATE = _sink_head(_SLEEP_TEMPLATE)
+
+SLEEPING_ANIMATION = Animation(_SLEEP_TEMPLATE, (
+    Track("face", (Frame({**_SLEEP_EYES, **_NOSE}),)),
+    Track("breath", (
+        Frame({}, (1700, 2000)),
+        Frame({}, (2000, 2500), template=_SLEEP_EXHALE_TEMPLATE),
+    )),
+    Track("zzz", (
+        Frame(_Z_BIG, 800),
+        Frame(_Z_NONE, (1200, 2200)),
+        Frame(_Z_DOT, 500),
+        Frame(_Z_SMALL, 600),
+    )),
+    Track("ears", (
+        Frame(_SLEEP_EAR_REST, (15000, 40000)),
+        Frame(_SLEEP_EAR_FLICK, 100),
+        Frame(_SLEEP_EAR_REST, 140),
+        Frame(_SLEEP_EAR_FLICK, 100),
+    )),
+    Track("tail", (
+        Frame(_SLEEP_TAIL_NEUTRAL, (6000, 15000)),
+        Frame(_SLEEP_TAIL_IN, (2000, 4000)),
+    )),
+))
+
 ANIMATIONS: Dict[str, Animation] = {
-    "sleeping": _anim(SITTING_TEMPLATE, [
-        {"L": "k", "R": "k", "A": "z"}, {"L": "k", "R": "k", "A": "n"}]),
+    "sleeping": SLEEPING_ANIMATION,
     "content": CONTENT_ANIMATION,
-    "interested": _anim(SITTING_TEMPLATE, [
-        {"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "k", "A": "n"}]),
+    "interested": INTERESTED_ANIMATION,
     "alert": _anim(ALERT_TEMPLATE, [
         {"L": "e", "R": "e", "A": "n"}, {"L": "e", "R": "e", "A": "!"}]),
     "panicked": _anim(ALERT_TEMPLATE, [

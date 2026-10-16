@@ -210,14 +210,16 @@ def test_tick_returns_false_when_the_frame_did_not_change(synth):
 
 
 def test_ranged_hold_draws_from_the_rng(synth):
+    class Fixed(random.Random):
+        # Fixed draws, so it doesn't matter how many the pane's starting
+        # state takes before the render.
+        def randint(self, a, b):
+            return a + 137
+
     synth("a", [(100, 400), 100])
-    rng = random.Random(5)
-    expected = [random.Random(5).randint(100, 400)]
-    expected[0] = int((expected[0] + 5) // 10 * 10)
-    pane = _pane(Clock(0), rng=rng)
+    pane = _pane(Clock(0), rng=Fixed())
     pane.render("a", 0, 0, "", "", "", None, None, False)
-    assert pane.next_due_ms() == expected[0]
-    assert 100 <= pane.next_due_ms() <= 400 and pane.next_due_ms() % 10 == 0
+    assert pane.next_due_ms() == 240  # 237 rounded to the 10 ms step
 
 
 def test_loop_from_wraps_to_the_right_index(synth):
