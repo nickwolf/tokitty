@@ -37,6 +37,10 @@ def plain(monkeypatch):
     monkeypatch.setitem(sprites.ANIMATIONS, "plain", sprites.single_track(
         sprites.SITTING_TEMPLATE,
         [sprites.Frame({"L": "e", "R": "e", "A": "n"}), sprites.Frame({"L": "k", "R": "k", "A": "n"})]))
+    # and a one-track, four-frame one
+    monkeypatch.setitem(sprites.ANIMATIONS, "four", sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({"L": c, "R": "e", "A": "n"}) for c in "ekz!"]))
 
 
 def test_sheet_is_valid_png_with_expected_dimensions(tmp_path):
@@ -49,15 +53,15 @@ def test_sheet_is_valid_png_with_expected_dimensions(tmp_path):
 
 def test_sheet_wraps_long_states_onto_continuation_rows(tmp_path, plain):
     out = tmp_path / "sheet.png"
-    render_sheet(out, scale=2, states=["flopped", "plain"], wrap=3)
-    assert _png_size(out) == _geometry(2, ["flopped", "plain"], wrap=3)
-    # flopped has 4 frames: 2 rows at wrap 3, plain 1 row
-    assert _geometry(2, ["flopped", "plain"], wrap=3)[1] == 4 + 3 * (52 + 10 + 4)
+    render_sheet(out, scale=2, states=["four", "plain"], wrap=3)
+    assert _png_size(out) == _geometry(2, ["four", "plain"], wrap=3)
+    # four has 4 frames: 2 rows at wrap 3, plain 1 row
+    assert _geometry(2, ["four", "plain"], wrap=3)[1] == 4 + 3 * (52 + 10 + 4)
 
 
 def test_state_selection_keeps_the_requested_order(tmp_path, plain):
     out = tmp_path / "sheet.png"
-    assert render_sheet(out, scale=1, states=["flopped", "plain"]) == ["flopped", "plain"]
+    assert render_sheet(out, scale=1, states=["four", "plain"]) == ["four", "plain"]
 
 
 def _pixel(path, x, y):
@@ -105,7 +109,7 @@ def test_legend_line(plain):
     from render_sheet import legend
 
     assert legend(["plain"]) == ["plain: 800 800 (loop from 0)"]
-    assert legend(["flopped"]) == ["flopped: 800 800 800 800 (loop from 0)"]
+    assert legend(["four"]) == ["four: 800 800 800 800 (loop from 0)"]
 
 
 def _two_track(monkeypatch):
@@ -135,12 +139,12 @@ def test_multi_track_state_gets_one_row_per_track(tmp_path, monkeypatch, plain):
     assert _png_size(out)[1] == 4 + 3 * (52 + 10 + 4)
 
 
-def test_gif_per_state_uses_real_durations(tmp_path):
+def test_gif_per_state_uses_real_durations(tmp_path, plain):
     PIL = pytest.importorskip("PIL.Image")
     from render_sheet import write_gifs
 
-    paths = write_gifs(tmp_path, ["flopped"], scale=1, seconds=3.2)
-    assert [p.name for p in paths] == ["flopped.gif"]
+    paths = write_gifs(tmp_path, ["four"], scale=1, seconds=3.2)
+    assert [p.name for p in paths] == ["four.gif"]
     with PIL.open(paths[0]) as gif:
         assert gif.n_frames == 4 and gif.info["duration"] == 800 and gif.info["loop"] == 0
 

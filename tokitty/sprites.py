@@ -250,8 +250,8 @@ FLOPPED_TEMPLATE: List[str] = [
     "....oxxwwwxxooooooossoo.1453",
     ".....oOOOOOoooooooooooss.4yy",
     "......OOOOOooooooooOoooo..yy",
-    "...mmoooooooooooooOooooo.yyy",
-    "..mmooooooooouuuuuOoccoooyy.",
+    "...mmoooooooooooooOooooo.YYY",
+    "..mmooooooooouuuuuOoccoooYY.",
     "...........ouuuuuuOccccooy..",
     "..mmoooooooouuuuuuuOoccoo...",
     "..mmoooooooouuuuuuuooooooomm",
@@ -998,6 +998,109 @@ ACTIVATE_ANIMATION = Animation(_AC_TMPL, (
     )),
 ))
 
+
+# ---- lying down: flopped and stirring ----------------------------------------
+# The flopped template's old 1-5 sweep markers and its eyes are cleared, and
+# the tail tip, eyes, ears and back become tracks. The tip sweeps through five
+# strokes rooted at (16, 25), banded by row like the other tails.
+_FLOP_BASE = _overlay(
+    [row.translate(str.maketrans("12345", ".....")) for row in FLOPPED_TEMPLATE],
+    {(11, 5): "o", (11, 10): "o", (11, 11): "o"})
+_FLOP_TIP_A = _tail((16, 25, 25), (15, 24, 25), (14, 23, 24), (13, 22, 23), (12, 21, 22))
+_FLOP_TIP_B = _tail((16, 25, 25), (15, 24, 25), (14, 24, 25), (13, 23, 24), (12, 23, 23))
+_FLOP_TIP_C = _tail((16, 25, 25), (15, 25, 26), (14, 25, 26), (13, 24, 25), (12, 24, 25))
+_FLOP_TIP_D = _tail((16, 25, 25), (15, 25, 26), (14, 25, 26), (13, 25, 26), (12, 26, 26))
+_FLOP_TIP_E = _tail((15, 26, 27), (14, 26, 27), (13, 27, 27), (12, 27, 27))
+# Eyes sit symmetric about the face: cols 5-6 and 10-11 on row 11.
+_FLOP_EYES_SHUT = {(11, 5): LID_CHAR, (11, 6): LID_CHAR, (11, 10): LID_CHAR, (11, 11): LID_CHAR}
+_FLOP_EYES_PEEK = {**_FLOP_EYES_SHUT, (11, 5): "e", (11, 6): "o"}
+_FLOP_EYES_OPEN = {(11, 5): "e", (11, 6): "o", (11, 10): "o", (11, 11): "e"}
+_FLOP_EAR_REST = _cells("x", (3, 12, 13))
+_FLOP_EAR_FLICK = _cells("x", (3, 13, 14))
+_FLOP_EARS_UP = {**_cells("x", (3, 12, 13)), (2, 5): "x", (2, 12): "x"}
+_FLOP_EARS_DOWN = _cells("x", (3, 12, 13))
+# The back rises a row on each breath in.
+_FLOP_INHALE = _cells("o", (13, 16, 20))
+
+
+def _lift_head(template: List[str], top: int = 3, bottom: int = 14, width: int = 15) -> List[str]:
+    """Rows top..bottom of the first `width` columns moved up one row, the
+    bottom row kept as well, so the head rises off the paws on a longer neck."""
+    rows = [list(r) for r in template]
+    for r in range(top - 1, bottom):
+        rows[r][:width] = rows[r + 1][:width]
+    return ["".join(r) for r in rows]
+
+
+_FL_TMPL, (_FL_A, _FL_B, _FL_C, _FL_D, _FL_E) = _pose_cells(
+    _FLOP_BASE, [_FLOP_TIP_A, _FLOP_TIP_B, _FLOP_TIP_C, _FLOP_TIP_D, _FLOP_TIP_E])
+_FL_TMPL, (_FL_SHUT, _FL_PEEK) = _pose_cells(_FL_TMPL, [_FLOP_EYES_SHUT, _FLOP_EYES_PEEK])
+_FL_TMPL, (_FL_EAR_REST, _FL_EAR_FLICK) = _pose_cells(_FL_TMPL, [_FLOP_EAR_REST, _FLOP_EAR_FLICK])
+_FL_TMPL, (_FL_EXHALE, _FL_INHALE) = _pose_cells(_FL_TMPL, [{}, _FLOP_INHALE])
+
+# flopped: sprawled and sulking. Slow breaths, a lazy five-stroke tail sweep
+# that eases at each end, eyes shut but for the odd look at the clock.
+FLOPPED_ANIMATION = Animation(_FL_TMPL, (
+    Track("eyes", (
+        Frame({**_FL_SHUT, **_NOSE}, (15000, 30000)),
+        Frame({**_FL_PEEK, **_NOSE}, (900, 1500)),
+    )),
+    Track("breath", (
+        Frame(_FL_EXHALE, (2300, 2700)),
+        Frame(_FL_INHALE, (1800, 2200)),
+    )),
+    Track("tail", (
+        Frame(_FL_B, (600, 1500)),
+        Frame(_FL_C, 140),
+        Frame(_FL_D, 120),
+        Frame(_FL_E, (300, 600)),
+        Frame(_FL_D, 120),
+        Frame(_FL_C, 140),
+        Frame(_FL_B, 160),
+        Frame(_FL_A, (400, 900)),
+    )),
+    Track("ears", (
+        Frame(_FL_EAR_REST, (8000, 20000)),
+        Frame(_FL_EAR_FLICK, 100),
+        Frame(_FL_EAR_REST, 120),
+        Frame(_FL_EAR_FLICK, 100),
+    )),
+))
+
+# stirring: the reset is close. The head lifts off the paws now and then,
+# groggy blinks, perked ears, a quicker tail.
+_ST_TMPL, (_ST_A, _ST_B, _ST_C, _ST_D, _ST_E) = _pose_cells(
+    _FLOP_BASE, [_FLOP_TIP_A, _FLOP_TIP_B, _FLOP_TIP_C, _FLOP_TIP_D, _FLOP_TIP_E])
+_ST_TMPL, (_ST_SHUT, _ST_OPEN) = _pose_cells(_ST_TMPL, [_FLOP_EYES_SHUT, _FLOP_EYES_OPEN])
+_ST_TMPL, (_ST_EARS_DOWN, _ST_EARS_UP) = _pose_cells(_ST_TMPL, [_FLOP_EARS_DOWN, _FLOP_EARS_UP])
+
+STIRRING_ANIMATION = Animation(_ST_TMPL, (
+    Track("eyes", (
+        Frame({**_ST_SHUT, **_NOSE}, (800, 1500)),
+        Frame({**_ST_OPEN, **_NOSE}, (1500, 3000)),
+        Frame({**_ST_SHUT, **_NOSE}, 160),
+        Frame({**_ST_OPEN, **_NOSE}, (1000, 2000)),
+    )),
+    Track("head", (
+        Frame({}, (2000, 4000)),
+        Frame({}, (1200, 2500), template=_lift_head(_ST_TMPL)),
+    )),
+    Track("tail", (
+        Frame(_ST_B, (300, 700)),
+        Frame(_ST_C, 90),
+        Frame(_ST_D, 80),
+        Frame(_ST_E, (200, 400)),
+        Frame(_ST_D, 80),
+        Frame(_ST_C, 90),
+        Frame(_ST_B, 100),
+        Frame(_ST_A, (200, 500)),
+    )),
+    Track("ears", (
+        Frame(_ST_EARS_DOWN, (2000, 4000)),
+        Frame(_ST_EARS_UP, (1500, 3000)),
+    )),
+))
+
 ANIMATIONS: Dict[str, Animation] = {
     "sleeping": SLEEPING_ANIMATION,
     "content": CONTENT_ANIMATION,
@@ -1009,16 +1112,8 @@ ANIMATIONS: Dict[str, Animation] = {
     "activate": ACTIVATE_ANIMATION,
     # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
     # (left, up, right, up, left, ...) instead of snapping right-to-left.
-    "flopped": _anim(FLOPPED_TEMPLATE, [
-        {"L": "k", **_TAIL_POSE_1},
-        {"L": "k", **_TAIL_POSE_2},
-        {"L": "k", **_TAIL_POSE_3},
-        {"L": "k", **_TAIL_POSE_2},
-    ]),
-    "stirring": _anim(FLOPPED_TEMPLATE, [
-        {"L": "k", **_TAIL_POSE_2},
-        {"L": "e", **_TAIL_POSE_3},
-    ]),
+    "flopped": FLOPPED_ANIMATION,
+    "stirring": STIRRING_ANIMATION,
     "working": _anim(WORKING_TEMPLATE, [
         {"L": "e", "R": "e", "A": "n", "S": "b", "P": "g"},
         # typing pulse: lidded eyes, looking down at the bright screen
@@ -1043,6 +1138,31 @@ ANIMATIONS: Dict[str, Animation] = {
 
 ALL_STATES = tuple(ANIMATIONS)
 
+# One-off animations played when the sprite state changes from one state to
+# another (#134), before the new state's own loop starts. Keyed by
+# (from, to); a pair with no entry is a plain cut. Every track plays once
+# (loop_from None) and the transition ends when its longest track does.
+TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
+TRANSITION_SEP = ">"
+
+
+def transition_name(from_state: str, to_state: str) -> str:
+    """The name a transition goes by wherever a state name is expected
+    (compose, get_frames, render_sheet): "from>to"."""
+    return f"{from_state}{TRANSITION_SEP}{to_state}"
+
+
+def _check_transitions() -> None:
+    for (from_state, to_state), anim in TRANSITIONS.items():
+        if from_state not in ANIMATIONS or to_state not in ANIMATIONS:
+            raise ValueError(f"transition {from_state}->{to_state} names an unknown state")
+        check_animation(anim)
+        if any(track.loop_from is not None for track in anim.tracks):
+            raise ValueError(f"transition {from_state}->{to_state} must play once")
+
+
+_check_transitions()
+
 for _anim_state in ANIMATIONS.values():
     check_animation(_anim_state)
 del _anim_state
@@ -1062,11 +1182,15 @@ _ENUMERATIONS: Dict[str, Tuple[Animation, List[Tuple[int, ...]], List[List[str]]
 
 
 def get_animation(state: str) -> Animation:
-    """The track table for a mood/sub-state name."""
-    try:
+    """The track table for a mood/sub-state name, or for a transition by its
+    transition_name ("from>to")."""
+    if state in ANIMATIONS:
         return ANIMATIONS[state]
-    except KeyError:
-        raise KeyError(f"Unknown sprite state: {state!r}") from None
+    if TRANSITION_SEP in state:
+        pair = tuple(state.split(TRANSITION_SEP, 1))
+        if pair in TRANSITIONS:
+            return TRANSITIONS[pair]
+    raise KeyError(f"Unknown sprite state: {state!r}")
 
 
 def get_tracks(state: str) -> Tuple[Track, ...]:

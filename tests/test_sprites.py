@@ -215,15 +215,32 @@ def test_inner_ear_pink_preserved_and_symmetric():
             assert len(cols) == 2, (name, r, cols)
 
 
-def test_flopped_tail_sweep_paints_tail_region():
-    """The wag sweep must paint the tail char so it takes the pattern's tail
-    tone; painting it "o" leaves a two-tone tail under van/colorpoint."""
-    from tokitty.sprites import ANIMATIONS
-
+def test_lying_tail_sweep_paints_only_tail_chars():
+    """The sweeping tail must paint the tail chars so it takes the pattern's
+    tail tones; painting it "o" leaves a two-tone tail under van/colorpoint.
+    Rows 11-15, columns 23-27 hold nothing but the tail tip."""
     for state in ("flopped", "stirring"):
-        for frame in ANIMATIONS[state].tracks[0].frames:
-            painted = {v for k, v in frame.subs.items() if k in "12345" and v != "."}
-            assert painted <= {"y"}, (state, painted)
+        for frame in get_frames(state):
+            tip = {frame[r][c] for r in range(11, 16) for c in range(23, 28)}
+            assert tip <= {".", "y", "Y"}, (state, tip)
+
+
+def test_transition_names_resolve_and_bad_transitions_are_rejected(monkeypatch):
+    from tokitty.sprites import TRANSITIONS, _check_transitions, transition_name
+
+    once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], None)
+    monkeypatch.setitem(TRANSITIONS, ("content", "sleeping"), once)
+    assert get_animation(transition_name("content", "sleeping")) is once
+    with pytest.raises(KeyError):
+        get_animation(transition_name("sleeping", "content"))
+    monkeypatch.setitem(TRANSITIONS, ("content", "nope"), once)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    monkeypatch.delitem(TRANSITIONS, ("content", "nope"))
+    looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
+    monkeypatch.setitem(TRANSITIONS, ("content", "sleeping"), looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
 
 
 def test_silhouette_patterns_present_and_covered():
@@ -327,9 +344,11 @@ def two_tracks(monkeypatch):
     return anim
 
 
-def test_get_frames_single_track_is_the_frame_list():
-    anim = ANIMATIONS["flopped"]
-    assert len(get_frames("flopped")) == len(anim.tracks[0].frames) == 4
+def test_get_frames_single_track_is_the_frame_list(monkeypatch):
+    frames = [Frame({"L": c, "R": "e", "A": "n"}, ms=100) for c in "ekz!"]
+    monkeypatch.setitem(ANIMATIONS, "four", single_track(SITTING_TEMPLATE, frames))
+    assert [g[8] for g in get_frames("four")] == [
+        SITTING_TEMPLATE[8].replace("L", c).replace("R", "e") for c in "ekz!"]
 
 
 def test_get_frames_enumeration_order(two_tracks):
@@ -400,7 +419,7 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "f967ed512bcf7d88748b30aab44d0d6a760f66b1d24f7aa0889e0d18ff0da1d3"
+    assert digest == "a0473043aeffdb42576f8a585459025124358d61391901d62737ba0d7f916cd7"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
