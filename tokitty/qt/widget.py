@@ -15,6 +15,8 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QT
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
+from tokitty import shadow as shadow_mod
+from tokitty import sprites
 from tokitty import theme as T
 from tokitty.customize import Customization
 from tokitty.menu import MenuItem
@@ -101,12 +103,12 @@ class TokittyQtWidget(QWidget):
 
         # One monotonic ms clock for the panes' schedules and the timer.
         self._clock = clock
-        self.panes: List[QtPane] = [
-            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock())
-            for c in customizations
-        ]
         self.homes: List[str] = [
             T.resolve_home(c.cat_home, i, pane_count) for i, c in enumerate(customizations)
+        ]
+        self.panes: List[QtPane] = [
+            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock(), spot=home)
+            for c, home in zip(customizations, self.homes)
         ]
         self.window_layout = T.layout_window(self.homes)
         self.setFixedSize(*self.window_layout.size)
@@ -115,6 +117,11 @@ class TokittyQtWidget(QWidget):
         # Keyed by the frame grid's identity (sprites keeps the grids alive
         # for the process), so repeated frames share one image.
         self._images: Dict[tuple, QImage] = {}
+        # The shadow images by (cell alphas, device cell size).
+        self._shadow_images: Dict[tuple, QImage] = {}
+        # Per pane: the window rect its cat, shadow and tags last painted, so a
+        # frame that moves the cat also repaints where it was.
+        self._painted: Dict[int, QRectF] = {}
         # Per pane: (inputs signature, card image, window-space origin of the
         # image). The card is drawn once and blitted until an input changes.
         self._cards: Dict[int, tuple] = {}
@@ -149,6 +156,9 @@ class TokittyQtWidget(QWidget):
         self.homes = list(homes)
         self.window_layout = T.layout_window(self.homes)
         self.setFixedSize(*self.window_layout.size)
+        self._painted.clear()
+        for pane, home in zip(self.panes, self.homes):
+            pane.set_spot(home)
         dx = self.window_layout.margins[0] - old.margins[0]
         dy = self.window_layout.margins[1] - old.margins[1]
         if dx or dy:
@@ -164,6 +174,7 @@ class TokittyQtWidget(QWidget):
         self.theme = theme
         self._layouts.clear()
         self._images.clear()
+        self._shadow_images.clear()
         self._cards.clear()
         self._styles.clear()
         count = len(self.panes)
@@ -189,13 +200,20 @@ class TokittyQtWidget(QWidget):
         """Where the first card is on screen (window position plus margins)."""
         return self.x() + self.window_layout.margins[0], self.y() + self.window_layout.margins[1]
 
-    def cat_origin(self, index: int) -> Tuple[float, float]:
+    def cat_origin(self, index: int, offset: Tuple[int, int] = (0, 0)) -> Tuple[float, float]:
         """The sprite's top-left in window coordinates, snapped to a whole
-        device pixel."""
+        device pixel. `offset` is a frame's move in cells; a mirrored cat
+        moves the other way in x. Without one it is the home origin, which
+        the click mask uses."""
         dpr = self.devicePixelRatioF()
         ox, oy = self.window_layout.pane_origins[index]
-        px, py = T.placement(self.homes[index]).origin
-        return T.snap(ox + px, dpr), T.snap(oy + py, dpr)
+        placed = T.placement(self.homes[index])
+        dx, dy = offset
+        if placed.mirrored:
+            dx = -dx
+        px, py = placed.origin
+        return (T.snap(ox + px + dx * sprites.SCALE, dpr),
+                T.snap(oy + py + dy * sprites.SCALE, dpr))
 
     def _layout_for(self, view: str, home: str) -> T.CardLayout:
         key = (view, home)
@@ -215,7 +233,7 @@ class TokittyQtWidget(QWidget):
 
     def _prune_images(self) -> None:
         live_grids = {id(grid) for pane in self.panes
-                      for name in {pane.playing, pane._current_state}
+                      for name in {pane.playing, pane.target}
                       for grid in known_grids(name)}
         live_palettes = {pane.palette_key for pane in self.panes}
         for key in [k for k in self._images if k[0] not in live_grids or k[1] not in live_palettes]:
@@ -241,28 +259,59 @@ class TokittyQtWidget(QWidget):
         self._arm()
 
     def _cat_dirty_rect(self, index: int, pane: QtPane):
-        """Window rect (device-independent) a cat frame change can touch: the
-        sprite, plus the tag boxes drawn over it, padded so nothing clips."""
+        """Window rect (device-independent) a cat frame change can touch: what
+        the last paint covered and what this frame covers, so a moved cat
+        leaves no ghost."""
+        rect = self._art_rect(index, pane)
+        before = self._painted.get(index)
+        if before is not None:
+            rect = rect.united(before)
+        return rect.toAlignedRect()
+
+    def _art_rect(self, index: int, pane: QtPane) -> QRectF:
+        """The sprite, its shadow and the tag boxes drawn over it, padded so
+        nothing clips."""
         rect = self._cat_rect(index, pane)
+        placed = self._shadow_placed(index, pane)
+        if placed is not None:
+            rect = rect.united(placed[0])
         if self._tags_shown(pane):
             driving, tool, _side = self.tag_boxes(index, self.homes[index])
             pad = TAG_CHIP_PAD_X + 1
             rect = rect.united(driving.adjusted(-pad, -pad, pad, pad)).united(
                 tool.adjusted(-pad, -pad, pad, pad))
-        return rect.adjusted(-1, -1, 1, 1).toAlignedRect()
+        return rect.adjusted(-1, -1, 1, 1)
 
     def _cat_rect(self, index: int, pane: QtPane) -> QRectF:
         grid = pane.grid()
         cell = T.cell_size(self.devicePixelRatioF())
         dpr = self.devicePixelRatioF()
-        x, y = self.cat_origin(index)
+        x, y = self.cat_origin(index, pane.offset())
         return QRectF(x, y, len(grid[0]) * cell / dpr, len(grid) * cell / dpr)
+
+    def _shadow_placed(self, index: int, pane: QtPane):
+        """(window rect, cells) of the pane's shadow, or None when it is off
+        or the frame has no body. The rect is snapped to device pixels."""
+        if not self.theme.cat.shadow:
+            return None
+        home = self.homes[index]
+        placed = shadow_mod.shadow_for(
+            pane.rest_grid(), pane.grid(), pane.offset(), home, T.placement(home).mirrored)
+        if placed is None:
+            return None
+        dpr = self.devicePixelRatioF()
+        ox, oy = self.window_layout.pane_origins[index]
+        cell = T.cell_size(dpr)
+        rect = QRectF(T.snap(ox + placed.x, dpr), T.snap(oy + placed.y, dpr),
+                      len(placed.cells[0]) * cell / dpr, len(placed.cells) * cell / dpr)
+        return rect, placed.cells
 
     def _tags_shown(self, pane: QtPane) -> bool:
         return "cat_tags" in self.theme.text.show and bool(pane._driving_tag or pane._tool_label)
 
     def _drop_images(self) -> None:
         self._images.clear()
+        self._shadow_images.clear()
         self._cards.clear()
         self.update()
 
@@ -309,6 +358,26 @@ class TokittyQtWidget(QWidget):
             self._images[key] = image
         return image
 
+    def _shadow_image(self, cells, dpr: float) -> QImage:
+        cell = T.cell_size(dpr)
+        key = (cells, cell)
+        image = self._shadow_images.get(key)
+        if image is None:
+            image = QImage(len(cells[0]) * cell, len(cells) * cell,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            ip = QPainter(image)
+            ip.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            for r, row in enumerate(cells):
+                for c, alpha in enumerate(row):
+                    if alpha:
+                        ip.fillRect(c * cell, r * cell, cell, cell,
+                                    QColor(*shadow_mod.COLOR, alpha))
+            ip.end()
+            image.setDevicePixelRatio(dpr)
+            self._shadow_images[key] = image
+        return image
+
     # ---- painting -------------------------------------------------------
 
     def _make_font(self, points: int, bold: bool) -> QFont:
@@ -343,7 +412,8 @@ class TokittyQtWidget(QWidget):
     def _paint_pane(self, p: QPainter, index: int, pane: QtPane, dpr: float,
                     dirty: QRectF) -> None:
         """Paint what intersects `dirty`, in the same order as a full repaint
-        (card, then cat, then tags), so a cat-only update stays correct."""
+        (card, then shadow, then cat, then tags), so a cat-only update stays
+        correct."""
         style = self._style_for(index, pane)
         # The pane's own palette wins: set_appearance may have been handed one.
         palette = pane.palette
@@ -356,8 +426,15 @@ class TokittyQtWidget(QWidget):
             -CARD_PAD, -CARD_PAD, CARD_PAD, CARD_PAD)
         if card.intersects(dirty):
             self._draw_card(p, index, pane, style, layout, ox, oy, dpr)
-        if self._cat_rect(index, pane).adjusted(-1, -1, 1, 1).intersects(dirty):
+        cat = self._cat_rect(index, pane)
+        placed = self._shadow_placed(index, pane)
+        art = cat if placed is None else cat.united(placed[0])
+        if art.adjusted(-1, -1, 1, 1).intersects(dirty):
+            if placed is not None:
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+                p.drawImage(placed[0].topLeft(), self._shadow_image(placed[1], dpr))
             self._paint_cat(p, index, pane, palette, home, dpr)
+            self._painted[index] = self._art_rect(index, pane)
         if self._tags_shown(pane):
             driving, tool, _side = self.tag_boxes(index, home)
             pad = TAG_CHIP_PAD_X + 1
@@ -549,7 +626,7 @@ class TokittyQtWidget(QWidget):
 
     def _paint_cat(self, p, index, pane, palette, home, dpr) -> None:
         image = self._cat_image(pane.grid(), palette, pane.palette_key, dpr, T.placement(home).mirrored)
-        x, y = self.cat_origin(index)
+        x, y = self.cat_origin(index, pane.offset())
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         p.drawImage(QPointF(x, y), image)
 

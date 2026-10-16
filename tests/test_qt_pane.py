@@ -401,3 +401,81 @@ def test_draw_next_frame_steps_through_the_playing_animation(monkeypatch):
     assert index == 0
     pane.draw_next_frame()
     assert pane.current_frame()[1] == 1 and pane.playing == "a>b"
+
+
+def _spot_pane(monkeypatch, spot="inside"):
+    for name in ("a", "b"):
+        monkeypatch.setitem(sprites.ANIMATIONS, name, sprites.single_track(
+            sprites.SITTING_TEMPLATE, [sprites.Frame({"A": c}, ms=100) for c in "nz"], 0))
+    anim = sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({"L": "e", "R": "e"}, ms=100), sprites.Frame({"A": "z"}, ms=100)], 0)
+    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("a", "on_top"), anim)
+    monkeypatch.setitem(sprites.SPOT_VARIANTS, ("b", "on_top"), anim)
+    monkeypatch.setitem(sprites.TRANSITIONS, ("a@on_top", "b@on_top"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"L": c}, ms=100) for c in "ek"], None))
+    clock = [0]
+    return QtPane(clock=lambda: clock[0], spot=spot), clock
+
+
+def test_the_pane_plays_the_variant_of_its_spot(monkeypatch):
+    pane, _ = _spot_pane(monkeypatch, "on_top")
+    assert pane.spot == "on_top"
+    _draw(pane, "a")
+    assert pane.playing == pane.target == "a@on_top" and pane._current_state == "a"
+    _draw(pane, "working")  # no variant: the plain state
+    assert pane.playing == pane.target == "working"
+    inside, _ = _spot_pane(monkeypatch, "inside")
+    _draw(inside, "a")
+    assert inside.playing == "a"
+
+
+def test_transitions_are_looked_up_by_resolved_names(monkeypatch):
+    pane, clock = _spot_pane(monkeypatch, "on_top")
+    _draw(pane, "a")
+    clock[0] = 50
+    _draw(pane, "b")
+    assert pane.playing == "a@on_top>b@on_top" and pane.target == "b@on_top"
+    assert pane._current_state == "b"
+    # the same two states inside have no transition between them
+    inside, _ = _spot_pane(monkeypatch, "inside")
+    _draw(inside, "a")
+    _draw(inside, "b")
+    assert inside.playing == "b"
+
+
+def test_a_spot_change_restarts_on_the_new_variant_without_a_transition(monkeypatch):
+    calls = []
+    pane, clock = _spot_pane(monkeypatch, "inside")
+    pane.on_change = lambda: calls.append(1)
+    _draw(pane, "a")
+    calls.clear()
+    clock[0] = 70
+    pane.set_spot("on_top")
+    assert pane.playing == "a@on_top" and pane.target == "a@on_top"
+    assert pane.next_due_ms() == 170 and calls == [1]
+    pane.set_spot("on_top")  # same spot: nothing happens
+    assert calls == [1]
+    pane.set_spot("inside")
+    assert pane.playing == "a" and pane._current_state == "a"
+
+
+def test_a_spot_change_leaves_a_state_without_a_variant_playing(monkeypatch):
+    pane, clock = _spot_pane(monkeypatch, "inside")
+    _draw(pane, "working")
+    due = pane.next_due_ms()
+    clock[0] = 30
+    pane.set_spot("on_top")
+    assert pane.playing == "working" and pane.next_due_ms() == due
+
+
+def test_rest_grid_and_offset_follow_the_target(monkeypatch):
+    anim = sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({}, ms=100), sprites.Frame({}, ms=100, offset=(1, -2))], None)
+    monkeypatch.setitem(sprites.ANIMATIONS, "hop", anim)
+    pane = QtPane(clock=lambda: 0)
+    _draw(pane, "hop")
+    assert pane.offset() == (0, 0) and pane.rest_grid() is sprites.get_frames("hop")[0]
+    pane.tick(100)
+    assert pane.offset() == (1, -2) and pane.rest_grid() is sprites.get_frames("hop")[0]

@@ -19,6 +19,8 @@ from tokitty.qt.widget import TokittyQtWidget
 from tokitty.sprite_raster import raster_rgba
 
 COATS = (("orange", "tabby"), ("gray", "tuxedo"))
+# The shadow lies over the empty margin of an on_top home, which this check keeps clear.
+NO_SHADOW = T.Theme(cat=T.CatStyle(shadow=False))
 
 
 def _render(pane, state: str) -> None:
@@ -80,7 +82,7 @@ def run_all() -> list:
     for colorway, pattern in COATS:
         for home in T.SPOTS:
             custom = Customization(colorway=colorway, pattern=pattern, cat_home=home)
-            widget = TokittyQtWidget(T.Theme(), [custom], 1)
+            widget = TokittyQtWidget(NO_SHADOW, [custom], 1)
             states = sprites.ALL_STATES if home.startswith("inside") else sprites.ALL_STATES[:3]
             for state in states:
                 _render(widget.panes[0], state)

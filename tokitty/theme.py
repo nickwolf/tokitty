@@ -94,10 +94,16 @@ class TextStyle:
 
 
 @dataclass(frozen=True)
+class CatStyle:
+    shadow: bool = True         # the ground shadow under the cat
+
+
+@dataclass(frozen=True)
 class Theme:
     card: CardStyle = field(default_factory=CardStyle)
     bars: BarStyle = field(default_factory=BarStyle)
     text: TextStyle = field(default_factory=TextStyle)
+    cat: CatStyle = field(default_factory=CatStyle)
 
 
 # --- pure helpers ---------------------------------------------------------
@@ -159,6 +165,10 @@ def _enum(value, allowed, default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
 
 
+def _bool(value, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
+
+
 def _section(raw, key: str) -> dict:
     sub = raw.get(key)
     return sub if isinstance(sub, dict) else {}
@@ -188,6 +198,9 @@ class _Picker:
 
     def enum(self, key: str, allowed, default: str) -> str:
         return self._pick(key, default, lambda v, d: _enum(v, allowed, d))
+
+    def bool(self, key: str, default: bool) -> bool:
+        return self._pick(key, default, _bool)
 
 
 def _clean_card(raw: dict, d: CardStyle, bad: Optional[set] = None) -> CardStyle:
@@ -243,16 +256,22 @@ def _clean_text(raw: dict, d: TextStyle, bad: Optional[set] = None) -> TextStyle
     )
 
 
+def _clean_cat(raw: dict, d: CatStyle, bad: Optional[set] = None) -> CatStyle:
+    pick = _Picker(raw, "cat", set() if bad is None else bad)
+    return CatStyle(shadow=pick.bool("shadow", d.shadow))
+
+
 def _validate(raw, fallback: Theme) -> Tuple[Theme, set]:
     data = raw if isinstance(raw, dict) else {}
     bad: set = set()
-    for name in ("card", "bars", "text"):
+    for name in ("card", "bars", "text", "cat"):
         if name in data and not isinstance(data[name], dict):
             bad.add(name)
     theme = Theme(
         card=_clean_card(_section(data, "card"), fallback.card, bad),
         bars=_clean_bars(_section(data, "bars"), fallback.bars, bad),
         text=_clean_text(_section(data, "text"), fallback.text, bad),
+        cat=_clean_cat(_section(data, "cat"), fallback.cat, bad),
     )
     return theme, bad
 
@@ -561,6 +580,11 @@ class WindowLayout:
     pane_origins: Tuple[Tuple[int, int], ...]
 
 
+# Rows an on_top cat can hop above its resting place, kept clear of the
+# window's top edge.
+HOP_HEADROOM = 3 * sprites.SCALE
+
+
 def _round_up4(value: int) -> int:
     return -(-value // 4) * 4
 
@@ -576,7 +600,7 @@ def layout_window(homes: Sequence[str], wander: bool = False) -> WindowLayout:
     used = set()
     for i, home in enumerate(homes):
         used |= {home} | (_outside_reachable(i, count) if wander else set())
-    top = _round_up4(SPRITE_H) if "on_top" in used else 0
+    top = _round_up4(SPRITE_H) + HOP_HEADROOM if "on_top" in used else 0
     margins = (0, top, 0, 0)  # no spot reaches past the sides or below the card
     origins = tuple(
         ((i % cols) * CARD_WIDTH, top + (i // cols) * CARD_HEIGHT)
