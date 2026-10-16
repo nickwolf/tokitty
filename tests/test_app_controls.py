@@ -447,7 +447,9 @@ def test_tail_saves_validates_and_restyles(tmp_path, monkeypatch):
     assert world.store["k1"].tail == "ringed_shade"
 
 
-def test_randomize_keeps_the_tail_and_reset_clears_it(tmp_path, monkeypatch):
+def test_randomize_and_reset_keep_the_tail(tmp_path, monkeypatch):
+    # Reset to preset clears the custom colours only; like colorway and
+    # pattern, the tail is a look choice it leaves alone.
     world = build("new", tmp_path, monkeypatch)
     seams = world.seams
     seams.on_customization_changed(0, "tail", "ringed")
@@ -455,5 +457,5 @@ def test_randomize_keeps_the_tail_and_reset_clears_it(tmp_path, monkeypatch):
     seams.on_randomize(0)
     assert world.store["k0"].tail == "ringed"
     seams.on_customization_changed(0, "reset", None)
-    assert world.store["k0"].tail == "plain"
+    assert world.store["k0"].tail == "ringed"
     assert world.store["k0"].overrides == {}

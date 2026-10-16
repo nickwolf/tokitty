@@ -94,7 +94,7 @@ def make_controls(
             cw, pat = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
             custom = replace(custom, colorway=cw, pattern=pat)
         elif field == "reset":
-            custom = replace(custom, overrides={}, tail="plain")
+            custom = replace(custom, overrides={})
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
             if value:
                 overrides = dict(custom.overrides)
