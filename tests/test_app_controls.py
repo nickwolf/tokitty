@@ -433,3 +433,29 @@ def test_seams_leave_out_the_backend():
     assert "autostart_backend" in fields
     stub = {name: None for name in fields}
     assert "autostart_backend" not in app_controls.Controls(**stub).seams()
+
+
+def test_tail_saves_validates_and_restyles(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(1, "tail", "ringed_shade")
+    assert world.store["k1"].tail == "ringed_shade"
+    assert load_customization(world.state_dir)["k1"].tail == "ringed_shade"
+    assert ("apply", 1, world.store["k1"]) in world.log
+    seams.on_customization_changed(1, "tail", "nope")
+    seams.on_customization_changed(1, "tail", None)
+    assert world.store["k1"].tail == "ringed_shade"
+
+
+def test_randomize_and_reset_keep_the_tail(tmp_path, monkeypatch):
+    # Reset to preset clears the custom colours only; like colorway and
+    # pattern, the tail is a look choice it leaves alone.
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(0, "tail", "ringed")
+    seams.on_customization_changed(0, "coat_base", "#112233")
+    seams.on_randomize(0)
+    assert world.store["k0"].tail == "ringed"
+    seams.on_customization_changed(0, "reset", None)
+    assert world.store["k0"].tail == "ringed"
+    assert world.store["k0"].overrides == {}

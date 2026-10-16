@@ -84,6 +84,9 @@ def make_controls(
         elif field == "pattern":
             if value in sprites.PATTERNS:
                 custom = replace(custom, pattern=value)
+        elif field == "tail":
+            if value in sprites.TAIL_STYLES:
+                custom = replace(custom, tail=value)
         elif field == "cat_home":
             if value in theme.SPOTS:
                 custom = replace(custom, cat_home=value)

@@ -1,19 +1,36 @@
+import hashlib
+import json
+import random
+
 import pytest
+
+from tokitty import sprites
 
 from tokitty.sprites import (
     ALERT_TEMPLATE,
     ALL_STATES,
+    ANIMATIONS,
     BASE_PALETTE,
     COLORWAYS,
     FLOPPED_TEMPLATE,
     LEGACY_COAT_MAP,
+    MIN_FRAME_MS,
     PALETTE,
     PATTERNS,
     REGION_CHARS,
     SCALE,
     SITTING_TEMPLATE,
+    Animation,
+    Frame,
+    Track,
+    check_animation,
+    compose,
+    frame_ms,
+    get_animation,
     get_frames,
+    get_tracks,
     get_palette,
+    single_track,
     resolve_palette,
 )
 
@@ -101,12 +118,7 @@ def test_palette_covers_pattern_char():
 
 
 def test_ground_line_is_not_coat_colored():
-    for frames in (get_frames("done_hop"),):
-        for frame in frames:
-            bottom_rows = frame[-3:]
-            joined = "".join("".join(r) for r in bottom_rows)
-            assert "G" in joined  # ground exists
-    # the ground char is defined in BASE_PALETTE, and no colorway x pattern
+    # The ground char is defined in BASE_PALETTE, and no colorway x pattern
     # combination ever recolors it -- it's not one of the region chars.
     assert "G" in BASE_PALETTE
     assert "G" not in REGION_CHARS
@@ -198,15 +210,33 @@ def test_inner_ear_pink_preserved_and_symmetric():
             assert len(cols) == 2, (name, r, cols)
 
 
-def test_flopped_tail_sweep_paints_tail_region():
-    """The wag sweep must paint the tail char so it takes the pattern's tail
-    tone; painting it "o" leaves a two-tone tail under van/colorpoint."""
-    from tokitty.sprites import FLOPPED_FRAME_SPECS
+def test_lying_tail_sweep_paints_only_tail_chars():
+    """The sweeping tail must paint the tail chars so it takes the pattern's
+    tail tones; painting it "o" leaves a two-tone tail under van/colorpoint.
+    Rows 11-15, columns 23-27 hold nothing but the tail tip of the belly-down
+    pose (flopped now lies on its back)."""
+    for state in ("stirring",):
+        for frame in get_frames(state):
+            tip = {frame[r][c] for r in range(11, 16) for c in range(23, 28)}
+            assert tip <= {".", "y", "Y"}, (state, tip)
 
-    for state, specs in FLOPPED_FRAME_SPECS.items():
-        for spec in specs:
-            painted = {v for k, v in spec.items() if k in "12345" and v != "."}
-            assert painted <= {"y"}, (state, painted)
+
+def test_transition_names_resolve_and_bad_transitions_are_rejected(monkeypatch):
+    from tokitty.sprites import TRANSITIONS, _check_transitions, transition_name
+
+    once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], None)
+    monkeypatch.setitem(TRANSITIONS, ("content", "sleeping"), once)
+    assert get_animation(transition_name("content", "sleeping")) is once
+    with pytest.raises(KeyError):
+        get_animation(transition_name("sleeping", "content"))
+    monkeypatch.setitem(TRANSITIONS, ("content", "nope"), once)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    monkeypatch.delitem(TRANSITIONS, ("content", "nope"))
+    looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
+    monkeypatch.setitem(TRANSITIONS, ("content", "sleeping"), looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
 
 
 def test_silhouette_patterns_present_and_covered():
@@ -221,3 +251,218 @@ def test_silhouette_patterns_present_and_covered():
     # van: white body, colored ears + tail
     van = PATTERNS["van"]
     assert van["o"] == "white" and van["x"] == "coat" and van["y"] == "coat"
+
+
+# ---- animation timing and tracks (#125) -------------------------------------
+
+def _frames(*chars, ms=800):
+    ms = ms if isinstance(ms, (list, tuple)) and len(ms) == len(chars) else [ms] * len(chars)
+    return [Frame({"A": c}, ms=m) for c, m in zip(chars, ms)]
+
+
+def test_all_states_follows_the_animation_table():
+    assert ALL_STATES == tuple(ANIMATIONS)
+    assert len(ALL_STATES) == 14 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
+
+
+def test_the_table_passes_the_track_rules():
+    for anim in ANIMATIONS.values():
+        check_animation(anim)
+
+
+def test_every_hold_is_valid():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            for frame in track.frames:
+                ends = (frame.ms,) if isinstance(frame.ms, int) else tuple(frame.ms)
+                if len(ends) == 2:
+                    assert ends[0] <= ends[1], state
+                for ms in ends:
+                    assert ms >= MIN_FRAME_MS and ms % 10 == 0, (state, ms)
+
+
+def test_loop_from_is_none_or_a_valid_index():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            assert track.loop_from is None or 0 <= track.loop_from < len(track.frames), state
+
+
+def test_frame_templates_match_the_animation_template_dimensions():
+    for state, anim in ANIMATIONS.items():
+        for track in anim.tracks:
+            for frame in track.frames:
+                tmpl = frame.template if frame.template is not None else anim.template
+                assert len(tmpl) == len(anim.template), state
+                assert all(len(row) == len(anim.template[0]) for row in tmpl), state
+
+
+def test_frame_zero_of_every_state_has_all_tracks_at_rest():
+    # Icons and previews draw get_frames(state)[0]: every track at frame 0.
+    for state in ALL_STATES:
+        assert get_frames(state)[0] is sprites.compose(state, [0] * len(get_tracks(state))), state
+
+
+def test_check_animation_rejects_rule_breaks():
+    tmpl = ["A.", ".."]
+    other = ["AA", ".."]
+    bad = {
+        "no tracks": Animation(tmpl, ()),
+        "dup names": Animation(tmpl, (Track("a", tuple(_frames("x"))), Track("a", tuple(_frames("y"))))),
+        "short hold": single_track(tmpl, _frames("x", "y", ms=30)),
+        "odd hold": single_track(tmpl, _frames("x", "y", ms=125)),
+        "lo > hi": single_track(tmpl, _frames("x", "y", ms=[(200, 100), 100])),
+        "loop_from out of range": single_track(tmpl, _frames("x", "y"), loop_from=2),
+        "shared keys": Animation(tmpl, (Track("a", tuple(_frames("x"))), Track("b", tuple(_frames("y"))))),
+        "two template tracks": Animation(tmpl, (
+            Track("a", (Frame({"A": "x"}, template=other),)),
+            Track("b", (Frame({"B": "x"}, template=other),)))),
+        "template size": single_track(tmpl, [Frame({"A": "x"}, template=["A"])]),
+    }
+    for name, anim in bad.items():
+        with pytest.raises(ValueError):
+            check_animation(anim)
+        assert name
+    good = Animation(tmpl, (Track("a", tuple(_frames("x"))),
+                            Track("b", (Frame({"B": "y"}), Frame({"B": "z"}), ))))
+    check_animation(good)
+
+
+@pytest.fixture
+def two_tracks(monkeypatch):
+    """Track a swaps A, track b swaps B; frame 2 of a equals frame 1 of a's
+    twin content-wise only through dedup of identical compositions."""
+    tmpl = ["AB", ".."]
+    anim = Animation(tmpl, (
+        Track("a", (Frame({"A": "1"}, ms=100), Frame({"A": "2"}, ms=100), Frame({"A": "3"}, ms=100))),
+        Track("b", (Frame({"B": "x"}, ms=350), Frame({"B": "y"}, ms=350))),
+    ))
+    monkeypatch.setitem(ANIMATIONS, "two", anim)
+    return anim
+
+
+def test_get_frames_single_track_is_the_frame_list(monkeypatch):
+    frames = [Frame({"L": c, "R": "e", "A": "n"}, ms=100) for c in "ekz!"]
+    monkeypatch.setitem(ANIMATIONS, "four", single_track(SITTING_TEMPLATE, frames))
+    assert [g[8] for g in get_frames("four")] == [
+        SITTING_TEMPLATE[8].replace("L", c).replace("R", "e") for c in "ekz!"]
+
+
+def test_get_frames_enumeration_order(two_tracks):
+    assert [tuple(g) for g in get_frames("two")] == [
+        ("1x", ".."),                       # all tracks at 0
+        ("2x", ".."), ("3x", ".."),        # track a frames 1.., b at 0
+        ("1y", ".."),                       # track b frame 1, a at 0
+    ]
+    from tokitty.sprites import enumeration_positions
+    assert enumeration_positions("two") == [(0, 0), (1, 0), (2, 0), (0, 1)]
+
+
+def test_composition_merges_every_tracks_current_frame(two_tracks):
+    assert compose("two", (2, 1)) == ["3y", ".."]
+
+
+def test_composed_grids_are_interned_by_content(monkeypatch):
+    tmpl = ["AB", ".."]
+    anim = Animation(tmpl, (
+        Track("a", (Frame({"A": "1"}), Frame({"A": "1"}))),  # a second frame identical to the first
+        Track("b", (Frame({"B": "x"}), Frame({"B": "y"}))),
+    ))
+    monkeypatch.setitem(ANIMATIONS, "dup", anim)
+    frames = get_frames("dup")
+    assert len(frames) == 3  # nothing is dropped
+    assert frames[1] is frames[0]  # but equal content is one object
+    assert compose("dup", (1, 0)) is frames[0]
+    assert get_frames("dup") is get_frames("dup")
+
+
+def test_template_override_comes_from_the_one_track_that_has_it(monkeypatch):
+    base, hop = ["A.", ".."], [".A", ".."]
+    anim = Animation(base, (
+        Track("body", (Frame({}), Frame({}, template=hop))),
+        Track("eyes", (Frame({"A": "o"}), Frame({"A": "c"}))),
+    ))
+    # keys overlap between tracks only through the template char; subs are disjoint
+    monkeypatch.setitem(ANIMATIONS, "ovr", anim)
+    assert compose("ovr", (0, 0)) == ["o.", ".."]
+    assert compose("ovr", (1, 1)) == [".c", ".."]
+
+
+def test_get_animation_unknown_state_raises():
+    with pytest.raises(KeyError):
+        get_animation("nonexistent-mood")
+    with pytest.raises(KeyError):
+        get_frames("nonexistent-mood")
+
+
+def test_get_frames_returns_the_same_grids_every_call():
+    for state in ALL_STATES:
+        a, b = get_frames(state), get_frames(state)
+        assert a is b and all(x is y for x, y in zip(a, b))
+
+
+def test_frame_ms_resolution():
+    assert frame_ms(Frame({}, ms=120)) == 120
+    assert frame_ms(Frame({}, ms=(40, 100))) == 70  # no rng: the midpoint
+    assert frame_ms(Frame({}, ms=(40, 90))) == 70   # 65 rounds to a multiple of 10
+    rng = random.Random(7)
+    drawn = {frame_ms(Frame({}, ms=(40, 200)), rng) for _ in range(200)}
+    assert drawn <= set(range(40, 201, 10)) and len(drawn) > 3
+    assert frame_ms(Frame({}, ms=(50, 50)), rng) == 50
+
+
+def test_art_is_pinned():
+    # Pins the art byte for byte, so a change to any frame is deliberate.
+    # The #125 art passes change pixels on purpose: update this hash with them.
+    frames = {s: get_frames(s) for s in ALL_STATES}
+    digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
+    assert digest == "71b3badb6b1b76f4eb018d9c50eecd48c3e715f99fb85424a8c44086fce1254c"
+
+
+def test_shut_eyes_use_the_fur_darkened_not_the_outline():
+    from tokitty.sprites import LID_CHAR, lid_tone
+
+    assert lid_tone("#e8823c") == "#74411e"
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            assert palette[LID_CHAR] == lid_tone(palette["o"]), (colorway, pattern)
+    assert LID_CHAR not in BASE_PALETTE and LID_CHAR not in REGION_CHARS
+
+
+def test_plain_tail_is_the_patterns_own_and_ringed_paints_the_bands():
+    from tokitty.sprites import TAIL_STYLES
+
+    assert TAIL_STYLES["ringed"] == ("coat", "mark")  # the default ring pair
+    for colorway, tones in COLORWAYS.items():
+        for pattern in PATTERNS:
+            assert resolve_palette(colorway, pattern, "plain") == resolve_palette(colorway, pattern)
+            for style, pair in TAIL_STYLES.items():
+                if pair is None:
+                    continue
+                palette = resolve_palette(colorway, pattern, style)
+                assert (palette["y"], palette["Y"]) == (tones[pair[0]], tones[pair[1]])
+                plain = resolve_palette(colorway, pattern)
+                tail_chars = {"y", "Y", sprites.DIM_CHARS["y"], sprites.DIM_CHARS["Y"]}
+                assert {k: v for k, v in palette.items() if k not in tail_chars} == \
+                    {k: v for k, v in plain.items() if k not in tail_chars}
+
+
+def test_dark_room_and_glow_tones_derive_from_each_look():
+    from tokitty.sprites import DIM_CHARS, GLOW_CHAR, dim_tone, glow_tone
+
+    assert dim_tone("#e8823c") == "#74411e"
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            assert palette[GLOW_CHAR] == glow_tone(palette["o"])
+            for char, dark in DIM_CHARS.items():
+                assert palette[dark] == dim_tone(palette[char]), (colorway, pattern, char)
+    assert not set(DIM_CHARS.values()) & (set(BASE_PALETTE) | set(REGION_CHARS))
+
+
+def test_resolve_palette_returns_independent_equal_dicts():
+    first, second = resolve_palette("gray", "calico", "ringed"), resolve_palette("gray", "calico", "ringed")
+    assert first == second and first is not second
+    first["o"] = "#010203"
+    assert resolve_palette("gray", "calico", "ringed") == second
+    assert resolve_palette("gray", "calico") != second

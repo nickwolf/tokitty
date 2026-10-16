@@ -227,7 +227,7 @@ How answering from the deck works:
 
 ## Customization
 
-A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern** offers nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
+A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern** offers nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways. **Tail** is an optional third dropdown that swaps the tail for a ringed one (`plain` by default, then `ringed`, `ringed_light`, `ringed_shade` and `ringed_pale`), and it is saved per pane like the other two.
 
 <p align="center">
   <img src="docs/media/looks-grid.png" alt="All six colorways down, all nine patterns across" width="760">
@@ -241,7 +241,7 @@ Colorways run top to bottom in the order listed above, patterns left to right.
 
 Settings ▸ Look has a row with a **Change…** button per overridable piece (Coat, Shade, Card background, Bar fill). Each pick previews live, and **Reset to preset** clears all four back to the current colorway and pattern's stock colors.
 
-Every per-pane choice is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Accounts](#accounts) above for the exact path per OS). With no accounts configured the file has one entry keyed `"default"`, and with accounts it is keyed by each account's identity slug, so each pane keeps its own look and colors. It stores `colorway`, `pattern`, `cat_home` (`inside`, `inside_right` or `on_top`), the four color overrides and the label.
+Every per-pane choice is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Accounts](#accounts) above for the exact path per OS). With no accounts configured the file has one entry keyed `"default"`, and with accounts it is keyed by each account's identity slug, so each pane keeps its own look and colors. It stores `colorway`, `pattern`, `tail`, `cat_home` (`inside`, `inside_right` or `on_top`), the four color overrides and the label.
 
 Each pane also gets a label under the sprite. Set one in the Name field of Settings ▸ Look; a pane with no name shows no label. The Accounts dialog's own list shows a placeholder ("Cat 1", "Cat 2", and so on) for any account that hasn't been renamed, just for that list.
 

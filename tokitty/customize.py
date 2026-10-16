@@ -16,12 +16,13 @@ gracefully instead of crashing the poller/UI.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from tokitty import sprites
 from tokitty.theme import SPOTS
@@ -41,6 +42,7 @@ class Customization:
     overrides: Dict[str, str] = field(default_factory=dict)
     label: str = ""
     cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
+    tail: str = "plain"  # a sprites.TAIL_STYLES name
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -97,12 +99,16 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         cat_home = entry.get("cat_home")
         if not (isinstance(cat_home, str) and cat_home in SPOTS):
             cat_home = "inside"
+        tail = entry.get("tail")
+        if not (isinstance(tail, str) and tail in sprites.TAIL_STYLES):
+            tail = "plain"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
             overrides=_clean_overrides(entry.get("overrides")),
             label=label,
             cat_home=cat_home,
+            tail=tail,
         )
     return result
 
@@ -141,9 +147,20 @@ def rename_account(state_dir: Path, slug: str, label: str) -> None:
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:
-    palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern))
-    if "coat_base" in custom.overrides:
-        palette["o"] = custom.overrides["coat_base"]
-    if "coat_shade" in custom.overrides:
-        palette["O"] = custom.overrides["coat_shade"]
-    return palette
+    """The sprite palette for a customization. Pure in the coat axes and the
+    two coat overrides, so it is computed once per distinct set of them; each
+    call returns a fresh dict the caller may mutate."""
+    return dict(_effective_palette(
+        custom.colorway, custom.pattern, custom.tail,
+        custom.overrides.get("coat_base"), custom.overrides.get("coat_shade")))
+
+
+@functools.lru_cache(maxsize=None)
+def _effective_palette(colorway: str, pattern: str, tail: str,
+                       coat_base: Optional[str], coat_shade: Optional[str]) -> Dict[str, str]:
+    palette = sprites.resolve_palette(colorway, pattern, tail)
+    if coat_base is not None:
+        palette["o"] = coat_base
+    if coat_shade is not None:
+        palette["O"] = coat_shade
+    return sprites.derive_tones(palette)

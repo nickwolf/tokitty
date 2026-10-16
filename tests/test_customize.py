@@ -1,4 +1,6 @@
 
+import pytest
+
 from tokitty import sprites
 from tokitty.customize import (
     SINGLE_KEY,
@@ -195,3 +197,70 @@ def test_cat_home_roundtrip(tmp_path):
     }
     save_customization(tmp_path, data)
     assert load_customization(tmp_path) == data
+
+
+def test_coat_override_carries_into_the_shut_eye_tone():
+    custom = Customization(overrides={"coat_base": "#4080c0"})
+    palette = effective_palette(custom)
+    assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0") == "#204060"
+
+
+def test_tail_round_trips(tmp_path):
+    save_customization(tmp_path, {SINGLE_KEY: Customization(tail="ringed_pale")})
+    assert load_customization(tmp_path)[SINGLE_KEY].tail == "ringed_pale"
+
+
+@pytest.mark.parametrize("raw", ['"tail": "nope"', '"tail": 3', '"tail": null', '"tail": ["ringed"]', '"x": 1'])
+def test_missing_or_invalid_tail_loads_plain(tmp_path, raw):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"colorway": "gray", "pattern": "solid", ' + raw + '}}', encoding="utf-8")
+    got = load_customization(tmp_path)[SINGLE_KEY]
+    assert got.tail == "plain"
+    assert (got.colorway, got.pattern) == ("gray", "solid")
+
+
+def test_legacy_coat_file_loads_plain_tail(tmp_path):
+    (tmp_path / "customization.json").write_text('{"default": {"coat": "calico"}}', encoding="utf-8")
+    assert load_customization(tmp_path)[SINGLE_KEY].tail == "plain"
+
+
+def test_effective_palette_uses_the_tail():
+    plain = effective_palette(Customization())
+    ringed = effective_palette(Customization(tail="ringed"))
+    assert plain == dict(sprites.resolve_palette("orange", "tabby"))
+    assert ringed == dict(sprites.resolve_palette("orange", "tabby", "ringed"))
+    assert (ringed["y"], ringed["Y"]) != (plain["y"], plain["Y"])
+
+
+def test_coat_override_still_rederives_the_lid_with_a_tail():
+    palette = effective_palette(Customization(tail="ringed", overrides={"coat_base": "#4080c0"}))
+    assert palette["o"] == "#4080c0"
+    assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0")
+    assert palette["y"] == sprites.resolve_palette("orange", "tabby", "ringed")["y"]
+
+
+def test_coat_overrides_carry_into_every_derived_tone():
+    custom = Customization(overrides={"coat_base": "#4080c0", "coat_shade": "#204060"})
+    palette = effective_palette(custom)
+    assert palette[sprites.GLOW_CHAR] == sprites.glow_tone("#4080c0")
+    assert palette[sprites.DIM_CHARS["o"]] == sprites.dim_tone("#4080c0")
+    assert palette[sprites.DIM_CHARS["O"]] == sprites.dim_tone("#204060")
+
+
+def test_effective_palette_is_memoized_but_independent():
+    custom = Customization(colorway="gray", pattern="tabby")
+    first, second = effective_palette(custom), effective_palette(custom)
+    assert first == second and first is not second
+    first["o"] = "#000001"  # a caller mutating its copy must not leak
+    assert effective_palette(custom) == second
+
+
+def test_effective_palette_follows_override_changes():
+    base = effective_palette(Customization())
+    tinted = effective_palette(Customization(overrides={"coat_base": "#4080c0"}))
+    shaded = effective_palette(Customization(overrides={"coat_shade": "#102030"}))
+    assert tinted["o"] == "#4080c0" and tinted != base and shaded["O"] == "#102030"
+    assert tinted["-"] != base["-"]  # derived tones re-derived from the override
+    # unrelated overrides do not change the sprite palette
+    assert effective_palette(Customization(overrides={"card_bg": "#222222"})) == base
+    assert effective_palette(Customization()) == base

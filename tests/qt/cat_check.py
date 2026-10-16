@@ -88,7 +88,7 @@ def run_all() -> list:
                 widget.panes[0].draw_next_frame()  # frame 0 shown; advance
                 widget.panes[0].draw_next_frame()  # and a second frame
                 results.append(check(widget))
-                widget.panes[0]._frame_index = 0
+                widget.panes[0]._player.restart(state, 0)
                 widget.panes[0].draw_next_frame()
             widget.deleteLater()
     return results

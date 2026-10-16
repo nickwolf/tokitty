@@ -96,6 +96,7 @@ def migrate_legacy_account_labels(
                     pattern=current.pattern,
                     overrides=dict(current.overrides),
                     label=account.name,
+                    tail=current.tail,
                 )
     return store
 

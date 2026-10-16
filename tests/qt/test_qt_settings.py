@@ -9,8 +9,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
-from tokitty import theme as T
-from tokitty.customize import Customization, load_customization
+from tokitty import sprites, theme as T
+from tokitty.customize import Customization, effective_palette, load_customization
 from tokitty.qt import settings as qs
 from tokitty.qt.settings import SettingsWindow
 from tokitty.settings import load_settings
@@ -651,3 +651,18 @@ def test_the_event_loop_survives_closing_settings_with_the_widget_shown(make_wor
     qapp.exec()
     net.stop()
     assert state["reached"]
+
+
+def test_look_has_a_tail_dropdown_that_writes_through(make_world):
+    world = make_world(2)
+    window = open_window(world, 1)
+    look = window.tabs["look"]
+    assert look.tail.choices() == list(sprites.TAIL_STYLES)
+    assert look.tail.get() == "plain"
+    look.tail.menu.actions()[look.tail.choices().index("ringed")].trigger()
+    assert world.store["k1"].tail == "ringed"
+    assert world.store["k0"].tail == "plain"
+    assert load_customization(world.state_dir)["k1"].tail == "ringed"
+    assert world.widget.panes[1]._tail == "ringed"
+    assert world.widget.panes[1].palette == effective_palette(world.store["k1"])
+    assert look.tail.get() == "ringed"
