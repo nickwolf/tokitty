@@ -383,5 +383,7 @@ def test_render_media_writes_gifs_for_moves_and_variants(tmp_path, hop, monkeypa
     monkeypatch.setattr(render_media, "ALL_STATES", [])
     monkeypatch.setattr(sprites, "TRANSITIONS", {})
     monkeypatch.setattr(render_media, "TRANSITIONS", {})
+    monkeypatch.setattr(sprites, "MOVES", {"hop": sprites.MOVES["hop"]})
+    monkeypatch.setattr(render_media, "MOVES", sprites.MOVES)
     render_media.write_anims(tmp_path, 1)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["anim-content-at-on_top.gif", "anim-move-hop.gif"]

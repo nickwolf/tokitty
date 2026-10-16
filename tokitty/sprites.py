@@ -1763,5 +1763,118 @@ LOAF_SLEEPING_ANIMATION = Animation(_LF_TMPL, (
 SPOT_VARIANTS[("content", "on_top")] = LOAF_CONTENT_ANIMATION
 SPOT_VARIANTS[("sleeping", "on_top")] = LOAF_SLEEPING_ANIMATION
 
+# jump_up / jump_down: the jumps between the card (inside) and its top edge
+# (on_top), 29 rows apart. jump_up wiggles like done_hop, launches with its
+# front paws thrown up, overshoots the edge by three rows (HOP_HEADROOM) with
+# its paws tucked, and drops onto it. jump_down peeks over the edge first, then
+# falls with its front paws reaching for the ground and its tail streaming up.
+_JUMP_ROWS = 29  # theme: on_top sits SPRITE_H + 12 px above inside
+_JUMP_HEAD = [row.replace("A", "n") for row in _overlay(SITTING_TEMPLATE, _SIT_EYES_OPEN)[:14]]
+
+_JUMP_LAUNCH_BODY = [
+    "........ooooooooooo.........",
+    "........ooooooooooO.........",
+    "........ossooowoooO.........",
+    "........oooouuuoooO.........",
+    "........sssuuuuucccO........",
+    "........ooouuuuuccOY........",
+    "........ooouuuuuuoOYY.......",
+    ".........oouuuuuoOO.YY......",
+    ".........ooo...ooO...yy.....",
+    ".........ooo...ooO...yy.....",
+    ".........mmm...mmm....YY....",
+    "......................YY....",
+]
+
+# Each foreleg is three cells wide, stepping out a column every two rows from
+# the shoulder; the right one mirrors the left with its outer edge shaded.
+_JUMP_ARM = ((14, 7), (13, 6), (12, 6), (11, 5), (10, 5), (9, 4), (8, 4), (7, 3), (6, 3))
+_JUMP_ARMS = {**{(r, c + dc): "o" for r, c in _JUMP_ARM for dc in (-1, 0, 1)},
+              **{(r, 27 - c + dc): "o" for r, c in _JUMP_ARM for dc in (-2, -1)},
+              **{(r, 27 - c): "O" for r, c in _JUMP_ARM},
+              **_cells("m", (4, 2, 3), (5, 2, 3), (4, 23, 24), (5, 23, 24))}
+_JUMP_LAUNCH: List[str] = _overlay(_JUMP_HEAD + _JUMP_LAUNCH_BODY, _JUMP_ARMS)
+
+_JUMP_FALL_BODY = [
+    "........ooooooooooo.........",
+    ".......ooooooooooooO........",
+    ".......ossooowooooooO.......",
+    ".......oooouuuuuoooooO......",
+    ".......ssouuuuuuucccO.......",
+    "........oouuuuuuuccO........",
+    "........ooouuuuuuoO.........",
+    "........oo.......oO.........",
+    "........oo.......oO.........",
+    "........oo.......oO.........",
+    "........mm.......mm.........",
+    "............................",
+]
+# The ears swept flat (their tips gone) and the tail rising from the rump
+# behind the right flank.
+_JUMP_FALL: List[str] = _overlay(
+    _JUMP_HEAD[:1] + ["." * 28] + _JUMP_HEAD[2:] + _JUMP_FALL_BODY,
+    {(r, c + dc): band for r, c, band in (
+        (19, 19, "Y"), (18, 20, "Y"), (17, 21, "y"), (16, 21, "y"), (15, 21, "Y"),
+        (14, 22, "Y"), (13, 22, "y"), (12, 23, "y"), (11, 23, "Y"), (10, 23, "Y"))
+     for dc in (0, 1)})
+
+# Looking down over the edge: the head lowered three rows onto the chest, the
+# eyes a row low under dark lids.
+_JUMP_PEEK_DROP = 3
+_JUMP_PEEK_EYES = {(8, 9): "o", (8, 10): "x", (8, 11): "o", (8, 15): "o", (8, 16): "x",
+                   (8, 17): "o", (9, 10): "e", (9, 16): "e"}
+
+
+def _jump_peek() -> List[str]:
+    head = _overlay(SITTING_TEMPLATE, _JUMP_PEEK_EYES)[:14]
+    rows = [list(row) for row in SITTING_TEMPLATE]
+    for r in range(_JUMP_PEEK_DROP):
+        rows[r][:22] = ["."] * 22
+    for r in range(13, -1, -1):
+        for c in range(22):
+            if head[r][c] != ".":
+                rows[r + _JUMP_PEEK_DROP][c] = head[r][c]
+            elif r + _JUMP_PEEK_DROP < 14:
+                rows[r + _JUMP_PEEK_DROP][c] = "."
+    return ["".join(row).replace("A", "n") for row in rows]
+
+
+_JUMP_PEEK = _jump_peek()
+
+
+def _down(rows: int) -> Tuple[int, int]:
+    return (0, rows)
+
+
+MOVES["jump_up"] = single_track(_hop_frame(), [
+    Frame({}, 200, template=_hop_frame()),
+    Frame({}, 150, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 60, template=_JUMP_LAUNCH, offset=_up(10)),
+    Frame({}, 60, template=_JUMP_LAUNCH, offset=_up(24)),
+    Frame({}, 140, template=_hop_frame(pose="tucked"), offset=_up(_JUMP_ROWS + 3)),
+    Frame({}, 70, template=_JUMP_FALL, offset=_up(_JUMP_ROWS + 1)),
+    Frame({}, 150, template=_hop_frame(pose="crouch"), offset=_up(_JUMP_ROWS)),
+    Frame({}, 400, template=_hop_frame(), offset=_up(_JUMP_ROWS)),
+], loop_from=None)
+
+MOVES["jump_down"] = single_track(_hop_frame(), [
+    Frame({}, 200, template=_hop_frame()),
+    Frame({}, 700, template=_JUMP_PEEK),
+    Frame({}, 150, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
+    Frame({}, 100, template=_hop_frame(pose="crouch")),
+    Frame({}, 70, template=_JUMP_LAUNCH, offset=_up(2)),
+    Frame({}, 60, template=_JUMP_FALL, offset=_down(4)),
+    Frame({}, 50, template=_JUMP_FALL, offset=_down(13)),
+    Frame({}, 50, template=_JUMP_FALL, offset=_down(24)),
+    Frame({}, 160, template=_hop_frame(pose="crouch"), offset=_down(_JUMP_ROWS)),
+    Frame({}, 400, template=_hop_frame(), offset=_down(_JUMP_ROWS)),
+], loop_from=None)
+
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 _check_transitions()

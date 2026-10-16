@@ -410,6 +410,51 @@ def test_frame_ms_resolution():
     assert frame_ms(Frame({}, ms=(50, 50)), rng) == 50
 
 
+def test_jumps_land_on_the_spot_they_head_for_within_the_headroom():
+    from tokitty import theme
+    from tokitty.sprites import MOVES
+
+    rise = (theme.placement("inside").origin[1] - theme.placement("on_top").origin[1]) // SCALE
+    for move, sign in (("jump_up", -1), ("jump_down", 1)):
+        frames = MOVES[move].tracks[0].frames
+        assert frames[0].offset == (0, 0)
+        assert frames[-1].offset == (0, sign * rise), move
+        assert frames[-1].template == frames[0].template, move  # lands sitting, as it left
+    # the overshoot above the edge stays inside the room kept clear over the card
+    top = min(f.offset[1] for f in MOVES["jump_up"].tracks[0].frames)
+    assert -top - rise <= theme.HOP_HEADROOM // SCALE
+
+
+def _touching(cell, cells, diagonal=True):
+    r, c = cell
+    return any((r + dr, c + dc) in cells for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+               if (dr or dc) and (diagonal or not (dr and dc)))
+
+
+def test_every_tail_stays_joined_to_the_cat():
+    # Tail cells (the Y/y bands) reach the body through each other, so no
+    # frame leaves a piece of tail floating beside the cat. Stepped diagonals
+    # count as joined, the way the curled tails are drawn.
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, move_name, spot_state, transition_name,
+    )
+
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    for name in names:
+        for i, grid in enumerate(get_frames(name)):
+            cells = {(r, c): ch for r, row in enumerate(grid) for c, ch in enumerate(row) if ch != "."}
+            tail = {cell for cell, ch in cells.items() if ch in "Yy"}
+            body = set(cells) - tail
+            joined = {cell for cell in tail if _touching(cell, body)}
+            grew = True
+            while grew:
+                more = {cell for cell in tail - joined if _touching(cell, joined)}
+                joined |= more
+                grew = bool(more)
+            assert joined == tail, (name, i, sorted(tail - joined))
+
+
 def test_art_is_pinned():
     # Pins the art byte for byte, so a change to any frame is deliberate.
     # The #125 art passes change pixels on purpose: update this hash with them.
@@ -423,7 +468,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "0a03c54678bb499fe49a8cf66316721b985944a84e37e3f511b26bd50c5c2530"
+    assert digest == "f254945ff47db236eb5fc3fc5eee871cf17bd98f0acf4b437c6ffc127c36226c"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
