@@ -838,14 +838,21 @@ ALERT_ANIMATION = Animation(_AL_TMPL, (
     )),
 ))
 
-# panicked: the whole cat shakes in bursts, the tail puffs up into a bottle
-# brush, the "!" flashes.
-_PUFF_TAIL = _tail((11, 23, 24), (12, 22, 25), (13, 22, 26), (14, 21, 26), (15, 22, 26),
-                   (16, 22, 26), (17, 21, 26), (18, 22, 26), (19, 22, 25), (20, 21, 25),
-                   (21, 21, 24), (22, 20, 23), (23, 19, 22))
-_PANIC_BASE = _overlay(
-    [row.replace("y", ".").replace("Y", ".") for row in ALERT_TEMPLATE], _PUFF_TAIL)
-_PN_TMPL, (_PN_OPEN,) = _pose_cells(_PANIC_BASE, [_ALERT_EYES_OPEN])
+# panicked: the whole cat shakes in bursts, the "!" flashes, and on the way
+# in the tail fluffs up (plain, bristled tip, full puff) and stays puffed.
+_ALERT_TAIL_PLAIN = _tail((14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24), (18, 24, 25),
+                          (19, 24, 25), (20, 24, 25), (21, 23, 24), (22, 20, 22), (23, 19, 21))
+_ALERT_TAIL_BRISTLE = _tail((12, 21, 21), (13, 20, 23), (14, 21, 23), (15, 22, 24), (16, 23, 25),
+                            (17, 23, 24), (18, 24, 25), (19, 24, 25), (20, 24, 25), (21, 23, 24),
+                            (22, 20, 22), (23, 19, 21))
+# One cell wider than the plain curve, with fur spikes on alternate rows.
+_ALERT_TAIL_PUFF = _tail((13, 21, 21), (14, 21, 23), (15, 22, 24), (16, 22, 25), (17, 23, 25),
+                         (18, 23, 26), (19, 24, 26), (20, 23, 26), (21, 23, 25), (22, 20, 24),
+                         (23, 19, 22))
+_PANIC_BASE = [row.replace("y", ".").replace("Y", ".") for row in ALERT_TEMPLATE]
+_PN_TMPL, (_PN_TAIL_PLAIN, _PN_TAIL_BRISTLE, _PN_TAIL_PUFF) = _pose_cells(
+    _PANIC_BASE, [_ALERT_TAIL_PLAIN, _ALERT_TAIL_BRISTLE, _ALERT_TAIL_PUFF])
+_PN_TMPL, (_PN_OPEN,) = _pose_cells(_PN_TMPL, [_ALERT_EYES_OPEN])
 _PN_TMPL, (_PN_BANG_ON, _PN_BANG_OFF) = _pose_cells(_PN_TMPL, [_BANG_HIGH, {}])
 
 PANICKED_ANIMATION = Animation(_PN_TMPL, (
@@ -863,6 +870,11 @@ PANICKED_ANIMATION = Animation(_PN_TMPL, (
         Frame(_PN_BANG_ON, 300),
         Frame(_PN_BANG_OFF, 150),
     )),
+    Track("tail", (
+        Frame(_PN_TAIL_PLAIN, 120),
+        Frame(_PN_TAIL_BRISTLE, 120),
+        Frame(_PN_TAIL_PUFF),
+    ), loop_from=None),
 ))
 
 # confused: a yellow "?" bobbing above the head, one ear drooped, the eyes
