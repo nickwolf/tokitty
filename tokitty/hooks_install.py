@@ -1836,8 +1836,11 @@ def apply_account_mutation(
     retry_pending_hook_op to pick up.
 
     A provider without hooks stops after the save: no pending op is
-    recorded and nothing is written inside config_dir."""
+    recorded and nothing is written inside config_dir. The same goes for
+    op "move", which only reorders accounts.json."""
     save_accounts(state_dir, accounts)
+    if op == "move":
+        return ConfigDirResult(config_dir, True, "reordered")
     if not provider_has_hooks(provider):
         return ConfigDirResult(config_dir, True, "saved, this harness has no hooks")
     save_pending_hook_op(state_dir, op, config_dir, provider)

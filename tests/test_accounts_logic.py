@@ -186,3 +186,39 @@ def test_elide_middle():
     out = elide_middle("x" * 80)
     assert len(out) <= 38 and "…" in out
 
+
+
+def _three():
+    return [Account(name=n, config_dir=f"/home/u/.claude-{n}") for n in ("a", "b", "c")]
+
+
+def test_move_account_swaps_with_the_neighbour():
+    from tokitty.accounts_logic import move_account
+
+    assert [a.name for a in move_account(_three(), "b", -1)] == ["b", "a", "c"]
+    assert [a.name for a in move_account(_three(), "b", 1)] == ["a", "c", "b"]
+
+
+def test_move_account_refuses_to_leave_the_list_or_move_a_missing_account():
+    from tokitty.accounts_logic import move_account
+
+    assert move_account(_three(), "a", -1) is None
+    assert move_account(_three(), "c", 1) is None
+    assert move_account(_three(), "gone", 1) is None
+    assert move_account([Account(name="a", config_dir="/x")], "a", 1) is None
+
+
+def test_move_account_does_not_mutate_its_input():
+    from tokitty.accounts_logic import move_account
+
+    accounts = _three()
+    move_account(accounts, "a", 1)
+    assert [a.name for a in accounts] == ["a", "b", "c"]
+
+
+def test_build_row_specs_move_flags_follow_position():
+    rows = build_row_specs(_three(), {})
+    assert [(r.move_up_enabled, r.move_down_enabled) for r in rows] == [
+        (False, True), (True, True), (True, False)]
+    (single,) = build_row_specs(_three()[:1], {})
+    assert (single.move_up_enabled, single.move_down_enabled) == (False, False)

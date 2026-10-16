@@ -2513,3 +2513,24 @@ def test_uninstall_hooks_prints_no_warning_line_without_one(monkeypatch, tmp_pat
     assert rc == 0
     err = capsys.readouterr().err
     assert "warning" not in err
+
+
+def test_apply_account_mutation_move_saves_the_order_and_touches_no_hooks(tmp_path):
+    from tokitty.accounts import load_accounts
+
+    def boom(*args, **kwargs):
+        raise AssertionError("a move must not run hook work")
+
+    accounts = [Account(name="b", config_dir="/home/u/.claude-b"),
+                Account(name="a", config_dir="/home/u/.claude-a")]
+    (tmp_path / "customization.json").write_text('{"a": {"label": "A"}}')
+    before = (tmp_path / "customization.json").read_text()
+
+    result = apply_account_mutation(
+        tmp_path, accounts, "move", "/home/u/.claude-a",
+        install_fn=boom, uninstall_fn=boom)
+
+    assert result.ok
+    assert [a.name for a in load_accounts(tmp_path)] == ["b", "a"]
+    assert load_pending_hook_op(tmp_path) is None
+    assert (tmp_path / "customization.json").read_text() == before

@@ -995,3 +995,96 @@ def test_a_closed_tab_stops_watching_the_manager(make_world, retries, dialogs, f
     manager = qa.current()
     window.close()
     assert tab._on_manager_closed not in manager.closed
+
+
+def three_accounts(state_dir):
+    write_accounts(state_dir, *[(n, str(state_dir / n), "claude") for n in ("acct-a", "acct-b", "acct-c")])
+
+
+def arrows(manager, glyph):
+    return buttons(manager, glyph)
+
+
+def test_move_buttons_are_disabled_at_the_ends(make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    assert [b.isEnabled() for b in arrows(manager, "↑")] == [False, True, True]
+    assert [b.isEnabled() for b in arrows(manager, "↓")] == [True, True, False]
+
+
+def test_no_move_buttons_with_a_single_account(make_world, retries, dialogs, mutations):
+    world = make_world(1)
+    write_accounts(world.state_dir, ("acct-a", str(world.state_dir / "a"), "claude"))
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    assert arrows(manager, "↑") == [] and arrows(manager, "↓") == []
+
+
+def test_move_buttons_are_disabled_while_busy(make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    # the startup retry is still in flight
+    assert not any(b.isEnabled() for b in arrows(manager, "↑") + arrows(manager, "↓"))
+    assert pump(settled(manager))
+    mutations.gate = threading.Event()
+    arrows(manager, "↓")[0].click()
+    assert manager._mutation_in_flight
+    assert not any(b.isEnabled() for b in arrows(manager, "↑") + arrows(manager, "↓"))
+    mutations.gate.set()
+    assert pump(settled(manager))
+    assert arrows(manager, "↓")[0].isEnabled()
+
+
+def test_move_runs_the_move_op_off_thread_with_the_new_order(make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    arrows(manager, "↑")[2].click()
+    assert pump(settled(manager))
+    (call,) = mutations.calls
+    assert call.op == "move" and call.names == ["acct-a", "acct-c", "acct-b"]
+    assert call.thread is not MAIN and call.guarded
+    assert dialogs.boxes == []
+
+
+def test_a_stale_move_row_changes_nothing(make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    manager._on_move("acct-gone", str(world.state_dir / "x"), "claude", 1)
+    manager._on_move("acct-a", str(world.state_dir / "acct-a"), "claude", -1)
+    assert mutations.calls == []
+
+
+def test_move_uses_the_order_on_disk_not_the_stale_row(make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    # another window reordered meanwhile: c is now first
+    write_accounts(world.state_dir, *[(n, str(world.state_dir / n), "claude")
+                                      for n in ("acct-c", "acct-a", "acct-b")])
+    manager._on_move("acct-a", str(world.state_dir / "acct-a"), "claude", 1)
+    assert pump(settled(manager))
+    assert mutations.calls[0].names == ["acct-c", "acct-b", "acct-a"]
+
+
+def test_a_failed_move_reports_the_save_and_leaves_no_pending_hook_failure(
+        make_world, retries, dialogs, mutations):
+    world = make_world(3)
+    three_accounts(world.state_dir)
+    manager = open_manager(world)
+    assert pump(settled(manager))
+    mutations.outcome = OSError("disk full")
+    arrows(manager, "↓")[0].click()
+    assert pump(settled(manager))
+    kind, _parent, _title, body = dialogs.boxes[-1]
+    assert kind == "critical" and "Couldn't save the new order" in body and "disk full" in body
+    assert "hook" not in body
+    assert not manager._pending_hook_failure
+    assert arrows(manager, "↓")[0].isEnabled()
