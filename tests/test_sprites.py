@@ -420,7 +420,7 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "c56a73beab2cef487067fcadb02b29f52088cfab79065895cea17255cb10c788"
+    assert digest == "f00672d8cdbe8b06d64edf807af8ec9a735fe275dcd9ffd2b8234d3e349a76a6"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
@@ -447,5 +447,19 @@ def test_plain_tail_is_the_patterns_own_and_ringed_paints_the_bands():
                 palette = resolve_palette(colorway, pattern, style)
                 assert (palette["y"], palette["Y"]) == (tones[pair[0]], tones[pair[1]])
                 plain = resolve_palette(colorway, pattern)
-                assert {k: v for k, v in palette.items() if k not in "yY"} == \
-                    {k: v for k, v in plain.items() if k not in "yY"}
+                tail_chars = {"y", "Y", sprites.DIM_CHARS["y"], sprites.DIM_CHARS["Y"]}
+                assert {k: v for k, v in palette.items() if k not in tail_chars} == \
+                    {k: v for k, v in plain.items() if k not in tail_chars}
+
+
+def test_dark_room_and_glow_tones_derive_from_each_look():
+    from tokitty.sprites import DIM_CHARS, GLOW_CHAR, dim_tone, glow_tone
+
+    assert dim_tone("#e8823c") == "#74411e"
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            assert palette[GLOW_CHAR] == glow_tone(palette["o"])
+            for char, dark in DIM_CHARS.items():
+                assert palette[dark] == dim_tone(palette[char]), (colorway, pattern, char)
+    assert not set(DIM_CHARS.values()) & (set(BASE_PALETTE) | set(REGION_CHARS))

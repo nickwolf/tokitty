@@ -156,12 +156,13 @@ def _shown(pane):
 
 def test_state_change_restarts_at_frame_zero(synth):
     synth("a", [100, 100, 100])
+    synth("b", [800, 800])
     clock = Clock()
     pane = _pane(clock)
     pane.render("a", 0, 0, "", "", "", None, None, False)
     assert pane.tick(clock.now + 100) and _shown(pane) == 1
     clock.now += 150
-    pane.render("working", 0, 0, "", "", "", None, None, False)
+    pane.render("b", 0, 0, "", "", "", None, None, False)
     assert _shown(pane) == 0
     assert pane.next_due_ms() == clock.now + 800
 

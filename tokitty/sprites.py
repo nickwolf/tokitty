@@ -55,6 +55,7 @@ BASE_PALETTE: Dict[str, str] = {
     "f": "#ff3fa4",  # flag cloth -- hot magenta, distinct from every accent
     "d": "#c9a15a",  # flag pole -- light wood, reads against dark backdrops
     "G": "#5a4632",  # ground line -- fixed earth tone, never varies with coat
+    "W": "#e8fbff",  # white lit by the laptop screen in the dark (working)
 }
 
 # --- colorway x pattern model (replaces the old bundled coat presets) ---
@@ -142,8 +143,17 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
     rings = TAIL_STYLES[tail]
     if rings is not None:
         merged["y"], merged["Y"] = tones[rings[0]], tones[rings[1]]
-    merged[LID_CHAR] = lid_tone(merged["o"])
-    return merged
+    return derive_tones(merged)
+
+
+def derive_tones(palette: Dict[str, str]) -> Dict[str, str]:
+    """Fill in the tones derived from a palette's own colours (the lid, the
+    screen glow, the dark-room twins), so a coat override can re-derive them."""
+    palette[LID_CHAR] = lid_tone(palette["o"])
+    palette[GLOW_CHAR] = glow_tone(palette["o"])
+    for char, dark in DIM_CHARS.items():
+        palette[dark] = dim_tone(palette[char])
+    return palette
 
 
 # Shut eyes are drawn in the fur colour darkened, not the outline black,
@@ -151,6 +161,30 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
 # has to re-derive it (customize.effective_palette does).
 LID_CHAR = "-"
 LID_DARKEN = 0.5
+
+
+# Dark-room twins (working): every coat and white char has a dimmed copy,
+# so the whole cat can sit in shadow while the screen lights bands of it.
+DIM_CHARS: Dict[str, str] = {"o": "(", "O": ")", "x": "[", "s": "]", "c": "{", "m": "}",
+                             "u": "<", "w": ">", "y": "^", "Y": "_", "p": ";", "n": ":", "g": "|"}
+DIM_FACTOR = 0.5
+
+
+def dim_tone(color: str) -> str:
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(v * DIM_FACTOR) for v in (r, g, b))
+
+
+GLOW_CHAR = "~"
+GLOW_LIGHT = "#c8f2ff"  # the bright screen glow, BASE_PALETTE "B"
+GLOW_MIX = 0.55
+
+
+def glow_tone(fur: str) -> str:
+    """Fur lit by the laptop screen: the fur colour pulled toward the glow."""
+    a = [int(fur[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(GLOW_LIGHT[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * GLOW_MIX) for x, y in zip(a, b))
 
 
 def lid_tone(fur: str) -> str:
@@ -539,7 +573,8 @@ def _pose_cells(template: List[str], poses: Sequence[Dict[Tuple[int, int], str]]
     pose paints here" pattern, and
     pose i's subs paint its own cells and blank the rest. Returns the marked
     template and one subs dict per pose."""
-    used = set("".join(template)) | set(BASE_PALETTE) | set(REGION_CHARS) | {"p", LID_CHAR}
+    used = (set("".join(template)) | set(BASE_PALETTE) | set(REGION_CHARS)
+            | {"p", LID_CHAR, GLOW_CHAR} | set(DIM_CHARS.values()))
     pool = [ch for ch in _MARKER_CHARS if ch not in used]
     cells = sorted({cell for pose in poses for cell in pose})
     # A pose that leaves a cell unpainted blanks it, so the cells may only
@@ -1143,6 +1178,151 @@ STIRRING_ANIMATION = Animation(_ST_TMPL, (
     )),
 ))
 
+
+# ---- props: working, thinking, permission ------------------------------------
+# working, in a dark room: paws typing in bursts on the keyboard, bands of
+# screen light scrolling up the face, a lean in to read, blinks, a slow
+# tail sway and the odd ear twitch.
+_PAWS_DOWN = _cells("m", (22, 9, 12))
+_PAWS_LEFT_UP = {**_PAWS_DOWN, (22, 9): "g", (22, 10): "g"}
+_PAWS_RIGHT_UP = {**_PAWS_DOWN, (22, 11): "g", (22, 12): "g"}
+# The laptop faces the cat, so we see the back of its lid (a glowing logo in
+# the middle). The room is dark: the whole cat is drawn in its dim twins,
+# its eyes still bright, and two lines of screen light scroll up the face,
+# chin to brow, as what's on the screen moves.
+
+
+def _dim(pose: Dict[Tuple[int, int], str]) -> Dict[Tuple[int, int], str]:
+    return {cell: DIM_CHARS.get(ch, ch) for cell, ch in pose.items()}
+
+
+_WK_BASE = [row.replace("S", "g") for row in WORKING_TEMPLATE]
+_WK_BASE = _overlay(_WK_BASE, {(17, 5): "B", (22, 9): "g", (22, 10): "g", (22, 11): "g", (22, 12): "g"})
+_WK_BASE = ["".join(DIM_CHARS.get(ch, ch) for ch in row) for row in _WK_BASE]
+_WRK_TMPL = _WK_BASE
+_EYE_CELLS = set(_SIT_EYE_CELLS)
+_FACE_LIGHT = {"o": GLOW_CHAR, "x": GLOW_CHAR, "w": "W", "s": "s", "c": "c", "p": "p", "n": "n"}
+
+
+def _light_band(rows) -> Dict[Tuple[int, int], str]:
+    cells = {}
+    for r in range(3, 14):
+        for c in range(5, 21):
+            ch = WORKING_TEMPLATE[r][c]
+            if ch in _FACE_LIGHT and (r, c) not in _EYE_CELLS:
+                cells[(r, c)] = _FACE_LIGHT[ch] if r in rows else DIM_CHARS[ch]
+    return cells
+
+
+_LIGHT_BANDS = [_light_band(())] + [_light_band((13 - k, 10 - k)) for k in range(6)]
+_WRK_TMPL, (_WRK_PAWS_DOWN, _WRK_PAWS_L, _WRK_PAWS_R) = _pose_cells(
+    _WRK_TMPL, [_dim(_PAWS_DOWN), _dim(_PAWS_LEFT_UP), _dim(_PAWS_RIGHT_UP)])
+_WRK_TMPL, _WRK_LIGHT = _pose_cells(_WRK_TMPL, _LIGHT_BANDS)
+_WRK_TMPL, (_WRK_OPEN, _WRK_LINE) = _pose_cells(_WRK_TMPL, [_dim(_SIT_EYES_OPEN), _dim(_SIT_EYES_LINE)])
+_WRK_TMPL, (_WRK_T_NEUTRAL, _WRK_T_OUT, _WRK_T_UP) = _pose_cells(
+    _WRK_TMPL, [_dim(_SIT_TAIL_NEUTRAL), _dim(_SIT_TAIL_OUT), _dim(_SIT_TAIL_UP)])
+_WRK_TMPL, (_WRK_EAR_REST, _WRK_EAR_FLICK) = _pose_cells(
+    _WRK_TMPL, [_dim(_SIT_EAR_REST), _dim(_SIT_EAR_FLICK)])
+
+WORKING_ANIMATION = Animation(_WRK_TMPL, (
+    Track("paws", (
+        Frame(_WRK_PAWS_DOWN, (400, 1200)),
+        Frame(_WRK_PAWS_L, 90), Frame(_WRK_PAWS_R, 90), Frame(_WRK_PAWS_L, 90),
+        Frame(_WRK_PAWS_R, 90), Frame(_WRK_PAWS_L, 90), Frame(_WRK_PAWS_R, 90),
+    )),
+    Track("glow", (
+        Frame(_WRK_LIGHT[0], (400, 1200)),
+        *(Frame(band, 120) for band in _WRK_LIGHT[1:]),
+    )),
+    Track("eyes", (
+        Frame({**_WRK_OPEN, "A": ":"}, (2000, 5000)),
+        Frame({**_WRK_LINE, "A": ":"}, 140),
+    )),
+    Track("lean", (
+        Frame({}, (10000, 20000)),
+        Frame({}, (1000, 1600), template=_sink_head(_WRK_TMPL)),
+    )),
+    Track("tail", (
+        Frame(_WRK_T_NEUTRAL, (1500, 3000)),
+        Frame(_WRK_T_OUT, 300),
+        Frame(_WRK_T_UP, (500, 900)),
+        Frame(_WRK_T_OUT, 300),
+    )),
+    Track("ears", (
+        Frame(_WRK_EAR_REST, (8000, 20000)),
+        Frame(_WRK_EAR_FLICK, 100),
+        Frame(_WRK_EAR_REST, 120),
+        Frame(_WRK_EAR_FLICK, 100),
+    )),
+))
+
+# thinking: a thought bubble builds from a dot to a full bubble with "..."
+# in it, holds, pops and clears; the eyes glance up toward it and the tail
+# tip taps.
+# A classic thought bubble up and to the left of the head: a scalloped white
+# cloud with yellow dots in it, and a trail of a medium and a small circle
+# down to the head.
+_BUBBLE_DOT = _glyph("w", 6, 5, "#")
+_BUBBLE_TRAIL = {**_BUBBLE_DOT, **_glyph("w", 4, 3, "##", "##")}
+_BUBBLE_SMALL = {**_BUBBLE_TRAIL, **_glyph("w", 1, 1, ".##.", "####", ".##.")}
+_BUBBLE_FULL = {**_BUBBLE_TRAIL, **_glyph("w", 0, 0, ".##.##.", "#######", "#######", ".#####."),
+                (2, 1): "?", (2, 3): "?", (2, 5): "?"}
+_BUBBLE_POP = _cells("w", (0, 0, 0), (0, 6, 6), (3, 0, 0), (2, 6, 6), (5, 3, 3))
+
+_TH_TMPL, (_TH_NONE, _TH_DOT, _TH_TRAIL, _TH_SMALL, _TH_FULL, _TH_POP) = _pose_cells(
+    SITTING_TEMPLATE, [{}, _BUBBLE_DOT, _BUBBLE_TRAIL, _BUBBLE_SMALL, _BUBBLE_FULL, _BUBBLE_POP])
+_TH_TMPL, (_TH_OPEN, _TH_RIGHT, _TH_LINE) = _pose_cells(
+    _TH_TMPL, [_SIT_EYES_OPEN, _SIT_EYES_LEFT, _SIT_EYES_LINE])
+_TH_TMPL, (_TH_T_NEUTRAL, _TH_T_OUT) = _pose_cells(_TH_TMPL, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT])
+
+THINKING_ANIMATION = Animation(_TH_TMPL, (
+    # Frame 0 is the full bubble, so the previews show the cat mid-thought.
+    Track("bubble", (
+        Frame(_TH_FULL, (1200, 2000)),
+        Frame(_TH_POP, 150),
+        Frame(_TH_NONE, (300, 700)),
+        Frame(_TH_DOT, 220),
+        Frame(_TH_TRAIL, 220),
+        Frame(_TH_SMALL, 260),
+    )),
+    Track("eyes", (
+        Frame({**_TH_OPEN, **_NOSE}, (1500, 3000)),
+        Frame({**_TH_RIGHT, **_NOSE}, (1000, 2000)),
+        Frame({**_TH_OPEN, **_NOSE}, 300),
+        Frame({**_TH_LINE, **_NOSE}, 140),
+    )),
+    Track("tail", (
+        Frame(_TH_T_NEUTRAL, (2000, 4000)),
+        Frame(_TH_T_OUT, 120), Frame(_TH_T_NEUTRAL, 120), Frame(_TH_T_OUT, 120),
+        Frame(_TH_T_NEUTRAL, 120), Frame(_TH_T_OUT, 120),
+    )),
+))
+
+# permission: the pennant ripples on a straight pole,
+# eyes wide with a rare blink.
+# The pole is held straight: it ends just below the paw instead of jogging
+# across the tail, which gets its cells back from the alert template.
+_PM_BASE = _overlay(
+    [row.replace("6", ".").replace("7", ".").replace("8", "d") for row in PERMISSION_TEMPLATE],
+    {(r, c): ALERT_TEMPLATE[r][c] for r, c in ((14, 25), (15, 24), (16, 24), (17, 23), (18, 23), (19, 22))})
+# The pennant ripples: a wave runs along its top edge out to the tip.
+_FLAG_WAVES = [
+    _cells("f", (0, 19, 24), (1, 19, 24), (2, 20, 24), (3, 21, 24), (4, 22, 24)),
+    _cells("f", (0, 20, 24), (1, 19, 24), (2, 20, 24), (3, 21, 24), (4, 22, 24)),
+    _cells("f", (0, 22, 24), (1, 20, 24), (2, 20, 24), (3, 21, 24), (4, 22, 24)),
+]
+_PM_TMPL, (_PM_W0, _PM_W1, _PM_W2) = _pose_cells(_PM_BASE, _FLAG_WAVES)
+_PM_TMPL, (_PM_OPEN, _PM_LINE) = _pose_cells(_PM_TMPL, [_ALERT_EYES_OPEN, _ALERT_EYES_LINE])
+_BANG_NOSE = {"A": "!"}
+
+PERMISSION_ANIMATION = Animation(_PM_TMPL, (
+    Track("flag", (Frame(_PM_W0, 250), Frame(_PM_W1, 250), Frame(_PM_W2, 250), Frame(_PM_W1, 250))),
+    Track("eyes", (
+        Frame({**_PM_OPEN, **_BANG_NOSE}, (3000, 6000)),
+        Frame({**_PM_LINE, **_BANG_NOSE}, 140),
+    )),
+))
+
 ANIMATIONS: Dict[str, Animation] = {
     "sleeping": SLEEPING_ANIMATION,
     "content": CONTENT_ANIMATION,
@@ -1156,20 +1336,9 @@ ANIMATIONS: Dict[str, Animation] = {
     # (left, up, right, up, left, ...) instead of snapping right-to-left.
     "flopped": FLOPPED_ANIMATION,
     "stirring": STIRRING_ANIMATION,
-    "working": _anim(WORKING_TEMPLATE, [
-        {"L": "e", "R": "e", "A": "n", "S": "b", "P": "g"},
-        # typing pulse: lidded eyes, looking down at the bright screen
-        {"L": "k", "R": "k", "A": "n", "S": "B", "P": "w"},
-    ]),
-    "thinking": _anim(THINKING_TEMPLATE, [
-        {"L": "e", "R": "e", "A": "n", "t": "?", "T": "."},
-        # bubble grows, one eye squints, nose flashes the accent
-        {"L": "e", "R": "k", "A": "?", "t": "?", "T": "?"},
-    ]),
-    "permission": _anim(PERMISSION_TEMPLATE, [
-        {"L": "e", "R": "e", "A": "!", "8": "d", "6": "f", "7": "."},
-        {"L": "e", "R": "e", "A": "!", "8": "d", "6": ".", "7": "f"},
-    ]),
+    "working": WORKING_ANIMATION,
+    "thinking": THINKING_ANIMATION,
+    "permission": PERMISSION_ANIMATION,
     # done_hop is the only state whose frames use different base grids
     # (whole-cat translate): each frame carries its own template.
     "done_hop": single_track(DONE_HOP_GROUNDED_TEMPLATE, [

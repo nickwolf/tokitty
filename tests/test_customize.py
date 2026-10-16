@@ -237,3 +237,11 @@ def test_coat_override_still_rederives_the_lid_with_a_tail():
     assert palette["o"] == "#4080c0"
     assert palette[sprites.LID_CHAR] == sprites.lid_tone("#4080c0")
     assert palette["y"] == sprites.resolve_palette("orange", "tabby", "ringed")["y"]
+
+
+def test_coat_overrides_carry_into_every_derived_tone():
+    custom = Customization(overrides={"coat_base": "#4080c0", "coat_shade": "#204060"})
+    palette = effective_palette(custom)
+    assert palette[sprites.GLOW_CHAR] == sprites.glow_tone("#4080c0")
+    assert palette[sprites.DIM_CHARS["o"]] == sprites.dim_tone("#4080c0")
+    assert palette[sprites.DIM_CHARS["O"]] == sprites.dim_tone("#204060")
