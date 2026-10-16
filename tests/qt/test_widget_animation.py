@@ -179,3 +179,37 @@ def test_drop_images_clears_everything(qapp):
     assert widget._images
     widget._drop_images()
     assert widget._images == {}
+
+
+def test_pruning_keeps_the_grids_of_a_playing_transition(qapp, synth, monkeypatch):
+    monkeypatch.setitem(sprites.TRANSITIONS, ("slow", "fast"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"L": "k", "A": c}, ms=100) for c in "nz"], None))
+    widget = make()
+    widget.anim.stop()
+    pane = widget.panes[0]
+    render(pane, "slow")
+    render(pane, "fast")
+    assert pane.playing == "slow>fast"
+    transition_grid = sprites.get_frames("slow>fast")[1]
+    from tokitty.qt.widget import palette_signature
+    widget._images[(id(transition_grid), palette_signature(pane.palette))] = "kept"
+    stale = object()  # a grid no state owns
+    widget._images[(id(stale), palette_signature(pane.palette))] = "gone"
+    widget._prune_images()
+    assert list(widget._images.values()) == ["kept"]
+    widget.anim.stop()
+
+
+def test_timer_wakes_for_the_end_of_a_transition(qapp, synth, monkeypatch):
+    monkeypatch.setitem(sprites.TRANSITIONS, ("slow", "fast"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"L": "k"}, ms=300)], None))
+    clock = Clock()
+    widget = make(1, clock)
+    render(widget.panes[0], "slow")
+    render(widget.panes[0], "fast")
+    assert widget.panes[0].next_due_ms() == 300
+    assert widget.anim.isActive() and widget.anim.interval() == 300
+    clock.now = 300
+    widget._next_frames()
+    assert widget.panes[0].playing == "fast" and widget.panes[0].next_due_ms() == 400
+    widget.anim.stop()

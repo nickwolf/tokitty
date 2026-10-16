@@ -345,3 +345,58 @@ def test_current_frame_index_is_none_off_the_enumeration(monkeypatch):
     pane._player.positions = [1, 1]
     grid, index = pane.current_frame()
     assert index is None and grid is sprites.compose("multi", (1, 1))
+
+
+def _transition_pane(monkeypatch):
+    for name in ("a", "b"):
+        monkeypatch.setitem(sprites.ANIMATIONS, name, sprites.single_track(
+            sprites.SITTING_TEMPLATE, [sprites.Frame({"A": c}, ms=100) for c in "nz"], 0))
+    monkeypatch.setitem(sprites.TRANSITIONS, ("a", "b"), sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({"L": c}, ms=100) for c in "ek"], None))
+    clock = [0]
+    return QtPane(clock=lambda: clock[0]), clock
+
+
+def _draw(pane, state):
+    pane.render(state, 0, 0, "", "", "", None, None, False)
+
+
+def test_transition_plays_on_a_state_change_but_never_on_the_first_render(monkeypatch):
+    pane, clock = _transition_pane(monkeypatch)
+    # sleeping is the constructor's placeholder: the first render into any
+    # state, even one a transition from "sleeping" exists for, plays none
+    monkeypatch.setitem(sprites.TRANSITIONS, ("sleeping", "a"), sprites.TRANSITIONS[("a", "b")])
+    _draw(pane, "a")
+    assert pane.playing == "a" and pane._current_state == "a"
+    clock[0] = 50
+    _draw(pane, "b")
+    assert pane.playing == "a>b" and pane._current_state == "b"
+    assert pane.next_due_ms() == 150
+    # polling the same state mid-transition leaves it alone
+    clock[0] = 120
+    _draw(pane, "b")
+    assert pane.playing == "a>b" and pane.next_due_ms() == 150
+    pane.tick(150)
+    pane.tick(250)  # last frame's hold over: the target takes over from 250
+    assert pane.playing == "b" and pane.next_due_ms() == 350
+
+
+def test_state_change_mid_transition_passes_the_logical_state(monkeypatch):
+    pane, clock = _transition_pane(monkeypatch)
+    _draw(pane, "a")
+    _draw(pane, "b")
+    assert pane.playing == "a>b"
+    _draw(pane, "a")  # no b>a transition: plain a
+    assert pane.playing == "a"
+    _draw(pane, "b")
+    assert pane.playing == "a>b"
+
+
+def test_draw_next_frame_steps_through_the_playing_animation(monkeypatch):
+    pane, _ = _transition_pane(monkeypatch)
+    _draw(pane, "a")
+    _draw(pane, "b")
+    _, index = pane.current_frame()
+    assert index == 0
+    pane.draw_next_frame()
+    assert pane.current_frame()[1] == 1 and pane.playing == "a>b"

@@ -1,5 +1,6 @@
 """Render README media: per-state PNG stills, a dual-cat card, the flag GIF,
-and an animated GIF of every state drawn on tracks (anim-<state>.gif).
+an animated GIF of every state drawn on tracks (anim-<state>.gif), and one of
+every transition (anim-<from>-to-<to>.gif).
 
 Stills reuse render_sheet's stdlib rasterizer; the GIF is assembled with
 Pillow, which is a dev-only dependency of this script (the shipped app
@@ -17,7 +18,10 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tokitty.sprites import ALL_STATES, LEGACY_COAT_MAP, get_frames, get_tracks, resolve_palette
+from tokitty.sprites import (
+    ALL_STATES, LEGACY_COAT_MAP, TRANSITIONS, frame_ms_max, get_frames, get_tracks,
+    resolve_palette, transition_name,
+)
 from render_sheet import BG, _hex_to_rgb, _write_png, write_gif
 from tokitty.sprite_raster import raster_frame
 
@@ -31,6 +35,7 @@ ANIM_SECONDS = 30  # long enough for the random holds to show their range
 # Seconds for states whose rare moments need longer to come round: the
 # sleeping cat's peek is 20 to 45 s apart.
 ANIM_SECONDS_FOR = {"sleeping": 50}
+TRANSITION_TAIL_SECONDS = 3  # the target state played after a transition, then it loops
 
 
 def write_anims(out: Path, scale: int) -> None:
@@ -41,6 +46,16 @@ def write_anims(out: Path, scale: int) -> None:
             seconds = ANIM_SECONDS_FOR.get(state, ANIM_SECONDS)
             frames = write_gif(out / f"anim-{state}.gif", state, scale=scale, seconds=seconds)
             print(f"anim-{state}.gif ({frames} frames)")
+    for from_state, to_state in TRANSITIONS:
+        name = f"anim-{from_state}-to-{to_state}.gif"
+        # The transition's longest possible length plus a few seconds of the target.
+        seconds = TRANSITION_TAIL_SECONDS + max(
+            sum(frame_ms_max(f) for f in track.frames)
+            for track in get_tracks(transition_name(from_state, to_state))
+        ) / 1000
+        frames = write_gif(out / name, to_state, scale=scale, seconds=seconds,
+                           from_state=from_state)
+        print(f"{name} ({frames} frames)")
 
 
 def _png_from_grid(path: Path, grid: List[List[bytes]]) -> None:

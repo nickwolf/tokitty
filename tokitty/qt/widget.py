@@ -203,7 +203,9 @@ class TokittyQtWidget(QWidget):
         self._arm()
 
     def _prune_images(self) -> None:
-        live_grids = {id(grid) for pane in self.panes for grid in known_grids(pane._current_state)}
+        live_grids = {id(grid) for pane in self.panes
+                      for name in {pane.playing, pane._current_state}
+                      for grid in known_grids(name)}
         live_palettes = {palette_signature(pane.palette) for pane in self.panes}
         for key in [k for k in self._images if k[0] not in live_grids or k[1] not in live_palettes]:
             del self._images[key]

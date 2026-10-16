@@ -55,6 +55,9 @@ class QtPane:
         self._accent = False
         self._dimmed = False
         self._current_state = "sleeping"
+        # The constructor's "sleeping" is a placeholder nobody saw, so the
+        # first render must not play a transition out of it.
+        self._rendered = False
         self._driving_tag = ""
         self._tool_label = ""
         self._view_mode = "limits"
@@ -181,9 +184,17 @@ class QtPane:
     def _set_state(self, state: str) -> None:
         """Polls re-render the same state every second or so; only a real
         change of sprite state may restart the loop."""
+        from_state = self._current_state if self._rendered else None
+        self._rendered = True
         self._current_state = state
-        if state != self._player.state:
-            self._player.restart(state, self._clock())
+        if state != self._player.target:
+            self._player.restart(state, self._clock(), from_state)
+
+    @property
+    def playing(self) -> str:
+        """The animation on screen: the state, or a transition's name while
+        one plays into it (_current_state stays the logical state)."""
+        return self._player.state
 
     def next_due_ms(self) -> Optional[int]:
         """Clock ms when tick() will next change a track's frame, or None."""

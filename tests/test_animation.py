@@ -58,3 +58,100 @@ def test_player_restart_and_step(blink):
     assert player.positions == [0, 0] and player.next_due() == 1100
     player.step(2000)
     assert player.enum_index() == 1 and player.next_due() == 2100
+
+
+# ---- transitions -----------------------------------------------------------
+
+
+def _states(monkeypatch, *names):
+    """Looping 100 ms states, one frame differing per name."""
+    for name in names:
+        monkeypatch.setitem(sprites.ANIMATIONS, name, sprites.single_track(
+            sprites.SITTING_TEMPLATE,
+            [sprites.Frame({"A": c}, ms=100) for c in "nz"], loop_from=0))
+
+
+@pytest.fixture
+def trans(monkeypatch):
+    """a>b: one track of 100 + 200 ms (ends at 300) and a one-frame 450 ms
+    track (ends at 450); b is a looping 100 ms state."""
+    _states(monkeypatch, "a", "b", "c")
+    anim = sprites.Animation(sprites.SITTING_TEMPLATE, (
+        sprites.Track("x", (sprites.Frame({"L": "e"}, ms=100), sprites.Frame({"L": "k"}, ms=200)),
+                      loop_from=None),
+        sprites.Track("y", (sprites.Frame({"R": "k"}, ms=450),), loop_from=None),
+    ))
+    monkeypatch.setitem(sprites.TRANSITIONS, ("a", "b"), anim)
+    return "a>b"
+
+
+def test_transition_plays_on_a_matching_change_only(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("c", 10, "a")
+    assert (player.state, player.target, player.in_transition) == ("c", "c", False)
+    player.restart("b", 20)
+    assert (player.state, player.target) == ("b", "b")
+    player.restart("b", 30, "a")
+    assert (player.state, player.target, player.in_transition) == ("a>b", "b", True)
+    assert player.positions == [0, 0] and player.next_due() == 130
+
+
+def test_transition_ends_at_the_latest_track_end_then_target_starts_there(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("b", 1000, "a")
+    assert player.tick(1100) and player.positions == [1, 0]
+    # track x is done at 1300 but y holds its single frame until 1450
+    player.tick(1300)
+    assert player.state == "a>b" and player.dues == [None, 1450]
+    assert player.tick(1449) is False and player.state == "a>b"
+    player.tick(1450)
+    assert (player.state, player.positions, player.next_due()) == ("b", [0], 1550)
+    assert player.tick(1550) and player.positions == [1]
+
+
+def test_late_tick_starts_the_target_from_the_exact_end(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("b", 1000, "a")
+    player.tick(1520)  # 70 ms past the 1450 end: b has run 70 ms of its first 100
+    assert (player.state, player.positions, player.next_due()) == ("b", [0], 1550)
+
+
+def test_stall_across_the_end_skips_the_target_frames_too(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("b", 1000, "a")
+    assert player.tick(1000 + 450 + 5_000_000)
+    assert player.state == "b" and player.positions[0] in (0, 1)
+    assert 5_001_450 <= player.next_due() <= 5_001_550
+
+
+def test_restart_mid_transition_uses_the_given_from_state(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("b", 0, "a")
+    player.tick(100)
+    player.restart("c", 150, "b")  # no b>c transition
+    assert (player.state, player.target, player.positions) == ("c", "c", [0])
+    player.restart("b", 200, "a")
+    player.tick(250)
+    player.restart("b", 300, "a")  # an explicit restart starts the transition over
+    assert player.state == "a>b" and player.positions == [0, 0] and player.next_due() == 400
+
+
+def test_transition_enumeration_and_stepping(trans):
+    player = Player("a", random.Random(0), 0)
+    player.restart("b", 0, "a")
+    assert player.enum_index() == 0
+    player.step(500)
+    assert player.state == "a>b" and player.enum_index() == 1
+
+
+def test_simulate_plays_the_transition_then_the_target(trans):
+    out = simulate("b", 1, random.Random(0), from_state="a")
+    assert sum(ms for _, ms in out) == 1000
+    first = sprites.compose("a>b", [0, 0])
+    assert out[0] == (first, 100)
+    # 100 (x0), then 350 of the same grid (x1 from 100, y until 450), then b every 100 ms
+    assert [ms for _, ms in out[:4]] == [100, 350, 100, 100]
+    assert out[2][0] == sprites.get_frames("b")[0]
+    # no transition for the pair: just the state
+    plain = simulate("b", 1, random.Random(0), from_state="c")
+    assert plain == simulate("b", 1, random.Random(0))

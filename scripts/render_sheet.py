@@ -14,6 +14,8 @@ Prints one legend line per track (top to bottom; "state" for a one-track state,
 label per cell, row-major. Multi-track rows show a track's frames with the
 other tracks at frame 0. --gif DIR also writes one GIF per selected state
 (needs Pillow): the tracks played together for --gif-seconds with --seed.
+--state also takes a transition as "from>to"; its GIF plays the transition
+and then the target, and is named <from>-to-<to>.gif (no ">" in a filename).
 """
 from __future__ import annotations
 
@@ -28,7 +30,8 @@ from typing import List, Optional, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tokitty.sprites import (
-    ALL_STATES, COLORWAYS, PATTERNS, compose, frame_ms_max, get_tracks, resolve_palette,
+    ALL_STATES, COLORWAYS, PATTERNS, TRANSITION_SEP, TRANSITIONS, compose, frame_ms_max,
+    get_tracks, resolve_palette, transition_name,
 )
 
 BG = "#1c1c22"  # ui.py card background
@@ -154,11 +157,18 @@ def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
     return [label for label, _, _ in rows]
 
 
+def gif_name(state: str) -> str:
+    """The GIF file name for a state or a "from>to" transition."""
+    return state.replace(TRANSITION_SEP, "-to-") + ".gif"
+
+
 def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
-              pattern: str = "tabby", seed: int = 0, seconds: float = DEFAULT_GIF_SECONDS) -> int:
+              pattern: str = "tabby", seed: int = 0, seconds: float = DEFAULT_GIF_SECONDS,
+              from_state: Optional[str] = None) -> int:
     """Write one animated GIF of a state: the tracks played together on their
     own clocks for `seconds` of simulated time with a seeded rng, one GIF
     frame per change of the composed grid and the exact holds between them.
+    A from_state with a transition into `state` plays that first.
     Returns the frame count. Pillow is only needed here, so it is imported
     lazily."""
     from PIL import Image
@@ -169,7 +179,7 @@ def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
     palette = resolve_palette(colorway, pattern)
     bg = _hex_to_rgb(BG)
     images, durations = [], []
-    for grid, ms in simulate(state, seconds, random.Random(seed)):
+    for grid, ms in simulate(state, seconds, random.Random(seed), from_state):
         px = raster_frame(grid, palette, scale, bg)
         raw = b"".join(b"".join(row) for row in px)
         images.append(Image.frombytes("RGB", (len(px[0]), len(px)), raw))
@@ -180,11 +190,16 @@ def write_gif(path: Path, state: str, scale: int = 8, colorway: str = "orange",
 
 
 def write_gifs(out_dir: Path, states: Sequence[str], **kw) -> List[Path]:
-    """write_gif for each state, as DIR/<state>.gif."""
+    """write_gif for each state, as DIR/<state>.gif. A "from>to" transition
+    plays the transition and then its target, as DIR/<from>-to-<to>.gif."""
     paths = []
     for state in states:
-        paths.append(out_dir / f"{state}.gif")
-        write_gif(paths[-1], state, **kw)
+        paths.append(out_dir / gif_name(state))
+        if TRANSITION_SEP in state:
+            from_state, to_state = state.split(TRANSITION_SEP, 1)
+            write_gif(paths[-1], to_state, from_state=from_state, **kw)
+        else:
+            write_gif(paths[-1], state, **kw)
     return paths
 
 
@@ -227,8 +242,8 @@ def main() -> int:
     parser.add_argument("--colorway", default="orange")
     parser.add_argument("--pattern", default="tabby")
     parser.add_argument("--grid", action="store_true")
-    parser.add_argument("--state", action="append", choices=ALL_STATES,
-                        help="only this state (repeatable; default all)")
+    parser.add_argument("--state", action="append", choices=list(ALL_STATES) + [transition_name(*pair) for pair in TRANSITIONS],
+                        help="only this state or from>to transition (repeatable; default all)")
     parser.add_argument("--wrap", type=int, default=DEFAULT_WRAP,
                         help="max frames per row before wrapping")
     parser.add_argument("--gif", type=Path, metavar="DIR",

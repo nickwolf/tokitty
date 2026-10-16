@@ -178,3 +178,46 @@ def test_render_grid_writes_png(tmp_path):
     labels = render_grid(out, scale=2)
     assert out.is_file() and out.stat().st_size > 0
     assert labels  # non-empty legend
+
+
+@pytest.fixture
+def transition(monkeypatch):
+    for name in ("sa", "sb"):
+        monkeypatch.setitem(sprites.ANIMATIONS, name, sprites.single_track(
+            sprites.SITTING_TEMPLATE,
+            [sprites.Frame({"A": c}, ms=100) for c in "nz"]))
+    monkeypatch.setitem(sprites.TRANSITIONS, ("sa", "sb"), sprites.single_track(
+        sprites.SITTING_TEMPLATE,
+        [sprites.Frame({"L": c}, ms=200) for c in "ek!"], loop_from=None))
+
+
+def test_sheet_and_legend_accept_a_transition_name(tmp_path, transition):
+    from render_sheet import legend
+
+    out = tmp_path / "sheet.png"
+    assert render_sheet(out, scale=1, states=["sa>sb"]) == ["sa>sb"]
+    assert legend(["sa>sb"]) == ["sa>sb: 200 200 200 (play once)"]
+
+
+def test_transition_gif_is_named_without_the_separator(tmp_path, transition):
+    PIL = pytest.importorskip("PIL.Image")
+    from render_sheet import write_gifs
+
+    paths = write_gifs(tmp_path, ["sa>sb"], scale=1, seconds=1.0)
+    assert [p.name for p in paths] == ["sa-to-sb.gif"] and ">" not in paths[0].name
+    with PIL.open(paths[0]) as gif:
+        # 3 transition frames of 200 ms, then the target alternating every 100 ms
+        durations = []
+        for i in range(gif.n_frames):
+            gif.seek(i)
+            durations.append(gif.info["duration"])
+    assert sum(durations) == 1000 and durations[:3] == [200, 200, 200]
+
+
+def test_render_media_writes_a_gif_per_transition(tmp_path, transition, monkeypatch):
+    pytest.importorskip("PIL.Image")
+    import render_media
+
+    monkeypatch.setattr(render_media, "ALL_STATES", [])
+    render_media.write_anims(tmp_path, 1)
+    assert [p.name for p in tmp_path.iterdir()] == ["anim-sa-to-sb.gif"]
