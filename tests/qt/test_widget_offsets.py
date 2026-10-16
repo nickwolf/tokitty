@@ -224,3 +224,21 @@ def test_shadow_uses_the_pane_inputs(qapp, hop, monkeypatch):
     rest, grid, offset, home, mirrored = seen[-1]
     assert rest is sprites.get_frames("hop")[0] and grid is widget.panes[0].grid()
     assert (offset, home, mirrored) == (HOP, "inside_right", True)
+
+
+def test_the_shadow_is_worked_out_once_per_frame(qapp, hop, monkeypatch):
+    calls = []
+    real = shadow_mod.shadow_for
+    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a: calls.append(a) or real(*a))
+    clock = Clock()
+    widget = make(clock=clock)
+    play(widget, clock)
+    full_render(widget)
+    first = widget._shadow_placed(0, widget.panes[0])
+    assert len(calls) == 1
+    # the next frame moves the cat, so the shadow is worked out again, once
+    clock.now = 100
+    widget._next_frames()
+    widget.anim.stop()
+    full_render(widget)
+    assert len(calls) == 2 and widget._shadow_placed(0, widget.panes[0]) != first

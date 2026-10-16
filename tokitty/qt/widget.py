@@ -119,6 +119,10 @@ class TokittyQtWidget(QWidget):
         self._images: Dict[tuple, QImage] = {}
         # The shadow images by (cell alphas, device cell size).
         self._shadow_images: Dict[tuple, QImage] = {}
+        # Per pane: the last shadow_for inputs and result. The dirty rect and
+        # the paint both ask for the same frame's shadow, and composed grids
+        # are interned, so an identity check finds the repeat.
+        self._shadow_memo: Dict[int, tuple] = {}
         # Per pane: the window rect its cat, shadow and tags last painted, so a
         # frame that moves the cat also repaints where it was.
         self._painted: Dict[int, QRectF] = {}
@@ -295,8 +299,13 @@ class TokittyQtWidget(QWidget):
         if not self.theme.cat.shadow:
             return None
         home = self.homes[index]
-        placed = shadow_mod.shadow_for(
-            pane.rest_grid(), pane.grid(), pane.offset(), home, T.placement(home).mirrored)
+        rest, grid, offset = pane.rest_grid(), pane.grid(), pane.offset()
+        memo = self._shadow_memo.get(index)
+        if memo is not None and memo[0] is rest and memo[1] is grid and memo[2:4] == (offset, home):
+            placed = memo[4]
+        else:
+            placed = shadow_mod.shadow_for(rest, grid, offset, home, T.placement(home).mirrored)
+            self._shadow_memo[index] = (rest, grid, offset, home, placed)
         if placed is None:
             return None
         dpr = self.devicePixelRatioF()
