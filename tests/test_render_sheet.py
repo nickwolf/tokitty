@@ -227,7 +227,7 @@ def test_render_media_writes_a_gif_per_transition(tmp_path, transition, monkeypa
     render_media.write_anims(tmp_path, 1)
     # one file per TRANSITIONS entry: the synthetic one and the real ones
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
-        f"anim-{a}-to-{b}.gif" for a, b in sprites.TRANSITIONS)
+        f"anim-{render_media.gif_name(sprites.transition_name(*pair))}" for pair in sprites.TRANSITIONS)
     assert (tmp_path / "anim-sa-to-sb.gif").exists()
 
 
@@ -357,6 +357,13 @@ def test_spot_scene_mirrors_the_cat_for_inside_right():
     # dx is negated for the mirrored cat
     moved = scene_frame(grid, (2, 0), grid, "inside_right", palette, 4)
     assert moved[y][180 + (27 - c) * 4 - 172 - 8] == bytes(want)
+
+
+def test_gif_names_never_carry_the_any_state_star():
+    from render_sheet import gif_name
+
+    assert gif_name("*>panicked") == "any-to-panicked.gif"
+    assert gif_name("flopped>stirring") == "flopped-to-stirring.gif"
 
 
 def test_spot_scene_widens_to_keep_a_walking_cat_in_view():

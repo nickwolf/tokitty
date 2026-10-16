@@ -35,12 +35,11 @@ class Player:
 
     def restart(self, state: str, now_ms: int, from_state: Optional[str] = None) -> None:
         """Every track back to frame 0, shown now. With a from_state that has a
-        transition into `state`, that plays first and `state` follows."""
+        transition into `state` (sprites.transition_for), that plays first and
+        `state` follows."""
         self.target = state
-        if from_state is not None and (from_state, state) in sprites.TRANSITIONS:
-            self.state = sprites.transition_name(from_state, state)
-        else:
-            self.state = state
+        key = None if from_state is None else sprites.transition_for(from_state, state)
+        self.state = state if key is None else sprites.transition_name(*key)
         self.positions = [0] * len(sprites.get_tracks(self.state))
         self._schedule(now_ms)
 

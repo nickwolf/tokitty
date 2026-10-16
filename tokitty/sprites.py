@@ -1417,6 +1417,9 @@ ALL_STATES = tuple(ANIMATIONS)
 # (from, to); a pair with no entry is a plain cut. Every track plays once
 # (loop_from None) and the transition ends when its longest track does.
 TRANSITION_SEP = ">"
+# A transition keyed (ANY_STATE, to) plays on a change into `to` from any
+# state that has no transition of its own into it.
+ANY_STATE = "*"
 
 
 # The flopped cat rolls over into stirring: an eye opens, the paws tuck in,
@@ -1473,6 +1476,17 @@ def transition_name(from_state: str, to_state: str) -> str:
     return f"{from_state}{TRANSITION_SEP}{to_state}"
 
 
+def transition_for(from_state: str, to_state: str) -> Optional[Tuple[str, str]]:
+    """The TRANSITIONS key that plays on a change from from_state to to_state:
+    the pair's own entry, else an ANY_STATE entry into to_state (never on a
+    restart of the same state), else None for a plain cut."""
+    if (from_state, to_state) in TRANSITIONS:
+        return (from_state, to_state)
+    if from_state != to_state and (ANY_STATE, to_state) in TRANSITIONS:
+        return (ANY_STATE, to_state)
+    return None
+
+
 def spot_state(state: str, spot: str) -> str:
     """The name to play `state` under in `spot`: its variant's "state@spot"
     when SPOT_VARIANTS has one, else the state itself."""
@@ -1494,7 +1508,7 @@ def _check_transitions() -> None:
         check_animation(anim)
     known = set(ANIMATIONS) | {spot_state(*key) for key in SPOT_VARIANTS}
     for (from_state, to_state), anim in TRANSITIONS.items():
-        if from_state not in known or to_state not in known:
+        if from_state not in known | {ANY_STATE} or to_state not in known:
             raise ValueError(f"transition {from_state}->{to_state} names an unknown state")
         check_animation(anim)
         if not _plays_once(anim):
@@ -1965,5 +1979,81 @@ MOVES["walk_stop"] = single_track(_WALK_STAND, [
     Frame({}, 300, template=_hop_frame()),
 ], loop_from=None)
 
+# State changes (#134). Each lands on the target's own frame 0, so the
+# hand-off to its loop is seamless.
+
+
+def _at(state: str, **positions: int) -> List[str]:
+    """A state's composed grid with the named tracks at those frames, the rest at 0."""
+    return compose(state, [positions.get(track.name, 0) for track in get_tracks(state)])
+
+
+def _laptop(dc: int = 0, lid_top: int = 14) -> Dict[Tuple[int, int], str]:
+    """The working laptop lit (the room not yet dark), moved dc columns with
+    whatever leaves the grid dropped, its lid folded down to row lid_top: 14
+    is open, 20 is shut."""
+    cells = {}
+    for r in range(lid_top, 24):
+        for c, ch in enumerate(WORKING_TEMPLATE[r]):
+            if ch in "gSP" and 0 <= c + dc < 28:
+                cells[(r, c + dc)] = "g"
+    if lid_top <= 17 and 0 <= 5 + dc < 28:
+        cells[(17, 5 + dc)] = "B"  # the logo on the back of the lid
+    return cells
+
+
+def _thinking_to_working() -> Animation:
+    """The thought pops, the cat pulls the laptop over from the left, and the
+    room goes dark around the screen."""
+    clear = _at("thinking", bubble=2)
+    return single_track(_at("thinking"), [
+        Frame({}, 150, template=_at("thinking")),
+        Frame({}, 120, template=_at("thinking", bubble=1)),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 160, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 100, template=_at("working")),
+    ], loop_from=None)
+
+
+def _working_to_done_hop() -> Animation:
+    """The lights come up as the lid swings shut, and the laptop slides away."""
+    sit = _hop_frame()
+    return single_track(_at("working"), [
+        Frame({}, 150, template=_at("working")),
+        Frame({}, 110, template=_overlay(sit, _laptop(lid_top=17))),
+        Frame({}, 130, template=_overlay(sit, _laptop(lid_top=20))),
+        Frame({}, 90, template=_overlay(sit, _laptop(-4, lid_top=20))),
+        Frame({}, 90, template=_overlay(sit, _laptop(-8, lid_top=20))),
+        Frame({}, 100, template=get_frames("done_hop")[0]),
+    ], loop_from=None)
+
+
+def _sleeping_to_interested() -> Animation:
+    """One eye peeks open, the head comes up, and the ears perk."""
+    return single_track(_at("sleeping"), [
+        Frame({}, 200, template=_at("sleeping")),
+        Frame({}, 350, template=_at("sleeping", eyes=1, zzz=1)),
+        Frame({}, 200, template=_sink_head(_hop_frame())),
+        Frame({}, 120, template=_hop_frame()),
+        Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
+def _startle() -> Animation:
+    """Into panicked from anywhere: the cat leaps three rows with its paws
+    flung up, drops and lands shaking."""
+    return single_track(_JUMP_LAUNCH, [
+        Frame({}, 70, template=_JUMP_LAUNCH, offset=_up(2)),
+        Frame({}, 140, template=_JUMP_LAUNCH, offset=_up(3)),
+        Frame({}, 70, template=_JUMP_FALL, offset=_up(1)),
+        Frame({}, 80, template=_at("panicked")),
+    ], loop_from=None)
+
+
+TRANSITIONS[("thinking", "working")] = _thinking_to_working()
+TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
+TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
+TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 _check_transitions()

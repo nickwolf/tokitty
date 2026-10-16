@@ -96,6 +96,23 @@ def test_transition_plays_on_a_matching_change_only(trans):
     assert player.positions == [0, 0] and player.next_due() == 130
 
 
+def test_any_state_transition_covers_changes_without_their_own(trans, monkeypatch):
+    once = sprites.single_track(sprites.SITTING_TEMPLATE, [sprites.Frame({}, ms=100)], None)
+    monkeypatch.setitem(sprites.TRANSITIONS, (sprites.ANY_STATE, "b"), once)
+    player = Player("c", random.Random(0), 0)
+    player.restart("b", 10, "c")
+    assert (player.state, player.target) == ("*>b", "b")
+    # the pair's own entry wins over the any-state one
+    player.restart("b", 20, "a")
+    assert player.state == "a>b"
+    # restarting the same state, or a change with no from_state, is a plain cut
+    player.restart("b", 30, "b")
+    assert player.state == "b"
+    player.restart("b", 40)
+    assert player.state == "b"
+    assert sprites.transition_for("c", "a") is None
+
+
 def test_transition_ends_at_the_latest_track_end_then_target_starts_there(trans):
     player = Player("a", random.Random(0), 0)
     player.restart("b", 1000, "a")

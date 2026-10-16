@@ -426,19 +426,30 @@ def test_jumps_land_on_the_spot_they_head_for_within_the_headroom():
 
 
 def test_state_hops_stay_inside_the_room_above_the_cat():
-    # A state plays in any spot, so its highest hop has to fit both inside the
-    # card (above the inside cat's canvas) and in the headroom kept over an
-    # on_top cat. Moves are #22's to place and are checked on their own.
+    # A state, or a change between states, plays in any spot, so its highest
+    # hop has to fit both inside the card (above the inside cat's canvas) and in
+    # the headroom kept over an on_top cat. Moves are #22's to place and are
+    # checked on their own.
     from tokitty import theme
-    from tokitty.sprites import SPOT_VARIANTS
+    from tokitty.sprites import SPOT_VARIANTS, TRANSITIONS
 
     inside_room = theme.placement("inside").origin[1] // SCALE
-    anims = list(ANIMATIONS.values()) + list(SPOT_VARIANTS.values())
+    anims = list(ANIMATIONS.values()) + list(SPOT_VARIANTS.values()) + list(TRANSITIONS.values())
     for anim in anims:
         for track in anim.tracks:
             for frame in track.frames:
                 rise = -frame.offset[1]
                 assert rise <= min(inside_room, theme.HOP_HEADROOM // SCALE), (track.name, frame.offset)
+
+
+def test_state_transitions_land_on_the_target_frame_0():
+    # the target's loop starts on frame 0, so a transition that ends on it hands
+    # off without a visible jump
+    from tokitty.sprites import TRANSITIONS, transition_name
+
+    for (from_state, to_state), anim in TRANSITIONS.items():
+        assert get_frames(transition_name(from_state, to_state))[-1] == get_frames(to_state)[0], \
+            (from_state, to_state)
 
 
 def test_walk_pieces_chain_and_keep_the_paws_on_the_edge():
@@ -501,7 +512,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "b6953dd950f3891f9b80e9125ff3a086a9b2d437d613ab7d8e343a6dde7c1713"
+    assert digest == "9c563f06776b19614347c25cc3da7a940e8947d4497265d12b17beeda216a090"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

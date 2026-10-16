@@ -49,7 +49,7 @@ def write_anims(out: Path, scale: int) -> None:
             frames = write_gif(out / f"anim-{state}.gif", state, scale=scale, seconds=seconds)
             print(f"anim-{state}.gif ({frames} frames)")
     for from_state, to_state in TRANSITIONS:
-        name = f"anim-{from_state}-to-{to_state}.gif"
+        name = f"anim-{gif_name(transition_name(from_state, to_state))}"
         # The transition's longest possible length plus a few seconds of the target.
         seconds = TRANSITION_TAIL_SECONDS + max(
             sum(frame_ms_max(f) for f in track.frames)

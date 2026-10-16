@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tokitty import shadow, theme
 from tokitty.sprites import (
-    ALL_STATES, COLORWAYS, MOVE_PREFIX, MOVES, PATTERNS, SCALE as CELL, SPOT_SEP, SPOT_VARIANTS,
+    ALL_STATES, ANY_STATE, COLORWAYS, MOVE_PREFIX, MOVES, PATTERNS, SCALE as CELL, SPOT_SEP, SPOT_VARIANTS,
     TRANSITION_SEP, TRANSITIONS, compose, compose_offset, frame_ms_max, get_frames, get_tracks,
     move_name, resolve_palette, spot_state, transition_name,
 )
@@ -262,9 +262,11 @@ def render_sheet(out_path: Path, scale: int = 8, colorway: str = "orange",
 
 def gif_name(state: str) -> str:
     """The GIF file name for a state, a "from>to" transition, a "state@spot"
-    variant or a "move:name" move (none of ">", "@", ":" in a filename)."""
+    variant or a "move:name" move (none of ">", "@", ":", "*" in a filename;
+    an any-state transition is "any-to-<to>")."""
     if state.startswith(MOVE_PREFIX):
         state = "move-" + state[len(MOVE_PREFIX):]
+    state = state.replace(ANY_STATE + TRANSITION_SEP, "any" + TRANSITION_SEP)
     return state.replace(TRANSITION_SEP, "-to-").replace(SPOT_SEP, "-at-") + ".gif"
 
 
