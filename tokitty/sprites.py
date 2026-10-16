@@ -1337,9 +1337,9 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
 # done_hop: the happy hop when a task finishes, played once. A butt wiggle
 # before the jump, a launch, a hang at the top with the paws tucked up and
 # sparkles,
-# a squash on landing and a proud settle with squinting eyes. The earth line
-# stays put underneath, so the gap opens and closes. activity.DONE_HOP_S
-# keeps the state up long enough for all of it.
+# a squash on landing and a proud settle with squinting eyes. No ground line:
+# the card is the floor, and the ground shadow (#137) can show the height.
+# activity.DONE_HOP_S keeps the state up long enough for all of it.
 _HOP_SPARKS = _cells("h", (3, 2, 2), (6, 1, 1), (2, 24, 24), (5, 26, 26))
 
 
@@ -1360,7 +1360,7 @@ def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
         grid = _overlay(grid, {(r, c): "." for r in (bottom - 1, bottom) for c in range(28)})
     if sparks:
         grid = _overlay(grid, _HOP_SPARKS)
-    return _overlay(grid, {(25, c): "G" for c in range(3, 25) if grid[25][c] == "."})
+    return grid
 
 
 DONE_HOP_ANIMATION = single_track(_hop_frame(), [

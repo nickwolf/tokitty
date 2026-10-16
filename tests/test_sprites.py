@@ -118,12 +118,7 @@ def test_palette_covers_pattern_char():
 
 
 def test_ground_line_is_not_coat_colored():
-    for frames in (get_frames("done_hop"),):
-        for frame in frames:
-            bottom_rows = frame[-3:]
-            joined = "".join("".join(r) for r in bottom_rows)
-            assert "G" in joined  # ground exists
-    # the ground char is defined in BASE_PALETTE, and no colorway x pattern
+    # The ground char is defined in BASE_PALETTE, and no colorway x pattern
     # combination ever recolors it -- it's not one of the region chars.
     assert "G" in BASE_PALETTE
     assert "G" not in REGION_CHARS
@@ -420,7 +415,7 @@ def test_art_is_pinned():
     # The #125 art passes change pixels on purpose: update this hash with them.
     frames = {s: get_frames(s) for s in ALL_STATES}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "270b9d1876920c81013c285a9c4d45588a9bcb64d9abb3d61675749c78169cbb"
+    assert digest == "71b3badb6b1b76f4eb018d9c50eecd48c3e715f99fb85424a8c44086fce1254c"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
