@@ -6,7 +6,7 @@ cat without ever joining the click area."""
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import QPoint, QRectF
+from PySide6.QtCore import QRectF
 from PySide6.QtGui import QImage, QRegion
 
 from tokitty import shadow as shadow_mod
