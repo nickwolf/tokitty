@@ -29,7 +29,8 @@ file), and only after _wait() has found a decision file whose nonce, session id
 and input digest all match this exact request. Claude Code applies that line as
 the user's answer, so every other path (error, ambiguity, timeout, disabled
 feature) prints nothing and exits 0, leaving Claude Code's own terminal
-prompt in charge.
+prompt in charge. AskUserQuestion and ExitPlanMode also arrive as
+PermissionRequests; the dock never offers those.
 
 On PostToolUse, SessionStart and SubagentStart, _usage_note() may print one
 additionalContext line when the widget's usage.json (next to the sessions dir)
@@ -126,6 +127,10 @@ _LOOKUP_GAP_S = 0.1
 _PREVIEW_MAX = 200
 _DENY_MESSAGE = "Denied from Stream Dock"
 _HEX = frozenset("0123456789abcdef")
+# Tools whose PermissionRequest is a question for the user, not a yes/no on a
+# tool call: an allow would let the question through unanswered (or approve a
+# plan unread), so the Stream Dock leaves them to Claude Code's own UI.
+_NOT_FOR_DOCK = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 
 def _digest(tool_input):
@@ -468,6 +473,8 @@ def _wait(
     if not isinstance(session_id, str) or not session_id:
         return None
     if not isinstance(tool_name, str) or not tool_name:
+        return None
+    if tool_name in _NOT_FOR_DOCK:
         return None
     if not isinstance(tool_input, dict):
         return None
