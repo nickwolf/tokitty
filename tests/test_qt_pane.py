@@ -530,18 +530,19 @@ def test_working_while_away_puts_the_cat_home_at_once():
     _content(pane)
     assert _walk_until(pane, clock, lambda p: p.pose.spot == "on_top")
     pane.render("working", 0, 0, "", "", "", None, None, False)
-    assert pane.pose == pane.mask_pose == pane._roam.wanderer.home
+    assert pane.pose == pane.mask_place[0] == pane._roam.wanderer.home
     assert not pane.playing.startswith(sprites.MOVE_PREFIX)
 
 
-def test_the_mask_pose_stays_home_while_a_move_plays_and_follows_a_rest():
+def test_the_mask_place_holds_every_offset_of_the_playing_move():
     clock = Clock(0)
     pane = _pane(clock, roams=True)
     _content(pane)
-    home = pane.pose
+    assert pane.mask_place == (pane.pose, ((0, 0),)) or (0, 0) in pane.mask_place[1]
     assert _walk_until(pane, clock, _moving)
-    assert pane.mask_pose == home
-    assert _walk_until(pane, clock, lambda p: p.pose.x != home.x and p.mask_pose == p.pose)
+    pose, offsets = pane.mask_place
+    assert pose == pane.pose and offsets == sprites.offsets(pane.playing)
+    assert any(o != (0, 0) for o in offsets)
 
 
 def test_a_pane_that_does_not_roam_never_moves():
@@ -552,7 +553,7 @@ def test_a_pane_that_does_not_roam_never_moves():
     for _ in range(300):
         clock.now = pane.next_due_ms()
         pane.tick(clock.now)
-        assert pane.pose == pane.mask_pose == pane._roam.wanderer.home
+        assert pane.pose == pane.mask_place[0] == pane._roam.wanderer.home
         assert not pane.playing.startswith(sprites.MOVE_PREFIX)
 
 

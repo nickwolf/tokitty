@@ -1,5 +1,6 @@
 """Sprite offsets and the ground shadow in the live widget (#116, #137): the
-painted cat moves by a frame's offset while the click mask stays home, a
+painted cat moves by a frame's offset inside a click mask that holds every
+offset of the animation, a
 frame change repaints where the cat was too, and the shadow sits under the
 cat without ever joining the click area."""
 from dataclasses import replace
@@ -51,10 +52,27 @@ def play(widget, clock, state="hop", index=0):
     widget.anim.stop()
 
 
+def _unmasked(widget, draw):
+    """render() shifts a region's output when the widget has a mask (by an
+    amount that depends on the mask), so paint with it lifted. The mask
+    itself is checked by test_the_mask_holds_the_cat_through_a_whole_trip."""
+    mask = widget.mask()
+    widget.clearMask()
+    try:
+        draw()
+    finally:
+        widget.setMask(mask)
+
+
+def render_part(widget, canvas, rect):
+    """Repaint `rect` into canvas, as a partial update would."""
+    _unmasked(widget, lambda: widget.render(canvas, rect.topLeft(), QRegion(rect)))
+
+
 def full_render(widget):
     image = QImage(widget.size(), QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(0)
-    widget.render(image)
+    _unmasked(widget, lambda: widget.render(image))
     return image
 
 
@@ -143,7 +161,7 @@ def test_a_partial_repaint_of_a_moved_cat_leaves_no_ghost(qapp, hop, home, shado
         widget._next_frames()
         widget.anim.stop()
         dirty = rects[-1][0]
-        widget.render(canvas, dirty.topLeft(), QRegion(dirty))
+        render_part(widget, canvas, dirty)
         assert canvas == full_render(widget), now
 
 
@@ -327,19 +345,22 @@ def test_the_walking_cat_is_drawn_mirrored_as_it_faces(qapp):
     assert canvas.pixelColor(round(x) + px, round(y) + py) == mirrored.pixelColor(px, py)
 
 
-def test_the_mask_follows_a_resting_cat_and_stays_home_mid_move(qapp):
+def test_the_mask_holds_the_cat_through_a_whole_trip(qapp):
+    # The mask clips painting on Windows: any part of the cat outside it vanishes.
     clock = Clock()
     widget = make(wander=True, clock=clock)
-    home_rects = widget.cat_rects()
-    pane = drive(widget, clock, lambda p: p.playing.startswith(sprites.MOVE_PREFIX))
-    assert widget.cat_rects() == home_rects
-    pane = drive(widget, clock, lambda p: away(p) and p.mask_pose == p.pose)
-    rect = widget.cat_rects()[0]
-    assert rect != home_rects[0]
-    ox, oy = widget.window_layout.pane_origins[0]
-    assert (rect.x, rect.y) == (round(ox + pane.pose.x),
-                                round(oy + T.placement("on_top").origin[1]))
-    assert widget.mask().contains(QPoint(rect.x + 3, rect.y + 3))
+    pane = drive(widget, clock, lambda p: True)
+    widget._update_mask()
+    spots, moves = set(), 0
+    for _ in range(600):
+        clock.now = pane.next_due_ms()
+        widget._next_frames()
+        widget.anim.stop()
+        cat = widget._cat_rect(0, pane).toAlignedRect()
+        assert QRegion(cat).subtracted(widget.mask()).isEmpty(), (pane.playing, pane.pose)
+        spots.add((pane.pose.spot, pane.pose.x))
+        moves += pane.playing.startswith(sprites.MOVE_PREFIX)
+    assert len(spots) > 2 and moves
 
 
 def test_the_mask_is_rebuilt_only_when_a_clickable_place_moved(qapp):
@@ -349,7 +370,7 @@ def test_the_mask_is_rebuilt_only_when_a_clickable_place_moved(qapp):
     real = widget._update_mask
     widget._update_mask = lambda: (calls.append(1), real())[1]
     drive(widget, clock, lambda p: p.playing.startswith(sprites.MOVE_PREFIX))
-    assert calls == []
+    assert len(calls) <= 1  # the move that just started
     ticks = 0
     for _ in range(40):  # frames of the move and of the walk that follows
         clock.now = widget.panes[0].next_due_ms()
@@ -383,7 +404,7 @@ def test_a_walking_cat_leaves_no_ghost_and_its_shadow_follows(qapp):
             dirty = QRectF(rects[-1][0])
             assert dirty.contains(old_art) and dirty.contains(widget._art_rect(0, pane))
         if rects:
-            widget.render(canvas, rects[-1][0].topLeft(), QRegion(rects[-1][0]))
+            render_part(widget, canvas, rects[-1][0])
             assert canvas == full_render(widget)
         xs.add(pane.pose.x)
         placed = widget._shadow_placed(0, pane)

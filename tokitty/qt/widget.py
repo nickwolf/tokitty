@@ -113,8 +113,8 @@ class TokittyQtWidget(QWidget):
             for i, (c, home) in enumerate(zip(customizations, self.homes))
         ]
         self.window_layout = T.layout_window(self.homes, wander=theme.cat.wander)
-        # Per pane: where its cat is clickable, to remask only when one moved.
-        self._mask_poses = self._current_mask_poses()
+        # Per pane: where its cat can be drawn, to remask only when that changed.
+        self._mask_places = self._current_mask_places()
         self.setFixedSize(*self.window_layout.size)
 
         self._layouts: Dict[Tuple[str, str], T.CardLayout] = {}
@@ -841,22 +841,26 @@ class TokittyQtWidget(QWidget):
             self._apply_macos()
 
     def cat_rects(self) -> List[T.Rect]:
-        """Each cat's sprite rectangle in window coordinates: where it rests,
-        or at home while a move plays."""
+        """Each cat's rectangle in window coordinates: the sprite at every
+        offset its animation can move it to, so a jump or a stride is never
+        cut off by the mask, which clips painting on Windows."""
         dpr = self.devicePixelRatioF()
         rects = []
-        for i, pose in enumerate(self._current_mask_poses()):
+        for i, (pose, offsets) in enumerate(self._current_mask_places()):
             ox, oy = self.window_layout.pane_origins[i]
-            x, y = self._origin_of(ox, oy, pose, (0, 0), dpr)
-            rects.append(T.Rect(round(x), round(y), T.SPRITE_W, T.SPRITE_H))
+            corners = [self._origin_of(ox, oy, pose, o, dpr) for o in offsets]
+            x0, y0 = min(c[0] for c in corners), min(c[1] for c in corners)
+            x1, y1 = max(c[0] for c in corners), max(c[1] for c in corners)
+            rects.append(T.Rect(round(x0), round(y0), round(x1 - x0) + T.SPRITE_W,
+                                round(y1 - y0) + T.SPRITE_H))
         return rects
 
-    def _current_mask_poses(self) -> Tuple[Pose, ...]:
-        return tuple(pane.mask_pose for pane in self.panes)
+    def _current_mask_places(self) -> tuple:
+        return tuple(pane.mask_place for pane in self.panes)
 
     def _sync_mask(self) -> None:
-        """Remask when some cat's clickable place moved, never per frame."""
-        if self._current_mask_poses() != self._mask_poses:
+        """Remask when some cat's animation or pose changed, never per frame."""
+        if self._current_mask_places() != self._mask_places:
             self._update_mask()
 
     def _update_mask(self) -> None:
@@ -864,7 +868,7 @@ class TokittyQtWidget(QWidget):
         pass clicks through transparent pixels, but macOS catches every click
         in the window rectangle, so the mask does it there; it costs nothing
         elsewhere. A rectangle per cat still catches its transparent cells."""
-        self._mask_poses = self._current_mask_poses()
+        self._mask_places = self._current_mask_places()
         region = QRegion()
         for r in T.hit_region(self.window_layout, self.cat_rects()):
             region = region.united(QRegion(QRect(r.x, r.y, r.w, r.h)))

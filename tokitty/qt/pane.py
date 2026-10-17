@@ -238,11 +238,10 @@ class QtPane:
         return self._roam.pose
 
     @property
-    def mask_pose(self) -> Pose:
-        """Where the cat is clickable: the home pose while a move plays, else
-        where it rests."""
-        w = self._roam.wanderer
-        return w.home if w.move is not None else w.pose
+    def mask_place(self) -> Tuple[Pose, Tuple[Tuple[int, int], ...]]:
+        """Where the playing animation can draw the cat: the pose and every
+        offset it moves the sprite by. Changes per animation, not per frame."""
+        return self.pose, sprites.offsets(self.playing)
 
     @property
     def playing(self) -> str:

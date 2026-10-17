@@ -1590,6 +1590,14 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
     return grid
 
 
+@functools.lru_cache(maxsize=None)
+def offsets(state: str) -> Tuple[Tuple[int, int], ...]:
+    """Every offset any frame of the animation moves the sprite by, (0, 0)
+    included: where it can draw the cat, which the click mask must cover."""
+    found = {(0, 0)} | {f.offset for t in get_animation(state).tracks for f in t.frames}
+    return tuple(sorted(found))
+
+
 def compose_offset(state: str, positions: Sequence[int]) -> Tuple[int, int]:
     """Where the sprite is moved, in cells, with every track at the given
     frame position: the offset of the one track that moves it, else (0, 0)."""
