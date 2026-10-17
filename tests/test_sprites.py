@@ -469,6 +469,25 @@ def test_walk_pieces_chain_and_keep_the_paws_on_the_edge():
     assert all(ground_row(f.template) == sitting for f in start + walk + stop)
 
 
+def test_lie_down_and_sit_up_join_sitting_and_the_loaf_on_the_edge():
+    from tokitty.shadow import ground_row
+    from tokitty.sprites import MOVES, compose_offset, enumeration_positions, move_name, spot_state
+
+    loaf = spot_state("content", "on_top")
+    loaf_offset = compose_offset(loaf, enumeration_positions(loaf)[0])
+    sitting = get_frames("content")[0]
+    for move, first, last in (("lie_down", sitting, get_frames(loaf)[0]),
+                              ("sit_up", get_frames(loaf)[0], sitting)):
+        frames = MOVES[move].tracks[0].frames
+        grids = get_frames(move_name(move))
+        assert grids[0] == first and grids[-1] == last, move
+        ends = {frames[0].offset, frames[-1].offset}
+        assert ends == {(0, 0), loaf_offset}, move
+        # the paws stay on the edge the whole way down and up
+        edge = ground_row(sitting)
+        assert all(ground_row(g) + f.offset[1] == edge for g, f in zip(grids, frames)), move
+
+
 def _touching(cell, cells, diagonal=True):
     r, c = cell
     return any((r + dr, c + dc) in cells for dr in (-1, 0, 1) for dc in (-1, 0, 1)
@@ -512,7 +531,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "ae21999b8b666cb0e018d848ea99637e4196d38e0ed97a241d8de4cd8bf5e07a"
+    assert digest == "c8c8a7db8d5ca4edad194e3e3de57389dd9d0f3db86a2c05e679922ded96b3ef"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
