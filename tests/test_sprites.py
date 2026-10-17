@@ -262,7 +262,7 @@ def _frames(*chars, ms=800):
 
 def test_all_states_follows_the_animation_table():
     assert ALL_STATES == tuple(ANIMATIONS)
-    assert len(ALL_STATES) == 14 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
+    assert len(ALL_STATES) == 15 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
 
 
 def test_the_table_passes_the_track_rules():
@@ -531,7 +531,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "c8c8a7db8d5ca4edad194e3e3de57389dd9d0f3db86a2c05e679922ded96b3ef"
+    assert digest == "de15d9f8b5c0a37c0f147e654f20636c225ffdc23cfc19155f44c266ec2a4530"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

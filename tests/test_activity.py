@@ -8,6 +8,7 @@ from tokitty.activity import (
     IDLE_DECAY_S,
     GONE_S,
     PERMISSION_STALE_S,
+    QUESTION_TOOLS,
     DONE_HOP_S,
     WORK_STRETCH_MIN_S,
 )
@@ -23,7 +24,7 @@ def rec(session_id, event, ts, seq=1, tool_name=None, agent_id=None):
 
 
 def test_constants():
-    assert ACTIVITY_STATES == ("permission", "working", "thinking", "done_hop", "idle")
+    assert ACTIVITY_STATES == ("permission", "question", "working", "thinking", "done_hop", "idle")
 
 
 def test_no_sessions_is_idle():
@@ -520,3 +521,83 @@ def test_interrupt_after_long_stretch_never_hops():
     assert s.tool_label == ""
     assert s.done_hop_at is None
     assert t.aggregate(100.0 + WORK_STRETCH_MIN_S + 5).state == "idle"
+
+
+def test_question_sequence_from_a_real_ask_user_question():
+    # Logged 2026-10-17: PreToolUse, PermissionRequest 55 ms later, a
+    # Notification with no tool_name 10 s later, PostToolUse on the answer.
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, seq=1, tool_name="AskUserQuestion")}, now=100.0)
+    assert t.aggregate(100.0).state == "working"
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.055, seq=2, tool_name="AskUserQuestion")}, now=100.1)
+    assert t.aggregate(100.1).state == "question"
+    t.observe({"s1": rec("s1", "Notification", 110.0, seq=3)}, now=110.0)
+    assert t.aggregate(110.0).state == "question"
+    assert t.sessions(110.0)[0].state == "question"
+    t.observe({"s1": rec("s1", "PostToolUse", 130.0, seq=4, tool_name="AskUserQuestion")}, now=130.0)
+    assert t.aggregate(130.0).state == "thinking"
+
+
+def test_plan_approval_is_a_question_too():
+    # Logged 2026-10-17: ExitPlanMode fires the same PermissionRequest shape.
+    assert QUESTION_TOOLS == {"AskUserQuestion", "ExitPlanMode"}
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name="ExitPlanMode")}, now=100.0)
+    assert t.aggregate(100.0).state == "question"
+
+
+def test_tool_permission_and_idle_notification_stay_permission():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name="Bash")}, now=100.0)
+    t.observe({"s1": rec("s1", "Notification", 106.0, seq=2)}, now=106.0)
+    assert t.aggregate(106.0).state == "permission"
+    # The idle "waiting for your input" Notification after a Stop.
+    t.observe({"s1": rec("s1", "Stop", 110.0, seq=3)}, now=110.0)
+    t.observe({"s1": rec("s1", "Notification", 170.0, seq=4)}, now=170.0)
+    assert t.aggregate(170.0).state == "permission"
+
+
+def test_question_cleared_then_tool_permission_is_permission():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name="AskUserQuestion")}, now=100.0)
+    t.observe({"s1": rec("s1", "PostToolUse", 101.0, seq=2, tool_name="AskUserQuestion")}, now=101.0)
+    t.observe({"s1": rec("s1", "Notification", 102.0, seq=3)}, now=102.0)
+    assert t.aggregate(102.0).state == "permission"
+
+
+def test_question_goes_stale_at_permission_stale_s():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name="AskUserQuestion")}, now=100.0)
+    t.observe({"s1": rec("s1", "Notification", 110.0, seq=2)}, now=110.0)
+    assert t.aggregate(110.0 + IDLE_DECAY_S + 1).state == "question"
+    assert t.aggregate(110.0 + PERMISSION_STALE_S - 1).state == "question"
+    assert t.aggregate(110.0 + PERMISSION_STALE_S).state == "idle"
+
+
+def test_question_ranks_with_permission_above_working():
+    t = ActivityTracker()
+    t.observe(
+        {
+            "s1": rec("s1", "PreToolUse", 101.0, seq=1, tool_name="Bash"),
+            "s2": rec("s2", "PermissionRequest", 100.0, seq=1, tool_name="AskUserQuestion"),
+        },
+        now=101.0,
+    )
+    assert t.aggregate(101.0).state == "question"
+    # Same rank as permission: the most recent prompt wins.
+    t.observe(
+        {
+            "s1": rec("s1", "PermissionRequest", 102.0, seq=2, tool_name="Bash"),
+            "s2": rec("s2", "PermissionRequest", 100.0, seq=1, tool_name="AskUserQuestion"),
+        },
+        now=102.0,
+    )
+    assert t.aggregate(102.0).state == "permission"
+
+
+def test_question_tools_match_the_ones_the_stream_dock_skips():
+    # hook_writer is standalone (stdlib only, installed outside the package),
+    # so it keeps its own copy; the two must never drift apart.
+    from tokitty import hook_writer
+
+    assert QUESTION_TOOLS == hook_writer._NOT_FOR_DOCK

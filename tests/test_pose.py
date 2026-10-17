@@ -68,3 +68,11 @@ def test_permission_beats_capped_wake_states():
         result = resolve_pose(capped_state, ActivityView(state="permission"))
         assert result["sprite_state"] == ACTIVITY_SPRITE_PLACEHOLDERS["permission"]
         assert result["accent"] is True
+
+
+def test_question_beats_capped_wake_and_working_with_the_accent():
+    for v1_state in ("content", "flopped", "stirring", "waking"):
+        result = resolve_pose(v1_state, ActivityView(state="question"))
+        assert result["sprite_state"] == "question" == ACTIVITY_SPRITE_PLACEHOLDERS["question"]
+        assert result["tool_label"] == ""
+        assert result["accent"] is True
