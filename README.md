@@ -96,7 +96,7 @@ Optional, off by default. With a downloaded build, adding an account in the Acco
 python -m tokitty --install-hooks
 ```
 
-and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt, and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
+and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt (left unanswered, the cat gets impatient after 30 seconds and frantic after 3 minutes), and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
 
 Installing also registers a `PermissionRequest` hook for the Stream Dock. It is inert unless a Stream Dock is connected: with no deck it prints nothing and Claude Code's own prompt is unaffected. Running Claude Code sessions pick it up after a restart.
 

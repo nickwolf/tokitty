@@ -601,3 +601,50 @@ def test_question_tools_match_the_ones_the_stream_dock_skips():
     from tokitty import hook_writer
 
     assert QUESTION_TOOLS == hook_writer._NOT_FOR_DOCK
+
+
+def test_since_set_on_permission_request_and_kept_by_notification():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name="Bash")}, now=100.0)
+    assert t.aggregate(100.0).since == 100.0
+    t.observe({"s1": rec("s1", "Notification", 105.0, seq=2)}, now=105.0)
+    view = t.aggregate(105.0)
+    assert view.state == "permission" and view.since == 100.0
+    t.observe({"s1": rec("s1", "PermissionRequest", 110.0, seq=3, tool_name="Bash")}, now=110.0)
+    assert t.aggregate(110.0).since == 100.0
+
+
+def test_since_set_by_notification_raised_permission():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "Notification", 100.0)}, now=100.0)
+    assert t.aggregate(100.0).since == 100.0
+
+
+def test_since_resets_when_overlay_changes_and_clears_when_lowered():
+    t = ActivityTracker()
+    q = next(iter(QUESTION_TOOLS))
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, seq=1, tool_name=q)}, now=100.0)
+    view = t.aggregate(100.0)
+    assert view.state == "question" and view.since == 100.0
+    t.observe({"s1": rec("s1", "PermissionRequest", 150.0, seq=2, tool_name="Bash")}, now=150.0)
+    view = t.aggregate(150.0)
+    assert view.state == "permission" and view.since == 150.0
+    t.observe({"s1": rec("s1", "PostToolUse", 160.0, seq=3)}, now=160.0)
+    assert t.aggregate(160.0).since is None
+    t.observe({"s1": rec("s1", "PermissionRequest", 200.0, seq=4, tool_name="Bash")}, now=200.0)
+    assert t.aggregate(200.0).since == 200.0
+
+
+def test_non_prompt_views_have_no_since():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PreToolUse", 100.0, tool_name="Bash")}, now=100.0)
+    assert t.aggregate(100.0).since is None
+    assert t.sessions(100.0)[0].since is None
+
+
+def test_session_view_carries_since():
+    t = ActivityTracker()
+    t.observe({"s1": rec("s1", "PermissionRequest", 100.0, tool_name="Bash")}, now=100.0)
+    assert t.sessions(120.0)[0].since == 100.0
+    # Stale prompt reads idle, so no since.
+    assert t.sessions(100.0 + PERMISSION_STALE_S)[0].since is None
