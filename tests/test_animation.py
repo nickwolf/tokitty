@@ -198,3 +198,16 @@ def test_simulate_frames_splits_on_offset_and_simulate_merges(hop):
     assert [(ms, off) for _, ms, off in out] == [(100, (0, 0)), (100, (0, -3)), (800, (2, -3))]
     assert out[0][0] is out[1][0] is out[2][0]
     assert simulate(hop, 1, random.Random(0)) == [(out[0][0], 1000)]
+
+
+def test_finished_at_is_when_a_moves_last_hold_ends(monkeypatch):
+    monkeypatch.setitem(sprites.MOVES, "two", sprites.single_track(
+        sprites.SITTING_TEMPLATE, [sprites.Frame({}, 100), sprites.Frame({}, 250)], loop_from=None))
+    player = Player(sprites.move_name("two"), random.Random(0), 1000)
+    assert player.next_due() == 1100 and player.finished_at is None
+    player.tick(1100)
+    assert player.next_due() == 1350 and player.finished_at is None
+    player.tick(1400)  # ticked late: the move still ended when its hold did
+    assert player.finished_at == 1350 and player.next_due() is None
+    # a state never finishes, even one that plays once
+    assert Player("done_hop", random.Random(0), 0).finished_at is None
