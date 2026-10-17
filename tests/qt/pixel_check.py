@@ -43,6 +43,7 @@ from PySide6.QtGui import QFont, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tokitty import sprites  # noqa: E402
+from tokitty.wander import home_pose  # noqa: E402
 from tokitty import theme as T  # noqa: E402
 from tokitty.customize import Customization  # noqa: E402
 from tokitty.qt.widget import TokittyQtWidget  # noqa: E402
@@ -263,7 +264,7 @@ def cat_sheet(state: str) -> Rendered:
     """Every coat as a row, the state's frames as columns, on a transparent
     ground. The cat is drawn by the widget itself (on_top, so nothing else
     is under it, and no shadow) and cropped from a grab."""
-    widget = PixelWidget(T.Theme(cat=T.CatStyle(shadow=False)), [Customization(cat_home="on_top")], 1)
+    widget = PixelWidget(T.Theme(cat=T.CatStyle(shadow=False, wander=False)), [Customization(cat_home="on_top")], 1)
     try:
         widget.anim.stop()
         pane = widget.panes[0]
@@ -271,6 +272,10 @@ def cat_sheet(state: str) -> Rendered:
         # would otherwise play their on_top variants (pinned by the art hash).
         pane.set_spot("inside")
         dpr = widget.devicePixelRatioF()
+        # The widget places the cat by its pose, now inside; draw it on top.
+        on_top = home_pose("on_top")
+        ox, oy = widget.window_layout.pane_origins[0]
+        widget.cat_origin = lambda _i, offset=(0, 0): widget._origin_of(ox, oy, on_top, offset, dpr)
         frames = sprites.get_frames(state)
         cell = T.cell_size(dpr)
         w, h = len(frames[0][0]) * cell, len(frames[0]) * cell
@@ -299,7 +304,7 @@ def cat_sheet(state: str) -> Rendered:
 def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
     """One widget layout with fixed inputs, rendered but not yet grabbed. Tags
     stay empty: a tag chip would paint into the on_top cat's rect."""
-    theme = T.Theme()
+    theme = T.Theme(cat=T.CatStyle(wander=False))  # the references are the card without headroom
     home = "inside"
     if name == "halo":
         theme = replace(theme, text=replace(theme.text, halo="on"))
@@ -440,7 +445,7 @@ def dump(outdir: Path, dpr: int, wanted: Sequence[str]) -> None:
     import PySide6
 
     app = QApplication.instance() or QApplication([])
-    probe = PixelWidget(T.Theme(), [Customization()], 1)
+    probe = PixelWidget(T.Theme(cat=T.CatStyle(wander=False)), [Customization()], 1)
     actual = probe.devicePixelRatioF()
     destroy(probe)
     if actual != dpr:

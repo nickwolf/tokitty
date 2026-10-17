@@ -34,7 +34,7 @@ def synth(monkeypatch):
 def make(count=1, clock=None, homes=None, **custom):
     customs = [Customization(cat_home=(homes[i] if homes else "inside"), **custom)
                for i in range(count)]
-    return TokittyQtWidget(T.Theme(), customs, count, clock=clock or Clock())
+    return TokittyQtWidget(T.Theme(cat=T.CatStyle(wander=False)), customs, count, clock=clock or Clock())
 
 
 def render(pane, state):
@@ -110,6 +110,7 @@ def test_partial_repaint_matches_a_full_one(qapp, synth, home):
     widget = make(1, clock, homes=[home])
     widget.anim.stop()
     render(widget.panes[0], "fast")
+    widget.clearMask()  # with a mask, render() shifts a region's output
     canvas = QImage(widget.size(), QImage.Format.Format_ARGB32_Premultiplied)
     canvas.fill(0)
     widget.render(canvas)
@@ -119,6 +120,7 @@ def test_partial_repaint_matches_a_full_one(qapp, synth, home):
     clock.now = 100
     widget._next_frames()
     widget.anim.stop()
+    widget.clearMask()
     assert len(rects) == 1
     # render() places the region's top-left at targetOffset.
     widget.render(canvas, rects[0][0].topLeft(), QRegion(rects[0][0]))

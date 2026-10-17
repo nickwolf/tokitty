@@ -25,6 +25,7 @@ from tokitty.qt.menu import render_menu
 from tokitty.qt.pane import QtPane, fit_tag, monotonic_ms, palette_signature  # noqa: F401
 from tokitty.sprite_raster import raster_rgba
 from tokitty.sprites import known_grids
+from tokitty.wander import Pose
 from tokitty.usage_display import ROW_SLOTS
 
 MODEL_NAME_MAX = 14       # ui.render_usage's fit_tag limit
@@ -107,10 +108,13 @@ class TokittyQtWidget(QWidget):
             T.resolve_home(c.cat_home, i, pane_count) for i, c in enumerate(customizations)
         ]
         self.panes: List[QtPane] = [
-            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock(), spot=home)
-            for c, home in zip(customizations, self.homes)
+            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock(), spot=home,
+                   roams=self._roams(c, i, pane_count))
+            for i, (c, home) in enumerate(zip(customizations, self.homes))
         ]
-        self.window_layout = T.layout_window(self.homes)
+        self.window_layout = T.layout_window(self.homes, wander=theme.cat.wander)
+        # Per pane: where its cat can be drawn, to remask only when that changed.
+        self._mask_places = self._current_mask_places()
         self.setFixedSize(*self.window_layout.size)
 
         self._layouts: Dict[Tuple[str, str], T.CardLayout] = {}
@@ -151,18 +155,26 @@ class TokittyQtWidget(QWidget):
 
     # ---- layout ---------------------------------------------------------
 
+    def _roams(self, custom: Customization, index: int, count: int) -> bool:
+        """Whether this pane's cat goes on trips: it needs the wander setting
+        and a way up to the top edge, which only a first-row pane has."""
+        return self.theme.cat.wander and "on_top" in T.reachable_spots(
+            self.theme, custom.cat_home, index, count)
+
     def rebuild_layout(self, homes: Sequence[str]) -> None:
-        """Recompute geometry for new homes. The window moves by the change
-        in margins so every card stays where it is on screen."""
+        """Recompute geometry for new homes (or a changed wander setting).
+        The window moves by the change in margins so every card stays where
+        it is on screen."""
         if len(homes) != len(self.panes):
             raise ValueError("need one home per pane")
         old = self.window_layout
         self.homes = list(homes)
-        self.window_layout = T.layout_window(self.homes)
+        self.window_layout = T.layout_window(self.homes, wander=self.theme.cat.wander)
         self.setFixedSize(*self.window_layout.size)
         self._painted.clear()
-        for pane, home in zip(self.panes, self.homes):
-            pane.set_spot(home)
+        count = len(self.panes)
+        for i, (pane, home) in enumerate(zip(self.panes, self.homes)):
+            pane.set_spot(home, self._roams(pane.customization, i, count))
         dx = self.window_layout.margins[0] - old.margins[0]
         dy = self.window_layout.margins[1] - old.margins[1]
         if dx or dy:
@@ -174,7 +186,8 @@ class TokittyQtWidget(QWidget):
     def set_theme(self, theme: T.Theme) -> None:
         """Swap the theme and repaint. The cached card layouts and cat images
         belong to the old one; the homes are recomputed in case the model ever
-        ties them to the theme, and the window only rebuilds when they moved."""
+        ties them to the theme, and the window only rebuilds when they or the
+        wander setting moved its layout."""
         self.theme = theme
         self._layouts.clear()
         self._images.clear()
@@ -184,8 +197,13 @@ class TokittyQtWidget(QWidget):
         count = len(self.panes)
         homes = [T.resolve_home(pane.customization.cat_home, i, count)
                  for i, pane in enumerate(self.panes)]
-        if homes != self.homes:
+        if homes != self.homes or self.window_layout != T.layout_window(
+                homes, wander=theme.cat.wander):
             self.rebuild_layout(homes)
+        else:
+            # The wander setting can change who roams without moving the window.
+            for i, pane in enumerate(self.panes):
+                pane.set_spot(pane.spot, self._roams(pane.customization, i, count))
         self.update()
 
     def pane_anchor(self, index: int) -> Tuple[int, int]:
@@ -206,17 +224,19 @@ class TokittyQtWidget(QWidget):
 
     def cat_origin(self, index: int, offset: Tuple[int, int] = (0, 0)) -> Tuple[float, float]:
         """The sprite's top-left in window coordinates, snapped to a whole
-        device pixel. `offset` is a frame's move in cells; a mirrored cat
-        moves the other way in x. Without one it is the home origin, which
-        the click mask uses."""
+        device pixel, where the pane's pose puts it. `offset` is a frame's
+        move in cells; a mirrored cat moves the other way in x."""
         dpr = self.devicePixelRatioF()
         ox, oy = self.window_layout.pane_origins[index]
-        placed = T.placement(self.homes[index])
+        return self._origin_of(ox, oy, self.panes[index].pose, offset, dpr)
+
+    @staticmethod
+    def _origin_of(ox: int, oy: int, pose: Pose, offset: Tuple[int, int], dpr: float):
         dx, dy = offset
-        if placed.mirrored:
+        if pose.mirrored:
             dx = -dx
-        px, py = placed.origin
-        return (T.snap(ox + px + dx * sprites.SCALE, dpr),
+        py = T.placement(pose.spot).origin[1]
+        return (T.snap(ox + pose.x + dx * sprites.SCALE, dpr),
                 T.snap(oy + py + dy * sprites.SCALE, dpr))
 
     def _layout_for(self, view: str, home: str) -> T.CardLayout:
@@ -233,6 +253,7 @@ class TokittyQtWidget(QWidget):
         and re-arm (a new state restarts its loop, so its due time moved)."""
         self.update()
         self._prune_images()
+        self._sync_mask()
         self._arm()
 
     def _prune_images(self) -> None:
@@ -260,6 +281,7 @@ class TokittyQtWidget(QWidget):
             if pane.tick(now):
                 # Only the cat changed: repaint its rect, not the window.
                 self.update(self._cat_dirty_rect(index, pane))
+        self._sync_mask()
         self._arm()
 
     def _cat_dirty_rect(self, index: int, pane: QtPane):
@@ -298,14 +320,14 @@ class TokittyQtWidget(QWidget):
         or the frame has no body. The rect is snapped to device pixels."""
         if not self.theme.cat.shadow:
             return None
-        home = self.homes[index]
+        pose = pane.pose
         rest, grid, offset = pane.rest_grid(), pane.grid(), pane.offset()
         memo = self._shadow_memo.get(index)
-        if memo is not None and memo[0] is rest and memo[1] is grid and memo[2:4] == (offset, home):
+        if memo is not None and memo[0] is rest and memo[1] is grid and memo[2:4] == (offset, pose):
             placed = memo[4]
         else:
-            placed = shadow_mod.shadow_for(rest, grid, offset, home, T.placement(home).mirrored)
-            self._shadow_memo[index] = (rest, grid, offset, home, placed)
+            placed = shadow_mod.shadow_for(rest, grid, offset, pose.spot, pose.mirrored, x=pose.x)
+            self._shadow_memo[index] = (rest, grid, offset, pose, placed)
         if placed is None:
             return None
         dpr = self.devicePixelRatioF()
@@ -634,7 +656,7 @@ class TokittyQtWidget(QWidget):
             self._bar(p, layout[f"model_bar_{i}"], pct, fill)
 
     def _paint_cat(self, p, index, pane, palette, home, dpr) -> None:
-        image = self._cat_image(pane.grid(), palette, pane.palette_key, dpr, T.placement(home).mirrored)
+        image = self._cat_image(pane.grid(), palette, pane.palette_key, dpr, pane.pose.mirrored)
         x, y = self.cat_origin(index, pane.offset())
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         p.drawImage(QPointF(x, y), image)
@@ -819,18 +841,34 @@ class TokittyQtWidget(QWidget):
             self._apply_macos()
 
     def cat_rects(self) -> List[T.Rect]:
-        """Each cat's sprite rectangle in window coordinates."""
+        """Each cat's rectangle in window coordinates: the sprite at every
+        offset its animation can move it to, so a jump or a stride is never
+        cut off by the mask, which clips painting on Windows."""
+        dpr = self.devicePixelRatioF()
         rects = []
-        for i in range(len(self.panes)):
-            x, y = self.cat_origin(i)
-            rects.append(T.Rect(round(x), round(y), T.SPRITE_W, T.SPRITE_H))
+        for i, (pose, offsets) in enumerate(self._current_mask_places()):
+            ox, oy = self.window_layout.pane_origins[i]
+            corners = [self._origin_of(ox, oy, pose, o, dpr) for o in offsets]
+            x0, y0 = min(c[0] for c in corners), min(c[1] for c in corners)
+            x1, y1 = max(c[0] for c in corners), max(c[1] for c in corners)
+            rects.append(T.Rect(round(x0), round(y0), round(x1 - x0) + T.SPRITE_W,
+                                round(y1 - y0) + T.SPRITE_H))
         return rects
+
+    def _current_mask_places(self) -> tuple:
+        return tuple(pane.mask_place for pane in self.panes)
+
+    def _sync_mask(self) -> None:
+        """Remask when some cat's animation or pose changed, never per frame."""
+        if self._current_mask_places() != self._mask_places:
+            self._update_mask()
 
     def _update_mask(self) -> None:
         """Limit clicks to the cards and the cats. Windows and Linux already
         pass clicks through transparent pixels, but macOS catches every click
         in the window rectangle, so the mask does it there; it costs nothing
         elsewhere. A rectangle per cat still catches its transparent cells."""
+        self._mask_places = self._current_mask_places()
         region = QRegion()
         for r in T.hit_region(self.window_layout, self.cat_rects()):
             region = region.united(QRegion(QRect(r.x, r.y, r.w, r.h)))

@@ -1590,6 +1590,14 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
     return grid
 
 
+@functools.lru_cache(maxsize=None)
+def offsets(state: str) -> Tuple[Tuple[int, int], ...]:
+    """Every offset any frame of the animation moves the sprite by, (0, 0)
+    included: where it can draw the cat, which the click mask must cover."""
+    found = {(0, 0)} | {f.offset for t in get_animation(state).tracks for f in t.frames}
+    return tuple(sorted(found))
+
+
 def compose_offset(state: str, positions: Sequence[int]) -> Tuple[int, int]:
     """Where the sprite is moved, in cells, with every track at the given
     frame position: the offset of the one track that moves it, else (0, 0)."""
@@ -1985,6 +1993,76 @@ MOVES["walk_stop"] = single_track(_WALK_STAND, [
     Frame({}, 150, template=_WALK_STAND),
     Frame({}, 120, template=_hop_frame(pose="crouch")),
     Frame({}, 300, template=_hop_frame()),
+], loop_from=None)
+
+# lie_down / sit_up: between sitting on the top edge and the content loaf
+# (content@on_top), so a cat that wanders up settles into the loaf and sits up
+# again before it walks or jumps down. Two in-between frames in loaf
+# coordinates (row 21 on the edge, drawn _LOAF_DROP lower): the body widening
+# from the sitting cat's to the loaf's, the head coming down to meet it.
+_SETTLE_HALF = {12: (7, 19), 13: (6, 20), 14: (6, 21), 15: (5, 21), 16: (5, 22),
+                17: (4, 22), 18: (4, 22), 19: (4, 22), 20: (4, 22), 21: (5, 21)}
+_SETTLE_LOAF = {12: (6, 20), 13: (5, 22), 14: (4, 23), 15: (3, 23), 16: (3, 24),
+                17: (3, 24), 18: (3, 24), 19: (3, 24), 20: (3, 24), 21: (4, 23)}
+
+
+def _settle_frame(head_down: int, body: Mapping[int, Tuple[int, int]],
+                  paws: Sequence[int], tail_tip: str = "mid") -> List[str]:
+    """The sitting head head_down rows below the loaf grid's top (the loaf
+    itself uses _LOAF_HEAD_DROP) over a body spanning `body`'s columns per
+    row, the paws on row 21 and the loaf's tail over the edge."""
+    rows = [["."] * 28 for _ in range(len(LOAF_TEMPLATE))]
+    for r, (first, last) in body.items():
+        rows[r][first:last + 1] = ["o"] * (last - first + 1)
+        rows[r][last] = "O"
+        if r >= 15:
+            rows[r][last - 1] = "O"
+    for r in (16, 18):  # the haunch stripes, as on the sitting cat's flank
+        first = body[r][0]
+        rows[r][first:first + 3] = ["s"] * 3
+    for r, cols in ((19, (18, 19)), (20, (18, 19, 20))):
+        for c in cols:
+            rows[r][c] = "c"
+    for r in range(1, 14):
+        for c, ch in enumerate(SITTING_TEMPLATE[r]):
+            if ch == "." or r + head_down > 21:
+                continue
+            # the head's shaded edge only against the air, as on the loaf
+            rows[r + head_down][c] = "o" if ch == "O" and rows[r + head_down][c] != "." else ch
+    # a bib from below the chin to the paws, no more than four rows deep
+    for r in range(max(14 + head_down, 17), 21):
+        first, last = (10, 16) if r < 19 else (9, 17)
+        rows[r][first:last + 1] = ["u"] * (last - first + 1)
+    for c in paws:
+        rows[21][c] = "m"
+    grid = _overlay(["".join(row) for row in rows], _loaf_tail(tail_tip))
+    # a body narrower than the loaf's: bridge the gap to the tail's root
+    right = max(body[r][1] for r in (19, 20))
+    grid = _overlay(grid, {(r, c): "Y" for r in (19, 20) for c in range(right + 1, 25)})
+    grid = _overlay(grid, _shift(_SIT_EYES_OPEN, head_down))
+    return [row.replace("A", "n") for row in grid]
+
+
+_SETTLE_LOWER = _settle_frame(0, _SETTLE_HALF, (8, 9, 10, 16, 17, 18), "left")
+_SETTLE_SINK = _settle_frame(3, _SETTLE_LOAF, (8, 9, 10, 11, 15, 16, 17, 18))
+# the content loaf's frame 0, so lie_down hands off to it and sit_up leaves it seamlessly
+_LOAF_REST = compose(spot_state("content", "on_top"),
+                     [0] * len(SPOT_VARIANTS[("content", "on_top")].tracks))
+
+MOVES["lie_down"] = single_track(_hop_frame(), [
+    Frame({}, 150, template=_hop_frame()),
+    Frame({}, 140, template=_hop_frame(pose="crouch")),
+    Frame({}, 160, template=_SETTLE_LOWER, offset=_LOAF_DROP),
+    Frame({}, 160, template=_SETTLE_SINK, offset=_LOAF_DROP),
+    Frame({}, 300, template=_LOAF_REST, offset=_LOAF_DROP),
+], loop_from=None)
+
+MOVES["sit_up"] = single_track(_hop_frame(), [
+    Frame({}, 150, template=_LOAF_REST, offset=_LOAF_DROP),
+    Frame({}, 120, template=_SETTLE_SINK, offset=_LOAF_DROP),
+    Frame({}, 120, template=_SETTLE_LOWER, offset=_LOAF_DROP),
+    Frame({}, 140, template=_hop_frame(pose="crouch")),
+    Frame({}, 250, template=_hop_frame()),
 ], loop_from=None)
 
 # State changes (#134). Each lands on the target's own frame 0, so the

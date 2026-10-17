@@ -560,7 +560,7 @@ def test_a_refused_value_is_not_saved_and_the_old_one_stays(make_world):
     theme_tab = open_window(world).tabs["theme"]
     assert theme_tab._edit("card", "opacity", 55) is False  # not a multiple of 10
     assert theme_tab._edit("card", "background", "red") is False
-    assert world.widget.theme == T.Theme()
+    assert world.widget.theme == T.Theme(cat=T.CatStyle(wander=False))  # make_world's theme
     assert not (world.state_dir / T.THEME_FILENAME).exists()
     assert theme_tab._edit("card", "opacity", 60) is True
     assert saved_theme(world).card.opacity == 60
@@ -683,3 +683,20 @@ def test_cat_shadow_toggle_reflects_the_theme_after_a_refresh(make_world):
     world = make_world(1, theme=T.Theme(cat=T.CatStyle(shadow=False)))
     theme_tab = open_window(world).tabs["theme"]
     assert theme_tab.shadow_toggle.get() is False
+
+
+def test_cat_wander_toggle_writes_the_theme_and_resizes_the_window(make_world):
+    world = make_world(1, theme=T.Theme())  # wander is on by default
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.wander_toggle.get() is True and world.widget.window_layout.margins[1] == 116
+    theme_tab.wander_toggle._clicked()
+    assert saved_theme(world).cat.wander is False
+    assert world.widget.theme.cat.wander is False and world.widget.window_layout.margins[1] == 0
+    theme_tab.wander_toggle._clicked()
+    assert saved_theme(world).cat.wander is True and world.widget.window_layout.margins[1] == 116
+
+
+def test_cat_wander_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(wander=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.wander_toggle.get() is False

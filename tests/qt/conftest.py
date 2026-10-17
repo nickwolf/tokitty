@@ -46,7 +46,7 @@ def make_world(qapp, tmp_path, monkeypatch):
         state_dir = tmp_path / f"state{len(opened)}"
         state_dir.mkdir()
         customs = customs or [Customization() for _ in range(count)]
-        widget = TokittyQtWidget(theme or T.Theme(), customs, len(customs))
+        widget = TokittyQtWidget(theme or T.Theme(cat=T.CatStyle(wander=False)), customs, len(customs))
         widget.anim.stop()
         units = [{"key": f"k{i}", "account": None, "tag_kind": None, "pane": pane,
                   "usage": FakeUsage(), "custom": c}

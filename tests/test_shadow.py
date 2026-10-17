@@ -128,3 +128,10 @@ def test_shadow_follows_dx_and_mirroring_flips_it():
     assert right.y == plain.y and right.cells == plain.cells
     # dx is negated for a mirrored cat
     assert shadow_for(g, g, (3, 0), "inside_right", True).x == right.x - 3 * S
+
+
+def test_x_overrides_the_spots_own_left_edge():
+    g = sprites.get_frames("content")[0]
+    at_home = shadow_for(g, g, (0, 0), "on_top", False)
+    moved = shadow_for(g, g, (0, 0), "on_top", False, x=theme.placement("on_top").origin[0] + 3 * S)
+    assert moved.x - at_home.x == 3 * S and moved.y == at_home.y and moved.cells == at_home.cells

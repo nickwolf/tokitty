@@ -96,6 +96,7 @@ class TextStyle:
 @dataclass(frozen=True)
 class CatStyle:
     shadow: bool = True         # the ground shadow under the cat
+    wander: bool = True         # the cat now and then strolls along the card's top edge (#22)
 
 
 @dataclass(frozen=True)
@@ -258,7 +259,7 @@ def _clean_text(raw: dict, d: TextStyle, bad: Optional[set] = None) -> TextStyle
 
 def _clean_cat(raw: dict, d: CatStyle, bad: Optional[set] = None) -> CatStyle:
     pick = _Picker(raw, "cat", set() if bad is None else bad)
-    return CatStyle(shadow=pick.bool("shadow", d.shadow))
+    return CatStyle(shadow=pick.bool("shadow", d.shadow), wander=pick.bool("wander", d.wander))
 
 
 def _validate(raw, fallback: Theme) -> Tuple[Theme, set]:

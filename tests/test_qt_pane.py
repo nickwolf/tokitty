@@ -479,3 +479,89 @@ def test_rest_grid_and_offset_follow_the_target(monkeypatch):
     assert pane.offset() == (0, 0) and pane.rest_grid() is sprites.get_frames("hop")[0]
     pane.tick(100)
     assert pane.offset() == (1, -2) and pane.rest_grid() is sprites.get_frames("hop")[0]
+
+
+# ---- wandering (#22) --------------------------------------------------------
+
+def _content(pane, state="content"):
+    pane.render(state, 0, 0, "", "", "", None, None, False)
+
+
+def _walk_until(pane, clock, stop, limit=400):
+    """Tick at every due time until stop(pane) holds."""
+    for _ in range(limit):
+        if stop(pane):
+            return True
+        clock.now = pane.next_due_ms()
+        pane.tick(clock.now)
+    return stop(pane)
+
+
+def _moving(pane):
+    return pane.playing.startswith(sprites.MOVE_PREFIX)
+
+
+def test_a_content_pane_leaves_home_after_its_wait():
+    clock = Clock(0)
+    pane = _pane(clock, roams=True)
+    _content(pane)
+    home = pane.pose
+    assert pane.spot == "inside"
+    assert not _moving(pane)
+    assert _walk_until(pane, clock, _moving)
+    assert _walk_until(pane, clock, lambda p: p.pose.spot == "on_top")
+    assert pane.pose != home and pane.spot == "inside"
+
+
+def test_a_repeated_poll_does_not_restart_a_move():
+    clock = Clock(0)
+    pane = _pane(clock, roams=True)
+    _content(pane)
+    assert _walk_until(pane, clock, _moving)
+    playing, due = pane.playing, pane.next_due_ms()
+    clock.now += 10
+    _content(pane)
+    assert pane.playing == playing and pane.next_due_ms() == due
+
+
+def test_working_while_away_puts_the_cat_home_at_once():
+    clock = Clock(0)
+    pane = _pane(clock, roams=True)
+    _content(pane)
+    assert _walk_until(pane, clock, lambda p: p.pose.spot == "on_top")
+    pane.render("working", 0, 0, "", "", "", None, None, False)
+    assert pane.pose == pane.mask_place[0] == pane._roam.wanderer.home
+    assert not pane.playing.startswith(sprites.MOVE_PREFIX)
+
+
+def test_the_mask_place_holds_every_offset_of_the_playing_move():
+    clock = Clock(0)
+    pane = _pane(clock, roams=True)
+    _content(pane)
+    assert pane.mask_place == (pane.pose, ((0, 0),)) or (0, 0) in pane.mask_place[1]
+    assert _walk_until(pane, clock, _moving)
+    pose, offsets = pane.mask_place
+    assert pose == pane.pose and offsets == sprites.offsets(pane.playing)
+    assert any(o != (0, 0) for o in offsets)
+
+
+def test_a_pane_that_does_not_roam_never_moves():
+    clock = Clock(0)
+    pane = _pane(clock)
+    _content(pane)
+    assert pane.next_due_ms() is not None  # the idle blinks
+    for _ in range(300):
+        clock.now = pane.next_due_ms()
+        pane.tick(clock.now)
+        assert pane.pose == pane.mask_place[0] == pane._roam.wanderer.home
+        assert not pane.playing.startswith(sprites.MOVE_PREFIX)
+
+
+def test_set_spot_with_roams_sends_the_new_home_wandering():
+    clock = Clock(0)
+    pane = _pane(clock)
+    _content(pane)
+    pane.set_spot("inside", True)
+    assert _walk_until(pane, clock, lambda p: p.pose.spot == "on_top")
+    pane.set_spot("on_top")  # roams stays on
+    assert pane.pose.spot == "on_top" and pane.spot == "on_top"

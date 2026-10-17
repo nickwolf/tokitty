@@ -1,5 +1,6 @@
 """Sprite offsets and the ground shadow in the live widget (#116, #137): the
-painted cat moves by a frame's offset while the click mask stays home, a
+painted cat moves by a frame's offset inside a click mask that holds every
+offset of the animation, a
 frame change repaints where the cat was too, and the shadow sits under the
 cat without ever joining the click area."""
 from dataclasses import replace
@@ -13,6 +14,7 @@ from tokitty import sprites
 from tokitty import theme as T
 from tokitty.customize import Customization
 from tokitty.qt.widget import TokittyQtWidget
+from tokitty.wander import Pose
 
 pytestmark = pytest.mark.qt
 
@@ -37,8 +39,8 @@ def hop(monkeypatch):
         sprites.SITTING_TEMPLATE, frames, 0))
 
 
-def make(home="inside", shadow=True, clock=None, count=1):
-    theme = T.Theme(cat=T.CatStyle(shadow=shadow))
+def make(home="inside", shadow=True, clock=None, count=1, wander=False):
+    theme = T.Theme(cat=T.CatStyle(shadow=shadow, wander=wander))
     widget = TokittyQtWidget(theme, [Customization(cat_home=home)] * count, count,
                              clock=clock or Clock())
     widget.anim.stop()
@@ -50,10 +52,27 @@ def play(widget, clock, state="hop", index=0):
     widget.anim.stop()
 
 
+def _unmasked(widget, draw):
+    """render() shifts a region's output when the widget has a mask (by an
+    amount that depends on the mask), so paint with it lifted. The mask
+    itself is checked by test_the_mask_holds_the_cat_through_a_whole_trip."""
+    mask = widget.mask()
+    widget.clearMask()
+    try:
+        draw()
+    finally:
+        widget.setMask(mask)
+
+
+def render_part(widget, canvas, rect):
+    """Repaint `rect` into canvas, as a partial update would."""
+    _unmasked(widget, lambda: widget.render(canvas, rect.topLeft(), QRegion(rect)))
+
+
 def full_render(widget):
     image = QImage(widget.size(), QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(0)
-    widget.render(image)
+    _unmasked(widget, lambda: widget.render(image))
     return image
 
 
@@ -142,7 +161,7 @@ def test_a_partial_repaint_of_a_moved_cat_leaves_no_ghost(qapp, hop, home, shado
         widget._next_frames()
         widget.anim.stop()
         dirty = rects[-1][0]
-        widget.render(canvas, dirty.topLeft(), QRegion(dirty))
+        render_part(widget, canvas, dirty)
         assert canvas == full_render(widget), now
 
 
@@ -213,7 +232,7 @@ def test_the_shadow_switch_follows_set_theme(qapp, hop):
 def test_shadow_uses_the_pane_inputs(qapp, hop, monkeypatch):
     seen = []
     real = shadow_mod.shadow_for
-    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a: (seen.append(a), real(*a))[1])
+    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a, **kw: (seen.append(a), real(*a, **kw))[1])
     clock = Clock()
     widget = make("inside_right", clock=clock)
     play(widget, clock)
@@ -229,7 +248,7 @@ def test_shadow_uses_the_pane_inputs(qapp, hop, monkeypatch):
 def test_the_shadow_is_worked_out_once_per_frame(qapp, hop, monkeypatch):
     calls = []
     real = shadow_mod.shadow_for
-    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a: calls.append(a) or real(*a))
+    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a, **kw: calls.append(a) or real(*a, **kw))
     clock = Clock()
     widget = make(clock=clock)
     play(widget, clock)
@@ -242,3 +261,172 @@ def test_the_shadow_is_worked_out_once_per_frame(qapp, hop, monkeypatch):
     widget.anim.stop()
     full_render(widget)
     assert len(calls) == 2 and widget._shadow_placed(0, widget.panes[0]) != first
+
+
+# ---- wandering (#22) --------------------------------------------------------
+
+def drive(widget, clock, stop, index=0, limit=600):
+    """Tick the widget at every due time until stop(pane) holds."""
+    pane = widget.panes[index]
+    widget.panes[index].render("content", 0, 0, "", "", "", None, None, False)
+    for _ in range(limit):
+        if stop(pane):
+            return pane
+        clock.now = max(clock.now, pane.next_due_ms())
+        widget._next_frames()
+        widget.anim.stop()
+    raise AssertionError("the cat never got there")
+
+
+def away(pane):
+    return pane.pose.spot == "on_top" and pane.pose.x != pane._roam.wanderer.home.x
+
+
+def test_wander_gives_an_inside_cat_the_headroom_for_its_jump(qapp):
+    on, off = make(wander=True), make(wander=False)
+    assert on.window_layout.margins[1] == 116 and off.window_layout.margins[1] == 0
+    assert on.height() == off.height() + 116
+
+
+def test_only_first_row_panes_roam(qapp):
+    widget = make(wander=True, count=5)  # two columns, three rows
+    assert [pane._roams for pane in widget.panes] == [True, True, False, False, False]
+    assert not any(pane._roams for pane in make(wander=False, count=5).panes)
+
+
+def test_set_theme_toggles_the_headroom_and_keeps_the_cards_still(qapp):
+    widget = make(wander=False)
+    widget.move(100, 300)
+    card = widget.first_card_pos()
+    widget.set_theme(replace(widget.theme, cat=T.CatStyle(wander=True)))
+    assert widget.window_layout.margins[1] == 116 and widget.panes[0]._roams
+    assert widget.first_card_pos() == card
+    widget.set_theme(replace(widget.theme, cat=T.CatStyle(wander=False)))
+    assert widget.window_layout.margins[1] == 0 and not widget.panes[0]._roams
+    assert widget.first_card_pos() == card
+
+
+def test_set_theme_flips_roaming_even_when_the_layout_stays(qapp):
+    widget = make("on_top", wander=False)
+    size = widget.size()
+    widget.set_theme(replace(widget.theme, cat=T.CatStyle(wander=True)))
+    assert widget.size() == size and widget.panes[0]._roams
+
+
+def test_cat_origin_follows_the_pose_and_its_mirroring(qapp):
+    widget = make(wander=True)
+    wanderer = widget.panes[0]._roam.wanderer
+    home = wanderer.home
+    ox, oy = widget.window_layout.pane_origins[0]
+    assert widget.cat_origin(0) == (ox + home.x, oy + T.placement("inside").origin[1])
+    wanderer.pose = Pose("on_top", home.x + 3 * sprites.SCALE, True)
+    assert widget.cat_origin(0) == (ox + home.x + 3 * sprites.SCALE,
+                                    oy + T.placement("on_top").origin[1])
+    # a mirrored cat's frame offset runs the other way
+    dx, dy = widget.cat_origin(0, (2, -1))
+    assert (dx, dy) == (ox + home.x + 3 * sprites.SCALE - 2 * sprites.SCALE,
+                        oy + T.placement("on_top").origin[1] - sprites.SCALE)
+    wanderer.pose = replace(wanderer.pose, mirrored=False)
+    assert widget.cat_origin(0, (2, 0))[0] == ox + home.x + 3 * sprites.SCALE + 2 * sprites.SCALE
+
+
+def test_the_walking_cat_is_drawn_mirrored_as_it_faces(qapp):
+    widget = make(wander=True)
+    wanderer = widget.panes[0]._roam.wanderer
+    wanderer.pose = Pose("on_top", wanderer.home.x, True)
+    pane = widget.panes[0]
+    mirrored = widget._cat_image(pane.grid(), pane.palette, pane.palette_key, 1.0, True)
+    plain = widget._cat_image(pane.grid(), pane.palette, pane.palette_key, 1.0, False)
+    canvas = full_render(widget)
+    x, y = widget.cat_origin(0)
+    px, py = next((px, py) for py in range(mirrored.height()) for px in range(mirrored.width())
+                  if mirrored.pixelColor(px, py).alpha() == 255
+                  and mirrored.pixelColor(px, py) != plain.pixelColor(px, py))
+    assert canvas.pixelColor(round(x) + px, round(y) + py) == mirrored.pixelColor(px, py)
+
+
+def test_the_mask_holds_the_cat_through_a_whole_trip(qapp):
+    # The mask clips painting on Windows: any part of the cat outside it vanishes.
+    clock = Clock()
+    widget = make(wander=True, clock=clock)
+    pane = drive(widget, clock, lambda p: True)
+    widget._update_mask()
+    spots, moves = set(), 0
+    for _ in range(600):
+        clock.now = pane.next_due_ms()
+        widget._next_frames()
+        widget.anim.stop()
+        cat = widget._cat_rect(0, pane).toAlignedRect()
+        assert QRegion(cat).subtracted(widget.mask()).isEmpty(), (pane.playing, pane.pose)
+        spots.add((pane.pose.spot, pane.pose.x))
+        moves += pane.playing.startswith(sprites.MOVE_PREFIX)
+    assert len(spots) > 2 and moves
+
+
+def test_the_mask_is_rebuilt_only_when_a_clickable_place_moved(qapp):
+    clock = Clock()
+    widget = make(wander=True, clock=clock)
+    calls = []
+    real = widget._update_mask
+    widget._update_mask = lambda: (calls.append(1), real())[1]
+    drive(widget, clock, lambda p: p.playing.startswith(sprites.MOVE_PREFIX))
+    assert len(calls) <= 1  # the move that just started
+    ticks = 0
+    for _ in range(40):  # frames of the move and of the walk that follows
+        clock.now = widget.panes[0].next_due_ms()
+        before = len(calls)
+        widget._next_frames()
+        widget.anim.stop()
+        ticks += 1
+        assert len(calls) - before <= 1
+    assert len(calls) < ticks
+
+
+def test_a_walking_cat_leaves_no_ghost_and_its_shadow_follows(qapp):
+    clock = Clock()
+    widget = make(wander=True, clock=clock)
+    pane = widget.panes[0]
+    drive(widget, clock, lambda p: p.pose.spot == "on_top")
+    full_render(widget)
+    canvas = full_render(widget)
+    rects = []
+    widget.update = lambda *a: rects.append(a)
+    xs, shadow_xs, moved = set(), set(), 0
+    for _ in range(600):
+        clock.now = pane.next_due_ms()
+        before = widget._cat_rect(0, pane)
+        old_art = widget._art_rect(0, pane)
+        rects.clear()
+        widget._next_frames()
+        widget.anim.stop()
+        if widget._cat_rect(0, pane) != before:
+            moved += 1
+            dirty = QRectF(rects[-1][0])
+            assert dirty.contains(old_art) and dirty.contains(widget._art_rect(0, pane))
+        if rects:
+            render_part(widget, canvas, rects[-1][0])
+            assert canvas == full_render(widget)
+        xs.add(pane.pose.x)
+        placed = widget._shadow_placed(0, pane)
+        if placed is not None and pane.pose.spot == "on_top":
+            shadow_xs.add(round(placed[0].x() - pane.pose.x))
+        if len(xs) > 3:
+            break
+    assert moved and len(xs) > 3
+    # the shadow keeps its place under the cat as the cat walks
+    assert len(shadow_xs) <= 4
+
+
+def test_the_shadow_passes_the_pose_on(qapp, monkeypatch):
+    seen = []
+    real = shadow_mod.shadow_for
+    monkeypatch.setattr(shadow_mod, "shadow_for", lambda *a, **kw: (seen.append((a, kw)), real(*a, **kw))[1])
+    widget = make(wander=True)
+    wanderer = widget.panes[0]._roam.wanderer
+    wanderer.pose = Pose("on_top", wanderer.home.x + 4 * sprites.SCALE, True)
+    first = widget._shadow_placed(0, widget.panes[0])
+    args, kw = seen[-1]
+    assert args[3:5] == ("on_top", True) and kw == {"x": wanderer.pose.x}
+    wanderer.pose = replace(wanderer.pose, x=wanderer.pose.x + 4 * sprites.SCALE)
+    second = widget._shadow_placed(0, widget.panes[0])
+    assert second[0].x() - first[0].x() == 4 * sprites.SCALE

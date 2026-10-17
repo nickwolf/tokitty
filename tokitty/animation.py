@@ -25,13 +25,27 @@ class Player:
         self.target = state
         self.positions: List[int] = []
         self.dues: List[Optional[int]] = []
-        # Transitions only: when each track's last frame finished its hold.
+        # Transitions and moves: when each track's last frame finished its hold.
         self.ends: List[Optional[int]] = []
         self.restart(state, now_ms)
 
     @property
     def in_transition(self) -> bool:
         return self.state != self.target
+
+    @property
+    def _plays_through(self) -> bool:
+        """A transition or a move: played once to its end, the last frame's
+        hold included."""
+        return self.in_transition or self.state.startswith(sprites.MOVE_PREFIX)
+
+    @property
+    def finished_at(self) -> Optional[int]:
+        """When a move's last frame finished its hold, else None (still
+        playing, or not a move)."""
+        if not self.state.startswith(sprites.MOVE_PREFIX) or None in self.ends:
+            return None
+        return max(self.ends)
 
     def restart(self, state: str, now_ms: int, from_state: Optional[str] = None) -> None:
         """Every track back to frame 0, shown now. With a from_state that has a
@@ -45,9 +59,9 @@ class Player:
 
     def _schedule(self, start_ms: int) -> None:
         """Each track's due time from the moment its current frame went up. A
-        one-frame track has nothing to advance to, except in a transition,
-        where the last frame's hold is part of the play."""
-        once = self.in_transition
+        one-frame track has nothing to advance to, except in a transition or a
+        move, where the last frame's hold is part of the play."""
+        once = self._plays_through
         self.ends = [None] * len(self.positions)
         self.dues = [
             start_ms + frame_ms(track.frames[pos], self.rng) if once or len(track.frames) > 1 else None
@@ -78,7 +92,7 @@ class Player:
         return self.grid() is not before or self.offset() != before_offset
 
     def _advance(self, now_ms: int) -> None:
-        transition = self.in_transition
+        through = self._plays_through
         for i, track in enumerate(sprites.get_tracks(self.state)):
             due = self.dues[i]
             if due is None or now_ms < due:
@@ -95,7 +109,7 @@ class Player:
                 nxt = pos + 1
                 if nxt >= n:
                     if track.loop_from is None:
-                        if transition:
+                        if through:
                             self.ends[i] = due  # the last frame's hold is over
                         due = None  # played once; the last frame stays up
                         break

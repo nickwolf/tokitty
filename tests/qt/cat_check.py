@@ -20,11 +20,14 @@ from tokitty.sprite_raster import raster_rgba
 
 COATS = (("orange", "tabby"), ("gray", "tuxedo"))
 # The shadow lies over the empty margin of an on_top home, which this check keeps clear.
-NO_SHADOW = T.Theme(cat=T.CatStyle(shadow=False))
+NO_SHADOW = T.Theme(cat=T.CatStyle(shadow=False, wander=False))
 
 
 def _render(pane, state: str) -> None:
     pane.render(state, 42, 67, "2h", "Mon", "", None, None, False)
+    # A loaf sits up (or a cat lies down) before the state's loop; play it out.
+    while pane.playing.startswith("move:"):
+        pane.tick(pane.next_due_ms())
 
 
 def _block(image: QImage, x: int, y: int, w: int, h: int) -> bytes:
