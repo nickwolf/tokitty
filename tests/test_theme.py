@@ -2,12 +2,15 @@ import json
 import subprocess
 import sys
 
+from dataclasses import replace
+
 import pytest
 
 from tokitty import theme as T
 from tokitty.theme import (
     BarStyle, CardStyle, TextStyle, Theme,
     bar_fill, card_alpha, halo_active, halo_applies, load_theme, save_theme,
+    theme_from_dict, rejected_fields,
 )
 
 
@@ -510,16 +513,16 @@ def test_window_margins_homes_only():
     assert w.margins == (0, 0, 0, 0)
     assert w.size == (300, 384)
     w = layout_window(["on_top", "inside"])
-    assert w.margins == (0, 104, 0, 0)
-    assert w.size == (300, 104 + 256)
+    assert w.margins == (0, 116, 0, 0)
+    assert w.size == (300, 116 + 256)
 
 
 def test_window_margins_wander_sizes_for_reachable():
     w = layout_window(["inside", "inside"], wander=True)
-    assert w.margins == (0, 104, 0, 0)
-    assert w.size == (300, 104 + 256)
+    assert w.margins == (0, 116, 0, 0)
+    assert w.size == (300, 116 + 256)
     # no pane in the first row, so nothing can reach the top
-    assert layout_window(["inside"] * 9, wander=True).margins == (0, 104, 0, 0)
+    assert layout_window(["inside"] * 9, wander=True).margins == (0, 116, 0, 0)
 
 
 @pytest.mark.parametrize("n", [1, 2, 5, 9])
@@ -528,14 +531,14 @@ def test_window_never_has_side_margins(n):
         homes = list(homes) + ["inside"] * (n - len(homes))
         for wander in (False, True):
             m = layout_window(homes, wander).margins
-            assert m in ((0, 0, 0, 0), (0, 104, 0, 0)), (homes, wander)
-            assert (m[1] == 104) == ("on_top" in homes or wander)
+            assert m in ((0, 0, 0, 0), (0, 116, 0, 0)), (homes, wander)
+            assert (m[1] == 116) == ("on_top" in homes or wander)
 
 
 def test_window_origins_two_columns():
     w = layout_window(["on_top"] + ["inside"] * 4)
-    assert w.pane_origins == ((0, 104), (300, 104), (0, 232), (300, 232), (0, 360))
-    assert w.size == (600, 104 + 384)
+    assert w.pane_origins == ((0, 116), (300, 116), (0, 244), (300, 244), (0, 372))
+    assert w.size == (600, 116 + 384)
 
 
 def test_round_up4():
@@ -694,3 +697,49 @@ def test_non_list_show_and_non_dict_section_are_rejected():
 def test_theme_from_dict_ignores_a_non_dict():
     assert T.theme_from_dict(None, Theme()) == Theme()
     assert T.rejected_fields([], Theme()) == set()
+
+
+def test_on_top_margin_holds_the_sprite_and_the_hop_headroom():
+    from tokitty.theme import HOP_HEADROOM
+
+    assert HOP_HEADROOM == 12
+    assert layout_window(["on_top"]).margins[1] == SPRITE_H + HOP_HEADROOM
+    for homes in (["inside"], ["inside_right", "inside"]):
+        assert layout_window(homes).margins[1] == 0
+    # reachable only: the headroom comes with the spot, not on top of it
+    assert layout_window(["inside", "inside"], wander=True).margins[1] == SPRITE_H + HOP_HEADROOM
+    assert layout_window(["on_top"]).pane_origins == ((0, SPRITE_H + HOP_HEADROOM),)
+
+
+def test_cat_shadow_is_on_by_default_and_for_a_file_without_a_cat_section(tmp_path):
+    from tokitty.theme import CatStyle, load_theme
+
+    assert Theme().cat == CatStyle(shadow=True)
+    (tmp_path / "theme.json").write_text(json.dumps({"card": {"radius": 3}}), encoding="utf-8")
+    loaded = load_theme(tmp_path)
+    assert loaded.card.radius == 3 and loaded.cat.shadow is True
+
+
+def test_cat_shadow_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
+
+    theme = Theme(cat=CatStyle(shadow=False))
+    assert theme_to_dict(theme)["cat"] == {"shadow": False}
+    save_theme(tmp_path, theme)
+    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False}
+    assert load_theme(tmp_path).cat.shadow is False
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.shadow is False
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_shadow_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"shadow": bad}}
+    assert theme_from_dict(raw, Theme()).cat.shadow is True
+    assert rejected_fields(raw, Theme()) == {"cat.shadow"}
+    off = Theme(cat=replace(Theme().cat, shadow=False))
+    assert theme_from_dict(raw, off).cat.shadow is False  # the fallback's value
+
+
+def test_cat_section_that_is_not_a_dict_is_reported():
+    assert rejected_fields({"cat": True}, Theme()) == {"cat"}
+    assert theme_from_dict({"cat": True}, Theme()).cat.shadow is True

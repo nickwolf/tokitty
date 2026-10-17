@@ -1,6 +1,7 @@
 """Render README media: per-state PNG stills, a dual-cat card, the flag GIF,
 an animated GIF of every animated state (anim-<state>.gif), and one of
-every transition (anim-<from>-to-<to>.gif).
+every transition (anim-<from>-to-<to>.gif), spot variant
+(anim-<state>-at-<spot>.gif) and move (anim-move-<name>.gif).
 
 Stills reuse render_sheet's stdlib rasterizer; the GIF is assembled with
 Pillow, which is a dev-only dependency of this script (the shipped app
@@ -19,10 +20,10 @@ from typing import List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tokitty.sprites import (
-    ALL_STATES, LEGACY_COAT_MAP, TRANSITIONS, frame_ms_max, get_frames, get_tracks,
-    resolve_palette, transition_name,
+    ALL_STATES, LEGACY_COAT_MAP, MOVES, SPOT_VARIANTS, TRANSITIONS, frame_ms_max, get_frames,
+    get_tracks, move_name, resolve_palette, spot_state, transition_name,
 )
-from render_sheet import BG, _hex_to_rgb, _write_png, write_gif
+from render_sheet import BG, _hex_to_rgb, _write_png, gif_name, write_gif
 from tokitty.sprite_raster import raster_frame
 
 # The states worth photographing, per the Phase 5 spec: mood ladder,
@@ -35,6 +36,7 @@ ANIM_SECONDS = 30  # long enough for the random holds to show their range
 # Seconds for states whose rare moments need longer to come round: the
 # sleeping cat's peek is 20 to 45 s apart.
 ANIM_SECONDS_FOR = {"sleeping": 50}
+MOVE_TAIL_SECONDS = 1  # the last frame of a move, held after it lands
 TRANSITION_TAIL_SECONDS = 3  # the target state played after a transition, then it loops
 
 
@@ -47,7 +49,7 @@ def write_anims(out: Path, scale: int) -> None:
             frames = write_gif(out / f"anim-{state}.gif", state, scale=scale, seconds=seconds)
             print(f"anim-{state}.gif ({frames} frames)")
     for from_state, to_state in TRANSITIONS:
-        name = f"anim-{from_state}-to-{to_state}.gif"
+        name = f"anim-{gif_name(transition_name(from_state, to_state))}"
         # The transition's longest possible length plus a few seconds of the target.
         seconds = TRANSITION_TAIL_SECONDS + max(
             sum(frame_ms_max(f) for f in track.frames)
@@ -55,6 +57,18 @@ def write_anims(out: Path, scale: int) -> None:
         ) / 1000
         frames = write_gif(out / name, to_state, scale=scale, seconds=seconds,
                            from_state=from_state)
+        print(f"{name} ({frames} frames)")
+    for key in SPOT_VARIANTS:
+        name, variant = f"anim-{gif_name(spot_state(*key))}", spot_state(*key)
+        if len(get_frames(variant)) > 1:
+            frames = write_gif(out / name, variant, scale=scale, seconds=ANIM_SECONDS)
+            print(f"{name} ({frames} frames)")
+    for move in MOVES:
+        name = f"anim-{gif_name(move_name(move))}"
+        seconds = MOVE_TAIL_SECONDS + max(
+            sum(frame_ms_max(f) for f in track.frames) for track in get_tracks(move_name(move))
+        ) / 1000
+        frames = write_gif(out / name, move_name(move), scale=scale, seconds=seconds)
         print(f"{name} ({frames} frames)")
 
 

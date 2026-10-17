@@ -410,12 +410,109 @@ def test_frame_ms_resolution():
     assert frame_ms(Frame({}, ms=(50, 50)), rng) == 50
 
 
+def test_jumps_land_on_the_spot_they_head_for_within_the_headroom():
+    from tokitty import theme
+    from tokitty.sprites import MOVES
+
+    rise = (theme.placement("inside").origin[1] - theme.placement("on_top").origin[1]) // SCALE
+    for move, sign in (("jump_up", -1), ("jump_down", 1)):
+        frames = MOVES[move].tracks[0].frames
+        assert frames[0].offset == (0, 0)
+        assert frames[-1].offset == (0, sign * rise), move
+        assert frames[-1].template == frames[0].template, move  # lands sitting, as it left
+    # the overshoot above the edge stays inside the room kept clear over the card
+    top = min(f.offset[1] for f in MOVES["jump_up"].tracks[0].frames)
+    assert -top - rise <= theme.HOP_HEADROOM // SCALE
+
+
+def test_state_hops_stay_inside_the_room_above_the_cat():
+    # A state, or a change between states, plays in any spot, so its highest
+    # hop has to fit both inside the card (above the inside cat's canvas) and in
+    # the headroom kept over an on_top cat. Moves are #22's to place and are
+    # checked on their own.
+    from tokitty import theme
+    from tokitty.sprites import SPOT_VARIANTS, TRANSITIONS
+
+    inside_room = theme.placement("inside").origin[1] // SCALE
+    anims = list(ANIMATIONS.values()) + list(SPOT_VARIANTS.values()) + list(TRANSITIONS.values())
+    for anim in anims:
+        for track in anim.tracks:
+            for frame in track.frames:
+                rise = -frame.offset[1]
+                assert rise <= min(inside_room, theme.HOP_HEADROOM // SCALE), (track.name, frame.offset)
+
+
+def test_state_transitions_land_on_the_target_frame_0():
+    # the target's loop starts on frame 0, so a transition that ends on it hands
+    # off without a visible jump
+    from tokitty.sprites import TRANSITIONS, transition_name
+
+    for (from_state, to_state), anim in TRANSITIONS.items():
+        assert get_frames(transition_name(from_state, to_state))[-1] == get_frames(to_state)[0], \
+            (from_state, to_state)
+
+
+def test_walk_pieces_chain_and_keep_the_paws_on_the_edge():
+    from tokitty.shadow import ground_row
+    from tokitty.sprites import MOVES, _WALK_STRIDE
+
+    start, walk, stop = (MOVES[m].tracks[0].frames for m in ("walk_start", "walk", "walk_stop"))
+    # turning and sitting happen in place; the stride moves a cell a frame, flat
+    assert all(f.offset == (0, 0) for f in start + stop)
+    assert [f.offset for f in walk] == [(i, 0) for i in range(1, _WALK_STRIDE + 1)]
+    # walk_start ends in the standing pose walk_stop starts from, and walk is drawn
+    # from that same pose, so start, strides and stop join without a jump
+    assert start[-1].template == stop[0].template == MOVES["walk"].template
+    assert start[0].template == stop[-1].template  # sits as it sat
+    # every frame stands on the same row as the sitting cat, so it walks on the edge
+    sitting = ground_row(start[0].template)
+    assert all(ground_row(f.template) == sitting for f in start + walk + stop)
+
+
+def _touching(cell, cells, diagonal=True):
+    r, c = cell
+    return any((r + dr, c + dc) in cells for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+               if (dr or dc) and (diagonal or not (dr and dc)))
+
+
+def test_every_tail_stays_joined_to_the_cat():
+    # Tail cells (the Y/y bands) reach the body through each other, so no
+    # frame leaves a piece of tail floating beside the cat. Stepped diagonals
+    # count as joined, the way the curled tails are drawn.
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, move_name, spot_state, transition_name,
+    )
+
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    for name in names:
+        for i, grid in enumerate(get_frames(name)):
+            cells = {(r, c): ch for r, row in enumerate(grid) for c, ch in enumerate(row) if ch != "."}
+            tail = {cell for cell, ch in cells.items() if ch in "Yy"}
+            body = set(cells) - tail
+            joined = {cell for cell in tail if _touching(cell, body)}
+            grew = True
+            while grew:
+                more = {cell for cell in tail - joined if _touching(cell, joined)}
+                joined |= more
+                grew = bool(more)
+            assert joined == tail, (name, i, sorted(tail - joined))
+
+
 def test_art_is_pinned():
     # Pins the art byte for byte, so a change to any frame is deliberate.
     # The #125 art passes change pixels on purpose: update this hash with them.
-    frames = {s: get_frames(s) for s in ALL_STATES}
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, compose_offset, enumeration_positions, move_name,
+        spot_state, transition_name,
+    )
+
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
+              for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "71b3badb6b1b76f4eb018d9c50eecd48c3e715f99fb85424a8c44086fce1254c"
+    assert digest == "ae21999b8b666cb0e018d848ea99637e4196d38e0ed97a241d8de4cd8bf5e07a"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
@@ -466,3 +563,50 @@ def test_resolve_palette_returns_independent_equal_dicts():
     first["o"] = "#010203"
     assert resolve_palette("gray", "calico", "ringed") == second
     assert resolve_palette("gray", "calico") != second
+
+
+def test_offsets_live_on_one_track_and_compose():
+    from tokitty.sprites import Animation, Track, check_animation, compose_offset
+
+    hop = Track("body", (Frame({}, ms=100), Frame({}, ms=100, offset=(0, -3))), None)
+    anim = Animation(SITTING_TEMPLATE, (hop, Track("eyes", (Frame({"L": "e"}, ms=100),), None)))
+    check_animation(anim)
+    clash = Animation(SITTING_TEMPLATE, (hop, Track("tail", (Frame({}, ms=100, offset=(1, 0)),), None)))
+    with pytest.raises(ValueError):
+        check_animation(clash)
+    for state in ALL_STATES:
+        assert compose_offset(state, [0] * len(get_animation(state).tracks)) == (0, 0)
+
+
+def test_spot_variants_and_moves_resolve_and_are_checked(monkeypatch):
+    from tokitty import sprites
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, _check_transitions, compose_offset, move_name,
+        spot_state, transition_name,
+    )
+
+    once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100,
+                                                 offset=(0, -29))], None)
+    looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
+    assert spot_state("alert", "on_top") == "alert"
+    monkeypatch.setitem(SPOT_VARIANTS, ("alert", "on_top"), looping)
+    assert spot_state("alert", "on_top") == "alert@on_top"
+    assert get_animation("alert@on_top") is looping
+    with pytest.raises(KeyError):
+        get_animation("confused@on_top")
+    # a transition may name a variant on either side
+    monkeypatch.setitem(TRANSITIONS, ("alert@on_top", "content"), once)
+    assert get_animation(transition_name("alert@on_top", "content")) is once
+    _check_transitions()
+    monkeypatch.setitem(MOVES, "jump_up", once)
+    assert get_animation(move_name("jump_up")) is once
+    assert compose_offset(move_name("jump_up"), [0]) == (0, -29)
+    _check_transitions()
+    monkeypatch.setitem(MOVES, "walk", looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    monkeypatch.delitem(MOVES, "walk")
+    monkeypatch.setitem(SPOT_VARIANTS, ("nope", "on_top"), looping)
+    with pytest.raises(ValueError):
+        _check_transitions()
+    assert sprites.SPOT_SEP not in "".join(ALL_STATES)

@@ -35,12 +35,11 @@ class Player:
 
     def restart(self, state: str, now_ms: int, from_state: Optional[str] = None) -> None:
         """Every track back to frame 0, shown now. With a from_state that has a
-        transition into `state`, that plays first and `state` follows."""
+        transition into `state` (sprites.transition_for), that plays first and
+        `state` follows."""
         self.target = state
-        if from_state is not None and (from_state, state) in sprites.TRANSITIONS:
-            self.state = sprites.transition_name(from_state, state)
-        else:
-            self.state = state
+        key = None if from_state is None else sprites.transition_for(from_state, state)
+        self.state = state if key is None else sprites.transition_name(*key)
         self.positions = [0] * len(sprites.get_tracks(self.state))
         self._schedule(now_ms)
 
@@ -58,21 +57,25 @@ class Player:
     def grid(self) -> List[str]:
         return sprites.compose(self.state, self.positions)
 
+    def offset(self) -> Tuple[int, int]:
+        """Where the sprite is moved from its spot, in cells."""
+        return sprites.compose_offset(self.state, self.positions)
+
     def next_due(self) -> Optional[int]:
         dues = [d for d in self.dues if d is not None]
         return min(dues) if dues else None
 
     def tick(self, now_ms: int) -> bool:
         """Advance every track whose time has passed. True iff the composed
-        grid changed."""
-        before = self.grid()
+        grid or the offset changed."""
+        before, before_offset = self.grid(), self.offset()
         self._advance(now_ms)
         while self.in_transition and all(e is not None for e in self.ends):
             # The latest track has finished: the target starts at that exact
             # moment, not at now, so a late tick does not stretch the hand-off.
             self.restart(self.target, max(self.ends))
             self._advance(now_ms)
-        return self.grid() is not before
+        return self.grid() is not before or self.offset() != before_offset
 
     def _advance(self, now_ms: int) -> None:
         transition = self.in_transition
@@ -118,22 +121,36 @@ class Player:
         self._schedule(now_ms)
 
 
-def simulate(state: str, seconds: float, rng: random.Random,
-             from_state: Optional[str] = None) -> List[Tuple[List[str], int]]:
-    """Play a state for `seconds` of simulated time: (grid, hold ms) for every
-    change of the composed grid, consecutive equal grids merged. The holds add
-    up to the whole duration (a play-once state ends on its last grid). With a
-    from_state that has a transition into `state`, that plays first."""
+def simulate_frames(state: str, seconds: float, rng: random.Random,
+                    from_state: Optional[str] = None) -> List[Tuple[List[str], int, Tuple[int, int]]]:
+    """Play a state for `seconds` of simulated time: (grid, hold ms, offset)
+    for every change of the composed grid or the offset, consecutive equal
+    ones merged. The holds add up to the whole duration (a play-once state
+    ends on its last frame). With a from_state that has a transition into
+    `state`, that plays first."""
     end = int(seconds * 1000)
     player = Player(state, rng)
     player.restart(state, 0, from_state)
-    out: List[Tuple[List[str], int]] = []
-    start, shown = 0, player.grid()
+    out: List[Tuple[List[str], int, Tuple[int, int]]] = []
+    start, shown, moved = 0, player.grid(), player.offset()
     while True:
         due = player.next_due()
         if due is None or due >= end:
-            out.append((shown, end - start))
+            out.append((shown, end - start, moved))
             return out
         if player.tick(due):
-            out.append((shown, due - start))
-            start, shown = due, player.grid()
+            out.append((shown, due - start, moved))
+            start, shown, moved = due, player.grid(), player.offset()
+
+
+def simulate(state: str, seconds: float, rng: random.Random,
+             from_state: Optional[str] = None) -> List[Tuple[List[str], int]]:
+    """simulate_frames without the offsets: (grid, hold ms) for every change
+    of the composed grid, consecutive equal grids merged."""
+    out: List[Tuple[List[str], int]] = []
+    for grid, ms, _offset in simulate_frames(state, seconds, rng, from_state):
+        if out and out[-1][0] is grid:
+            out[-1] = (grid, out[-1][1] + ms)
+        else:
+            out.append((grid, ms))
+    return out

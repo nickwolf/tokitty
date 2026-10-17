@@ -226,8 +226,8 @@ SITTING_TEMPLATE: List[str] = [
     ".......ooooxxwxxooOO........",
     ".......ooxxwwAwwxxOO........",
     ".......oxxwwwwwwwxOO........",
-    "........oxxwwwwwxOO.........",
-    ".........ooxxwxxOO..........",
+    "........oxwwwwwwwxO.........",
+    ".........ooxwwwxOO..........",
     "........ooooooooooo..YY.....",
     ".......ooooooooooooo..YY....",
     "......ooooooooooooooo..yy...",
@@ -256,8 +256,8 @@ ALERT_TEMPLATE: List[str] = [
     ".......ooooxxwxxooOO........",
     ".......ooxxwwAwwxxOO........",
     ".......oxxwwwwwwwxOO........",
-    "........oxxwwwwwxOO.........",
-    "..........ooowoOO...........",
+    "........oxwwwwwwwxO.........",
+    ".........ooxwwwxOO..........",
     "..........oooooOO...........",
     ".........ooooooooo...YY.....",
     "........ooooooooooo...YY....",
@@ -468,6 +468,11 @@ class Frame:
     ms: Duration = DEFAULT_FRAME_MS
     # Overrides the animation's template for this frame only.
     template: Optional[List[str]] = None
+    # Moves the whole sprite (dx, dy) cells from its spot while this frame is
+    # up, dy < 0 being up: motion the 28x26 grid cannot hold, like a hop's
+    # height or a jump onto the card's top edge. Facing right; a mirrored cat
+    # moves by -dx. Icons, previews and keys draw the grid only.
+    offset: Tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -523,9 +528,9 @@ def check_animation(anim: Animation) -> None:
     """Raise ValueError if an animation breaks the track rules: unique track
     names, holds that are multiples of the step and at least MIN_FRAME_MS
     (lo <= hi for ranges), a valid loop_from per track, template overrides
-    with the animation template's dimensions on at most one track, and
-    substitution keys that no two tracks share (so the order tracks are
-    composed in can never matter)."""
+    with the animation template's dimensions on at most one track, offsets
+    on at most one track, and substitution keys that no two tracks share (so
+    the order tracks are composed in can never matter)."""
     if not anim.tracks:
         raise ValueError("animation has no tracks")
     names = [t.name for t in anim.tracks]
@@ -534,6 +539,7 @@ def check_animation(anim: Animation) -> None:
     dims = (len(anim.template), len(anim.template[0]))
     owners: Dict[str, str] = {}
     template_tracks = []
+    offset_tracks = []
     for track in anim.tracks:
         if not track.frames:
             raise ValueError(f"track {track.name!r} has no frames")
@@ -555,8 +561,12 @@ def check_animation(anim: Animation) -> None:
                     raise ValueError(f"track {track.name!r}: template size differs")
                 if track.name not in template_tracks:
                     template_tracks.append(track.name)
+            if frame.offset != (0, 0) and track.name not in offset_tracks:
+                offset_tracks.append(track.name)
     if len(template_tracks) > 1:
         raise ValueError(f"tracks {template_tracks} all override the template")
+    if len(offset_tracks) > 1:
+        raise ValueError(f"tracks {offset_tracks} all move the sprite")
 
 
 # The flopped tail wags through three 2px-thick positions. Template
@@ -900,8 +910,9 @@ ALERT_ANIMATION = Animation(_AL_TMPL, (
     )),
 ))
 
-# panicked: the whole cat shakes in bursts, the "!" flashes, and on the way
-# in the tail fluffs up (plain, bristled tip, full puff) and stays puffed.
+# panicked: the whole cat shakes in bursts, each opening with a startle hop
+# two rows up that settles into smaller bounces, the "!" flashes, and on the
+# way in the tail fluffs up (plain, bristled tip, full puff) and stays puffed.
 _ALERT_TAIL_PLAIN = _tail((14, 21, 22), (15, 22, 23), (16, 23, 24), (17, 23, 24), (18, 24, 25),
                           (19, 24, 25), (20, 24, 25), (21, 23, 24), (22, 20, 22), (23, 19, 21))
 _ALERT_TAIL_BRISTLE = _tail((12, 21, 21), (13, 20, 23), (14, 21, 23), (15, 22, 24), (16, 23, 25),
@@ -921,10 +932,10 @@ PANICKED_ANIMATION = Animation(_PN_TMPL, (
     Track("face", (Frame({**_PN_OPEN, **_NOSE}),)),
     Track("shake", (
         Frame({}, (400, 700)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, -1), offset=(0, -2)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, 1), offset=(0, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
-        Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
+        Frame({}, 70, template=_shift_template(_PN_TMPL, 1), offset=(0, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, -1)),
         Frame({}, 70, template=_shift_template(_PN_TMPL, 1)),
     )),
@@ -1114,14 +1125,20 @@ _BACK_INHALE = {(12, 15): "u", (12, 16): "u"}
 # The near front paw droops a row from its limp wrist.
 _BACK_PAW_REST = _cells("m", (9, 9, 10), (10, 9, 10))
 _BACK_PAW_DROOP = _cells("m", (10, 9, 10), (11, 9, 10))
-# The tail rises up the right side of the rump; its hooked tip straightens.
-_BACK_TAIL_REST = _tail((12, 25, 26), (13, 26, 27))
-_BACK_TAIL_CURL = _tail((12, 26, 27), (13, 26, 27))
+# The tail rises up the right side of the rump, a column clear of the body so
+# it never merges into the outline, to a small S at the top no higher than the
+# raised paws. It swishes by sweeping the top in over the hip and out
+# straight up the edge.
+_BACK_TAIL_MID = _tail((13, 26, 27), (12, 26, 27), (11, 25, 26), (10, 25, 26), (9, 26, 27),
+                       (8, 26, 27), (7, 26, 27), (6, 25, 26))
+_BACK_TAIL_IN = _tail((13, 26, 27), (12, 25, 26), (11, 24, 25), (10, 24, 25), (9, 25, 26))
+_BACK_TAIL_OUT = _tail((13, 26, 27), *((r, 26, 27) for r in range(8, 13)), (7, 27, 27), (6, 27, 27))
 
 _FL_TMPL, (_FL_SHUT, _FL_PEEK) = _pose_cells(FLOPPED_BACK_TEMPLATE, [_BACK_EYES_SHUT, _BACK_EYES_PEEK])
 _FL_TMPL, (_FL_EXHALE, _FL_INHALE) = _pose_cells(_FL_TMPL, [_BACK_EXHALE, _BACK_INHALE])
 _FL_TMPL, (_FL_PAW_REST, _FL_PAW_DROOP) = _pose_cells(_FL_TMPL, [_BACK_PAW_REST, _BACK_PAW_DROOP])
-_FL_TMPL, (_FL_TAIL_REST, _FL_TAIL_CURL) = _pose_cells(_FL_TMPL, [_BACK_TAIL_REST, _BACK_TAIL_CURL])
+_FL_TMPL, (_FL_TAIL_MID, _FL_TAIL_IN, _FL_TAIL_OUT) = _pose_cells(
+    _FL_TMPL, [_BACK_TAIL_MID, _BACK_TAIL_IN, _BACK_TAIL_OUT])
 # Out cold, not asleep: now and then a single small Z drifts up off the head,
 # sparser than sleeping's and never the big one.
 _FL_TMPL, (_FL_Z_NONE, _FL_Z_DOT, _FL_Z_LOW, _FL_Z_HIGH) = _pose_cells(_FL_TMPL, [
@@ -1143,8 +1160,10 @@ FLOPPED_ANIMATION = Animation(_FL_TMPL, (
         Frame(_FL_PAW_DROOP, 160),
     )),
     Track("tail", (
-        Frame(_FL_TAIL_REST, (3000, 8000)),
-        Frame(_FL_TAIL_CURL, 400),
+        Frame(_FL_TAIL_MID, (1500, 4000)),
+        Frame(_FL_TAIL_IN, 220), Frame(_FL_TAIL_MID, 160), Frame(_FL_TAIL_OUT, 260),
+        Frame(_FL_TAIL_MID, 160), Frame(_FL_TAIL_IN, 220), Frame(_FL_TAIL_MID, 160),
+        Frame(_FL_TAIL_OUT, 260),
     )),
     Track("zzz", (
         Frame(_FL_Z_NONE, (6000, 12000)),
@@ -1335,15 +1354,15 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
 
 
 # done_hop: the happy hop when a task finishes, played once. A butt wiggle
-# before the jump, a launch, a hang at the top with the paws tucked up and
-# sparkles,
-# a squash on landing and a proud settle with squinting eyes. No ground line:
-# the card is the floor, and the ground shadow (#137) can show the height.
+# before the jump, a launch, a hang three rows up with the paws tucked and
+# sparkles, a squash on landing and a proud settle with squinting eyes. The
+# height is a sprite offset, so the whole cat leaves the grid's bottom and
+# the ground shadow (#137) shows how high it went.
 # activity.DONE_HOP_S keeps the state up long enough for all of it.
 _HOP_SPARKS = _cells("h", (3, 2, 2), (6, 1, 1), (2, 24, 24), (5, 26, 26))
 
 
-def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
+def _hop_frame(pose: str = "sit", eyes: str = "open", dx: int = 0,
                sparks: bool = False) -> List[str]:
     grid = _overlay(SITTING_TEMPLATE, _SIT_EYES_ARCH if eyes == "arch" else _SIT_EYES_OPEN)
     grid = [row.replace("A", "n") for row in grid]
@@ -1351,16 +1370,17 @@ def _hop_frame(up: int = 0, pose: str = "sit", eyes: str = "open", dx: int = 0,
         grid = _sink_head(grid)
     if dx:
         grid = _shift_template(grid, dx)
-    if up:
-        grid = _shift_up(grid, up)
     if pose == "tucked":
-        # paws pulled up under the body: the two lowest rows go, so the gap
-        # under the cat grows without the ears leaving the top of the grid
+        # paws pulled up under the body: the two lowest rows go
         bottom = max(r for r, row in enumerate(grid) if row.strip("."))
         grid = _overlay(grid, {(r, c): "." for r in (bottom - 1, bottom) for c in range(28)})
     if sparks:
         grid = _overlay(grid, _HOP_SPARKS)
     return grid
+
+
+def _up(rows: int) -> Tuple[int, int]:
+    return (0, -rows)
 
 
 DONE_HOP_ANIMATION = single_track(_hop_frame(), [
@@ -1370,9 +1390,11 @@ DONE_HOP_ANIMATION = single_track(_hop_frame(), [
     Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
     Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
     Frame({}, 120, template=_hop_frame(pose="crouch")),
-    Frame({}, 110, template=_hop_frame(up=1)),
-    Frame({}, 420, template=_hop_frame(up=1, pose="tucked", eyes="arch", sparks=True)),
-    Frame({}, 110, template=_hop_frame(up=1)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(1)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(2)),
+    Frame({}, 420, template=_hop_frame(pose="tucked", eyes="arch", sparks=True), offset=_up(3)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(2)),
+    Frame({}, 70, template=_hop_frame(), offset=_up(1)),
     Frame({}, 160, template=_hop_frame(pose="crouch")),
     Frame({}, 400, template=_hop_frame(eyes="arch")),
 ], loop_from=None)
@@ -1403,6 +1425,9 @@ ALL_STATES = tuple(ANIMATIONS)
 # (from, to); a pair with no entry is a plain cut. Every track plays once
 # (loop_from None) and the transition ends when its longest track does.
 TRANSITION_SEP = ">"
+# A transition keyed (ANY_STATE, to) plays on a change into `to` from any
+# state that has no transition of its own into it.
+ANY_STATE = "*"
 
 
 # The flopped cat rolls over into stirring: an eye opens, the paws tuck in,
@@ -1438,6 +1463,20 @@ _ROLL_CURL: List[str] = [
 ]
 TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
 
+# A state's own look in one cat spot (theme.SPOTS), keyed by (state, spot):
+# the cat lying along the card's top edge where it would sit inside. Goes by
+# "state@spot"; a state with no entry for a spot plays as usual there.
+# TRANSITIONS may name a variant on either side.
+SPOT_SEP = "@"
+SPOT_VARIANTS: Dict[Tuple[str, str], Animation] = {}
+
+# Moves from one spot to another (#116), played once by the wandering (#22):
+# the jumps between the card and its top edge, the walk along it. Each starts
+# at the spot it leaves, and its last frame's offset is where it lands
+# relative to that spot. Goes by "move:name".
+MOVE_PREFIX = "move:"
+MOVES: Dict[str, Animation] = {}
+
 
 def transition_name(from_state: str, to_state: str) -> str:
     """The name a transition goes by wherever a state name is expected
@@ -1445,13 +1484,47 @@ def transition_name(from_state: str, to_state: str) -> str:
     return f"{from_state}{TRANSITION_SEP}{to_state}"
 
 
+def transition_for(from_state: str, to_state: str) -> Optional[Tuple[str, str]]:
+    """The TRANSITIONS key that plays on a change from from_state to to_state:
+    the pair's own entry, else an ANY_STATE entry into to_state (never on a
+    restart of the same state), else None for a plain cut."""
+    if (from_state, to_state) in TRANSITIONS:
+        return (from_state, to_state)
+    if from_state != to_state and (ANY_STATE, to_state) in TRANSITIONS:
+        return (ANY_STATE, to_state)
+    return None
+
+
+def spot_state(state: str, spot: str) -> str:
+    """The name to play `state` under in `spot`: its variant's "state@spot"
+    when SPOT_VARIANTS has one, else the state itself."""
+    return f"{state}{SPOT_SEP}{spot}" if (state, spot) in SPOT_VARIANTS else state
+
+
+def move_name(move: str) -> str:
+    return f"{MOVE_PREFIX}{move}"
+
+
+def _plays_once(anim: Animation) -> bool:
+    return all(track.loop_from is None for track in anim.tracks)
+
+
 def _check_transitions() -> None:
+    for (state, _spot), anim in SPOT_VARIANTS.items():
+        if state not in ANIMATIONS:
+            raise ValueError(f"spot variant names an unknown state {state!r}")
+        check_animation(anim)
+    known = set(ANIMATIONS) | {spot_state(*key) for key in SPOT_VARIANTS}
     for (from_state, to_state), anim in TRANSITIONS.items():
-        if from_state not in ANIMATIONS or to_state not in ANIMATIONS:
+        if from_state not in known | {ANY_STATE} or to_state not in known:
             raise ValueError(f"transition {from_state}->{to_state} names an unknown state")
         check_animation(anim)
-        if any(track.loop_from is not None for track in anim.tracks):
+        if not _plays_once(anim):
             raise ValueError(f"transition {from_state}->{to_state} must play once")
+    for move, anim in MOVES.items():
+        check_animation(anim)
+        if not _plays_once(anim):
+            raise ValueError(f"move {move!r} must play once")
 
 
 
@@ -1474,14 +1547,21 @@ _ENUMERATIONS: Dict[str, Tuple[Animation, List[Tuple[int, ...]], List[List[str]]
 
 
 def get_animation(state: str) -> Animation:
-    """The track table for a mood/sub-state name, or for a transition by its
+    """The track table for a mood/sub-state name, a spot variant
+    ("state@spot"), a move ("move:name"), or a transition by its
     transition_name ("from>to")."""
     if state in ANIMATIONS:
         return ANIMATIONS[state]
+    if state.startswith(MOVE_PREFIX) and state[len(MOVE_PREFIX):] in MOVES:
+        return MOVES[state[len(MOVE_PREFIX):]]
     if TRANSITION_SEP in state:
         pair = tuple(state.split(TRANSITION_SEP, 1))
         if pair in TRANSITIONS:
             return TRANSITIONS[pair]
+    elif SPOT_SEP in state:
+        key = tuple(state.split(SPOT_SEP, 1))
+        if key in SPOT_VARIANTS:
+            return SPOT_VARIANTS[key]
     raise KeyError(f"Unknown sprite state: {state!r}")
 
 
@@ -1508,6 +1588,16 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
     grid = _GRIDS.setdefault(tuple(rows), rows)
     _COMPOSED[key] = (anim, grid)
     return grid
+
+
+def compose_offset(state: str, positions: Sequence[int]) -> Tuple[int, int]:
+    """Where the sprite is moved, in cells, with every track at the given
+    frame position: the offset of the one track that moves it, else (0, 0)."""
+    for track, pos in zip(get_animation(state).tracks, positions):
+        offset = track.frames[pos].offset
+        if offset != (0, 0):
+            return offset
+    return (0, 0)
 
 
 def _enumeration(state: str):
@@ -1565,5 +1655,413 @@ def _flopped_to_stirring() -> Animation:
     ], loop_from=None)
 
 
+# Lying on the card's top edge (#116): a loaf, the sitting head dropped onto
+# a low wide body with the front paws tucked under the chest, the tail hanging
+# down over the front of the card. It replaces content and sleeping when the
+# cat's spot is on_top. Same placeholders as the sitting template (L, R, A).
+LOAF_TEMPLATE: List[str] = [
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "........x.........x.........",
+    ".......xxx...o...xxx........",
+    "......xxxxoooooooxxxx.......",
+    "......xxpxxsssssxxpxx.......",
+    ".....ooocccoooooooooOO......",
+    ".......occsssosssoOO........",
+    "......ooooooooooooooO.......",
+    ".....oooooLxxxxxRoooooO.....",
+    "....oooooooxxwxxoooooooO....",
+    "...ooooooxxwwAwwxxooooOO....",
+    "...sssooxxwwwwwwwxoooooOO...",
+    "...ooooooxwwwwwwwxoooooOO...",
+    "...sssoooooxwwwxoooooooOO...",
+    "...ooooooouuuuuuuoccoooOO...",
+    "...oooooouuuuuuuuucccooOO...",
+    "....oooommmmooommmmoooOO....",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+]
+_LOAF_HEAD_DROP = 5  # rows the sitting head sits lower on the loaf
+# The loaf's paws are on row 21; it is drawn this much lower than a sitting
+# cat on the edge, so the paws rest on the card's top edge and the tail
+# hangs over the card.
+_LOAF_DROP = (0, len(LOAF_TEMPLATE) - 1 - 21)
+
+
+def _loaf_tail(tip: str) -> Dict[Tuple[int, int], str]:
+    tips = {"left": ((23, 24, 25), (24, 23, 24), (25, 23, 23)),
+            "mid": ((23, 25, 26), (24, 25, 26), (25, 25, 25)),
+            "right": ((23, 26, 27), (24, 26, 27), (25, 27, 27))}
+    return _tail((19, 25, 25), (20, 25, 26), (21, 25, 26), (22, 25, 26), *tips[tip])
+
+
+# The flanks fill out by a pixel on each breath in.
+_LOAF_INHALE = {**_cells("o", *((r, 2, 2) for r in range(16, 21))),
+                **_cells("O", *((r, 25, 25) for r in range(15, 19)))}
+
+_LF_TMPL, (_LF_TAIL_MID, _LF_TAIL_LEFT, _LF_TAIL_RIGHT) = _pose_cells(
+    LOAF_TEMPLATE, [_loaf_tail("mid"), _loaf_tail("left"), _loaf_tail("right")])
+_LF_TMPL, (_LF_EXHALE, _LF_INHALE) = _pose_cells(_LF_TMPL, [{}, _LOAF_INHALE])
+_LF_TMPL, (_LF_EAR_REST, _LF_EAR_FLICK) = _pose_cells(
+    _LF_TMPL, [_shift(_SIT_EAR_REST, _LOAF_HEAD_DROP), _shift(_SIT_EAR_FLICK, _LOAF_HEAD_DROP)])
+_LF_TMPL, (_LF_OPEN, _LF_SHUT, _LF_ARCH, _LF_PEEK, _LF_LOOK_L, _LF_LOOK_R) = _pose_cells(
+    _LF_TMPL, [_shift(eyes, _LOAF_HEAD_DROP) for eyes in (
+        _SIT_EYES_OPEN, _SIT_EYES_LINE, _SIT_EYES_ARCH,
+        _SLEEP_PEEK, _SLEEP_PEEK_LEFT, _SLEEP_PEEK_RIGHT)])
+_LF_TMPL, (_LF_Z_BIG, _LF_Z_NONE, _LF_Z_DOT, _LF_Z_SMALL) = _pose_cells(
+    _LF_TMPL, [_ZZZ_BIG, {}, _ZZZ_DOT, _ZZZ_SMALL])
+_LF_TMPL = [row.replace("A", "n") for row in _LF_TMPL]
+
+# The breath track carries the drop, so every frame of it sits on the edge.
+LOAF_CONTENT_ANIMATION = Animation(_LF_TMPL, (
+    Track("eyes", (
+        Frame(_LF_OPEN, (2500, 6000)),
+        Frame(_LF_SHUT, 150),
+        Frame(_LF_OPEN, (3000, 7000)),
+        Frame(_LF_SHUT, 140),
+        Frame(_LF_OPEN, 120),
+        Frame(_LF_SHUT, 140),
+        Frame(_LF_OPEN, (2500, 6000)),
+        Frame(_LF_ARCH, 900),
+    )),
+    # The tip swings over the card like a lazy pendulum.
+    Track("tail", (
+        Frame(_LF_TAIL_MID, (1200, 2600)),
+        Frame(_LF_TAIL_RIGHT, (600, 900)),
+        Frame(_LF_TAIL_MID, (500, 700)),
+        Frame(_LF_TAIL_LEFT, (600, 900)),
+    )),
+    Track("breath", (
+        Frame(_LF_EXHALE, (2500, 3500), offset=_LOAF_DROP),
+        Frame(_LF_INHALE, (1800, 2400), offset=_LOAF_DROP),
+    )),
+    Track("ears", (
+        Frame(_LF_EAR_REST, (8000, 20000)),
+        Frame(_LF_EAR_FLICK, 100),
+        Frame(_LF_EAR_REST, 120),
+        Frame(_LF_EAR_FLICK, 100),
+    )),
+    Track("zzz", (Frame(_LF_Z_NONE, 1000),), None),
+))
+
+LOAF_SLEEPING_ANIMATION = Animation(_LF_TMPL, (
+    Track("eyes", (
+        Frame(_LF_SHUT, (20000, 45000)),
+        Frame(_LF_PEEK, 600),
+        Frame(_LF_LOOK_L, 450),
+        Frame(_LF_LOOK_R, 450),
+        Frame(_LF_PEEK, 300),
+    )),
+    Track("breath", (
+        Frame(_LF_EXHALE, (2000, 2500), offset=_LOAF_DROP),
+        Frame(_LF_INHALE, (1700, 2000), offset=_LOAF_DROP),
+    )),
+    Track("zzz", (
+        Frame(_LF_Z_BIG, 800),
+        Frame(_LF_Z_NONE, (1200, 2200)),
+        Frame(_LF_Z_DOT, 500),
+        Frame(_LF_Z_SMALL, 600),
+    )),
+    Track("ears", (
+        Frame(_LF_EAR_REST, (15000, 40000)),
+        Frame(_LF_EAR_FLICK, 100),
+        Frame(_LF_EAR_REST, 140),
+        Frame(_LF_EAR_FLICK, 100),
+    )),
+    Track("tail", (
+        Frame(_LF_TAIL_MID, (6000, 15000)),
+        Frame(_LF_TAIL_RIGHT, 500),
+        Frame(_LF_TAIL_MID, 400),
+        Frame(_LF_TAIL_LEFT, 500),
+        Frame(_LF_TAIL_MID, (500, 900)),
+    )),
+))
+
+SPOT_VARIANTS[("content", "on_top")] = LOAF_CONTENT_ANIMATION
+SPOT_VARIANTS[("sleeping", "on_top")] = LOAF_SLEEPING_ANIMATION
+
+# jump_up / jump_down: the jumps between the card (inside) and its top edge
+# (on_top), 29 rows apart. jump_up wiggles like done_hop, launches with its
+# front paws thrown up, overshoots the edge by three rows (HOP_HEADROOM) with
+# its paws tucked, and drops onto it. jump_down peeks over the edge first, then
+# falls with its front paws reaching for the ground and its tail streaming up.
+_JUMP_ROWS = 29  # theme: on_top sits SPRITE_H + 12 px above inside
+_JUMP_HEAD = [row.replace("A", "n") for row in _overlay(SITTING_TEMPLATE, _SIT_EYES_OPEN)[:14]]
+
+_JUMP_LAUNCH_BODY = [
+    "........ooooooooooo.........",
+    "........ooooooooooO.........",
+    "........ossooowoooO.........",
+    "........oooouuuoooO.........",
+    "........sssuuuuucccO........",
+    "........ooouuuuuccOY........",
+    "........ooouuuuuuoOYY.......",
+    ".........oouuuuuoOO.YY......",
+    ".........ooo...ooO...yy.....",
+    ".........ooo...ooO...yy.....",
+    ".........mmm...mmm....YY....",
+    "......................YY....",
+]
+
+# Each foreleg is three cells wide, stepping out a column every two rows from
+# the shoulder; the right one mirrors the left with its outer edge shaded.
+_JUMP_ARM = ((14, 7), (13, 6), (12, 6), (11, 5), (10, 5), (9, 4), (8, 4), (7, 3), (6, 3))
+_JUMP_ARMS = {**{(r, c + dc): "o" for r, c in _JUMP_ARM for dc in (-1, 0, 1)},
+              **{(r, 27 - c + dc): "o" for r, c in _JUMP_ARM for dc in (-2, -1)},
+              **{(r, 27 - c): "O" for r, c in _JUMP_ARM},
+              **_cells("m", (4, 2, 3), (5, 2, 3), (4, 23, 24), (5, 23, 24))}
+_JUMP_LAUNCH: List[str] = _overlay(_JUMP_HEAD + _JUMP_LAUNCH_BODY, _JUMP_ARMS)
+
+_JUMP_FALL_BODY = [
+    "........ooooooooooo.........",
+    ".......ooooooooooooO........",
+    ".......ossooowooooooO.......",
+    ".......oooouuuuuoooooO......",
+    ".......ssouuuuuuucccO.......",
+    "........oouuuuuuuccO........",
+    "........ooouuuuuuoO.........",
+    "........oo.......oO.........",
+    "........oo.......oO.........",
+    "........oo.......oO.........",
+    "........mm.......mm.........",
+    "............................",
+]
+# The ears swept flat (their tips gone) and the tail rising from the rump
+# behind the right flank.
+_JUMP_FALL: List[str] = _overlay(
+    _JUMP_HEAD[:1] + ["." * 28] + _JUMP_HEAD[2:] + _JUMP_FALL_BODY,
+    {(r, c + dc): band for r, c, band in (
+        (19, 19, "Y"), (18, 20, "Y"), (17, 21, "y"), (16, 21, "y"), (15, 21, "Y"),
+        (14, 22, "Y"), (13, 22, "y"), (12, 23, "y"), (11, 23, "Y"), (10, 23, "Y"))
+     for dc in (0, 1)})
+
+# Looking down over the edge: the head lowered three rows onto the chest, the
+# eyes a row low under dark lids.
+_JUMP_PEEK_DROP = 3
+_JUMP_PEEK_EYES = {(8, 9): "o", (8, 10): "x", (8, 11): "o", (8, 15): "o", (8, 16): "x",
+                   (8, 17): "o", (9, 10): "e", (9, 16): "e"}
+
+
+def _jump_peek() -> List[str]:
+    head = _overlay(SITTING_TEMPLATE, _JUMP_PEEK_EYES)[:14]
+    rows = [list(row) for row in SITTING_TEMPLATE]
+    for r in range(_JUMP_PEEK_DROP):
+        rows[r][:22] = ["."] * 22
+    for r in range(13, -1, -1):
+        for c in range(22):
+            if head[r][c] != ".":
+                rows[r + _JUMP_PEEK_DROP][c] = head[r][c]
+            elif r + _JUMP_PEEK_DROP < 14:
+                rows[r + _JUMP_PEEK_DROP][c] = "."
+    return ["".join(row).replace("A", "n") for row in rows]
+
+
+_JUMP_PEEK = _jump_peek()
+
+
+def _down(rows: int) -> Tuple[int, int]:
+    return (0, rows)
+
+
+MOVES["jump_up"] = single_track(_hop_frame(), [
+    Frame({}, 200, template=_hop_frame()),
+    Frame({}, 150, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 60, template=_JUMP_LAUNCH, offset=_up(10)),
+    Frame({}, 60, template=_JUMP_LAUNCH, offset=_up(24)),
+    Frame({}, 140, template=_hop_frame(pose="tucked"), offset=_up(_JUMP_ROWS + 3)),
+    Frame({}, 70, template=_JUMP_FALL, offset=_up(_JUMP_ROWS + 1)),
+    Frame({}, 150, template=_hop_frame(pose="crouch"), offset=_up(_JUMP_ROWS)),
+    Frame({}, 400, template=_hop_frame(), offset=_up(_JUMP_ROWS)),
+], loop_from=None)
+
+MOVES["jump_down"] = single_track(_hop_frame(), [
+    Frame({}, 200, template=_hop_frame()),
+    Frame({}, 700, template=_JUMP_PEEK),
+    Frame({}, 150, template=_hop_frame(pose="crouch")),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=-1)),
+    Frame({}, 110, template=_hop_frame(pose="crouch", dx=1)),
+    Frame({}, 100, template=_hop_frame(pose="crouch")),
+    Frame({}, 70, template=_JUMP_LAUNCH, offset=_up(2)),
+    Frame({}, 60, template=_JUMP_FALL, offset=_down(4)),
+    Frame({}, 50, template=_JUMP_FALL, offset=_down(13)),
+    Frame({}, 50, template=_JUMP_FALL, offset=_down(24)),
+    Frame({}, 160, template=_hop_frame(pose="crouch"), offset=_down(_JUMP_ROWS)),
+    Frame({}, 400, template=_hop_frame(), offset=_down(_JUMP_ROWS)),
+], loop_from=None)
+
+# walk_start / walk / walk_stop: walking along the card's top edge, in side
+# profile facing right (a mirrored cat walks left). walk_start turns the
+# sitting cat side on, walk is one stride of four frames that covers
+# _WALK_STRIDE cells and is played back to back for longer walks, and
+# walk_stop sits back down facing out.
+_WALK_STRIDE = 4
+
+_WALK_BODY = [
+    "............................",
+    "............................",
+    "............................",
+    "...................x....x...",
+    "..................xpx..xpx..",
+    "..................xppooopx..",
+    ".................oosssooooo.",
+    ".................ooooooooooo",
+    "................oooooooeoxxo",
+    "................oooooooxwwwn",
+    "................ooooooxwwwww",
+    ".................Oooooxwwwww",
+    ".....ooosssoooooOOooooxwww..",
+    "....oossssooossooooOOOOOO...",
+    "....ossssooossoooooccO......",
+    "....oooooooooooooooccO......",
+    "....osssoooooooooocccO......",
+    "....Oooouuuuuuuuuuuo........",
+    ".....OOuuuuuuuuuuuO.........",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+    "............................",
+]
+
+# Foot columns (near front, far front, near hind, far hind) for each stride
+# pose: a contact pose with the legs spread, a passing pose with them under
+# the body, then the same with the other pair leading. The far legs are shaded.
+_WALK_FEET = {
+    "stand": (17, 15, 6, 4),
+    "contact": (19, 15, 4, 8),
+    "pass": (17, 16, 6, 7),
+    "contact2": (15, 19, 8, 4),
+    "pass2": (16, 17, 7, 6),
+}
+_WALK_TAILS = {
+    "up": ((13, 4), (12, 3), (11, 2), (10, 2), (9, 2), (8, 2), (7, 3), (6, 4)),
+    "sway": ((13, 4), (12, 3), (11, 3), (10, 2), (9, 2), (8, 1), (7, 1), (6, 2)),
+}
+
+
+def _walk_frame(feet: str = "stand", tail: str = "up") -> List[str]:
+    rows = [list(row) for row in _WALK_BODY]
+    near_front, far_front, near_hind, far_hind = _WALK_FEET[feet]
+    # far legs first, so the near ones cover them where they cross
+    for hip, foot, fur in ((16, far_front, "O"), (5, far_hind, "O"),
+                           (17, near_front, "o"), (6, near_hind, "o")):
+        # two cells wide from under the body (row 19) to the paw on row 25
+        for i, r in enumerate(range(19, 25)):
+            c = round(hip + (foot - hip) * i / 5)
+            rows[r][c] = rows[r][c + 1] = fur
+        rows[25][foot] = rows[25][foot + 1] = "m"
+    for i, (r, c) in enumerate(_WALK_TAILS[tail]):
+        rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
+    return ["".join(row) for row in rows]
+
+
+_WALK_STAND = _walk_frame()
+
+MOVES["walk_start"] = single_track(_hop_frame(), [
+    Frame({}, 150, template=_hop_frame()),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 200, template=_WALK_STAND),
+], loop_from=None)
+
+MOVES["walk"] = single_track(_WALK_STAND, [
+    Frame({}, 130, template=_walk_frame(feet, tail), offset=(step, 0))
+    for step, (feet, tail) in enumerate(
+        (("contact", "up"), ("pass", "sway"), ("contact2", "up"), ("pass2", "sway")), 1)
+], loop_from=None)
+
+MOVES["walk_stop"] = single_track(_WALK_STAND, [
+    Frame({}, 150, template=_WALK_STAND),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 300, template=_hop_frame()),
+], loop_from=None)
+
+# State changes (#134). Each lands on the target's own frame 0, so the
+# hand-off to its loop is seamless.
+
+
+def _at(state: str, **positions: int) -> List[str]:
+    """A state's composed grid with the named tracks at those frames, the rest at 0."""
+    return compose(state, [positions.get(track.name, 0) for track in get_tracks(state)])
+
+
+def _laptop(dc: int = 0, lid_top: int = 14) -> Dict[Tuple[int, int], str]:
+    """The working laptop lit (the room not yet dark), moved dc columns with
+    whatever leaves the grid dropped, its lid folded down to row lid_top: 14
+    is open, 20 is shut."""
+    cells = {}
+    for r in range(lid_top, 24):
+        for c, ch in enumerate(WORKING_TEMPLATE[r]):
+            if ch in "gSP" and 0 <= c + dc < 28:
+                cells[(r, c + dc)] = "g"
+    if lid_top <= 17 and 0 <= 5 + dc < 28:
+        cells[(17, 5 + dc)] = "B"  # the logo on the back of the lid
+    return cells
+
+
+def _thinking_to_working() -> Animation:
+    """The thought pops, the cat pulls the laptop over from the left, and the
+    room goes dark around the screen."""
+    clear = _at("thinking", bubble=2)
+    return single_track(_at("thinking"), [
+        Frame({}, 150, template=_at("thinking")),
+        Frame({}, 120, template=_at("thinking", bubble=1)),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 160, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 100, template=_at("working")),
+    ], loop_from=None)
+
+
+def _working_to_done_hop() -> Animation:
+    """The lights come up as the lid swings shut, and the laptop slides away."""
+    sit = _hop_frame()
+    return single_track(_at("working"), [
+        Frame({}, 150, template=_at("working")),
+        Frame({}, 110, template=_overlay(sit, _laptop(lid_top=17))),
+        Frame({}, 130, template=_overlay(sit, _laptop(lid_top=20))),
+        Frame({}, 90, template=_overlay(sit, _laptop(-4, lid_top=20))),
+        Frame({}, 90, template=_overlay(sit, _laptop(-8, lid_top=20))),
+        Frame({}, 100, template=get_frames("done_hop")[0]),
+    ], loop_from=None)
+
+
+def _sleeping_to_interested() -> Animation:
+    """One eye peeks open, the head comes up, and the ears perk."""
+    return single_track(_at("sleeping"), [
+        Frame({}, 200, template=_at("sleeping")),
+        Frame({}, 350, template=_at("sleeping", eyes=1, zzz=1)),
+        Frame({}, 200, template=_sink_head(_hop_frame())),
+        Frame({}, 120, template=_hop_frame()),
+        Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
+def _startle() -> Animation:
+    """Into panicked from anywhere: the cat leaps three rows with its paws
+    flung up, drops and lands shaking."""
+    return single_track(_JUMP_LAUNCH, [
+        Frame({}, 70, template=_JUMP_LAUNCH, offset=_up(2)),
+        Frame({}, 140, template=_JUMP_LAUNCH, offset=_up(3)),
+        Frame({}, 70, template=_JUMP_FALL, offset=_up(1)),
+        Frame({}, 80, template=_at("panicked")),
+    ], loop_from=None)
+
+
+TRANSITIONS[("thinking", "working")] = _thinking_to_working()
+TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
+TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
+TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 _check_transitions()

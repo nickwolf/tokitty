@@ -19,6 +19,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
+from tokitty import sprites
 from tokitty.animation import Player
 from tokitty.theme import CardStyle
 
@@ -46,7 +47,7 @@ class QtPane:
     def __init__(self, customization: Optional[Customization] = None, label: str = "",
                  on_change: Optional[Callable[[], None]] = None,
                  clock: Callable[[], int] = monotonic_ms,
-                 rng: Optional[random.Random] = None):
+                 rng: Optional[random.Random] = None, spot: str = "inside"):
         self.customization = customization if customization is not None else Customization()
         # The widget sets this; it repaints on any state change.
         self.on_change = on_change
@@ -69,7 +70,10 @@ class QtPane:
         self._tool_label = ""
         self._view_mode = "limits"
         self._clock = clock
-        self._player = Player("sleeping", rng if rng is not None else random.Random(), clock())
+        # The cat's spot, which picks the state's variant there (spot_state).
+        self._spot = spot
+        self._player = Player(sprites.spot_state("sleeping", spot),
+                              rng if rng is not None else random.Random(), clock())
         self.session_pct = 0.0
         self.weekly_pct = 0.0
         self.session_reset_text = ""
@@ -200,17 +204,47 @@ class QtPane:
     def _set_state(self, state: str) -> None:
         """Polls re-render the same state every second or so; only a real
         change of sprite state may restart the loop."""
-        from_state = self._current_state if self._rendered else None
+        from_state = self._player.target if self._rendered else None
         self._rendered = True
         self._current_state = state
-        if state != self._player.target:
-            self._player.restart(state, self._clock(), from_state)
+        resolved = sprites.spot_state(state, self._spot)
+        if resolved != self._player.target:
+            self._player.restart(resolved, self._clock(), from_state)
+
+    def set_spot(self, spot: str) -> None:
+        """Move the cat to `spot`. A state with a variant there restarts as
+        that variant, with no transition (the cat did not change its mind)."""
+        if spot == self._spot:
+            return
+        self._spot = spot
+        resolved = sprites.spot_state(self._current_state, spot)
+        if resolved != self._player.target:
+            self._player.restart(resolved, self._clock())
+        self._changed()
+
+    @property
+    def spot(self) -> str:
+        return self._spot
 
     @property
     def playing(self) -> str:
-        """The animation on screen: the state, or a transition's name while
-        one plays into it (_current_state stays the logical state)."""
+        """The animation on screen: the state as played in this spot, or a
+        transition's name while one plays into it (_current_state stays the
+        logical state)."""
         return self._player.state
+
+    @property
+    def target(self) -> str:
+        """The animation the playing one leads to, spot variant included."""
+        return self._player.target
+
+    def offset(self) -> Tuple[int, int]:
+        """Where the sprite is moved from its spot, in cells."""
+        return self._player.offset()
+
+    def rest_grid(self):
+        """Frame 0 of the target animation, which fixes the shadow's footprint."""
+        return sprites.get_frames(self._player.target)[0]
 
     def next_due_ms(self) -> Optional[int]:
         """Clock ms when tick() will next change a track's frame, or None."""

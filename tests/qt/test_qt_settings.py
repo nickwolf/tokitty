@@ -666,3 +666,20 @@ def test_look_has_a_tail_dropdown_that_writes_through(make_world):
     assert world.widget.panes[1]._tail == "ringed"
     assert world.widget.panes[1].palette == effective_palette(world.store["k1"])
     assert look.tail.get() == "ringed"
+
+
+def test_cat_shadow_toggle_writes_the_theme(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.shadow_toggle.get() is True
+    theme_tab.shadow_toggle._clicked()
+    assert saved_theme(world).cat.shadow is False
+    assert world.widget.theme.cat.shadow is False
+    theme_tab.shadow_toggle._clicked()
+    assert saved_theme(world).cat.shadow is True
+
+
+def test_cat_shadow_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(shadow=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.shadow_toggle.get() is False

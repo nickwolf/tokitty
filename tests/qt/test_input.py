@@ -298,7 +298,9 @@ def test_mask_follows_rebuild_layout(qapp):
     widget.rebuild_layout(["on_top"])
     assert widget.mask() == expected_mask(widget)
     assert widget.mask().boundingRect().height() > before.height()
-    assert widget.mask().boundingRect().height() == widget.height()
+    # the hop headroom above the cat is not clickable
+    bounds = widget.mask().boundingRect()
+    assert bounds.top() == T.HOP_HEADROOM and bounds.bottom() + 1 == widget.height()
     widget.hide()
 
 

@@ -262,11 +262,14 @@ def _crop(image: Img, x: int, y: int, w: int, h: int) -> bytes:
 def cat_sheet(state: str) -> Rendered:
     """Every coat as a row, the state's frames as columns, on a transparent
     ground. The cat is drawn by the widget itself (on_top, so nothing else
-    is under it) and cropped from a grab."""
-    widget = PixelWidget(T.Theme(), [Customization(cat_home="on_top")], 1)
+    is under it, and no shadow) and cropped from a grab."""
+    widget = PixelWidget(T.Theme(cat=T.CatStyle(shadow=False)), [Customization(cat_home="on_top")], 1)
     try:
         widget.anim.stop()
         pane = widget.panes[0]
+        # Drawn on top but played as the plain state: content and sleeping
+        # would otherwise play their on_top variants (pinned by the art hash).
+        pane.set_spot("inside")
         dpr = widget.devicePixelRatioF()
         frames = sprites.get_frames(state)
         cell = T.cell_size(dpr)
