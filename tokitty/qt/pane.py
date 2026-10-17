@@ -4,8 +4,8 @@ The public surface (render, render_usage, set_appearance, draw_next_frame)
 takes a PaneUpdate's kwargs unchanged. There is no painting here and no PySide6
 import: every state change calls on_change and the widget repaints.
 
-Each pane also owns an animation Player: which frame each track shows and
-when it is next due, on a monotonic millisecond clock the caller can inject.
+Each pane also owns a Roam, a Player with the Wanderer that sends the cat on
+trips (#22): which frame each track shows and when it is next due, on a monotonic millisecond clock the caller can inject.
 The widget asks next_due_ms() when to wake and calls tick(); a frame advance
 is not a state change, so tick() never calls on_change (the widget repaints
 just the cat).
@@ -20,7 +20,7 @@ from typing import Callable, Dict, Optional, Tuple
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
 from tokitty import sprites
-from tokitty.animation import Player
+from tokitty.wander import Pose, Roam
 from tokitty.theme import CardStyle
 
 # ui.fit_tag's limit: the longest label the table produces is 10 characters.
@@ -47,7 +47,8 @@ class QtPane:
     def __init__(self, customization: Optional[Customization] = None, label: str = "",
                  on_change: Optional[Callable[[], None]] = None,
                  clock: Callable[[], int] = monotonic_ms,
-                 rng: Optional[random.Random] = None, spot: str = "inside"):
+                 rng: Optional[random.Random] = None, spot: str = "inside",
+                 roams: bool = False):
         self.customization = customization if customization is not None else Customization()
         # The widget sets this; it repaints on any state change.
         self.on_change = on_change
@@ -70,16 +71,21 @@ class QtPane:
         self._tool_label = ""
         self._view_mode = "limits"
         self._clock = clock
-        # The cat's spot, which picks the state's variant there (spot_state).
+        # The home spot, which picks the state's variant there (spot_state).
+        # `roams` lets the cat leave it for the card's top edge.
         self._spot = spot
-        self._player = Player(sprites.spot_state("sleeping", spot),
-                              rng if rng is not None else random.Random(), clock())
+        self._roams = roams
+        self._roam = Roam(spot, roams, rng if rng is not None else random.Random(), clock())
         self.session_pct = 0.0
         self.weekly_pct = 0.0
         self.session_reset_text = ""
         self.weekly_reset_text = ""
         self.status_text = ""
         self.usage_view = None
+
+    @property
+    def _player(self):
+        return self._roam.player
 
     @property
     def palette(self) -> Dict[str, str]:
@@ -203,28 +209,40 @@ class QtPane:
 
     def _set_state(self, state: str) -> None:
         """Polls re-render the same state every second or so; only a real
-        change of sprite state may restart the loop."""
-        from_state = self._player.target if self._rendered else None
+        change of sprite state may restart the loop, and a move in progress
+        is never cut by a poll."""
+        self._roam.set_state(state, self._clock(), transition=self._rendered)
         self._rendered = True
         self._current_state = state
-        resolved = sprites.spot_state(state, self._spot)
-        if resolved != self._player.target:
-            self._player.restart(resolved, self._clock(), from_state)
 
-    def set_spot(self, spot: str) -> None:
-        """Move the cat to `spot`. A state with a variant there restarts as
-        that variant, with no transition (the cat did not change its mind)."""
-        if spot == self._spot:
+    def set_spot(self, spot: str, roams: Optional[bool] = None) -> None:
+        """Move the cat's home to `spot`, and say whether it roams from there.
+        A state with a variant there restarts as that variant, with no
+        transition (the cat did not change its mind)."""
+        roams = self._roams if roams is None else roams
+        if spot == self._spot and roams == self._roams:
             return
         self._spot = spot
-        resolved = sprites.spot_state(self._current_state, spot)
-        if resolved != self._player.target:
-            self._player.restart(resolved, self._clock())
+        self._roams = roams
+        self._roam.set_home(spot, roams, self._clock())
         self._changed()
 
     @property
     def spot(self) -> str:
+        """The home spot, wherever the cat is now."""
         return self._spot
+
+    @property
+    def pose(self) -> Pose:
+        """Where the art is placed now."""
+        return self._roam.pose
+
+    @property
+    def mask_pose(self) -> Pose:
+        """Where the cat is clickable: the home pose while a move plays, else
+        where it rests."""
+        w = self._roam.wanderer
+        return w.home if w.move is not None else w.pose
 
     @property
     def playing(self) -> str:
@@ -248,12 +266,12 @@ class QtPane:
 
     def next_due_ms(self) -> Optional[int]:
         """Clock ms when tick() will next change a track's frame, or None."""
-        return self._player.next_due()
+        return self._roam.next_due()
 
     def tick(self, now_ms: int) -> bool:
         """Advance every track whose time has passed. True iff the composed
         grid changed. Never calls on_change: the widget repaints only the cat."""
-        return self._player.tick(now_ms)
+        return self._roam.tick(now_ms)
 
     def draw_next_frame(self) -> None:
         """Step to the next get_frames() entry (wrapping), ignoring the

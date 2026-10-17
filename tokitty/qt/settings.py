@@ -617,7 +617,12 @@ class ThemeTab(_Tab):
         self.shadow_toggle = kit.toggle(
             "Cat shadow", compact=True, on_change=lambda on: self._edit("cat", "shadow", on))
         self.shadow_toggle.setContentsMargins(12, 4, 12, 4)
-        kit.add(self.card(), self.shadow_toggle)
+        self.wander_toggle = kit.toggle(
+            "Cat wanders", compact=True, on_change=lambda on: self._edit("cat", "wander", on))
+        self.wander_toggle.setContentsMargins(12, 4, 12, 4)
+        card = self.card()
+        kit.add(card, self.shadow_toggle)
+        kit.add(card, self.wander_toggle)
         kit.section_header(self.frame, "Outline", "Helps text over a see-through card", top=10)
         self.halo = kit.segmented([("off", "Off"), ("auto", "Auto"), ("on", "On")],
                                   on_change=lambda v: self._edit("text", "halo", v))
@@ -705,6 +710,7 @@ class ThemeTab(_Tab):
         for element, toggle in self.show_toggles.items():
             toggle.set(element in theme.text.show)
         self.shadow_toggle.set(theme.cat.shadow)
+        self.wander_toggle.set(theme.cat.wander)
         for holder in self.entries.values():
             self.kit.set_entry_error(holder, False)
 

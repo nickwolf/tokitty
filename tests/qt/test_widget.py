@@ -19,9 +19,13 @@ pytestmark = pytest.mark.qt
 ROOT = Path(__file__).resolve().parents[2]
 
 
+# No wander headroom, so a card's pixels sit where these tests look for them.
+STILL = T.CatStyle(wander=False)
+
+
 def make(qapp, count=1, theme=None, homes=None):
     customs = [Customization(cat_home=(homes[i] if homes else "inside")) for i in range(count)]
-    widget = TokittyQtWidget(theme or T.Theme(), customs, count)
+    widget = TokittyQtWidget(theme or T.Theme(cat=STILL), customs, count)
     widget.anim.stop()
     return widget
 
@@ -142,14 +146,14 @@ def test_cat_cache_key_uses_a_hashable_palette(qapp):
 # ---- card -----------------------------------------------------------------
 
 def test_zero_percent_card_still_paints_alpha_one(qapp):
-    widget = make(qapp, theme=T.Theme(card=T.CardStyle(opacity=0)))
+    widget = make(qapp, theme=T.Theme(card=T.CardStyle(opacity=0), cat=STILL))
     image = widget.grab().toImage()
     assert image.pixelColor(150, 5).alpha() == 1
 
 
 def test_accented_pane_is_opaque_beside_a_translucent_one(qapp):
     # two panes fill one column, so stack: pane 1 sits below pane 0
-    widget = make(qapp, 2, theme=T.Theme(card=T.CardStyle(opacity=50)))
+    widget = make(qapp, 2, theme=T.Theme(card=T.CardStyle(opacity=50), cat=STILL))
     render(widget.panes[0], "permission", accent=True)
     render(widget.panes[1])
     image = widget.grab().toImage()
@@ -276,10 +280,10 @@ def test_tags_sit_on_the_cards_outer_side(qapp):
 def test_set_theme_changes_the_card_alpha(qapp):
     widget = make(qapp)
     assert widget.grab().toImage().pixelColor(150, 5).alpha() == 255
-    widget.set_theme(T.Theme(card=T.CardStyle(opacity=50)))
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=50), cat=STILL))
     assert widget.theme.card.opacity == 50
     assert abs(widget.grab().toImage().pixelColor(150, 5).alpha() - T.card_alpha(50)) <= 1
-    widget.set_theme(T.Theme(card=T.CardStyle(opacity=0)))
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=0), cat=STILL))
     assert widget.grab().toImage().pixelColor(150, 5).alpha() == 1
 
 
@@ -296,13 +300,13 @@ def test_set_theme_drops_cached_layouts_and_images(qapp):
 def test_set_theme_keeps_the_window_matching_its_layout(qapp):
     widget = make(qapp, 2, homes=["on_top", "inside"])
     widget.set_theme(T.Theme(bars=T.BarStyle(layout="full_width")))
-    expected = T.layout_window(widget.homes)
+    expected = T.layout_window(widget.homes, wander=True)
     assert (widget.width(), widget.height()) == expected.size
     # homes that changed under the new customizations are picked up too
     widget.panes[0].set_customization(Customization(cat_home="inside"))
     widget.set_theme(T.Theme())
     assert widget.homes == ["inside", "inside"]
-    assert (widget.width(), widget.height()) == T.layout_window(["inside", "inside"]).size
+    assert (widget.width(), widget.height()) == T.layout_window(["inside", "inside"], wander=True).size
 
 
 def test_pane_anchor_is_the_window_position_plus_origin_plus_16(qapp):

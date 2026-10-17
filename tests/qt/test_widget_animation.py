@@ -34,7 +34,7 @@ def synth(monkeypatch):
 def make(count=1, clock=None, homes=None, **custom):
     customs = [Customization(cat_home=(homes[i] if homes else "inside"), **custom)
                for i in range(count)]
-    return TokittyQtWidget(T.Theme(), customs, count, clock=clock or Clock())
+    return TokittyQtWidget(T.Theme(cat=T.CatStyle(wander=False)), customs, count, clock=clock or Clock())
 
 
 def render(pane, state):

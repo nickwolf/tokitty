@@ -57,16 +57,19 @@ def _surface(feet_y: int, surfaces: List[int]) -> int:
 
 
 def shadow_for(rest_grid: Sequence[str], grid: Sequence[str], offset: Tuple[int, int],
-               home: str, mirrored: bool) -> Optional[Shadow]:
+               home: str, mirrored: bool, x: Optional[int] = None) -> Optional[Shadow]:
     """The shadow of `grid` (the frame on screen, moved by `offset` cells) for a
     cat whose spot is `home`, in card coordinates. `rest_grid` is the animation's
-    frame 0, which fixes the footprint and where the floor is. None when the
-    grid has no body."""
+    frame 0, which fixes the footprint and where the floor is. `x` is the
+    sprite's left edge in card px where it is not at `home`'s own. None when
+    the grid has no body."""
     feet_row, rest_feet = ground_row(grid), ground_row(rest_grid)
     foot = footprint(rest_grid)
     if feet_row is None or rest_feet is None or foot is None:
         return None
     origin_x, origin_y = theme.placement(home).origin
+    if x is not None:
+        origin_x = x
     dx, dy = offset
     feet_y = origin_y + (feet_row + 1) * SCALE + dy * SCALE
     if home == "on_top":

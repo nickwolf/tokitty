@@ -714,7 +714,7 @@ def test_on_top_margin_holds_the_sprite_and_the_hop_headroom():
 def test_cat_shadow_is_on_by_default_and_for_a_file_without_a_cat_section(tmp_path):
     from tokitty.theme import CatStyle, load_theme
 
-    assert Theme().cat == CatStyle(shadow=True)
+    assert Theme().cat == CatStyle(shadow=True, wander=True)
     (tmp_path / "theme.json").write_text(json.dumps({"card": {"radius": 3}}), encoding="utf-8")
     loaded = load_theme(tmp_path)
     assert loaded.card.radius == 3 and loaded.cat.shadow is True
@@ -724,9 +724,9 @@ def test_cat_shadow_off_round_trips(tmp_path):
     from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
 
     theme = Theme(cat=CatStyle(shadow=False))
-    assert theme_to_dict(theme)["cat"] == {"shadow": False}
+    assert theme_to_dict(theme)["cat"] == {"shadow": False, "wander": True}
     save_theme(tmp_path, theme)
-    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False}
+    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False, "wander": True}
     assert load_theme(tmp_path).cat.shadow is False
     assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.shadow is False
 
@@ -738,6 +738,23 @@ def test_cat_shadow_of_the_wrong_type_is_rejected_and_reported(bad):
     assert rejected_fields(raw, Theme()) == {"cat.shadow"}
     off = Theme(cat=replace(Theme().cat, shadow=False))
     assert theme_from_dict(raw, off).cat.shadow is False  # the fallback's value
+
+
+def test_cat_wander_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
+
+    theme = Theme(cat=CatStyle(wander=False))
+    assert theme_to_dict(theme)["cat"] == {"shadow": True, "wander": False}
+    save_theme(tmp_path, theme)
+    assert load_theme(tmp_path).cat.wander is False
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.wander is True
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_wander_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"wander": bad}}
+    assert theme_from_dict(raw, Theme()).cat.wander is True
+    assert rejected_fields(raw, Theme()) == {"cat.wander"}
 
 
 def test_cat_section_that_is_not_a_dict_is_reported():
