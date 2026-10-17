@@ -1125,14 +1125,20 @@ _BACK_INHALE = {(12, 15): "u", (12, 16): "u"}
 # The near front paw droops a row from its limp wrist.
 _BACK_PAW_REST = _cells("m", (9, 9, 10), (10, 9, 10))
 _BACK_PAW_DROOP = _cells("m", (10, 9, 10), (11, 9, 10))
-# The tail rises up the right side of the rump; its hooked tip straightens.
-_BACK_TAIL_REST = _tail((12, 25, 26), (13, 26, 27))
-_BACK_TAIL_CURL = _tail((12, 26, 27), (13, 26, 27))
+# The tail rises up the right side of the rump, a column clear of the body so
+# it never merges into the outline, to a small S at the top no higher than the
+# raised paws. It swishes by sweeping the top in over the hip and out
+# straight up the edge.
+_BACK_TAIL_MID = _tail((13, 26, 27), (12, 26, 27), (11, 25, 26), (10, 25, 26), (9, 26, 27),
+                       (8, 26, 27), (7, 26, 27), (6, 25, 26))
+_BACK_TAIL_IN = _tail((13, 26, 27), (12, 25, 26), (11, 24, 25), (10, 24, 25), (9, 25, 26))
+_BACK_TAIL_OUT = _tail((13, 26, 27), *((r, 26, 27) for r in range(8, 13)), (7, 27, 27), (6, 27, 27))
 
 _FL_TMPL, (_FL_SHUT, _FL_PEEK) = _pose_cells(FLOPPED_BACK_TEMPLATE, [_BACK_EYES_SHUT, _BACK_EYES_PEEK])
 _FL_TMPL, (_FL_EXHALE, _FL_INHALE) = _pose_cells(_FL_TMPL, [_BACK_EXHALE, _BACK_INHALE])
 _FL_TMPL, (_FL_PAW_REST, _FL_PAW_DROOP) = _pose_cells(_FL_TMPL, [_BACK_PAW_REST, _BACK_PAW_DROOP])
-_FL_TMPL, (_FL_TAIL_REST, _FL_TAIL_CURL) = _pose_cells(_FL_TMPL, [_BACK_TAIL_REST, _BACK_TAIL_CURL])
+_FL_TMPL, (_FL_TAIL_MID, _FL_TAIL_IN, _FL_TAIL_OUT) = _pose_cells(
+    _FL_TMPL, [_BACK_TAIL_MID, _BACK_TAIL_IN, _BACK_TAIL_OUT])
 # Out cold, not asleep: now and then a single small Z drifts up off the head,
 # sparser than sleeping's and never the big one.
 _FL_TMPL, (_FL_Z_NONE, _FL_Z_DOT, _FL_Z_LOW, _FL_Z_HIGH) = _pose_cells(_FL_TMPL, [
@@ -1154,8 +1160,10 @@ FLOPPED_ANIMATION = Animation(_FL_TMPL, (
         Frame(_FL_PAW_DROOP, 160),
     )),
     Track("tail", (
-        Frame(_FL_TAIL_REST, (3000, 8000)),
-        Frame(_FL_TAIL_CURL, 400),
+        Frame(_FL_TAIL_MID, (1500, 4000)),
+        Frame(_FL_TAIL_IN, 220), Frame(_FL_TAIL_MID, 160), Frame(_FL_TAIL_OUT, 260),
+        Frame(_FL_TAIL_MID, 160), Frame(_FL_TAIL_IN, 220), Frame(_FL_TAIL_MID, 160),
+        Frame(_FL_TAIL_OUT, 260),
     )),
     Track("zzz", (
         Frame(_FL_Z_NONE, (6000, 12000)),
