@@ -10,7 +10,7 @@ See docs/task-6-brief (issue #6) for the full spec this implements.
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-ACTIVITY_STATES = ("permission", "working", "thinking", "done_hop", "idle")
+ACTIVITY_STATES = ("permission", "question", "working", "thinking", "done_hop", "idle")
 
 IDLE_DECAY_S = 180.0
 GONE_S = 1800.0
@@ -33,6 +33,11 @@ _KNOWN_EVENTS = frozenset(
 
 _PERMISSION_EVENTS = frozenset({"Notification", "PermissionRequest"})
 
+# Tools whose PermissionRequest is a question for the user to read and answer
+# (or a plan to approve), not a tool to allow. Each fires PreToolUse, then
+# PermissionRequest with its tool_name, then a Notification with none.
+QUESTION_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
+
 _WORKING_THINKING_EVENTS = frozenset(
     {"UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStop"}
 )
@@ -51,7 +56,7 @@ _TOOL_LABELS = {
     "WebSearch": "Browsing",
 }
 
-_PRIORITY = {"permission": 0, "working": 1, "thinking": 2, "done_hop": 3}
+_PRIORITY = {"permission": 0, "question": 0, "working": 1, "thinking": 2, "done_hop": 3}
 
 
 def _tool_label(tool_name):
@@ -84,7 +89,8 @@ class _SessionState:
     last_event: str = ""
     base_state: str = "idle"  # "working" | "thinking" | "idle" | "done_hop"
     tool_label: str = ""
-    permission: bool = False
+    # "permission" or "question" while a prompt waits on the user, else "".
+    overlay: str = ""
     stretch_start: Optional[float] = None
     done_hop_at: Optional[float] = None
 
@@ -164,9 +170,16 @@ class ActivityTracker:
                 state.tool_label = ""
                 state.done_hop_at = None
 
-            # Permission flag: raised on Notification or PermissionRequest,
-            # lowered by the next (higher-seq) event of any other kind.
-            state.permission = event in _PERMISSION_EVENTS
+            # Prompt overlay: raised on Notification or PermissionRequest,
+            # lowered by the next (higher-seq) event of any other kind. A
+            # question's own Notification carries no tool_name, so it keeps
+            # the question up rather than turning it into permission.
+            if event == "PermissionRequest":
+                state.overlay = "question" if rec.get("tool_name") in QUESTION_TOOLS else "permission"
+            elif event == "Notification":
+                state.overlay = state.overlay or "permission"
+            else:
+                state.overlay = ""
 
             if state.first_seen is None:
                 state.first_seen = ts
@@ -175,15 +188,15 @@ class ActivityTracker:
             state.last_event = event
 
     def _effective_view(self, session_id: str, state: _SessionState, now: float) -> Optional[ActivityView]:
-        if state.permission:
-            # Permission does not decay on the idle timer. If a prompt is
+        if state.overlay:
+            # A prompt does not decay on the idle timer. If it is
             # abandoned (Esc, killed terminal, closed window) with no further
             # hook event and no SessionEnd, nothing lowers this flag, so it
             # holds for PERMISSION_STALE_S and then reads as idle. The session
             # itself is swept at GONE_S (30 min).
             if (now - state.last_ts) >= PERMISSION_STALE_S:
                 return None
-            return ActivityView(state="permission", session_id=session_id)
+            return ActivityView(state=state.overlay, session_id=session_id)
 
         if state.base_state == "done_hop":
             if state.done_hop_at is not None and (now - state.done_hop_at) < DONE_HOP_S:

@@ -18,6 +18,7 @@ from tokitty.activity import ActivityView
 # resolution logic below).
 ACTIVITY_SPRITE_PLACEHOLDERS = {
     "permission": "permission",
+    "question": "question",
     "working": "working",
     "thinking": "thinking",
     "done_hop": "done_hop",
@@ -26,6 +27,9 @@ ACTIVITY_SPRITE_PLACEHOLDERS = {
 # v1 substates of the capped/wake sequence (see mood.compute_capped_substate)
 # -- these outrank an activity-derived pose, per spec.
 _CAPPED_WAKE_STATES = frozenset({"activate", "flopped", "stirring", "waking"})
+
+# A prompt waiting on the user: a tool to allow, or a question to answer.
+_PROMPT_STATES = frozenset({"permission", "question"})
 
 _ACTIVITY_POSE_STATES = frozenset({"working", "thinking", "done_hop"})
 
@@ -39,9 +43,9 @@ def resolve_pose(v1_state: str, activity: Optional[ActivityView]) -> dict:
     watcher is running / nothing resolved yet -- treated the same as an
     idle ActivityView.
     """
-    if activity is not None and activity.state == "permission":
+    if activity is not None and activity.state in _PROMPT_STATES:
         return {
-            "sprite_state": ACTIVITY_SPRITE_PLACEHOLDERS["permission"],
+            "sprite_state": ACTIVITY_SPRITE_PLACEHOLDERS[activity.state],
             "tool_label": "",
             "accent": True,
         }

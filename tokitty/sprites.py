@@ -47,6 +47,7 @@ BASE_PALETTE: Dict[str, str] = {
     "z": "#8fd0e8",  # sleep accent
     "!": "#e6483c",  # alert/panic accent
     "?": "#e8c23c",  # confused accent
+    "q": "#3c6fe8",  # the question bubble's "?" -- blue, apart from confused's yellow
     "h": "#f2d675",  # activate/happy sparkle accent
     # Prop colors (task 8 activity sprites). Non-coat: props must not
     # change with coat, so these live in BASE_PALETTE, not the coat presets.
@@ -1353,6 +1354,74 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
 ))
 
 
+# question: Claude Code is asking something. The cat sits up with its head
+# tilted and a speech bubble with a big "?" bobs beside it, apart from the
+# permission flag and from confused's bare yellow "?". The head is the alert
+# head drawn tilted (left ear up, right ear down), the body the alert body.
+QUESTION_TEMPLATE: List[str] = [row.ljust(28, ".") for row in (
+    "..........x..........",
+    ".........xpx.....o...",
+    "........xxpooooooooxx",
+    "........xxpxxssssxxpx",
+    ".........occcoooosxpx",
+    "........ooosssoooooxx",
+    ".......oooooooooossoO",
+    "........oooexxxxxoooO",
+    "........oooxxxwxxxeoO",
+    "........ooxxwwAwwxxoO",
+    "........oxxwwwwwwwxoO",
+    ".........oxwwwwwwwxOO",
+    "..........oxxwwwxxOO.",
+    "...........oooooOOO..",
+)] + ALERT_TEMPLATE[14:]
+
+_ASK_BUBBLE = (".#####.", "#######", "#######", "#######", "#######", "#######", "#######",
+               "#######", ".#####.", ".#.....", "#......")
+_ASK_MARK = ("###", "..#", ".##", ".#.", "...", ".#.")
+
+
+def _ask_bubble(top: int) -> Dict[Tuple[int, int], str]:
+    return {**_glyph("w", top, 21, *_ASK_BUBBLE), **_glyph("q", top + 1, 23, *_ASK_MARK)}
+
+
+# The tilted eyes: the left one on row 7, the right one a row lower.
+_QU_EYE_CELLS = {(7, 10): "o", (7, 11): "o", (7, 12): "x", (8, 17): "x", (8, 18): "o", (8, 19): "o"}
+_QU_EYES_OPEN = {**_QU_EYE_CELLS, (7, 11): "e", (8, 18): "e"}
+_QU_EYES_LINE = {**_QU_EYE_CELLS, **{cell: LID_CHAR for cell in _QU_EYE_CELLS}}
+# A glance up at the bubble.
+_QU_EYES_LOOK = {**_QU_EYE_CELLS, (7, 12): "e", (8, 18): "x", (8, 19): "e"}
+
+_QU_TMPL, (_QU_T_NEUTRAL, _QU_T_OUT, _QU_T_UP) = _pose_cells(
+    QUESTION_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP])
+_QU_TMPL, (_QU_OPEN, _QU_LINE, _QU_LOOK) = _pose_cells(
+    _QU_TMPL, [_QU_EYES_OPEN, _QU_EYES_LINE, _QU_EYES_LOOK])
+_QU_TMPL, (_QU_EAR_REST, _QU_EAR_FLICK) = _pose_cells(
+    _QU_TMPL, [_cells("x", (0, 10, 10)), _cells("x", (0, 9, 9))])
+_QU_TMPL, (_QU_ASK_UP, _QU_ASK_DOWN) = _pose_cells(_QU_TMPL, [_ask_bubble(0), _ask_bubble(1)])
+
+QUESTION_ANIMATION = Animation(_QU_TMPL, (
+    Track("bubble", (Frame(_QU_ASK_UP, 450), Frame(_QU_ASK_DOWN, 450))),
+    Track("eyes", (
+        Frame({**_QU_OPEN, **_NOSE}, (2000, 4000)),
+        Frame({**_QU_LOOK, **_NOSE}, (900, 1500)),
+        Frame({**_QU_OPEN, **_NOSE}, (1500, 3000)),
+        Frame({**_QU_LINE, **_NOSE}, 140),
+    )),
+    Track("ears", (
+        Frame(_QU_EAR_REST, (3000, 7000)),
+        Frame(_QU_EAR_FLICK, 90),
+        Frame(_QU_EAR_REST, 110),
+        Frame(_QU_EAR_FLICK, 90),
+    )),
+    Track("tail", (
+        Frame(_QU_T_NEUTRAL, (1500, 3000)),
+        Frame(_QU_T_OUT, 200),
+        Frame(_QU_T_UP, (700, 1200)),
+        Frame(_QU_T_OUT, 200),
+    )),
+))
+
+
 # done_hop: the happy hop when a task finishes, played once. A butt wiggle
 # before the jump, a launch, a hang three rows up with the paws tucked and
 # sparkles, a squash on landing and a proud settle with squinting eyes. The
@@ -1415,6 +1484,7 @@ ANIMATIONS: Dict[str, Animation] = {
     "working": WORKING_ANIMATION,
     "thinking": THINKING_ANIMATION,
     "permission": PERMISSION_ANIMATION,
+    "question": QUESTION_ANIMATION,
     "done_hop": DONE_HOP_ANIMATION,
 }
 
