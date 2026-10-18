@@ -6,7 +6,7 @@ These PNGs are what the Qt widget's real paint output must match, pixel for pixe
 
 `cat/<state>@1x.png` and `@2x.png` are one sheet per sprite state: every coat (6 colourways x 9 patterns) as a row and every frame of the state as a column, drawn by the widget and cropped from a grab. They are exact-palette indexed PNGs.
 
-`card/<layout>@1x.png` and `@2x.png` are whole-widget grabs of six layouts: default, halo (halo on, opaque), low_opacity (20 percent, halo auto), cat_right (`inside_right`), cat_top (`on_top`) and models. Card text is drawn in the bundled Aileron font with full hinting and no subpixel antialiasing, so Linux and Windows agree. The product's own fonts are covered by a fit check, not by pixels.
+`card/<layout>@1x.png` and `@2x.png` are whole-widget grabs of eight layouts, all in the refined card look except the last two: default, halo (halo on, opaque), low_opacity (20 percent, halo auto), cat_right (`inside_right`), cat_top (`on_top`), models, classic and classic_models (the pre-#139 look, built from `theme.CLASSIC`, which pins that look). Card text is drawn in the bundled Aileron font with full hinting and no subpixel antialiasing, so Linux and Windows agree. The product's own fonts are covered by a fit check, not by pixels.
 
 `card/masks.json` holds the text regions each card reference was made with, in device pixels.
 
@@ -14,7 +14,7 @@ These PNGs are what the Qt widget's real paint output must match, pixel for pixe
 
 ## What is masked
 
-macOS rasterizes text differently (CoreText) and nothing changes that, so on macOS every card layout is compared with its text regions masked out. The mask is the union of the regions in `card/masks.json` and the regions the live render recorded. On every system the low_opacity layout is masked the same way, because text over a translucent card differs by up to one level per channel between Intel and AMD CPUs. Everything outside the mask must match exactly, including the cat.
+macOS rasterizes text differently (CoreText) and nothing changes that, so on macOS every card layout is compared with its text regions masked out. The mask is the union of the regions in `card/masks.json` and the regions the live render recorded. On every system the low_opacity layout is masked the same way, because text over a translucent card differs by up to one level per channel between Intel and AMD CPUs. On macOS the card layouts also allow a difference of one level per channel outside the mask, because the rounded card's antialiased edge comes out one level off at a few pixels there (2 to 7 per layout on the macos-latest runner, #139). Everywhere else, everything outside the mask must match exactly, including the cat.
 
 ## Updating a reference
 

@@ -7,6 +7,7 @@ Windows C runtime, and Windows is Tokitty's primary target platform.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -32,6 +33,19 @@ def format_countdown(seconds_left: float) -> str:
     if minutes:
         return f"{minutes}m {seconds:02d}s"
     return f"{seconds}s"
+
+
+_COUNTDOWN = re.compile(r"\d+[hms]( |$)")
+
+
+def reset_phrase(reset_text: str) -> str:
+    """The refined card's reset line: "resets 6:10 PM", "resets in 2h 14m 05s"
+    for a capped countdown, and nothing when the reset is unknown."""
+    if not reset_text or reset_text == "\u2014":
+        return ""
+    if _COUNTDOWN.match(reset_text):
+        return "resets in " + reset_text
+    return "resets " + reset_text
 
 
 def format_reset_time(dt: datetime) -> str:

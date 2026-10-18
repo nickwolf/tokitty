@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -219,18 +220,21 @@ def test_make_font_is_the_one_font_seam(qapp):
     from PySide6.QtGui import QFont
 
     class Probe(TokittyQtWidget):
-        def _make_font(self, points, bold):
+        def _make_font(self, points, weight):
             font = QFont("Aileron")
             font.setPixelSize(points)
-            font.setBold(bold)
+            font.setWeight(weight)
             return font
 
     widget = Probe(T.Theme(), [Customization()], 1)
     widget.anim.stop()
-    label, model, text = widget._font_set()
+    label, model, text, label_semi, model_semi = widget._font_set()
     assert (label.pixelSize(), model.pixelSize(), text.pixelSize()) == (
         T.FONT_SIZE_LABEL, T.FONT_SIZE_MODEL, T.FONT_SIZE_TEXT)
-    assert (label.bold(), model.bold(), text.bold()) == (True, True, False)
+    assert (label_semi.pixelSize(), model_semi.pixelSize()) == (T.FONT_SIZE_LABEL, T.FONT_SIZE_MODEL)
+    assert [f.weight() for f in (label, model, text, label_semi, model_semi)] == [
+        QFont.Weight.Bold, QFont.Weight.Bold, QFont.Weight.Normal,
+        QFont.Weight.DemiBold, QFont.Weight.DemiBold]
 
 
 def test_status_and_account_label_go_through_text(qapp):
@@ -331,3 +335,91 @@ def test_closing_the_widget_quits_the_application(qapp):
     qapp.exec()
     net.stop()
     assert time.monotonic() - start < 1.5
+
+
+# ---- card design (#139) ----------------------------------------------------
+
+class _TextLog(TokittyQtWidget):
+    def __init__(self, *args, **kw):
+        self.log = []
+        super().__init__(*args, **kw)
+
+    def _text(self, p, color, rect, flags, text, halo=False):
+        self.log.append((text, color.name(), (rect.x(), rect.y(), rect.width(), rect.height()),
+                         int(flags), halo))
+        super()._text(p, color, rect, flags, text, halo)
+
+
+def _logged(theme, label="work", status="open Claude Code", render_models=False):
+    widget = _TextLog(replace(theme, cat=STILL), [Customization(label=label)], 1)
+    widget.anim.stop()
+    pane = widget.panes[0]
+    if render_models:
+        from tokitty.usage_display import UsageRow, UsageView
+        pane.render_usage("working", UsageView(
+            rows=(UsageRow("Opus 4", "$12.40", 62.0), UsageRow("Sonnet 4", "$6.10", 31.0)),
+            status_text=status, ramp_pct=None))
+    else:
+        pane.render("working", 42, 67, "6:10 PM", "Mon", "", None, status, False)
+    widget.grab()
+    return widget
+
+
+def test_refined_limits_text_follows_the_layout(qapp):
+    widget = _logged(T.REFINED)
+    lay = T.layout_card(widget.theme, "limits", "inside")
+    seen = {t: (color, rect) for t, color, rect, _f, _h in widget.log}
+    assert {"Session", "Week", "42%", "67%", "resets 6:10 PM", "resets Mon", "work"} <= set(seen)
+    assert "SESSION" not in seen
+    r = lay["session_label"]
+    assert seen["Session"] == (T.REFINED.text.foreground, (r.x, r.y, r.w, r.h))
+    r = lay["session_percent"]
+    assert seen["42%"] == (T.REFINED.text.foreground, (r.x, r.y, r.w, r.h))
+    assert seen["resets 6:10 PM"][0] == T.REFINED.text.dim
+    assert seen["work"][0] == T.REFINED.text.dim
+
+
+def test_refined_status_is_one_elided_line_clear_of_the_account_label(qapp):
+    long = "a very long status line that cannot possibly fit in the stats column"
+    widget = _logged(T.REFINED, status=long)
+    status = next(e for e in widget.log if e[0] != "work" and e[0].startswith("a very"))
+    assert status[0] != long and status[0].endswith("…")
+    label = next(e for e in widget.log if e[0] == "work")
+    status_right = status[2][0] + status[2][2]
+    assert status_right <= label[2][0] + label[2][2] - 6  # the label's text starts after it
+    assert not (status[3] & int(Qt.TextFlag.TextWordWrap))
+    short = _logged(T.REFINED, status="idle")
+    assert any(e[0] == "idle" for e in short.log)
+    no_label = _logged(T.REFINED, label="", status=long)
+    wide = next(e for e in no_label.log if e[0].startswith("a very"))
+    assert wide[2][2] == T.layout_card(T.REFINED, "limits", "inside")["status"].w
+
+
+def test_refined_models_rows(qapp):
+    widget = _logged(T.REFINED, render_models=True)
+    names = {t: rect for t, _c, rect, _f, _h in widget.log}
+    lay = T.layout_card(widget.theme, "models", "inside")
+    r = lay["model_name_1"]
+    assert names["Sonnet 4"] == (r.x, r.y, r.w, r.h)
+    r = lay["model_value_1"]
+    assert names["$6.10"] == (r.x, r.y, r.w, r.h)
+
+
+def test_classic_keeps_its_upper_case_labels_and_inline_percent(qapp):
+    widget = _logged(T.CLASSIC)
+    texts = [t for t, *_ in widget.log]
+    assert "SESSION" in texts and "WEEK" in texts and "42%" in texts
+    assert "Session" not in texts
+    assert any(t.startswith("· ") for t in texts)
+
+
+def test_changing_the_design_repaints_the_cached_card(qapp):
+    widget = make(qapp, theme=T.Theme(cat=STILL))
+    render(widget.panes[0])
+    pane, style = widget.panes[0], widget._style_for(0, widget.panes[0])
+    layout = widget._layout_for(pane._view_mode, "inside")
+    widget._font_set()
+    before = widget._card_signature(pane, style, layout, 0, 0, 1.0)
+    widget.theme = replace(widget.theme, card=replace(widget.theme.card, design="classic"))
+    after = widget._card_signature(pane, style, layout, 0, 0, 1.0)
+    assert before != after

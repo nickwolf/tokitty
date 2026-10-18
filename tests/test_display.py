@@ -102,3 +102,14 @@ def test_resolve_status_text_is_empty_when_nothing_applies():
 
 def test_resolve_status_text_treats_empty_strings_as_absent():
     assert resolve_status_text("", "", "session caps ~6:20 PM") == "session caps ~6:20 PM"
+
+
+def test_reset_phrase_reads_for_each_reset_form():
+    from tokitty.display import reset_phrase
+    assert reset_phrase("6:10 PM") == "resets 6:10 PM"
+    assert reset_phrase("Mon Oct 20") == "resets Mon Oct 20"
+    assert reset_phrase("2h 14m 05s") == "resets in 2h 14m 05s"
+    assert reset_phrase("14m 05s") == "resets in 14m 05s"
+    assert reset_phrase("9s") == "resets in 9s"
+    assert reset_phrase("—") == ""
+    assert reset_phrase("") == ""

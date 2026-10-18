@@ -162,7 +162,7 @@ def scene_frame(frame: List[str], offset: Tuple[int, int], rest: List[str], spot
     crop_y = -SCENE_ABOVE // CELL
     width, height = scene_size(scale, span_w)
     canvas = [[_hex_to_rgb(SCENE_BACKDROP)] * width for _ in range(height)]
-    card = _hex_to_rgb(theme.Theme().card.background)
+    card = _hex_to_rgb(theme.CLASSIC.card.background)
     for cy in range(theme.CARD_HEIGHT // CELL):
         for cx in range(theme.CARD_WIDTH // CELL):
             _paint(canvas, cx - crop_x, cy - crop_y, scale, card)

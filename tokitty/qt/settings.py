@@ -661,6 +661,15 @@ class ThemeTab(_Tab):
         self.show_toggles: Dict[str, object] = {}
 
         kit.section_header(self.frame, "Card", top=0)
+        self.design = kit.segmented(
+            [("refined", "Refined"), ("classic", "Classic")],
+            on_change=lambda v: self.write(
+                lambda: self.host.set_theme(T.apply_design(self.host.theme(), v))))
+        self.add(self.design)
+        hint = text("Card style sets the card, bar and text colours below; the other settings stay.",
+                    color=DIM_COLOR, font=FONT_SMALL)
+        hint.setContentsMargins(0, 4, 0, 6)
+        self.add(hint)
         self.opacity = kit.segmented(
             [(str(n), "Invisible" if n == 0 else f"{n}%") for n in range(0, 101, 10)],
             on_change=lambda v: self._edit("card", "opacity", int(v)), compact=True)
@@ -788,6 +797,7 @@ class ThemeTab(_Tab):
 
     def refresh(self) -> None:
         theme = self.host.theme()
+        self.design.set(theme.card.design)
         self.opacity.set(str(theme.card.opacity))
         self.opacity_hint.setVisible(theme.card.opacity == 0)
         self.layout_choice.set(theme.bars.layout)

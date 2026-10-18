@@ -19,6 +19,7 @@ from tokitty import shadow as shadow_mod
 from tokitty import sprites
 from tokitty import theme as T
 from tokitty.customize import Customization
+from tokitty.display import reset_phrase
 from tokitty.menu import MenuItem
 from tokitty.qt import macos, position
 from tokitty.qt.menu import render_menu
@@ -51,6 +52,10 @@ _HALO_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1
 
 _LEFT_VCENTER = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 _RIGHT_VCENTER = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+_LEFT_BOTTOM = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
+_RIGHT_BOTTOM = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+# Refined card: room kept between the status line and the account label.
+STATUS_LABEL_GAP = 6
 
 
 def is_context_press(button, modifiers, platform: str = sys.platform) -> bool:
@@ -411,21 +416,26 @@ class TokittyQtWidget(QWidget):
 
     # ---- painting -------------------------------------------------------
 
-    def _make_font(self, points: int, bold: bool) -> QFont:
+    def _make_font(self, points: int, weight: QFont.Weight) -> QFont:
         """One of the card's fonts. The seam the pixel tests override."""
         font = QFont(self.font())
         if sys.platform == "win32":
             font.setFamily("Segoe UI")
         font.setPointSize(points)
-        font.setBold(bold)
+        font.setWeight(weight)
         return font
 
-    def _font_set(self) -> Tuple[QFont, QFont, QFont]:
+    def _font_set(self) -> Tuple[QFont, QFont, QFont, QFont, QFont]:
+        """(label, model, text, label_semibold, model_semibold). The classic
+        card uses the bold pair, the refined card the semibold one."""
         if self._fonts is None:
+            bold, regular, semi = QFont.Weight.Bold, QFont.Weight.Normal, QFont.Weight.DemiBold
             self._fonts = (
-                self._make_font(T.FONT_SIZE_LABEL, True),
-                self._make_font(T.FONT_SIZE_MODEL, True),
-                self._make_font(T.FONT_SIZE_TEXT, False),
+                self._make_font(T.FONT_SIZE_LABEL, bold),
+                self._make_font(T.FONT_SIZE_MODEL, bold),
+                self._make_font(T.FONT_SIZE_TEXT, regular),
+                self._make_font(T.FONT_SIZE_LABEL, semi),
+                self._make_font(T.FONT_SIZE_MODEL, semi),
             )
         return self._fonts
 
@@ -495,7 +505,7 @@ class TokittyQtWidget(QWidget):
         else:
             body = (pane.session_pct, pane.weekly_pct, pane.session_reset_text,
                     pane.weekly_reset_text, pane.status_text)
-        return (id(self.theme), id(layout), dpr, ox, oy, models, pane._dimmed, pane._label,
+        return (id(self.theme), self.theme.card.design, id(layout), dpr, ox, oy, models, pane._dimmed, pane._label,
                 style.background, style.foreground, style.dim, style.opacity,
                 style.bar_fill_override, id(self._fonts), body)
 
@@ -537,6 +547,10 @@ class TokittyQtWidget(QWidget):
             self._paint_models(p, pane, layout, style, label_fg, dim)
         else:
             self._paint_limits(p, pane, layout, style, label_fg, dim, halo)
+        if self.theme.card.design == "refined":
+            self._paint_footer(p, pane, layout, dim)
+            p.restore()
+            return
         if "status" in layout:
             text = pane.status_text if pane._view_mode == "limits" else (
                 pane.usage_view.status_text if pane.usage_view is not None else "")
@@ -556,6 +570,25 @@ class TokittyQtWidget(QWidget):
             self._text(p, dim, _text_rect(layout["account_label"], right=True),
                        _RIGHT_VCENTER, pane._label)
         p.restore()
+
+    def _paint_footer(self, p: QPainter, pane: QtPane, layout, dim: QColor) -> None:
+        """The refined status line and account label, one row. The label is
+        right-aligned; the status is one line, elided so it never runs under
+        the label."""
+        text_font = self._font_set()[2]
+        p.setFont(text_font)
+        label = pane._label if "account_label" in layout else ""
+        if label:
+            self._text(p, dim, _qrect(layout["account_label"]), _RIGHT_VCENTER, label)
+        if "status" in layout:
+            status = pane.status_text if pane._view_mode == "limits" else (
+                pane.usage_view.status_text if pane.usage_view is not None else "")
+            rect = layout["status"]
+            width = rect.w
+            if label:
+                width -= p.fontMetrics().horizontalAdvance(label) + STATUS_LABEL_GAP
+            shown = p.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, max(width, 0))
+            self._text(p, dim, QRectF(rect.x, rect.y, max(width, 0), rect.h), _LEFT_VCENTER, shown)
 
     def _paint_card(self, p: QPainter, style: T.PaneStyle) -> None:
         card = self.theme.card
@@ -610,7 +643,9 @@ class TokittyQtWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
     def _paint_limits(self, p, pane, layout, style, label_fg, dim, halo) -> None:
-        label_font, _model_font, text_font = self._font_set()
+        if self.theme.card.design == "refined":
+            return self._paint_limits_refined(p, pane, layout, style, label_fg, dim, halo)
+        label_font, _model_font, text_font = self._font_set()[:3]
         rows = (
             ("session", "SESSION", pane.session_pct, pane.session_reset_text),
             ("weekly", "WEEK", pane.weekly_pct, pane.weekly_reset_text),
@@ -637,19 +672,51 @@ class TokittyQtWidget(QWidget):
             if reset_box is not None:
                 self._text(p, dim, reset_box, _LEFT_VCENTER, reset)
 
+    def _paint_limits_refined(self, p, pane, layout, style, label_fg, dim, halo) -> None:
+        """Section name left and percent right on one row, the bar, then the
+        reset line under it."""
+        _label, _model, text_font, label_font, _model_semi = self._font_set()
+        rows = (
+            ("session", "Session", pane.session_pct, pane.session_reset_text),
+            ("weekly", "Week", pane.weekly_pct, pane.weekly_reset_text),
+        )
+        for name, title, pct, reset in rows:
+            p.setFont(label_font)
+            if f"{name}_label" in layout:
+                self._text(p, label_fg, _qrect(layout[f"{name}_label"]), _LEFT_BOTTOM, title,
+                           halo and T.halo_applies("section_labels"))
+            if f"{name}_percent" in layout:
+                self._text(p, label_fg, _qrect(layout[f"{name}_percent"]), _RIGHT_BOTTOM,
+                           f"{pct:.0f}%", halo and T.halo_applies("percent"))
+            self._bar(p, layout[f"{name}_bar"], pct,
+                      T.bar_fill(self.theme, pct, style.bar_fill_override))
+            phrase = reset_phrase(reset)
+            if f"{name}_reset" in layout and phrase:
+                p.setFont(text_font)
+                self._text(p, dim, _qrect(layout[f"{name}_reset"]), _LEFT_VCENTER, phrase)
+
     def _paint_models(self, p, pane, layout, style, label_fg, dim) -> None:
-        _label_font, model_font, text_font = self._font_set()
+        refined = self.theme.card.design == "refined"
+        fonts = self._font_set()
+        model_font, text_font = (fonts[4], fonts[2]) if refined else (fonts[1], fonts[2])
         view = pane.usage_view
         rows = view.rows if view is not None else ()
         for i in range(ROW_SLOTS):
             row = rows[i] if i < len(rows) else None
             if f"model_name_{i}" in layout and row is not None:
                 p.setFont(model_font)
-                self._text(p, label_fg, _text_rect(layout[f"model_name_{i}"]), _LEFT_VCENTER,
-                           fit_tag(row.label, MODEL_NAME_MAX))
-                p.setFont(text_font)
-                self._text(p, dim, _text_rect(layout[f"model_value_{i}"], right=True), _RIGHT_VCENTER,
-                           row.value_text)
+                name_box, value_box = layout[f"model_name_{i}"], layout[f"model_value_{i}"]
+                if refined:
+                    self._text(p, label_fg, _qrect(name_box), _LEFT_BOTTOM,
+                               fit_tag(row.label, MODEL_NAME_MAX))
+                    p.setFont(text_font)
+                    self._text(p, dim, _qrect(value_box), _RIGHT_BOTTOM, row.value_text)
+                else:
+                    self._text(p, label_fg, _text_rect(name_box), _LEFT_VCENTER,
+                               fit_tag(row.label, MODEL_NAME_MAX))
+                    p.setFont(text_font)
+                    self._text(p, dim, _text_rect(value_box, right=True), _RIGHT_VCENTER,
+                               row.value_text)
             # The track is always there; the fill only when there is a share.
             pct = row.bar_pct if row is not None else 0.0
             fill = T.bar_fill(self.theme, view.ramp_pct if view else None, style.bar_fill_override)
