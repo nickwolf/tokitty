@@ -19,6 +19,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
+from tokitty.hover import cat_hover_text, cat_phase
 from tokitty import sprites
 from tokitty.behaviour import Drives
 from tokitty.wander import Pose, Roam
@@ -83,6 +84,11 @@ class QtPane:
         self.weekly_reset_text = ""
         self.status_text = ""
         self.usage_view = None
+        # Raw numbers for the limits popup (a hover.LimitsHover), or None.
+        self.limits_hover = None
+        # The clock time the cat entered its current phase, for the popup.
+        self._phase = cat_phase("sleeping")
+        self._phase_since_ms = clock()
 
     @property
     def _player(self):
@@ -193,6 +199,7 @@ class QtPane:
         accent: bool = False,
         projection_text: Optional[str] = None,
         drives: Drives = Drives(),
+        hover=None,
     ) -> None:
         self._roam.set_drives(drives, self._clock())
         self._set_state(state)
@@ -205,8 +212,15 @@ class QtPane:
         self.weekly_pct = weekly_pct
         self.session_reset_text = session_reset_text
         self.weekly_reset_text = weekly_reset_text
+        self.limits_hover = hover
         self.status_text = resolve_status_text(hint_text, credits_text, projection_text, stale_text)
         self._finish()
+
+    def cat_hover_text(self) -> str:
+        """What the cat's popup says: the state, the tool when it works, and
+        how long it has been so."""
+        elapsed = (self._clock() - self._phase_since_ms) / 1000
+        return cat_hover_text(self._current_state, self._tool_label, elapsed)
 
     def _finish(self) -> None:
         self._changed()
@@ -222,6 +236,10 @@ class QtPane:
         self._roam.set_state(state, self._clock(), transition=self._rendered)
         self._rendered = True
         self._current_state = state
+        phase = cat_phase(state)
+        if phase != self._phase:
+            self._phase = phase
+            self._phase_since_ms = self._clock()
 
     def set_spot(self, spot: str, roams: Optional[bool] = None) -> None:
         """Move the cat's home to `spot`, and say whether it roams from there.
