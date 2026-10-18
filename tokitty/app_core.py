@@ -381,13 +381,14 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
         provider = providers[index]
         tag_kind = provider_tag_kind(provider, providers)
         cred_loader = CredentialLoader()
-        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader))
+        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader),
+                        name=f"poller-{index}")
         sessions_dir, distro_name = provider.resolve_activity_sessions(
             config_dir, credentials=wsl_credentials
         )
         watcher = ActivityWatcher(
             sessions_dir, ActivityTracker(), distro_name=distro_name,
-            list_running_distros_fn=distro_probe.get_running,
+            list_running_distros_fn=distro_probe.get_running, name=f"activity-{index}",
         )
         ledger = provider.resolve_ledger(config_dir, credentials=wsl_credentials)
         usage_watcher = UsageWatcher(
@@ -396,6 +397,7 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
             window=lambda: usage_state["window"],
             list_running_distros_fn=distro_probe.get_running,
             scanner_factory=ledger.make_scanner if ledger else None,
+            name=f"usage-{index}",
         )
 
         key = customization_key(account)
@@ -535,7 +537,7 @@ class Discovery:
 
     def start(self) -> None:
         # A bound method, so the thread's target is named run_discovery.
-        threading.Thread(target=self.run_discovery, daemon=True).start()
+        threading.Thread(target=self.run_discovery, daemon=True, name="discovery").start()
 
     def take_hook_warnings(self) -> list:
         """The warnings found so far, each handed out once."""

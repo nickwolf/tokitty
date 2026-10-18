@@ -222,7 +222,7 @@ class UpdateController:
             now=self._clock(),
         )
         self._cleanup_done.clear()
-        threading.Thread(target=self._cleanup_worker, args=(kwargs,), daemon=True).start()
+        threading.Thread(target=self._cleanup_worker, args=(kwargs,), daemon=True, name="update-cleanup").start()
 
     def _cleanup_worker(self, kwargs: dict) -> None:
         try:
@@ -252,7 +252,7 @@ class UpdateController:
             self._stage_result = self._ack_result = None
         self._cancel.clear()
         self._on_progress, self._on_done = on_progress, on_done
-        threading.Thread(target=self._stage_worker, args=(release,), daemon=True).start()
+        threading.Thread(target=self._stage_worker, args=(release,), daemon=True, name="update-stage").start()
         return True
 
     def cancel(self) -> None:
@@ -387,7 +387,7 @@ class UpdateController:
         with self._lock:
             self._phase = "waiting"
         self._handover_state = (tag, token, backup)
-        threading.Thread(target=self._ack_worker, args=(token, child), daemon=True).start()
+        threading.Thread(target=self._ack_worker, args=(token, child), daemon=True, name="update-ack").start()
 
     def _clear_pending(self, token: str) -> None:
         try:

@@ -138,7 +138,7 @@ class UpdateChecker:
             if self._checking:
                 return False
             self._checking = True
-        threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._worker, daemon=True, name="update-check").start()
         return True
 
     def _worker(self) -> None:

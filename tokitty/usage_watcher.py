@@ -43,7 +43,9 @@ class UsageWatcher:
         now_fn: Optional[Callable[[], datetime]] = None,
         sleep_fn: Optional[Callable[[float], bool]] = None,
         scanner_factory: Optional[Callable[..., TranscriptScanner]] = None,
+        name: Optional[str] = None,
     ):
+        self._name = name
         self._projects_dir = projects_dir
         self._distro_name = distro_name
         self._window = window
@@ -63,7 +65,7 @@ class UsageWatcher:
         self._sleep_fn = sleep_fn or self._wake.wait
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True, name=self._name)
         self._thread.start()
 
     def stop(self) -> None:

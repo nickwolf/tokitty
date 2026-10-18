@@ -440,3 +440,17 @@ def test_build_units_gives_each_unit_its_own_workers(tmp_path):
 
     for key in ("poller", "watcher", "usage", "cred_loader", "burn"):
         assert units[0][key] is not units[1][key]
+
+
+def test_build_units_names_each_units_threads_by_index(tmp_path):
+    accounts = [
+        Account(name="acct-v1-a", config_dir=str(tmp_path / "a")),
+        Account(name="acct-v1-b", config_dir=str(tmp_path / "b")),
+    ]
+
+    units, _ = _build(tmp_path, accounts)
+
+    for index, unit in enumerate(units):
+        assert unit["poller"]._name == f"poller-{index}"
+        assert unit["watcher"]._name == f"activity-{index}"
+        assert unit["usage"]._name == f"usage-{index}"

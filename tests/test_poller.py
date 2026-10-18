@@ -162,3 +162,21 @@ def test_poller_never_raises_out_of_the_loop_when_fetch_fn_raises():
         assert latest.status == "api_error"
     finally:
         poller.stop()
+
+
+def test_poller_thread_gets_the_given_name():
+    names = []
+    ready = threading.Event()
+
+    def fake_fetch():
+        names.append(threading.current_thread().name)
+        ready.set()
+        return _ok_result()
+
+    poller = Poller(fetch_fn=fake_fetch, poll_interval=60, sleep_fn=lambda seconds: True, name="poller-3")
+    poller.start()
+    try:
+        assert ready.wait(timeout=2)
+    finally:
+        poller.stop()
+    assert names[0] == "poller-3"
