@@ -2250,6 +2250,250 @@ def _thinking_to_working() -> Animation:
     ], loop_from=None)
 
 
+def _settle_at_keys() -> Animation:
+    """Into working from anywhere without its own entry: the cat sits up,
+    pulls the laptop over from the left, and the room goes dark."""
+    clear = _at("thinking", bubble=2)
+    return single_track(clear, [
+        Frame({}, 180, template=clear),
+        Frame({}, 90, template=_overlay(clear, _laptop(-9))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 160, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 100, template=_at("working")),
+    ], loop_from=None)
+
+
+def _working_to_thinking() -> Animation:
+    """thinking>working run back: the lights come up, the paws lift, the
+    laptop slides off to the left, and a thought bubbles up dot by dot."""
+    clear = _at("thinking", bubble=2)
+    return single_track(_at("working"), [
+        Frame({}, 150, template=_at("working")),
+        Frame({}, 140, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 120, template=_overlay(clear, _laptop())),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-9))),
+        Frame({}, 260, template=clear),
+        Frame({}, 200, template=_at("thinking", bubble=3)),
+        Frame({}, 200, template=_at("thinking", bubble=4)),
+        Frame({}, 240, template=_at("thinking", bubble=5)),
+        Frame({}, 100, template=_at("thinking")),
+    ], loop_from=None)
+
+
+def _rise(base: List[str], target: List[str], drop: int) -> List[str]:
+    """`base` with what `target` adds to it moved `drop` rows down and drawn
+    behind it, as a prop comes up from behind the body."""
+    patches = {}
+    for r, row in enumerate(target):
+        for c, ch in enumerate(row):
+            if ch != base[r][c] and r + drop < len(base) and base[r + drop][c] == ".":
+                patches[(r + drop, c)] = ch
+    return _overlay(base, patches)
+
+
+def _notice() -> List[Frame]:
+    """The lead-in to a prompt from anywhere: the cat sits up and its ears
+    go up, eyes wide (alert with its mark hidden)."""
+    return [
+        Frame({}, 140, template=_at("thinking", bubble=2)),
+        Frame({}, 200, template=_at("alert", bang=1)),
+    ]
+
+
+def _raise_pennant() -> Animation:
+    """Into permission from anywhere: the cat notices, its paw shoots up with
+    the pole, and the pennant unfurls from the pole outward."""
+    flag = _at("permission")
+
+    def furled(from_col: int) -> List[str]:
+        return [
+            "".join("." if ch == "f" and c < from_col else ch for c, ch in enumerate(row))
+            for row in flag
+        ]
+
+    return single_track(_at("alert", bang=1), _notice() + [
+        Frame({}, 140, template=furled(28)),
+        Frame({}, 80, template=furled(24)),
+        Frame({}, 80, template=furled(21)),
+        Frame({}, 100, template=flag),
+    ], loop_from=None)
+
+
+def _pop_question() -> Animation:
+    """Into question from anywhere: the cat notices, tilts its head, and the
+    bubble pops up beside it."""
+    start = _at("alert", bang=1)
+    ask = _at("question")
+    tilt = _overlay(ask, {cell: "." for cell in _ask_bubble(0)})
+    return single_track(start, _notice() + [
+        Frame({}, 180, template=tilt),
+        Frame({}, 80, template=_rise(tilt, ask, 4)),
+        Frame({}, 80, template=_rise(tilt, ask, 2)),
+        Frame({}, 100, template=ask),
+    ], loop_from=None)
+
+
+def _lean(grid: List[str], cols: int) -> List[str]:
+    """The grid sheared left by up to `cols` (right when negative) at the top
+    row, nothing at the bottom: the cat tipping over."""
+    rows = []
+    for r, row in enumerate(grid):
+        dc = round(cols * (len(grid) - 1 - r) / (len(grid) - 1))
+        rows.append(row[dc:] + "." * dc if dc >= 0 else "." * -dc + row[:dc])
+    return rows
+
+
+def _drop(grid: List[str], rows: int) -> List[str]:
+    """The grid moved `rows` down, its bottom rows cut off by the ground."""
+    return ["." * len(grid[0])] * rows + grid[:len(grid) - rows]
+
+
+def _panicked_to_flopped() -> Animation:
+    """The cap hits mid-panic: the alarm drains out of the cat, its eyes go
+    heavy, it wobbles, tips over and rolls onto its back (flopped>stirring's
+    roll run backward), and its legs flop up."""
+    spent = [row.replace("!", ".") for row in _at("panicked")]
+    spent = _overlay(spent, {(7, 10): LID_CHAR, (7, 16): LID_CHAR})
+    roll = get_frames(transition_name("flopped", "stirring"))
+    return single_track(_at("panicked"), [
+        Frame({}, 120, template=_at("panicked")),
+        Frame({}, 300, template=spent),
+        Frame({}, 140, template=_lean(spent, -1)),
+        Frame({}, 120, template=_lean(spent, 3)),
+        Frame({}, 80, template=_lean(spent, 7)),
+        Frame({}, 70, template=_lean(_drop(spent, 2), 9)),
+        Frame({}, 140, template=_ROLL_CURL),
+        Frame({}, 160, template=roll[1]),
+        Frame({}, 100, template=_at("flopped")),
+    ], loop_from=None)
+
+
+# The play bow of a cat stretching awake: head down between front paws
+# pushed out along the ground, rump and tail up, eyes squeezed shut.
+_STRETCH_BOW: List[str] = [
+    "............................",
+    "..........................y.",
+    ".........................yy.",
+    ".........................Y..",
+    "........................YY..",
+    "........................Y...",
+    "...................ooooYY...",
+    ".................ooooooooo..",
+    "....xx......xx..oossoooooo..",
+    "...xxpx...xpxxooooooosooOo..",
+    "...xxpooooopxxooosooooooOo..",
+    "...oooooooooooooooooooooOo..",
+    "...oooosssoooooooooossoOOo..",
+    "..oooooooooooooooooooooOo...",
+    "..oossooooossooooooooooOo...",
+    "..ooooooooooooooooooOooOo...",
+    "..ooo--ooo--oooooooOo.ooo...",
+    "..oooxxxnxxxooooooOo..ooo...",
+    "..ooxxwwwwwxxooooOo...ooo...",
+    "...oxxwwwwwxxooooo....ooo...",
+    "....oxxwwwxxoooo......ooo...",
+    "mmooooooooooooo.......ooo...",
+    "mmooooooooooooo......mmoo...",
+    "............................",
+    "............................",
+    "............................",
+]
+
+
+def _stirring_to_waking() -> Animation:
+    """The cat stretches awake: from lying it pushes its front paws out into
+    a play bow, rump and tail up, then sits up into waking."""
+    return single_track(_at("stirring"), [
+        Frame({}, 200, template=_at("stirring")),
+        Frame({}, 160, template=_drop(_STRETCH_BOW, 1)),
+        Frame({}, 600, template=_STRETCH_BOW),
+        Frame({}, 140, template=_at("stirring")),
+        Frame({}, 110, template=_drop(_at("waking"), 3)),
+        Frame({}, 100, template=_drop(_at("waking"), 1)),
+        Frame({}, 100, template=_at("waking")),
+    ], loop_from=None)
+
+
+def _activate_settles(to_state: str) -> Animation:
+    """Out of activate into the mood after it: the sparks drift out and fade,
+    one last happy squint, and the cat settles into `to_state`."""
+    return single_track(_at("activate"), [
+        Frame({}, 160, template=_at("activate", sparks=1)),
+        Frame({}, 160, template=_at("activate", sparks=2)),
+        Frame({}, 300, template=_at("activate", sparks=3, eyes=1)),
+        Frame({}, 100, template=_at(to_state)),
+    ], loop_from=None)
+
+
+def _activate_dozes_off() -> Animation:
+    """Out of activate into sleeping, taking its time: the sparks fade, the
+    ears relax, two slow drowsy blinks, one eye lingers open, then the head
+    nods onto the chest and the first Z drifts up."""
+    settle = list(_activate_settles("content").tracks[0].frames[:-1])
+    asleep = _at("sleeping", zzz=1)
+    return single_track(_at("activate"), settle + [
+        Frame({}, 600, template=_at("content")),
+        Frame({}, 450, template=_at("content", eyes=1)),
+        Frame({}, 700, template=_at("content")),
+        Frame({}, 800, template=_at("content", eyes=1)),
+        Frame({}, 300, template=_at("content")),
+        Frame({}, 900, template=_at("sleeping", eyes=1, zzz=1)),
+        Frame({}, 700, template=asleep),
+        Frame({}, 600, template=_sink_head(asleep)),
+        Frame({}, 500, template=_at("sleeping", zzz=2)),
+        Frame({}, 100, template=_at("sleeping")),
+    ], loop_from=None)
+
+
+# The moods activate settles into at once (sleeping dozes off slowly,
+# panicked has its own startle).
+_ACTIVATE_SETTLES_INTO = ("content", "interested", "alert")
+
+
+def _interested_to_alert() -> Animation:
+    """An ear perks, the cat sits up tall, and the "!" pops up beside it."""
+    return single_track(_at("interested"), [
+        Frame({}, 120, template=_at("interested")),
+        Frame({}, 220, template=_at("interested", ears=1)),
+        Frame({}, 180, template=_at("alert", bang=1)),
+        Frame({}, 80, template=_at("alert", bang=2)),
+        Frame({}, 100, template=_at("alert", bang=3)),
+        Frame({}, 100, template=_at("alert")),
+    ], loop_from=None)
+
+
+def _alert_to_interested() -> Animation:
+    """The "!" goes, the cat lets out a sigh (its head sinks a row) and
+    settles back down."""
+    calm = _at("alert", bang=1)
+    return single_track(_at("alert"), [
+        Frame({}, 120, template=_at("alert")),
+        Frame({}, 300, template=calm),
+        Frame({}, 400, template=_sink_head(calm, neck_row=14)),
+        Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
+def _double_take() -> Animation:
+    """Into confused from anywhere: a squint one way, then the other, the
+    ear comes up, and the "?" floats up beside the cat."""
+    puzzled = _at("confused")
+    blank = [row.replace("?", ".") for row in puzzled]
+    return single_track(blank, [
+        Frame({}, 180, template=blank),
+        Frame({}, 160, template=[row.replace("?", ".") for row in _at("confused", eyes=1)]),
+        Frame({}, 120, template=blank),
+        Frame({}, 160, template=[row.replace("?", ".") for row in _at("confused", eyes=3)]),
+        Frame({}, 200, template=[row.replace("?", ".") for row in _at("confused", ears=1)]),
+        Frame({}, 90, template=_rise(blank, puzzled, 4)),
+        Frame({}, 90, template=_rise(blank, puzzled, 2)),
+        Frame({}, 100, template=puzzled),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2300,8 +2544,21 @@ def _permission_to_urgent() -> Animation:
 
 TRANSITIONS[("permission", "permission_urgent")] = _permission_to_urgent()
 TRANSITIONS[("thinking", "working")] = _thinking_to_working()
+TRANSITIONS[("working", "thinking")] = _working_to_thinking()
+TRANSITIONS[(ANY_STATE, "working")] = _settle_at_keys()
+TRANSITIONS[(ANY_STATE, "permission")] = _raise_pennant()
+TRANSITIONS[(ANY_STATE, "question")] = _pop_question()
 TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
+TRANSITIONS[("panicked", "flopped")] = _panicked_to_flopped()
+TRANSITIONS[("stirring", "waking")] = _stirring_to_waking()
+for _mood in _ACTIVATE_SETTLES_INTO:
+    TRANSITIONS[("activate", _mood)] = _activate_settles(_mood)
+del _mood
+TRANSITIONS[("activate", "sleeping")] = _activate_dozes_off()
+TRANSITIONS[("interested", "alert")] = _interested_to_alert()
+TRANSITIONS[("alert", "interested")] = _alert_to_interested()
+TRANSITIONS[(ANY_STATE, "confused")] = _double_take()
 _check_transitions()

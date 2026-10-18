@@ -423,8 +423,8 @@ def test_the_pane_plays_the_variant_of_its_spot(monkeypatch):
     assert pane.spot == "on_top"
     _draw(pane, "a")
     assert pane.playing == pane.target == "a@on_top" and pane._current_state == "a"
-    _draw(pane, "working")  # no variant: the plain state
-    assert pane.playing == pane.target == "working"
+    _draw(pane, "thinking")  # no variant: the plain state
+    assert pane.playing == pane.target == "thinking"
     inside, _ = _spot_pane(monkeypatch, "inside")
     _draw(inside, "a")
     assert inside.playing == "a"
