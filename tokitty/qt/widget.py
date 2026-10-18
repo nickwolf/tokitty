@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import sys
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
@@ -20,14 +21,16 @@ from tokitty import sprites
 from tokitty import theme as T
 from tokitty.customize import Customization
 from tokitty.display import reset_phrase
+from tokitty.hover import limit_hover_text
 from tokitty.menu import MenuItem
 from tokitty.qt import macos, position
+from tokitty.qt.hover import HOVER_DELAY_MS, HoverPopup, PopupLook, place_popup
 from tokitty.qt.menu import render_menu
 from tokitty.qt.pane import QtPane, fit_tag, monotonic_ms, palette_signature  # noqa: F401
 from tokitty.sprite_raster import raster_rgba
 from tokitty.sprites import known_grids
 from tokitty.wander import Pose
-from tokitty.usage_display import ROW_SLOTS
+from tokitty.usage_display import ROW_SLOTS, hover_text as model_hover_text
 
 MODEL_NAME_MAX = 14       # ui.render_usage's fit_tag limit
 CAT_CANVAS_SIZE = 112     # ui.CAT_CANVAS_SIZE
@@ -100,6 +103,17 @@ class TokittyQtWidget(QWidget):
         self._always_on_top = True  # starts on, never persisted
         self._drag: Optional[Tuple[int, int]] = None
         self._native_done = False  # _after_native_window ran for this native window
+        # Hover popup (#130). The target is (pane index, "cat" | "limits" | "models",
+        # row key); _hover_pos is the pointer in window coordinates while it is
+        # inside the window. Set before the panes, whose callbacks read them.
+        self.hover_delay_ms = HOVER_DELAY_MS
+        self._hover_pos: Optional[Tuple[float, float]] = None
+        self._hover_target: Optional[tuple] = None
+        self._hover_win: Optional[HoverPopup] = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(self._hover_fire)
+        self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -178,6 +192,7 @@ class TokittyQtWidget(QWidget):
         if len(homes) != len(self.panes):
             raise ValueError("need one home per pane")
         old = self.window_layout
+        self.hover_cancel()
         self.homes = list(homes)
         self.window_layout = T.layout_window(self.homes, wander=self.theme.cat.wander)
         self.setFixedSize(*self.window_layout.size)
@@ -199,6 +214,7 @@ class TokittyQtWidget(QWidget):
         ties them to the theme, and the window only rebuilds when they or the
         wander setting moved its layout."""
         self.theme = theme
+        self.hover_cancel()
         self._layouts.clear()
         self._images.clear()
         self._shadow_images.clear()
@@ -265,6 +281,7 @@ class TokittyQtWidget(QWidget):
         self._prune_images()
         self._sync_mask()
         self._arm()
+        self._hover_recheck()
 
     def _prune_images(self) -> None:
         live_grids = {id(grid) for pane in self.panes
@@ -293,6 +310,7 @@ class TokittyQtWidget(QWidget):
                 self.update(self._cat_dirty_rect(index, pane))
         self._sync_mask()
         self._arm()
+        self._hover_recheck()
 
     def _cat_dirty_rect(self, index: int, pane: QtPane):
         """Window rect (device-independent) a cat frame change can touch: what
@@ -848,6 +866,8 @@ class TokittyQtWidget(QWidget):
         menu.exec(global_pos)
 
     def mousePressEvent(self, event) -> None:
+        # A drag or a menu starts here; neither wants a popup in the way.
+        self.hover_cancel()
         if is_context_press(event.button(), event.modifiers()):
             pos = event.position()
             menu = self.context_menu(self.pane_index_at(pos.x(), pos.y()))
@@ -862,11 +882,196 @@ class TokittyQtWidget(QWidget):
         if self._drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
             g = event.globalPosition().toPoint()
             self.move(g.x() - self._drag[0], g.y() - self._drag[1])
+        elif self._drag is None:
+            pos = event.position()
+            self._hover_pos = (pos.x(), pos.y())
+            self._hover_update(self.hover_target_at(pos.x(), pos.y()), moved=True)
+
+    def leaveEvent(self, event) -> None:
+        self.hover_cancel()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self.hover_cancel()
+        super().hideEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._drag is not None and event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
             self.save_position()
+
+    # ---- hover popup ----------------------------------------------------
+
+    def hover_target_at(self, x: float, y: float) -> Optional[tuple]:
+        """What a window point is over: (pane, "cat", None) on the cat's drawn
+        pixels, else (pane, "limits", "session" | "weekly") or (pane,
+        "models", row) on a row's block, else None. The cat is tested first
+        because it is painted over the card, and against its alpha so the
+        transparent corners of its frame are nothing."""
+        for i in reversed(range(len(self.panes))):
+            if self._cat_hit(i, self.panes[i], x, y):
+                return (i, "cat", None)
+        for i, pane in enumerate(self.panes):
+            ox, oy = self.window_layout.pane_origins[i]
+            lx, ly = x - ox, y - oy
+            if not (0 <= lx < T.CARD_WIDTH and 0 <= ly < T.CARD_HEIGHT):
+                continue
+            for kind, key, rect in self._row_rects(i, pane):
+                if rect.x <= lx < rect.right and rect.y <= ly < rect.bottom:
+                    return (i, kind, key)
+        return None
+
+    def _cat_hit(self, index: int, pane: QtPane, x: float, y: float) -> bool:
+        rect = self._cat_rect(index, pane)
+        if not rect.contains(x, y):
+            return False
+        dpr = self.devicePixelRatioF()
+        image = self._cat_image(pane.grid(), pane.palette, pane.palette_key, dpr, pane.pose.mirrored)
+        px, py = int((x - rect.x()) * dpr), int((y - rect.y()) * dpr)
+        if not (0 <= px < image.width() and 0 <= py < image.height()):
+            return False
+        return image.pixelColor(px, py).alpha() > 0
+
+    def _row_rects(self, index: int, pane: QtPane):
+        """(kind, key, card rect) for each hoverable row: the whole block, from
+        its label row to its reset line, or a model's name row to its bar."""
+        layout = self._layout_for(pane._view_mode, self.homes[index])
+        if pane._view_mode == "models":
+            view = pane.usage_view
+            count = len(view.rows) if view is not None else 0
+            groups = [("models", i, (f"model_name_{i}", f"model_value_{i}", f"model_bar_{i}"))
+                      for i in range(min(count, ROW_SLOTS))]
+        else:
+            groups = [("limits", name, (f"{name}_label", f"{name}_percent", f"{name}_bar", f"{name}_reset"))
+                      for name in ("session", "weekly")]
+        for kind, key, names in groups:
+            parts = [layout.get(n) for n in names]
+            if kind == "limits" and key in layout.lines:
+                parts.append(layout.lines[key])
+            parts = [r for r in parts if r is not None]
+            if not parts:
+                continue
+            x0, y0 = min(r.x for r in parts), min(r.y for r in parts)
+            x1, y1 = max(r.right for r in parts), max(r.bottom for r in parts)
+            yield kind, key, T.Rect(x0, y0, x1 - x0, y1 - y0)
+
+    def hover_text_for(self, target: tuple) -> Optional[str]:
+        index, kind, key = target
+        pane = self.panes[index]
+        if kind == "cat":
+            return pane.cat_hover_text()
+        if kind == "limits":
+            hover = pane.limits_hover
+            if hover is None:
+                return None
+            return limit_hover_text(getattr(hover, key), datetime.now(timezone.utc))
+        view = pane.usage_view
+        if view is None or key >= len(view.rows) or view.rows[key].detail is None:
+            return None
+        return model_hover_text(view.rows[key].detail, view.window_text)
+
+    def hover_popup(self) -> Optional[HoverPopup]:
+        """The popup while it is on screen, else None."""
+        return self._hover_win if self._hover_win is not None and self._hover_win.isVisible() else None
+
+    def _hover_active(self) -> bool:
+        return self._hover_timer.isActive() or self.hover_popup() is not None
+
+    def hover_cancel(self) -> None:
+        self._hover_timer.stop()
+        self._hover_target = None
+        self._hover_pos = None
+        if self._hover_win is not None:
+            self._hover_win.hide()
+
+    def _hover_update(self, target: Optional[tuple], moved: bool) -> None:
+        """The pointer is over `target` (None for nothing). A move restarts the
+        delay; a frame recheck leaves a running one alone."""
+        if target is None:
+            self._hover_timer.stop()
+            self._hover_target = None
+            if self._hover_win is not None:
+                self._hover_win.hide()
+            return
+        shown = self.hover_popup() is not None
+        if target != self._hover_target:
+            self._hover_target = target
+            if shown:
+                self._hover_show(target)
+                return
+            self._hover_timer.start(self.hover_delay_ms)
+        elif not shown and moved:
+            self._hover_timer.start(self.hover_delay_ms)
+        elif shown:
+            self._hover_refresh(target)
+
+    def _hover_recheck(self) -> None:
+        """Called on every cat frame and pane render: the cat may have walked
+        out from under a still pointer, a row may have changed. Only does
+        anything while a popup is up or about to be."""
+        if self._hover_pos is not None and self._hover_active():
+            self._hover_update(self.hover_target_at(*self._hover_pos), moved=False)
+
+    def _hover_fire(self) -> None:
+        target = self._hover_target
+        if target is None or self._hover_pos is None:
+            return
+        if self.hover_target_at(*self._hover_pos) != target:
+            self._hover_update(self.hover_target_at(*self._hover_pos), moved=True)
+            return
+        self._hover_show(target)
+
+    def _popup_look(self, index: int) -> PopupLook:
+        pane = self.panes[index]
+        style = self._style_for(index, pane)
+        card = self.theme.card
+        fonts = self._font_set()
+        refined = card.design == "refined"
+        return PopupLook(
+            background=style.background, foreground=style.foreground, dim=style.dim,
+            border_color=card.border_color, border_width=card.border_width,
+            radius=card.radius, first_font=fonts[4] if refined else fonts[1], font=fonts[2],
+        )
+
+    def _hover_target_rect(self, target: tuple) -> Tuple[int, int, int, int]:
+        """The popup sits beside this window rect: a row's height across the
+        card's width (so it clears the card), or the cat's drawn rectangle,
+        widened to the card while the cat is inside it."""
+        index, kind, key = target
+        ox, oy = self.window_layout.pane_origins[index]
+        if kind == "cat":
+            r = self._cat_rect(index, self.panes[index])
+            card = QRectF(ox, oy, T.CARD_WIDTH, T.CARD_HEIGHT)
+            if r.intersects(card):
+                # Sitting on the card: clear the whole card, not just the cat.
+                r = r.united(card)
+            return round(r.x()), round(r.y()), round(r.width()), round(r.height())
+        rect = next(r for k, kk, r in self._row_rects(index, self.panes[index]) if (k, kk) == (kind, key))
+        return ox, oy + rect.y, T.CARD_WIDTH, rect.h
+
+    def _hover_show(self, target: tuple) -> None:
+        text = self.hover_text_for(target)
+        if text is None:
+            self._hover_update(None, moved=False)
+            return
+        if self._hover_win is None:
+            self._hover_win = HoverPopup()
+        popup = self._hover_win
+        popup.set_content(text, self._popup_look(target[0]))
+        x, y, w, h = self._hover_target_rect(target)
+        top_left = self.mapToGlobal(QPoint(x, y))
+        area = self._area_at((top_left.x(), top_left.y()))
+        px, py = place_popup((popup.width(), popup.height()), (top_left.x(), top_left.y(), w, h), area)
+        popup.move(px, py)
+        popup.show()
+
+    def _hover_refresh(self, target: tuple) -> None:
+        """Same target, new numbers: keep the popup where it is."""
+        text = self.hover_text_for(target)
+        if text is None:
+            self._hover_update(None, moved=False)
+        elif text != self._hover_win.text:
+            self._hover_win.set_content(text, self._popup_look(target[0]))
 
     def closeEvent(self, event) -> None:
         # The frameless, focusless widget has no close button, but an OS-level

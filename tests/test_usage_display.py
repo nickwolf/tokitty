@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tokitty.usage_display import ROW_SLOTS, build_view, fold, format_tokens, window_label
+from tokitty.usage_display import ROW_SLOTS, build_view, fold, format_tokens, hover_text, window_label
 from tokitty.usage_scan import (
     STATUS_OK,
     STATUS_PARTIAL,
@@ -185,3 +185,59 @@ def test_an_unpriced_row_never_makes_the_rates_look_old():
     breakdown = UsageBreakdown(STATUS_OK, "7d", NOW, models=(row,), total_tokens=1_000,
                                unpriced_models=("codex-auto-review",), scanned_at=datetime(2030, 1, 1, tzinfo=timezone.utc))
     assert "old" not in build_view(breakdown).status_text
+
+
+# ---- hover detail ------------------------------------------------------------
+
+def full_model(name, cost):
+    return ModelUsage(model=name, input_tokens=120_000, output_tokens=45_000,
+                      cache_read_tokens=1_800_000, cache_write_5m_tokens=60_000,
+                      cache_write_1h_tokens=30_000, cost_usd=cost)
+
+
+def test_a_row_hovers_with_both_readouts_whichever_the_card_shows():
+    models = [full_model("claude-opus-4-6", 12.4), model("claude-sonnet-5", 7.6, tokens=1000)]
+    for readout in ("cost", "tokens"):
+        view = build_view(breakdown(models), readout)
+        top = next(r for r in view.rows if r.label == "opus-4-6")
+        text = hover_text(top.detail, view.window_text)
+        lines = text.split("\n")
+        assert lines[0] == "Opus 4.6 (7d)" or lines[0].endswith("(7d)")
+        assert "$12.40" in lines[1] and "2.1M tokens" in lines[1]
+        assert lines[2] == "in 120.0K \u00b7 out 45.0K"
+        assert lines[3] == "cache read 1.8M \u00b7 cache write 90.0K"
+
+
+def test_the_share_is_of_the_rows_total_in_the_cards_readout():
+    models = [model("claude-opus-5", 6.0), model("claude-sonnet-5", 4.0)]
+    view = build_view(breakdown(models), "cost")
+    assert "60% of total" in hover_text(view.rows[0].detail, view.window_text)
+    assert "40% of total" in hover_text(view.rows[1].detail, view.window_text)
+
+
+def test_an_unknown_cost_reads_as_dashes():
+    view = build_view(breakdown([model("mystery-1", None, tokens=500)]))
+    assert hover_text(view.rows[0].detail, "7d").split("\n")[1].startswith("-- \u00b7 500 tokens")
+
+
+def test_the_other_row_hovers_with_the_summed_numbers():
+    models = [full_model(f"claude-m{i}", float(5 - i)) for i in range(5)]
+    view = build_view(breakdown(models))
+    other = view.rows[-1].detail
+    assert other.label == "Other" and other.model_count == 3
+    assert other.input_tokens == 3 * 120_000 and other.cache_write_tokens == 3 * 90_000
+    assert other.cost_usd == pytest.approx(3.0 + 2.0 + 1.0)
+    assert hover_text(other, "7d").split("\n")[0] == "Other (3 models, 7d)"
+
+
+def test_a_partly_unpriced_other_row_is_marked_as_a_lower_bound():
+    models = [model("a", 5.0), model("b", 4.0), model("c", 3.0), model("d", None, tokens=10)]
+    other = build_view(breakdown(models)).rows[-1].detail
+    assert other.cost_is_partial
+    assert ">= $3.00" in hover_text(other, "7d")
+
+
+def test_detail_does_not_take_part_in_row_equality():
+    a = build_view(breakdown([model("claude-opus-5", 3.0)])).rows[0]
+    b = build_view(breakdown([model("claude-opus-5", 3.0, tokens=1)])).rows[0]
+    assert a == b

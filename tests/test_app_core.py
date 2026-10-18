@@ -9,11 +9,12 @@ from tokitty.accounts import Account
 from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
 from tokitty.api import UsageSnapshot
-from tokitty.app_core import PaneUpdate, build_units, make_onboarder, step_unit
 from tokitty.behaviour import Drives, drives
-from tokitty.burn import BurnTracker
+from tokitty.app_core import PaneUpdate, _limits_hover_for, build_units, make_onboarder, step_unit
+from tokitty.burn import PACE_CAPS, PACE_UNKNOWN, PACE_WONT_CAP, BurnTracker, Pace
 from tokitty.customize import Customization, load_customization, save_customization
 from tokitty.display import format_reset_day, format_reset_time
+from tokitty.hover import LimitHover, LimitsHover
 from tokitty.poller import PollResult
 from tokitty.providers import get_provider
 from tokitty.startup import ONBOARDING_MODELS_AUTOSELECT
@@ -136,6 +137,10 @@ def test_step_unit_limits_ok(events):
         "hint_text": None,
         "dimmed": False,
         "projection_text": None,
+        "hover": LimitsHover(
+            session=LimitHover("Session", "session", 40.0, RESETS, False, Pace(PACE_UNKNOWN)),
+            weekly=LimitHover("Week", "weekly", 20.0, WEEKLY_RESETS, False, Pace(PACE_UNKNOWN)),
+        ),
         "tool_label": "",
         "accent": False,
         "drives": Drives(),
@@ -197,6 +202,7 @@ def test_step_unit_stale_token_without_history(events):
         "dimmed": True,
         "stale_text": None,
         "projection_text": None,
+        "hover": None,
         "tool_label": "",
         "accent": False,
         "drives": Drives(),
@@ -482,3 +488,45 @@ def test_step_unit_without_time_of_day_has_plain_drives(events, view):
     unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
     update = _step(unit, events, usage_state=_usage_state(view=view), tz=_MEXICO)
     assert update.kwargs["drives"] == Drives()
+
+
+# ---- limits hover ------------------------------------------------------------
+
+def _burning(*, start_pct=10.0, end_pct=40.0):
+    tracker = BurnTracker()
+    for offset, pct in ((0, start_pct), (600, end_pct)):
+        tracker.add(UsageSnapshot(
+            session_pct=pct, session_resets_at=RESETS, weekly_pct=20.0,
+            weekly_resets_at=WEEKLY_RESETS, limits=[], fetched_at=NOW + timedelta(seconds=offset)))
+    return tracker, NOW + timedelta(seconds=600)
+
+
+def test_limits_hover_carries_the_raw_values_and_a_pace_per_bar():
+    tracker, now = _burning()
+    hover = _limits_hover_for(_snapshot(), tracker, {"dimmed": False, "stale_text": None}, now)
+    assert hover.session.pace.status == PACE_CAPS
+    assert hover.weekly.pace.status == PACE_WONT_CAP
+    assert (hover.session.resets_at, hover.weekly.resets_at) == (RESETS, WEEKLY_RESETS)
+    assert (hover.session.title, hover.weekly.title) == ("Session", "Week")
+    assert not hover.session.capped and not hover.weekly.capped
+
+
+@pytest.mark.parametrize("display", [{"dimmed": True}, {"stale_text": "as of 4:12 PM"}])
+def test_limits_hover_drops_the_pace_for_dimmed_or_stale_numbers(display):
+    tracker, now = _burning()
+    hover = _limits_hover_for(_snapshot(), tracker, display, now)
+    assert hover.session.pace == Pace(PACE_UNKNOWN) and hover.weekly.pace == Pace(PACE_UNKNOWN)
+
+
+def test_limits_hover_marks_the_capped_bar():
+    from tokitty.api import LimitInfo
+
+    capped = LimitInfo(kind="session", percent=100.0, severity="exceeded", resets_at=RESETS, is_active=True)
+    snapshot = UsageSnapshot(session_pct=100.0, session_resets_at=RESETS, weekly_pct=20.0,
+                             weekly_resets_at=WEEKLY_RESETS, limits=[capped], fetched_at=NOW)
+    hover = _limits_hover_for(snapshot, BurnTracker(), {}, NOW)
+    assert hover.session.capped and not hover.weekly.capped
+
+
+def test_limits_hover_is_none_without_a_snapshot():
+    assert _limits_hover_for(None, BurnTracker(), {}, NOW) is None
