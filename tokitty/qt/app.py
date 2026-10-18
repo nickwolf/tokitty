@@ -49,6 +49,7 @@ def apply_customization(pane, custom) -> None:
         session_bar=custom.overrides.get("session_bar", ""),
         weekly_bar=custom.overrides.get("weekly_bar", ""),
         colorway=custom.colorway, pattern=custom.pattern, tail=custom.tail,
+        personality=custom.personality,
     )
 
 

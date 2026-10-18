@@ -525,7 +525,9 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     display["projection_text"] = _projection_text_for(unit["burn"], display, now)
     activity = unit["watcher"].get_latest()
 
-    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None)
+    custom = customization_store.get(unit["key"])
+    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None,
+                        custom.personality if custom else "balanced")
     if usage_state["view"] == "models":
         args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
         update = PaneUpdate("models", {**args, "drives": cat_drives})

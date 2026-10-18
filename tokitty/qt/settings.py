@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from tokitty.qt import macos
 from tokitty import diagnostics, sprites, theme as T
 from tokitty.app_version import version_text
+from tokitty.behaviour import PERSONALITIES
 from tokitty.display import PROVIDER_SEPARATOR, bar_color
 from tokitty.qt.kit import Kit, SpritePreview, hbox, set_text_color, text, vbox
 from tokitty.qt.poller import QtPoller
@@ -351,6 +352,13 @@ class LookTab(_Tab):
         left_col.addWidget(make_row)
         left_col.addSpacing(8)
 
+        personality_row, personality_layout = _hrow()
+        self.personality = self._choice(
+            personality_layout, "Personality", list(PERSONALITIES),
+            lambda i, name: host.on_customization_changed(i, "personality", name))
+        left_col.addWidget(personality_row)
+        left_col.addSpacing(8)
+
         sits = text("Cat sits", color=MUTED, font=FONT_SMALL)
         sits.setContentsMargins(0, 0, 0, 4)
         left_col.addWidget(sits)
@@ -476,6 +484,7 @@ class LookTab(_Tab):
             Qt.CursorShape.PointingHandCursor if editable else Qt.CursorShape.ArrowCursor)
         self.pattern.set(pane._pattern)
         self.tail.set(pane._tail)
+        self.personality.set(pane._personality)
         for _caption, field in _COLOR_ROWS:
             self.color_rows[field].set(host.pane_color(index, field))
         count = len(host.panes)

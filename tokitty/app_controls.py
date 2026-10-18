@@ -11,9 +11,10 @@ from typing import Callable, Optional, Tuple
 
 from tokitty import colorways, sprites, theme
 from tokitty.app_core import initial_label
+from tokitty.behaviour import PERSONALITIES
 from tokitty.customize import load_customization, save_customization_entry
 from tokitty.ntfy import send_test as ntfy_send_test
-from tokitty.randomize import random_look
+from tokitty.randomize import random_look, random_personality
 from tokitty.settings import load_settings, update_settings
 
 
@@ -96,12 +97,16 @@ def make_controls(
         elif field == "tail":
             if value in sprites.TAIL_STYLES:
                 custom = replace(custom, tail=value)
+        elif field == "personality":
+            if value in PERSONALITIES:
+                custom = replace(custom, personality=value)
         elif field == "cat_home":
             if value in theme.SPOTS:
                 custom = replace(custom, cat_home=value)
         elif field == "randomize":
             cw, pat = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
-            custom = replace(custom, colorway=cw, pattern=pat)
+            custom = replace(custom, colorway=cw, pattern=pat,
+                             personality=random_personality())
         elif field == "reset":
             custom = replace(custom, overrides={})
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill", "session_bar",
