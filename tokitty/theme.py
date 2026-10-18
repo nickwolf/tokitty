@@ -99,6 +99,7 @@ class TextStyle:
 class CatStyle:
     shadow: bool = True         # the ground shadow under the cat
     wander: bool = True         # the cat now and then strolls along the card's top edge (#22)
+    time_of_day: bool = True    # the cat naps more at night and roams more in the morning (#138)
 
 
 @dataclass(frozen=True)
@@ -303,7 +304,11 @@ def _clean_text(raw: dict, d: TextStyle, bad: Optional[set] = None) -> TextStyle
 
 def _clean_cat(raw: dict, d: CatStyle, bad: Optional[set] = None) -> CatStyle:
     pick = _Picker(raw, "cat", set() if bad is None else bad)
-    return CatStyle(shadow=pick.bool("shadow", d.shadow), wander=pick.bool("wander", d.wander))
+    return CatStyle(
+        shadow=pick.bool("shadow", d.shadow),
+        wander=pick.bool("wander", d.wander),
+        time_of_day=pick.bool("time_of_day", d.time_of_day),
+    )
 
 
 def _validate(raw, fallback: Theme) -> Tuple[Theme, set]:

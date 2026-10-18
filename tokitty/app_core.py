@@ -17,6 +17,7 @@ from typing import Callable, List, Optional, Tuple
 from tokitty.accounts import Account
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
+from tokitty.behaviour import drives
 from tokitty.burn import BurnTracker
 from tokitty.credentials import CredentialLoader
 from tokitty.customize import SINGLE_KEY, Customization, save_customization
@@ -480,10 +481,12 @@ def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None])
 
 
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
-              notes_removed: set, onboard: Callable, now: datetime) -> Optional[PaneUpdate]:
+              notes_removed: set, onboard: Callable, now: datetime,
+              time_of_day: bool = False, tz=None) -> Optional[PaneUpdate]:
     """One tick for one unit: read the workers, run the side effects, update the
     unit's bookkeeping and say what to draw. None means there is no poll result
-    yet, so the pane stays as it is."""
+    yet, so the pane stays as it is. With `time_of_day` the cat's drives follow
+    the hour of `now` in `tz` (None is local time)."""
     latest = unit["poller"].get_latest()
     breakdown = unit["usage"].get_latest()
     onboard(unit, latest, breakdown)
@@ -499,13 +502,16 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     display["projection_text"] = _projection_text_for(unit["burn"], display, now)
     activity = unit["watcher"].get_latest()
 
+    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None)
     if usage_state["view"] == "models":
-        update = PaneUpdate("models", _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp()))
+        args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
+        update = PaneUpdate("models", {**args, "drives": cat_drives})
     else:
         pose = resolve_pose(display["state"], activity, now.timestamp())
         display["state"] = pose["sprite_state"]
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]
+        display["drives"] = cat_drives
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
     return update

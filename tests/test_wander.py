@@ -254,3 +254,175 @@ def test_wanderer_starts_at_home_drawn_as_its_state_there():
     w = Wanderer("on_top", True, random.Random(0), "content")
     assert w.pose == Pose("on_top", 8, False) and w.lying
     assert w.animation() == "content@on_top"
+
+
+# ---- golden: default Drives is today's behaviour (#138) -----------------------
+
+def _golden_sequence(home, roams):
+    roam = _roam(home, roams=roams)
+    seq = [(0, roam.player.state, roam.pose)]
+    while True:
+        due = roam.next_due()
+        if due is None or due > 4 * 3600_000:
+            return roam, seq
+        roam.tick(due)
+        seq.append((due, roam.player.state, roam.pose))
+
+
+@pytest.mark.parametrize("home, count, digest, prefix", [
+    ("inside", 37170, "8f72afd610cd9182",
+     ["jump_up", "walk_start", "walk", "walk_stop", "lie_down", "sit_up"]),
+    ("on_top", 36887, "797c5f70598225c5",
+     ["sit_up", "walk_start", "walk", "walk_stop", "lie_down", "sit_up"]),
+])
+def test_default_drives_replay_the_seeded_sequence_exactly(home, count, digest, prefix):
+    """Recorded before Drives existed: seed 0, content, four simulated hours."""
+    import hashlib
+    _, seq = _golden_sequence(home, True)
+    assert len(seq) == count
+    assert hashlib.sha256(repr(seq).encode()).hexdigest()[:16] == digest
+    assert _moves(_run(_roam(home), 4 * 3600_000))[:6] == prefix
+
+
+def test_a_non_roaming_cat_with_default_drives_has_no_rest():
+    roam = _roam(roams=False)
+    assert roam.wanderer.due is None
+    assert roam.wanderer.rest_until is None
+
+
+# ---- time of day: nap, stay, trip (#138) ---------------------------------------
+
+from tokitty.behaviour import Drives, drives  # noqa: E402
+
+HOUR = 3600_000
+
+
+def _driven(home="inside", state="content", seed=0, roams=True, d=Drives()):
+    """Drives are in place before the first rest is drawn."""
+    roam = Roam(home, roams, random.Random(seed), 0)
+    roam.set_drives(d, 0)
+    roam.set_state(state, 0, transition=False)
+    return roam
+
+
+def _nap(roam, limit=HOUR):
+    """Tick until the cat dozes off; returns the time."""
+    while True:
+        now = roam.next_due()
+        assert now is not None and now < limit
+        roam.tick(now)
+        if roam.wanderer.nap_until is not None:
+            return now
+
+
+def _count(roam, hours):
+    """(trips, naps) over the time: a trip is a jump_up/walk_start from rest
+    at home, a nap a switch to the sleeping art while logically content."""
+    trips = naps = 0
+    was_away = was_napping = False
+    until = hours * HOUR
+    while True:
+        due = roam.next_due()
+        if due is None or due > until:
+            return trips, naps
+        roam.tick(due)
+        w = roam.wanderer
+        if w.away and not was_away:
+            trips += 1
+        was_away = w.away
+        if w.nap_until is not None and not was_napping:
+            naps += 1
+        was_napping = w.nap_until is not None
+
+
+def test_night_makes_fewer_trips_and_more_naps_than_day():
+    night = _count(_driven(d=drives(2)), 8)
+    day = _count(_driven(d=drives(12)), 8)
+    assert night[0] < day[0]
+    assert night[1] > day[1]
+
+
+def test_a_nap_shows_the_sleeping_art_and_ends_in_the_content_art():
+    roam = _driven(d=Drives(trip=0.0, nap=1.0))
+    w = roam.wanderer
+    now = _nap(roam)
+    assert w.nap_until is not None and w.state == "content"
+    assert roam.player.target == "sleeping"
+    assert w.due == w.nap_until
+    assert 180_000 <= w.nap_until - now <= 600_000
+    roam.tick(w.nap_until)
+    assert w.nap_until is None
+    assert roam.player.target == "content"
+
+
+def test_an_alert_ends_a_nap_at_once():
+    roam = _driven(d=Drives(trip=0.0, nap=1.0))
+    now = _nap(roam)
+    assert roam.wanderer.nap_until is not None
+    roam.set_state("alert", now + 1_000)
+    assert roam.wanderer.nap_until is None
+    assert roam.wanderer.animation() == "alert"
+    assert roam.player.target == "alert"
+
+
+def test_the_same_state_during_a_nap_leaves_it_alone():
+    roam = _driven(d=Drives(trip=0.0, nap=1.0))
+    now = _nap(roam)
+    w = roam.wanderer
+    until, due = w.nap_until, w.due
+    for t in (1_000, 2_000, 3_000):
+        roam.set_state("content", now + t)
+    assert (w.nap_until, w.due) == (until, due)
+    assert roam.player.target == "sleeping"
+
+
+def test_an_interested_cat_never_naps():
+    roam = _driven(state="interested", d=Drives(trip=0.0, nap=1.0))
+    assert _count(roam, 4) == (0, 0)   # no trip weight, and no nap for it
+    roam = _driven(state="interested", d=Drives(trip=1.0, nap=50.0))
+    assert _count(roam, 4)[1] == 0
+
+
+def test_a_cat_that_cannot_roam_naps_in_place_and_never_leaves():
+    roam = _driven(roams=False, d=drives(2))
+    assert roam.wanderer.due is not None
+    trips, naps = _count(roam, 8)
+    assert trips == 0 and naps > 0
+
+
+def test_a_non_roaming_cat_gets_a_rest_when_a_nap_becomes_possible():
+    roam = _driven(roams=False)
+    assert roam.wanderer.due is None
+    roam.set_drives(drives(2), 1_000)
+    assert roam.wanderer.due is not None
+    roam.set_drives(Drives(), 2_000)  # a nap already planned is not cut short
+    assert roam.wanderer.due is not None
+
+
+def test_a_nap_on_top_swaps_loaf_for_loaf_and_wakes_as_content():
+    roam = _driven(home="on_top", d=Drives(trip=0.0, nap=1.0))
+    w = roam.wanderer
+    _nap(roam)
+    assert roam.player.target == "sleeping@on_top" and w.nap_until is not None
+    roam.tick(w.nap_until)
+    assert roam.player.target == "content@on_top" and w.nap_until is None
+
+
+def test_set_drives_mid_rest_keeps_the_current_deadline():
+    roam = _driven()
+    due = roam.wanderer.due
+    roam.set_drives(drives(2), 5_000)
+    roam.set_drives(drives(12), 6_000)
+    assert roam.wanderer.due == due
+
+
+def test_set_drives_survives_set_home():
+    roam = _driven(d=drives(2))
+    roam.set_home("on_top", True, 1_000)
+    assert roam.wanderer.drives == drives(2)
+
+
+def test_pace_scales_the_rest():
+    slow = _driven(d=Drives(pace=2.0))
+    plain = _driven()
+    assert slow.wanderer.due == 2 * plain.wanderer.due
