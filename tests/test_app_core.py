@@ -10,7 +10,7 @@ from tokitty.accounts import Account
 from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
 from tokitty.api import UsageSnapshot
-from tokitty.behaviour import Drives, drives
+from tokitty.behaviour import drives
 from tokitty.app_core import PaneUpdate, _limits_hover_for, build_units, make_onboarder, step_unit
 from tokitty.burn import PACE_CAPS, PACE_UNKNOWN, PACE_WONT_CAP, BurnTracker, Pace
 from tokitty.customize import Customization, load_customization, save_customization
@@ -144,7 +144,7 @@ def test_step_unit_limits_ok(events):
         ),
         "tool_label": "",
         "accent": False,
-        "drives": Drives(),
+        "drives": drives(None),
     })
     assert [e[0] for e in events] == ["onboard", "note_write"]
     assert events[0][1:] == (poll, None)
@@ -169,7 +169,7 @@ def test_step_unit_models_view(events):
         "driving_tag": "",
         "tool_label": "",
         "accent": False,
-        "drives": Drives(),
+        "drives": drives(None),
     })
     assert unit["last_good"] is poll
     assert len(unit["burn"].samples) == 1
@@ -206,7 +206,7 @@ def test_step_unit_stale_token_without_history(events):
         "hover": None,
         "tool_label": "",
         "accent": False,
-        "drives": Drives(),
+        "drives": drives(None),
     })
     assert unit["last_good"] is None
     assert unit["burn"].samples == []
@@ -488,7 +488,7 @@ def test_step_unit_drives_follow_the_hour_in_the_given_zone(events, view):
 def test_step_unit_without_time_of_day_has_plain_drives(events, view):
     unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
     update = _step(unit, events, usage_state=_usage_state(view=view), tz=_MEXICO)
-    assert update.kwargs["drives"] == Drives()
+    assert update.kwargs["drives"] == drives(None)
 
 
 @pytest.mark.parametrize("view", ["limits", "models"])

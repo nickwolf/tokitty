@@ -316,8 +316,9 @@ def _nap(roam, limit=HOUR):
 
 
 def _count(roam, hours):
-    """(trips, naps) over the time: a trip is a jump_up/walk_start from rest
-    at home, a nap a switch to the sleeping art while logically content."""
+    """(trips, naps) over the time: a trip is setting out along the top edge
+    (a scratch at home is no trip), a nap a switch to the sleeping art while
+    logically content."""
     trips = naps = 0
     was_away = was_napping = False
     until = hours * HOUR
@@ -327,9 +328,9 @@ def _count(roam, hours):
             return trips, naps
         roam.tick(due)
         w = roam.wanderer
-        if w.away and not was_away:
+        if w.stops and not was_away:
             trips += 1
-        was_away = w.away
+        was_away = bool(w.stops)
         if w.nap_until is not None and not was_napping:
             naps += 1
         was_napping = w.nap_until is not None
