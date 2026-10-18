@@ -6,9 +6,10 @@ from tokitty import behaviour
 from tokitty.behaviour import Drives, drives
 
 
-def test_none_is_the_plain_cat():
-    assert drives(None) == Drives()
+def test_none_is_the_plain_cat_that_plays():
+    assert drives(None) == replace(Drives(), play=0.3)
     assert Drives().trip == 1.0 and Drives().nap == 0.0 and Drives().pace == 1.0
+    assert Drives().play == 0.0
 
 
 @pytest.mark.parametrize("hour, band", [
@@ -17,10 +18,10 @@ def test_none_is_the_plain_cat():
 ])
 def test_band_edges(hour, band):
     expected = {
-        "night": Drives(trip=0.3, nap=3.0, stay=1.0, pace=1.6),
-        "morning": Drives(trip=1.5, nap=0.2, stay=0.0, pace=0.7),
-        "day": Drives(trip=1.0, nap=0.5, stay=0.0, pace=1.0),
-        "evening": Drives(trip=0.8, nap=1.0, stay=0.5, pace=1.2),
+        "night": Drives(trip=0.3, nap=3.0, stay=1.0, play=0.1, pace=1.6),
+        "morning": Drives(trip=1.5, nap=0.2, stay=0.0, play=0.4, pace=0.7),
+        "day": Drives(trip=1.0, nap=0.5, stay=0.0, play=0.3, pace=1.0),
+        "evening": Drives(trip=0.8, nap=1.0, stay=0.5, play=0.3, pace=1.2),
     }[band]
     assert drives(hour) == expected
 
@@ -42,7 +43,6 @@ def test_pace_is_clamped(monkeypatch):
 def test_balanced_is_the_band_unchanged_at_every_hour():
     for hour in [None, *range(24)]:
         assert drives(hour, "balanced") == drives(hour)
-    assert drives(None) == Drives()
 
 
 def test_unknown_personality_is_balanced():
@@ -55,7 +55,7 @@ def test_unknown_personality_is_balanced():
     ("curious", dict(trip=1.6, nap=.6, stay=.5, play=1.0, pace=.9), (2, 4)),
 ])
 def test_personality_scales_the_evening_band(name, mult, stops):
-    base = Drives(trip=0.8, nap=1.0, stay=0.5, play=0.0, pace=1.2)
+    base = Drives(trip=0.8, nap=1.0, stay=0.5, play=0.3, pace=1.2)
     got = drives(20, name)
     for field, factor in mult.items():
         assert getattr(got, field) == pytest.approx(getattr(base, field) * factor)

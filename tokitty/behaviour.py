@@ -6,7 +6,7 @@ Drives() is the cat as it was before any of this existed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Tuple
 
 # Bounds on `pace`, the idle-CPU budget: a longer rest is cheaper, a shorter
@@ -20,18 +20,21 @@ class Drives:
     trip: float = 1.0               # weight of a stroll along the top edge
     nap: float = 0.0                # weight of dozing off where it is
     stay: float = 0.0               # weight of simply resting on
-    play: float = 0.0               # reserved, not read yet
+    play: float = 0.0               # weight of a scratch (#124)
     pace: float = 1.0               # scales every rest span (>1 is slower)
     stops: Tuple[int, int] = (1, 3)  # stops per trip, as a randint range
 
 
 # (first hour, drives) per band of local time, each running to the next start.
 _BANDS = (
-    (6, Drives(trip=1.5, nap=0.2, stay=0.0, pace=0.7)),    # morning
-    (10, Drives(trip=1.0, nap=0.5, stay=0.0, pace=1.0)),   # day
-    (18, Drives(trip=0.8, nap=1.0, stay=0.5, pace=1.2)),   # evening
-    (23, Drives(trip=0.3, nap=3.0, stay=1.0, pace=1.6)),   # night, until 6
+    (6, Drives(trip=1.5, nap=0.2, stay=0.0, play=0.4, pace=0.7)),    # morning
+    (10, Drives(trip=1.0, nap=0.5, stay=0.0, play=0.3, pace=1.0)),   # day
+    (18, Drives(trip=0.8, nap=1.0, stay=0.5, play=0.3, pace=1.2)),   # evening
+    (23, Drives(trip=0.3, nap=3.0, stay=1.0, play=0.1, pace=1.6)),   # night, until 6
 )
+# With the clock off: the plain cat, but it plays. Drives() itself keeps play
+# at 0, the behaviour from before any of this existed.
+_NO_CLOCK = replace(Drives(), play=0.3)
 
 PERSONALITIES = ("balanced", "lazy", "playful", "curious")
 
@@ -46,10 +49,10 @@ _PERSONALITY = {
 
 def drives(hour: Optional[int], personality: str = "balanced") -> Drives:
     """The drives for a local hour (0-23) as a personality sets them; None for
-    the hour, the setting being off, is the plain cat's baseline. An unknown
-    personality is balanced."""
+    the hour, the setting being off, is the plain cat's baseline (which plays).
+    An unknown personality is balanced."""
     if hour is None:
-        row = Drives()
+        row = _NO_CLOCK
     else:
         row = _BANDS[-1][1]            # before 6 is still the night before
         for start, band in _BANDS:

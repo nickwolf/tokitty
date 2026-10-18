@@ -651,9 +651,6 @@ _PLACEMENTS = {
     "on_top": Placement((8, -SPRITE_H), False),
 }
 
-# The cat scratches the near edge of the stats column from inside the card.
-SCRATCH_SPOTS = frozenset({"inside", "inside_right"})
-
 
 def placement(spot: str) -> Placement:
     return _PLACEMENTS[spot]

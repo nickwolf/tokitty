@@ -407,7 +407,7 @@ import itertools  # noqa: E402
 
 from tokitty.customize import Customization, effective_palette  # noqa: E402
 from tokitty.theme import (  # noqa: E402
-    SCRATCH_SPOTS, SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
+    SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
     hit_region, layout_window, placement, reachable_spots, resolve_home,
     resolve_pane_style, snap, top_edge_track,
 )
@@ -423,7 +423,6 @@ def test_placements():
     assert placement("inside") == Placement((8, 12), False)
     assert placement("on_top") == Placement((8, -104), False)
     assert placement("inside_right") == Placement((180, 12), True)
-    assert SCRATCH_SPOTS == {"inside", "inside_right"}
     assert set(T.SPOTS) == {"inside", "inside_right", "on_top"}
 
 

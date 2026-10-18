@@ -559,11 +559,12 @@ def _handoff_standing(unit: dict, latest: PollResult, display: dict, custom) -> 
 
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
               notes_removed: set, onboard: Callable, now: datetime,
-              time_of_day: bool = False, tz=None) -> Optional[PaneUpdate]:
+              time_of_day: bool = False, tz=None, wander: bool = True) -> Optional[PaneUpdate]:
     """One tick for one unit: read the workers, run the side effects, update the
     unit's bookkeeping and say what to draw. None means there is no poll result
     yet, so the pane stays as it is. With `time_of_day` the cat's drives follow
-    the hour of `now` in `tz` (None is local time)."""
+    the hour of `now` in `tz` (None is local time). Without `wander` the cat
+    holds still apart from naps, so it never plays (#124)."""
     latest = unit["poller"].get_latest()
     breakdown = unit["usage"].get_latest()
     unit["handoff_standing"] = None
@@ -583,6 +584,8 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     custom = customization_store.get(unit["key"])
     cat_drives = drives(now.astimezone(tz).hour if time_of_day else None,
                         custom.personality if custom else "balanced")
+    if not wander:
+        cat_drives = replace(cat_drives, play=0.0)
     if usage_state["view"] == "models":
         args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
         update = PaneUpdate("models", {**args, "drives": cat_drives})

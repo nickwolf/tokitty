@@ -316,8 +316,9 @@ def _nap(roam, limit=HOUR):
 
 
 def _count(roam, hours):
-    """(trips, naps) over the time: a trip is a jump_up/walk_start from rest
-    at home, a nap a switch to the sleeping art while logically content."""
+    """(trips, naps) over the time: a trip is setting out along the top edge
+    (a scratch at home is no trip), a nap a switch to the sleeping art while
+    logically content."""
     trips = naps = 0
     was_away = was_napping = False
     until = hours * HOUR
@@ -327,9 +328,9 @@ def _count(roam, hours):
             return trips, naps
         roam.tick(due)
         w = roam.wanderer
-        if w.away and not was_away:
+        if w.stops and not was_away:
             trips += 1
-        was_away = w.away
+        was_away = bool(w.stops)
         if w.nap_until is not None and not was_napping:
             naps += 1
         was_napping = w.nap_until is not None
@@ -426,6 +427,78 @@ def test_pace_scales_the_rest():
     slow = _driven(d=Drives(pace=2.0))
     plain = _driven()
     assert slow.wanderer.due == 2 * plain.wanderer.due
+
+
+# ---- play: scratching (#124) ---------------------------------------------------
+
+from tokitty.wander import PLAY_MOVES  # noqa: E402
+
+PLAY = Drives(trip=0.0, play=1.0)
+
+
+@pytest.mark.parametrize("home", ["inside", "inside_right", "on_top"])
+def test_play_scratches_and_the_cat_ends_where_it_started(home):
+    roam = _driven(home, d=PLAY)
+    start = _drawn(roam)
+    shown = _run(roam, 2 * HOUR)
+    played = [m for m in _moves(shown) if m.startswith("scratch")]
+    assert played and set(played) <= set(PLAY_MOVES[home])
+    assert roam.pose == home_pose(home)
+    assert _drawn(roam) == start
+
+
+def test_an_inside_cat_plays_every_scratch_and_on_top_only_the_stretch():
+    inside = _moves(_run(_driven("inside", d=PLAY), 6 * HOUR))
+    assert {"scratch", "scratch_stats", "scratch_edge"} <= set(inside)
+    on_top = _moves(_run(_driven("on_top", d=PLAY), 6 * HOUR))
+    assert set(on_top) == {"sit_up", "scratch", "lie_down"}
+
+
+def test_a_loafing_cat_sits_up_to_scratch_and_lies_down_after():
+    moves = _moves(_run(_driven("on_top", d=PLAY), HOUR))
+    i = moves.index("scratch")
+    assert moves[i - 1:i + 2] == ["sit_up", "scratch", "lie_down"]
+
+
+def test_scratch_stats_heads_for_the_stats_on_either_side():
+    for home, toward in (("inside", 1), ("inside_right", -1)):
+        roam = _driven(home, d=PLAY)
+        start = _drawn(roam)[0]
+        xs = [xy[0] for name, _, xy, _ in _run(roam, 6 * HOUR) if name == "move:scratch_stats"]
+        assert xs and max((x - start) * toward for x in xs) == 3 * sprites.SCALE
+
+
+def test_a_cat_that_cannot_roam_plays_in_place():
+    roam = _driven(roams=False, d=PLAY)
+    assert roam.wanderer.due is not None
+    shown = _run(roam, 2 * HOUR)
+    assert all(pose == home_pose("inside") for _, pose, _, _ in shown)
+    assert any(m.startswith("scratch") for m in _moves(shown))
+
+
+def _stop_scratches(play, seeds=range(6)):
+    found = 0
+    for seed in seeds:
+        moves = _moves(_run(_driven(seed=seed, d=Drives(play=play)), 2 * HOUR))
+        found += sum(1 for a, b in zip(moves, moves[1:]) if (a, b) == ("walk_stop", "scratch"))
+    return found
+
+
+def test_a_stop_on_a_trip_sometimes_has_a_scratch_but_never_with_no_play():
+    assert _stop_scratches(1e-9) > 0
+    assert _stop_scratches(0.0) == 0
+
+
+def test_an_alert_cuts_a_scratch_and_a_nap_drops_one_still_to_come():
+    roam = _driven(d=PLAY)
+    while not roam.player.state.startswith("move:scratch"):
+        roam.tick(roam.next_due())
+    roam.set_state("alert", roam.next_due())
+    assert roam.wanderer.move is None and roam.pose == home_pose("inside")
+    w = _driven(d=PLAY).wanderer
+    w.play = "scratch"
+    w.set_state("sleeping", 0)
+    assert w.play is None
 
 
 def test_a_lazy_cat_makes_fewer_trips_than_a_balanced_one_at_night():
