@@ -86,3 +86,13 @@ def _no_real_state_dir_for_hooks(monkeypatch, tmp_path_factory):
 
     state = tmp_path_factory.mktemp("hooks-state")
     monkeypatch.setattr(hooks_install, "state_dir_path", lambda: state)
+
+
+@pytest.fixture(autouse=True)
+def _keep_stderr_untee(monkeypatch):
+    """run_qt puts a StderrTee on sys.stderr; undo it so it never wraps a
+    stream pytest closes after the test."""
+    import sys
+
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    yield

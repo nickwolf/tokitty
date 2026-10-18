@@ -123,6 +123,67 @@ def test_surprise_toggle_writes_the_setting_and_notifies(make_world):
     assert len(calls) == 1
 
 
+def _write_accounts(world):
+    import json
+
+    (world.state_dir / "accounts.json").write_text(json.dumps({"accounts": [
+        {"name": "alice-work", "config_dir": str(world.state_dir / "alice-dir")},
+        {"name": "zed-codex", "config_dir": str(world.state_dir / "zed-dir"),
+         "provider": "codex"}]}))
+
+
+def test_copy_diagnostics_button_sits_below_the_toggles(make_world):
+    world = make_world()
+    general = open_window(world).tabs["general"]
+    button = general.diagnostics_button
+    assert button.text() == "Copy diagnostics"
+    assert general.diagnostics_hint.text() == qs.DIAGNOSTICS_HINT
+    assert general.frame.isAncestorOf(button)
+    assert button.mapTo(general.frame, QPoint(0, 0)).y() > \
+        general.toggles["aot"].mapTo(general.frame, QPoint(0, 0)).y()
+
+
+def test_copy_diagnostics_puts_a_clean_report_on_the_clipboard(make_world, monkeypatch):
+    from tokitty import accounts_rows
+    from tokitty.hooks_install import HookStatus
+
+    world = make_world(customs=[Customization(label="Nick's laptop"), Customization()])
+    _write_accounts(world)
+    (world.state_dir / "customization.json").write_text(
+        '{"alice-work": {"label": "Nick\'s laptop"}}')
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir",
+                        lambda *a, **k: HookStatus("installed", "alice-work detail"))
+    copied = []
+    monkeypatch.setattr(qs, "_copy_text", copied.append)
+    general = open_window(world).tabs["general"]
+
+    general.diagnostics_button.click()
+    assert general.diagnostics_hint.text() == "Collecting…"
+    assert spin_events(lambda: general.diagnostics_hint.text() == "Copied")
+
+    assert len(copied) == 1
+    report = copied[0]
+    assert report.splitlines()[0].startswith("tokitty: ")
+    assert "accounts: 2 (claude 1, codex 1)" in report
+    assert "1. claude: installed" in report and "2. codex: installed" in report
+    assert "screens: " in report and "qt: " in report
+    for leaked in ("alice", "zed-codex", "Nick's laptop", str(world.state_dir)):
+        assert leaked not in report
+    # a refresh puts the hint back
+    world.host.notify_state_changed()
+    assert general.diagnostics_hint.text() == qs.DIAGNOSTICS_HINT
+
+
+def test_copy_diagnostics_reports_a_clipboard_failure(make_world, monkeypatch):
+    def boom(_text):
+        raise RuntimeError("no clipboard")
+
+    monkeypatch.setattr(qs, "_copy_text", boom)
+    general = open_window(make_world()).tabs["general"]
+    general.diagnostics_button.click()
+    assert spin_events(lambda: "Could not copy" in general.diagnostics_hint.text())
+
+
 def test_general_has_no_transparency_row_and_hides_missing_seams(make_world):
     world = make_world()
     window = open_window(world)
