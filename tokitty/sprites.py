@@ -2417,6 +2417,42 @@ def _stirring_to_waking() -> Animation:
     ], loop_from=None)
 
 
+def _activate_settles(to_state: str) -> Animation:
+    """Out of activate into the mood after it: the sparks drift out and fade,
+    one last happy squint, and the cat settles into `to_state`."""
+    return single_track(_at("activate"), [
+        Frame({}, 160, template=_at("activate", sparks=1)),
+        Frame({}, 160, template=_at("activate", sparks=2)),
+        Frame({}, 300, template=_at("activate", sparks=3, eyes=1)),
+        Frame({}, 100, template=_at(to_state)),
+    ], loop_from=None)
+
+
+def _activate_dozes_off() -> Animation:
+    """Out of activate into sleeping, taking its time: the sparks fade, the
+    ears relax, two slow drowsy blinks, one eye lingers open, then the head
+    nods onto the chest and the first Z drifts up."""
+    settle = list(_activate_settles("content").tracks[0].frames[:-1])
+    asleep = _at("sleeping", zzz=1)
+    return single_track(_at("activate"), settle + [
+        Frame({}, 600, template=_at("content")),
+        Frame({}, 450, template=_at("content", eyes=1)),
+        Frame({}, 700, template=_at("content")),
+        Frame({}, 800, template=_at("content", eyes=1)),
+        Frame({}, 300, template=_at("content")),
+        Frame({}, 900, template=_at("sleeping", eyes=1, zzz=1)),
+        Frame({}, 700, template=asleep),
+        Frame({}, 600, template=_sink_head(asleep)),
+        Frame({}, 500, template=_at("sleeping", zzz=2)),
+        Frame({}, 100, template=_at("sleeping")),
+    ], loop_from=None)
+
+
+# The moods activate settles into at once (sleeping dozes off slowly,
+# panicked has its own startle).
+_ACTIVATE_SETTLES_INTO = ("content", "interested", "alert")
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2477,4 +2513,8 @@ TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 TRANSITIONS[("panicked", "flopped")] = _panicked_to_flopped()
 TRANSITIONS[("stirring", "waking")] = _stirring_to_waking()
+for _mood in _ACTIVATE_SETTLES_INTO:
+    TRANSITIONS[("activate", _mood)] = _activate_settles(_mood)
+del _mood
+TRANSITIONS[("activate", "sleeping")] = _activate_dozes_off()
 _check_transitions()
