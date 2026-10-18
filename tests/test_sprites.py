@@ -531,7 +531,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "77232efc51b5347d56c3d61156e263bb2ca4eab3edec6bb3ed9a49118b360958"
+    assert digest == "d3951688c0724a9ede8eba5226baab1067a8b121239e6db2087523fd467ff1db"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

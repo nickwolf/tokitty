@@ -2364,7 +2364,7 @@ def _panicked_to_flopped() -> Animation:
         Frame({}, 140, template=_lean(spent, -1)),
         Frame({}, 120, template=_lean(spent, 3)),
         Frame({}, 80, template=_lean(spent, 7)),
-        Frame({}, 70, template=_lean(_drop(spent, 4), 9)),
+        Frame({}, 70, template=_lean(_drop(spent, 2), 9)),
         Frame({}, 140, template=_ROLL_CURL),
         Frame({}, 160, template=roll[1]),
         Frame({}, 100, template=_at("flopped")),
