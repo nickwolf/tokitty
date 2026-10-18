@@ -2479,6 +2479,191 @@ def _stirring_to_waking() -> Animation:
     ], loop_from=None)
 
 
+# scratch (#124): the cat stretches out low facing the way it walks, rump and
+# tail up, and rakes whatever it stands on (the card's top edge, or the card
+# inside) with its front paws in turn, bright claw marks where they drag.
+# The walking cat's head, lowered to between the shoulders.
+_SCRATCH_BODY = {8: (4, 9), 9: (3, 11), 10: (2, 12), 11: (2, 13), 12: (2, 14),
+                 13: (2, 15), 14: (2, 16), 15: (2, 17), 16: (2, 18), 17: (2, 18),
+                 18: (2, 18), 19: (3, 19), 20: (3, 19), 21: (3, 19), 22: (12, 19)}
+_SCRATCH_TAIL = ((8, 3), (7, 2), (6, 2), (5, 2), (4, 2), (3, 3), (2, 4), (1, 5))
+
+
+def _scratch_frame(near: int = 0, far: int = 0) -> List[str]:
+    """The reach with the near (front row 23-24) and far (row 25) forepaws
+    pulled back `near` / `far` cells from full stretch, claw marks ahead of a
+    pulled paw."""
+    rows = [["."] * 28 for _ in range(26)]
+    for r, (first, last) in _SCRATCH_BODY.items():
+        if r >= 17:  # under the hips only the haunch and the chest are body
+            belly = 7 + 2 * (r - 17)
+            for c in range(first, last + 1):
+                if c < 7 or c >= belly:
+                    rows[r][c] = "o"
+        else:
+            rows[r][first:last + 1] = ["o"] * (last - first + 1)
+    for r, c in ((9, 6), (9, 7), (10, 9), (10, 10), (11, 5), (11, 6), (12, 11), (12, 12)):
+        rows[r][c] = "s"
+    # hind legs: the far one shaded behind the near one
+    for r in range(17, 25):
+        rows[r][6] = rows[r][7] = "O"
+        rows[r][3] = rows[r][4] = "o"
+    rows[25][3] = rows[25][4] = "m"
+    rows[25][6] = rows[25][7] = "m"
+    # the head, from the walking cat, eight rows lower and two columns back
+    for r in range(3, 13):
+        for c in range(16, 28):
+            ch = _WALK_STAND[r][c]
+            if ch != "." and c - 2 >= 0:
+                rows[r + 9][c - 2] = ch
+    # forelegs out along the ground: far (shaded) on row 25, near on rows 23-24
+    far_end = 25 - far
+    for c in range(14, far_end):
+        rows[25][c] = "O"
+    rows[25][far_end] = rows[25][far_end + 1] = "m"
+    near_end = 23 - near
+    for r in (23, 24):
+        for c in range(13, near_end):
+            rows[r][c] = "o"
+    rows[24][near_end] = rows[24][near_end + 1] = "m"
+    rows[23][near_end] = "o"
+    if near:
+        for c in range(near_end + 3, min(28, near_end + 3 + near), 2):
+            rows[24][c] = "B"
+    if far:
+        for c in range(far_end + 3, min(28, far_end + 3 + far), 2):
+            rows[25][c] = "B"
+    for i, (r, c) in enumerate(_SCRATCH_TAIL):
+        rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
+    return ["".join(row) for row in rows]
+
+
+_SCRATCH_REACH = _scratch_frame()
+
+
+MOVES["scratch"] = single_track(_hop_frame(), [
+    Frame({}, 150, template=_hop_frame()),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 140, template=_WALK_STAND),
+    Frame({}, 400, template=_SCRATCH_REACH),
+    Frame({}, 110, template=_scratch_frame(near=4)),
+    Frame({}, 110, template=_SCRATCH_REACH),
+    Frame({}, 110, template=_scratch_frame(far=4)),
+    Frame({}, 110, template=_SCRATCH_REACH),
+    Frame({}, 110, template=_scratch_frame(near=4)),
+    Frame({}, 110, template=_SCRATCH_REACH),
+    Frame({}, 110, template=_scratch_frame(far=4)),
+    Frame({}, 300, template=_SCRATCH_REACH),
+    Frame({}, 140, template=_WALK_STAND),
+    Frame({}, 120, template=_hop_frame(pose="crouch")),
+    Frame({}, 250, template=_hop_frame()),
+], loop_from=None)
+
+
+# scratch_stats / scratch_edge (#124): a cat inside the card steps over to the
+# stats column, or to the card's own near side, rears up and claws that edge,
+# front paws dragging down in turn. One drawing facing left, turned around for
+# the stats; inside_right mirrors the whole move.
+_SCRATCH_UP_BODY = {8: (9, 15), 9: (8, 15), 10: (8, 15), 11: (7, 15), 12: (7, 16),
+                    13: (7, 16), 14: (8, 16), 15: (8, 17), 16: (8, 17), 17: (8, 18),
+                    18: (8, 18), 19: (8, 19), 20: (8, 19), 21: (9, 18), 22: (10, 17)}
+_SCRATCH_UP_TAIL = ((21, 17), (22, 18), (23, 19), (23, 21), (23, 23), (22, 24),
+                    (21, 25), (20, 25))
+_SCRATCH_UP_STRIPES = ((11, 13), (11, 14), (13, 14), (13, 15), (15, 15), (15, 16),
+                       (17, 16), (17, 17))
+
+
+def _scratch_upright(near: int = 0, far: int = 0) -> List[str]:
+    """Up on the hind legs facing left, forepaws on the grid's left edge: the
+    near paw at rows 11-12 and the far one at 14-15, each dragged `near` /
+    `far` rows down with claw marks above it."""
+    rows = [["."] * 28 for _ in range(26)]
+
+    def put(r: int, c: int, ch: str) -> None:
+        if 0 <= r < 26 and 0 <= c < 28:
+            rows[r][c] = ch
+
+    for i, (r, c) in enumerate(_SCRATCH_UP_TAIL):
+        ch = "Y" if i // 2 % 2 == 0 else "y"
+        put(r, c, ch)
+        put(r, c + 1, ch)
+    for r, (first, last) in _SCRATCH_UP_BODY.items():
+        for c in range(first, last + 1):
+            put(r, c, "o")
+        put(r, last, "O")
+    for r in range(12, 21):  # the belly, on the side toward the card's edge
+        for c in range(_SCRATCH_UP_BODY[r][0], _SCRATCH_UP_BODY[r][0] + 3):
+            put(r, c, "u")
+    for r, c in _SCRATCH_UP_STRIPES:
+        put(r, c, "s")
+    for r in (23, 24):
+        for c, ch in ((9, "o"), (10, "o"), (15, "O"), (16, "O")):
+            put(r, c, ch)
+    for c in (8, 9, 10, 15, 16, 17):
+        put(25, c, "m")
+    # the walking cat's head, turned to face the edge and raised
+    for r in range(3, 13):
+        for c in range(16, 28):
+            if _WALK_STAND[r][c] != ".":
+                put(r - 3, 31 - c, _WALK_STAND[r][c])
+    # forelegs out to the edge, the far (shaded) one under the near one
+    for shoulder_r, shoulder_c, paw_r, ch in ((15, 10, 14 + far, "O"), (13, 9, 11 + near, "o")):
+        for c in range(2, shoulder_c + 1):
+            r = round(paw_r + (shoulder_r - paw_r) * (c - 2) / (shoulder_c - 2))
+            put(r, c, ch)
+            put(r + 1, c, ch)
+        for r in (paw_r, paw_r + 1):
+            put(r, 0, "m")
+            put(r, 1, "m")
+    for r in range(11, 11 + near, 2):
+        put(r, 0, "B")
+    for r in range(14, 14 + far, 2):
+        put(r, 0, "B")
+    return ["".join(row) for row in rows]
+
+
+def _facing_left(grid: List[str]) -> List[str]:
+    return [row[::-1] for row in grid]
+
+
+def _upright_scratch(toward_stats: bool) -> Animation:
+    """Walk to a vertical edge, rear up and claw it in four strokes, walk
+    back. Toward the stats: three steps right put the forepaws (columns 26-27)
+    flush with the stats column's left edge, STATS_X (132 = 8 + 3 * 4 + 28 * 4).
+    Otherwise two steps left put them on the card's own side (0 = 8 - 2 * 4)."""
+    turn = (lambda g: g) if toward_stats else _facing_left
+    back = _facing_left if toward_stats else (lambda g: g)
+    up = (lambda g: _facing_left(g)) if toward_stats else (lambda g: g)
+    sign = 1 if toward_stats else -1
+    steps = (("contact", "up"), ("pass", "sway"), ("contact2", "up"))[:3 if toward_stats else 2]
+    at = (sign * len(steps), 0)
+    reach = up(_scratch_upright())
+    frames = [
+        Frame({}, 150, template=_hop_frame()),
+        Frame({}, 120, template=_hop_frame(pose="crouch")),
+        Frame({}, 140, template=turn(_WALK_STAND)),
+    ]
+    frames += [Frame({}, 130, template=turn(_walk_frame(feet, tail)), offset=(sign * i, 0))
+               for i, (feet, tail) in enumerate(steps, 1)]
+    frames += [Frame({}, 120, template=_drop(reach, 2), offset=at),
+               Frame({}, 350, template=reach, offset=at)]
+    for paw in ("near", "far", "near", "far"):
+        frames += [Frame({}, 110, template=up(_scratch_upright(**{paw: 3})), offset=at),
+                   Frame({}, 110, template=reach, offset=at)]
+    frames[-1] = Frame({}, 300, template=reach, offset=at)
+    frames.append(Frame({}, 120, template=_drop(reach, 2), offset=at))
+    frames += [Frame({}, 130, template=back(_walk_frame(feet, tail)), offset=(sign * i, 0))
+               for i, (feet, tail) in reversed(list(enumerate(steps[:-1], 1)))]
+    frames += [Frame({}, 140, template=back(_WALK_STAND)),
+               Frame({}, 120, template=_hop_frame(pose="crouch")),
+               Frame({}, 250, template=_hop_frame())]
+    return single_track(_hop_frame(), frames, loop_from=None)
+
+
+MOVES["scratch_stats"] = _upright_scratch(toward_stats=True)
+MOVES["scratch_edge"] = _upright_scratch(toward_stats=False)
+
+
 def _activate_settles(to_state: str) -> Animation:
     """Out of activate into the mood after it: the sparks drift out and fade,
     one last happy squint, and the cat settles into `to_state`."""
