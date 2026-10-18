@@ -192,7 +192,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
     }
 
 
-def _usage_render_args(unit, latest, breakdown, activity, usage_state) -> dict:
+def _usage_render_args(unit, latest, breakdown, activity, usage_state, now: Optional[float] = None) -> dict:
     """Arguments for Pane.render_usage.
 
     Deliberately ignores every FAILED poll result: a non-subscriber must
@@ -213,7 +213,7 @@ def _usage_render_args(unit, latest, breakdown, activity, usage_state) -> dict:
             state = capped.substate
             driving_tag = capped.driving_tag
 
-    pose = resolve_pose(state, activity)
+    pose = resolve_pose(state, activity, now)
     budget = budget_for(
         Settings(usage_budgets=usage_state["budgets"]), unit["key"], usage_state["window"]
     )
@@ -498,9 +498,9 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     activity = unit["watcher"].get_latest()
 
     if usage_state["view"] == "models":
-        update = PaneUpdate("models", _usage_render_args(unit, latest, breakdown, activity, usage_state))
+        update = PaneUpdate("models", _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp()))
     else:
-        pose = resolve_pose(display["state"], activity)
+        pose = resolve_pose(display["state"], activity, now.timestamp())
         display["state"] = pose["sprite_state"]
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]

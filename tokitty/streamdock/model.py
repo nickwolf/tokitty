@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
 from tokitty.activity import SessionView
+from tokitty.pose import prompt_state
 from tokitty.streamdock.pending import PendingRequest
 
 FOCUSED = "focused"
@@ -204,6 +205,7 @@ class DeckModel:
         self._dismissed: Set[SessionRef] = set()
         self._plan: Dict[str, KeySpec] = {}
         self._revision = 0
+        self._now: Optional[float] = None
 
     # inputs
 
@@ -222,7 +224,10 @@ class DeckModel:
         usage: Dict[int, Tuple[float, float, bool]],
         *,
         titles: Optional[Dict[SessionRef, str]] = None,
+        now: Optional[float] = None,
     ) -> None:
+        # Wall-clock seconds, the clock hook timestamps use.
+        self._now = now
         live = {SessionRef(acct, v.session_id): v for acct, views in sessions_by_account.items() for v in views}
         # A dismissal is forgotten when its session ends, or when it asks for permission.
         self._dismissed &= set(live)
@@ -497,7 +502,7 @@ class DeckModel:
         return KeySpec(
             kind,
             ref=ref,
-            state=v.state,
+            state=prompt_state(v.state, v.since, self._now),
             tool_label=v.tool_label,
             title=self._titles.get(ref, ""),
             pending=ref in self._pending,

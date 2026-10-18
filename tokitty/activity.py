@@ -70,6 +70,8 @@ class ActivityView:
     state: str
     tool_label: str = ""
     session_id: str = ""
+    # When the prompt went up (hook ts); None unless permission/question.
+    since: Optional[float] = None
 
 
 @dataclass
@@ -79,6 +81,7 @@ class SessionView:
     tool_label: str
     first_seen: float
     last_ts: float
+    since: Optional[float] = None
 
 
 @dataclass
@@ -91,6 +94,8 @@ class _SessionState:
     tool_label: str = ""
     # "permission" or "question" while a prompt waits on the user, else "".
     overlay: str = ""
+    # Hook ts at which the current overlay went up.
+    overlay_since: Optional[float] = None
     stretch_start: Optional[float] = None
     done_hop_at: Optional[float] = None
 
@@ -175,11 +180,14 @@ class ActivityTracker:
             # question's own Notification carries no tool_name, so it keeps
             # the question up rather than turning it into permission.
             if event == "PermissionRequest":
-                state.overlay = "question" if rec.get("tool_name") in QUESTION_TOOLS else "permission"
+                overlay = "question" if rec.get("tool_name") in QUESTION_TOOLS else "permission"
             elif event == "Notification":
-                state.overlay = state.overlay or "permission"
+                overlay = state.overlay or "permission"
             else:
-                state.overlay = ""
+                overlay = ""
+            if overlay != state.overlay:
+                state.overlay_since = ts if overlay else None
+            state.overlay = overlay
 
             if state.first_seen is None:
                 state.first_seen = ts
@@ -196,7 +204,7 @@ class ActivityTracker:
             # itself is swept at GONE_S (30 min).
             if (now - state.last_ts) >= PERMISSION_STALE_S:
                 return None
-            return ActivityView(state=state.overlay, session_id=session_id)
+            return ActivityView(state=state.overlay, session_id=session_id, since=state.overlay_since)
 
         if state.base_state == "done_hop":
             if state.done_hop_at is not None and (now - state.done_hop_at) < DONE_HOP_S:
@@ -240,6 +248,7 @@ class ActivityTracker:
                     tool_label=view.tool_label if view is not None else "",
                     first_seen=state.first_seen,
                     last_ts=state.last_ts,
+                    since=view.since if view is not None else None,
                 )
             )
         views.sort(key=lambda v: (v.first_seen, v.session_id))

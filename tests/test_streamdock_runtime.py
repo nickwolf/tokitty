@@ -104,6 +104,7 @@ class Harness:
     def __init__(self, tmp_path, **kw):
         self.tmp = tmp_path
         self.now = 100.0
+        self.wall = 1_000_000.0
         self.dirs = {i: tmp_path / f"acct{i}" for i in (0, 1)}
         accounts = [
             AccountInput(i, f"acct{i}", Account(f"acct{i}", f"/cfg{i}"), f"/cfg{i}", self.dirs[i]) for i in (0, 1)
@@ -139,6 +140,7 @@ class Harness:
             worker_factory=worker_factory,
             launch_fn=lambda preset, account: self.launched.append((preset["name"], account.name)),
             monotonic_fn=lambda: self.now,
+            wall_fn=lambda: self.wall,
             list_running_distros_fn=lambda: self.running,
             run_io=lambda job: job(),
         )
@@ -184,6 +186,19 @@ def slots(h, n):
 def decisions(h, i):
     d = h.dirs[i] / "decisions"
     return sorted(json.loads(p.read_text()) for p in d.glob("*.json")) if d.exists() else []
+
+
+def test_key_escalates_on_wall_clock_not_monotonic(h):
+    h.wall = 100.0
+    h.sessions = {0: [SessionView("a", "permission", "", 1.0, 1.0, 100.0)]}
+    slots(h, 1)
+    assert h.spec("k0").state == "permission"
+    h.now += 1000.0  # the monotonic clock is not what the thresholds read
+    h.tick()
+    assert h.spec("k0").state == "permission"
+    h.wall = 135.0
+    h.tick()
+    assert h.spec("k0").state == "permission_urgent"
 
 
 def test_configured():

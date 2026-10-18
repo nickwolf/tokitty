@@ -1353,6 +1353,82 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
     )),
 ))
 
+# permission_urgent (#174): the prompt has waited 30 s. The pennant whips
+# twice as fast, the brows come down (frame 0, so a key or preview reads
+# impatient too), the tail lashes and a hind foot beside the body taps,
+# heel down, toes up.
+_SCOWL_CELLS = {(6, 9): "o", (6, 10): "o", (6, 16): "o", (6, 17): "o"}
+_SCOWL = {**_SCOWL_CELLS, (6, 9): LID_CHAR, (6, 10): LID_CHAR, (7, 11): LID_CHAR,
+          (7, 15): LID_CHAR, (6, 16): LID_CHAR, (6, 17): LID_CHAR}
+_PU_EYES_OPEN = {**_ALERT_EYES_OPEN, **_SCOWL}
+_PU_EYES_LINE = {**_ALERT_EYES_LINE, **_SCOWL}
+_HAUNCH = _cells("o", (23, 6, 7), (24, 5, 8))
+_FOOT_DOWN = {**_HAUNCH, **_cells("o", (25, 5, 9)), **_cells("m", (25, 3, 4))}
+_FOOT_UP = {**_HAUNCH, **_cells("o", (25, 6, 9)), **_cells("m", (24, 3, 4))}
+
+_PU_TMPL, (_PU_W0, _PU_W1, _PU_W2) = _pose_cells(_PM_BASE, _FLAG_WAVES)
+_PU_TMPL, (_PU_OPEN, _PU_LINE) = _pose_cells(_PU_TMPL, [_PU_EYES_OPEN, _PU_EYES_LINE])
+_PU_TMPL, (_PU_FOOT_DOWN, _PU_FOOT_UP) = _pose_cells(_PU_TMPL, [_FOOT_DOWN, _FOOT_UP])
+_PU_TMPL, (_PU_T_NEUTRAL, _PU_T_OUT, _PU_T_UP) = _pose_cells(
+    _PU_TMPL, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP])
+
+PERMISSION_URGENT_ANIMATION = Animation(_PU_TMPL, (
+    Track("flag", (Frame(_PU_W0, 120), Frame(_PU_W1, 120), Frame(_PU_W2, 120), Frame(_PU_W1, 120))),
+    Track("eyes", (
+        Frame({**_PU_OPEN, **_BANG_NOSE}, (2500, 4500)),
+        Frame({**_PU_LINE, **_BANG_NOSE}, 120),
+    )),
+    Track("foot", (
+        Frame(_PU_FOOT_DOWN, (350, 600)),
+        Frame(_PU_FOOT_UP, 110),
+        Frame(_PU_FOOT_DOWN, 110),
+        Frame(_PU_FOOT_UP, 110),
+    )),
+    Track("tail", (
+        Frame(_PU_T_NEUTRAL, (700, 1200)),
+        Frame(_PU_T_OUT, 80),
+        Frame(_PU_T_UP, 100),
+        Frame(_PU_T_OUT, 80),
+    )),
+))
+
+# permission_frantic (#174): still waiting after 3 minutes. Everything from
+# urgent, faster, plus a big red "!" flashing on the free side of the head
+# and an open-mouthed meow now and then.
+_BIG_BANG = ("###", "###", "###", "###", "###", "...", "###")
+_PF_TMPL, (_PF_W0, _PF_W1, _PF_W2) = _pose_cells(_PM_BASE, _FLAG_WAVES)
+_PF_TMPL, (_PF_OPEN, _PF_LINE) = _pose_cells(_PF_TMPL, [_PU_EYES_OPEN, _PU_EYES_LINE])
+_PF_TMPL, (_PF_MOUTH_SHUT, _PF_MOUTH_MEOW) = _pose_cells(_PF_TMPL, [_MOUTH_SHUT, _YAWN_MOUTH])
+_PF_TMPL, (_PF_FOOT_DOWN, _PF_FOOT_UP) = _pose_cells(_PF_TMPL, [_FOOT_DOWN, _FOOT_UP])
+_PF_TMPL, (_PF_T_NEUTRAL, _PF_T_OUT, _PF_T_UP) = _pose_cells(
+    _PF_TMPL, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP])
+_PF_TMPL, (_PF_BANG_HIGH, _PF_BANG_LOW, _PF_BANG_NONE) = _pose_cells(
+    _PF_TMPL, [_glyph("!", 1, 1, *_BIG_BANG), _glyph("!", 2, 1, *_BIG_BANG), {}])
+
+PERMISSION_FRANTIC_ANIMATION = Animation(_PF_TMPL, (
+    Track("flag", (Frame(_PF_W0, 80), Frame(_PF_W1, 80), Frame(_PF_W2, 80), Frame(_PF_W1, 80))),
+    Track("bang", (
+        Frame(_PF_BANG_HIGH, 350),
+        Frame(_PF_BANG_NONE, 150),
+        Frame(_PF_BANG_LOW, 70),
+    )),
+    Track("eyes", (
+        Frame({**_PF_OPEN, **_BANG_NOSE}, (2500, 4500)),
+        Frame({**_PF_LINE, **_BANG_NOSE}, 120),
+    )),
+    Track("mouth", (
+        Frame(_PF_MOUTH_SHUT, (1500, 2500)),
+        Frame(_PF_MOUTH_MEOW, 500),
+    )),
+    Track("foot", (Frame(_PF_FOOT_DOWN, 90), Frame(_PF_FOOT_UP, 90))),
+    Track("tail", (
+        Frame(_PF_T_NEUTRAL, (300, 600)),
+        Frame(_PF_T_OUT, 70),
+        Frame(_PF_T_UP, 80),
+        Frame(_PF_T_OUT, 70),
+    )),
+))
+
 
 # question: Claude Code is asking something. The cat sits up with its head
 # tilted and a speech bubble with a big "?" bobs beside it, apart from the
@@ -1484,6 +1560,8 @@ ANIMATIONS: Dict[str, Animation] = {
     "working": WORKING_ANIMATION,
     "thinking": THINKING_ANIMATION,
     "permission": PERMISSION_ANIMATION,
+    "permission_urgent": PERMISSION_URGENT_ANIMATION,
+    "permission_frantic": PERMISSION_FRANTIC_ANIMATION,
     "question": QUESTION_ANIMATION,
     "done_hop": DONE_HOP_ANIMATION,
 }
@@ -2207,6 +2285,20 @@ def _startle() -> Animation:
     ], loop_from=None)
 
 
+def _permission_to_urgent() -> Animation:
+    """The wait wears thin: the brows lower flat, then pinch into the scowl
+    as the hind leg slides out, and the first tap lands on urgent's frame 0."""
+    flat = {(6, 9): LID_CHAR, (6, 10): LID_CHAR, (6, 16): LID_CHAR, (6, 17): LID_CHAR}
+    leg = {**_cells("o", (23, 7, 7), (24, 6, 8), (25, 6, 9)), (25, 5): "m"}
+    return single_track(_at("permission"), [
+        Frame({}, 200, template=_at("permission")),
+        Frame({}, 160, template=_overlay(_at("permission"), flat)),
+        Frame({}, 120, template=_overlay(_at("permission"), {**_SCOWL, **leg})),
+        Frame({}, 100, template=_at("permission_urgent")),
+    ], loop_from=None)
+
+
+TRANSITIONS[("permission", "permission_urgent")] = _permission_to_urgent()
 TRANSITIONS[("thinking", "working")] = _thinking_to_working()
 TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
