@@ -2371,6 +2371,52 @@ def _panicked_to_flopped() -> Animation:
     ], loop_from=None)
 
 
+# The play bow of a cat stretching awake: head down between front paws
+# pushed out along the ground, rump and tail up, eyes squeezed shut.
+_STRETCH_BOW: List[str] = [
+    "............................",
+    "..........................y.",
+    ".........................yy.",
+    ".........................Y..",
+    "........................YY..",
+    "........................Y...",
+    "...................ooooYY...",
+    ".................ooooooooo..",
+    "....xx......xx..oossoooooo..",
+    "...xxpx...xpxxooooooosooOo..",
+    "...xxpooooopxxooosooooooOo..",
+    "...oooooooooooooooooooooOo..",
+    "...oooosssoooooooooossoOOo..",
+    "..oooooooooooooooooooooOo...",
+    "..oossooooossooooooooooOo...",
+    "..ooooooooooooooooooOooOo...",
+    "..ooo--ooo--oooooooOo.ooo...",
+    "..oooxxxnxxxooooooOo..ooo...",
+    "..ooxxwwwwwxxooooOo...ooo...",
+    "...oxxwwwwwxxooooo....ooo...",
+    "....oxxwwwxxoooo......ooo...",
+    "mmooooooooooooo.......ooo...",
+    "mmooooooooooooo......mmoo...",
+    "............................",
+    "............................",
+    "............................",
+]
+
+
+def _stirring_to_waking() -> Animation:
+    """The cat stretches awake: from lying it pushes its front paws out into
+    a play bow, rump and tail up, then sits up into waking."""
+    return single_track(_at("stirring"), [
+        Frame({}, 200, template=_at("stirring")),
+        Frame({}, 160, template=_drop(_STRETCH_BOW, 1)),
+        Frame({}, 600, template=_STRETCH_BOW),
+        Frame({}, 140, template=_at("stirring")),
+        Frame({}, 110, template=_drop(_at("waking"), 3)),
+        Frame({}, 100, template=_drop(_at("waking"), 1)),
+        Frame({}, 100, template=_at("waking")),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2430,4 +2476,5 @@ TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
 TRANSITIONS[("panicked", "flopped")] = _panicked_to_flopped()
+TRANSITIONS[("stirring", "waking")] = _stirring_to_waking()
 _check_transitions()
