@@ -205,6 +205,7 @@ class QtPane:
         projection_text: Optional[str] = None,
         drives: Drives = Drives(),
         hover=None,
+        handoff_text: Optional[str] = None,
     ) -> None:
         self._roam.set_drives(drives, self._clock())
         self._set_state(state)
@@ -218,7 +219,9 @@ class QtPane:
         self.session_reset_text = session_reset_text
         self.weekly_reset_text = weekly_reset_text
         self.limits_hover = hover
-        self.status_text = resolve_status_text(hint_text, credits_text, projection_text, stale_text)
+        self.status_text = resolve_status_text(
+            hint_text, credits_text, projection_text, stale_text, handoff_text
+        )
         self._finish()
 
     def cat_hover_text(self) -> str:

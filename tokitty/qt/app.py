@@ -18,6 +18,7 @@ from pathlib import Path
 from tokitty.app_core import (
     UI_REFRESH_MS,
     Discovery,
+    apply_handoff,
     build_units,
     make_onboarder,
     make_usage_state,
@@ -540,14 +541,18 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 # Deferred: the box is modal and must not hold up the tick.
                 QTimer.singleShot(0, lambda warnings=hook_warnings: show_warnings(warnings))
             now = datetime.now(timezone.utc)
-            for unit in units:
-                update = step_unit(
+            stepped = [
+                (unit, step_unit(
                     unit, usage_state=usage_state, notifier=notifier,
                     customization_store=customization_store, notes_removed=notes_removed,
                     onboard=maybe_onboard, now=now,
                     time_of_day=widget.theme.cat.time_of_day,
                     wander=widget.theme.cat.wander,
-                )
+                ))
+                for unit in units
+            ]
+            # Hints compare every account, so they need the whole first pass.
+            for (unit, _), update in zip(stepped, apply_handoff(stepped)):
                 if update is not None:
                     getattr(unit["pane"], "render" if update.kind == "limits" else "render_usage")(
                         **update.kwargs
