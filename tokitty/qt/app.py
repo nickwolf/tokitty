@@ -164,6 +164,9 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
 
 
 def run_qt(after_update_token=None, apply_update=False) -> int:
+    from tokitty.diagnostics import install_stderr_tee
+
+    install_stderr_tee()  # first, so Copy diagnostics sees everything printed
     try:
         import PySide6  # noqa: F401
     except ImportError:

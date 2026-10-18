@@ -13,14 +13,15 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+import PySide6
+from PySide6.QtCore import Qt, qVersion
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QColorDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
 )
 
 from tokitty.qt import macos
-from tokitty import sprites, theme as T
+from tokitty import diagnostics, sprites, theme as T
 from tokitty.app_version import version_text
 from tokitty.display import PROVIDER_SEPARATOR, bar_color
 from tokitty.qt.kit import Kit, SpritePreview, hbox, set_text_color, text, vbox
@@ -72,6 +73,20 @@ _TEXT_NAMES = (
 )
 
 OPACITY_HINT = "You'll need to right-click where the widget is to get back here"
+
+
+DIAGNOSTICS_HINT = "For bug reports. Names, paths and tokens are left out."
+
+
+def _copy_text(value: str) -> None:
+    """Put text on the system clipboard. The one clipboard write; tests patch it."""
+    QGuiApplication.clipboard().setText(value)
+
+
+def _screen_facts() -> List[Tuple[int, int, float]]:
+    """(width, height, pixel ratio) per screen: no names, models or serials."""
+    return [(s.geometry().width(), s.geometry().height(), s.devicePixelRatio())
+            for s in QGuiApplication.screens()]
 
 
 def _hrow() -> Tuple[QWidget, QHBoxLayout]:
@@ -193,6 +208,61 @@ class GeneralTab(_Tab):
         if host.on_toggle_surprise is not None and host.surprise_me is not None:
             add("surprise", "Surprise me", "New random cat look at every launch",
                 lambda _v: self.write(host.on_toggle_surprise))
+        self._build_diagnostics()
+
+    def _build_diagnostics(self) -> None:
+        self.mailbox = Mailbox()
+        self._pending = False
+        self._screens: List[Tuple[int, int, float]] = []
+        self.poller = QtPoller(self.owner, self.mailbox, self._on_report,
+                               lambda: self._pending)
+        row, layout = _hrow()
+        row.setContentsMargins(0, 10, 0, 0)
+        self.diagnostics_button = self.kit.button(
+            "Copy diagnostics", "secondary", self._copy_diagnostics, compact=True)
+        layout.addWidget(self.diagnostics_button)
+        layout.addSpacing(10)
+        self.diagnostics_hint = text(DIAGNOSTICS_HINT, color=MUTED, font=FONT_SMALL)
+        layout.addWidget(self.diagnostics_hint, 1)
+        self.add(row)
+
+    def _set_diagnostics_hint(self, message: str, color: str = MUTED) -> None:
+        self.diagnostics_hint.setText(message)
+        set_text_color(self.diagnostics_hint, color)
+
+    def _copy_diagnostics(self) -> None:
+        if self._pending:
+            return
+        self._pending = True
+        self._screens = _screen_facts()  # Qt objects stay on the GUI thread
+        self._set_diagnostics_hint("Collecting…")
+        state_dir = self.host.state_dir
+        probe = getattr(self.host, "running_distros", None)
+
+        def running(name: str) -> bool:
+            return name.casefold() in {d.casefold() for d in probe()}
+
+        run_worker(self.mailbox, "diagnostics",
+                   lambda: diagnostics.read_state(state_dir, running if probe else None))
+        self.poller.start()
+
+    def _on_report(self, _tag: str, ok: bool, value) -> None:
+        self._pending = False
+        if not ok:
+            self._set_diagnostics_hint("Could not collect diagnostics.", WARN)
+            return
+        report = diagnostics.build_report(
+            facts=value, screens=self._screens, qt_version=qVersion(),
+            pyside_version=PySide6.__version__, stderr_lines=diagnostics.stderr_tail())
+        try:
+            _copy_text(report)
+        except Exception:
+            self._set_diagnostics_hint("Could not copy to the clipboard.", WARN)
+            return
+        self._set_diagnostics_hint("Copied")
+
+    def close(self) -> None:
+        self.poller.cancel()
 
     def _tray_available(self) -> bool:
         available = self.host.tray_available
@@ -208,6 +278,8 @@ class GeneralTab(_Tab):
                             ("surprise", host.surprise_me)):
             if key in self.toggles and getter is not None:
                 self.toggles[key].set(getter())
+        if not self._pending:
+            self._set_diagnostics_hint(DIAGNOSTICS_HINT)
 
 
 class LookTab(_Tab):
