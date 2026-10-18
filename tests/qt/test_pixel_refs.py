@@ -19,6 +19,9 @@ pytestmark = pytest.mark.qt
 
 ROOT = Path(__file__).resolve().parents[2]
 MAC = sys.platform == "darwin"
+# The rounded card's antialiased edge comes out 1 level off at a few pixels
+# on the macOS runners (#139); Linux and Windows match exactly.
+MAC_CARD_TOLERANCE = 1
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +44,8 @@ def check(name, rendered):
         stored = pc.load_masks().get(name)
         assert stored is not None, f"no text regions stored for {name}; run: python tests/qt/pixel_check.py update {name}"
         rects = sorted(set(stored) | set(rendered.rects))
-    diff = pc.compare(rendered.img, ref, rects)
+    tolerance = MAC_CARD_TOLERANCE if MAC and name.startswith("card/") else 0
+    diff = pc.compare(rendered.img, ref, rects, tolerance)
     if diff is None:
         return
     out = pc.diff_dir()
@@ -125,3 +129,12 @@ def test_compare_masks_only_the_given_rects():
     assert (diff.count, diff.bbox) == (1, (0, 0, 0, 0))
     assert pc.compare(b, a, [(0, 0, 1, 1)]) is None
     assert pc.compare(b, a, [(1, 0, 4, 2)]).count == 1
+
+
+def test_compare_tolerance_allows_only_small_channel_differences():
+    a = pc.Img(2, 1, bytes([10, 10, 10, 255, 10, 10, 10, 255]))
+    off_by_one = pc.Img(2, 1, bytes([11, 9, 10, 255, 10, 10, 10, 255]))
+    off_by_two = pc.Img(2, 1, bytes([12, 10, 10, 255, 10, 10, 10, 255]))
+    assert pc.compare(off_by_one, a).count == 1
+    assert pc.compare(off_by_one, a, tolerance=1) is None
+    assert pc.compare(off_by_two, a, tolerance=1).count == 1

@@ -14,7 +14,7 @@ These PNGs are what the Qt widget's real paint output must match, pixel for pixe
 
 ## What is masked
 
-macOS rasterizes text differently (CoreText) and nothing changes that, so on macOS every card layout is compared with its text regions masked out. The mask is the union of the regions in `card/masks.json` and the regions the live render recorded. On every system the low_opacity layout is masked the same way, because text over a translucent card differs by up to one level per channel between Intel and AMD CPUs. Everything outside the mask must match exactly, including the cat.
+macOS rasterizes text differently (CoreText) and nothing changes that, so on macOS every card layout is compared with its text regions masked out. The mask is the union of the regions in `card/masks.json` and the regions the live render recorded. On every system the low_opacity layout is masked the same way, because text over a translucent card differs by up to one level per channel between Intel and AMD CPUs. On macOS the card layouts also allow a difference of one level per channel outside the mask, because the rounded card's antialiased edge comes out one level off at a few pixels there (2 to 7 per layout on the macos-latest runner, #139). Everywhere else, everything outside the mask must match exactly, including the cat.
 
 ## Updating a reference
 

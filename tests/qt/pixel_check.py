@@ -144,8 +144,9 @@ def apply_mask(img: Img, rects: Sequence[Rect]) -> bytes:
     return bytes(data)
 
 
-def compare(actual: Img, ref: Img, rects: Sequence[Rect] = ()) -> Optional[Diff]:
-    """None when the two match outside `rects`, else where they differ."""
+def compare(actual: Img, ref: Img, rects: Sequence[Rect] = (), tolerance: int = 0) -> Optional[Diff]:
+    """None when the two match outside `rects`, else where they differ. A pixel
+    whose every channel is within `tolerance` of the reference counts as equal."""
     if (actual.w, actual.h) != (ref.w, ref.h):
         return Diff(0, None, [], [], f"size {actual.w}x{actual.h} against reference {ref.w}x{ref.h}")
     a, b = apply_mask(actual, rects), apply_mask(ref, rects)
@@ -160,10 +161,12 @@ def compare(actual: Img, ref: Img, rects: Sequence[Rect] = ()) -> Optional[Diff]
             continue
         for x in range(actual.w):
             pa, pb = ra[x * 4:x * 4 + 4], rb[x * 4:x * 4 + 4]
-            if pa != pb:
+            if pa != pb and (not tolerance or max(abs(i - j) for i, j in zip(pa, pb)) > tolerance):
                 points.append((x, y))
                 if len(first) < 5:
                     first.append((x, y, pa, pb))
+    if not points:
+        return None
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     return Diff(len(points), (min(xs), min(ys), max(xs), max(ys)), first, points)
 
