@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, fields, replace
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from tokitty import sprites, theme
 from tokitty.app_core import initial_label
@@ -44,6 +44,9 @@ class Controls:
     set_ntfy_value: Callable[[str, str], Optional[str]]
     send_ntfy_test: Callable[[], Optional[str]]
     streamdock_account_toggles: Callable[[], list]
+    # (stored label, harness prefix or None): the part of the name the user
+    # typed, apart from the "claude·" tag the pane adds in a mixed window.
+    pane_name: Callable[[int], Tuple[str, Optional[str]]]
     # None when there is no backend or its state is unreadable; the General
     # tab hides the row then.
     autostart_enabled: Optional[Callable[[], bool]] = None
@@ -113,6 +116,12 @@ def make_controls(
             label = initial_label(unit["account"], custom, unit["tag_kind"])
             unit["pane"].set_appearance(label=label)
         on_layout_changed(pane_index, custom)
+
+    def pane_name(pane_index: int) -> Tuple[str, Optional[str]]:
+        unit = units[pane_index]
+        key = unit["key"]
+        custom = load_customization(state_dir).get(key, customization_store[key])
+        return custom.label or "", unit["tag_kind"]
 
     surprise_state = {"on": settings.surprise_me}
 
@@ -272,6 +281,7 @@ def make_controls(
         set_ntfy_value=set_ntfy_value,
         send_ntfy_test=send_ntfy_test,
         streamdock_account_toggles=streamdock_account_toggles,
+        pane_name=pane_name,
     )
 
     from tokitty.autostart import (

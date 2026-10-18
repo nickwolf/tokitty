@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from tokitty.qt import macos
 from tokitty import sprites, theme as T
 from tokitty.app_version import version_text
-from tokitty.display import bar_color
+from tokitty.display import PROVIDER_SEPARATOR, bar_color
 from tokitty.qt.kit import Kit, SpritePreview, hbox, set_text_color, text, vbox
 from tokitty.qt.poller import QtPoller
 from tokitty.settings_style import (
@@ -136,6 +136,10 @@ class _Tab:
     def refresh(self) -> None:
         pass
 
+    def commit(self) -> None:
+        """Save any edit still sitting in an entry. Called before the pane or
+        tab changes and when the window closes."""
+
     def close(self) -> None:
         """The window is going away: cancel any poll this tab scheduled."""
 
@@ -234,9 +238,15 @@ class LookTab(_Tab):
         caption = text("Name", color=MUTED, font=FONT_SMALL)
         caption.setContentsMargins(0, 0, 0, 4)
         left_col.addWidget(caption)
+        name_row, name_layout = _hrow()
+        # The harness tag the pane adds in a mixed window; not part of the name.
+        self.name_hint = text("", color=MUTED)
+        name_layout.addWidget(self.name_hint)
         holder, self.name_entry = kit.entry()
         holder.setContentsMargins(0, 0, 0, 0)
-        left_col.addWidget(holder)
+        name_layout.addWidget(holder, 1)
+        left_col.addWidget(name_row)
+        self._name_index: Optional[int] = None
         left_col.addSpacing(8)
         self.name_entry.editingFinished.connect(self._save_name)
 
@@ -307,15 +317,20 @@ class LookTab(_Tab):
 
     def _save_name(self) -> None:
         index = self.owner.pane_index
-        pane = self.host.panes[index]
+        raw, kind = self.host.pane_name(index)
         new = self.name_entry.text().strip()
-        if new == (pane._label or ""):
-            return
-        self.write(lambda: self.host.on_customization_changed(index, "label", new))
-        # The write may have resolved the typed name (blank back to the
-        # default); show what the pane now carries even though the entry
-        # still has focus.
-        self.name_entry.setText(self.host.panes[index]._label or "")
+        prefix = f"{kind}{PROVIDER_SEPARATOR}" if kind else ""
+        if prefix and new.startswith(prefix):
+            new = new[len(prefix):].strip()
+        if new != raw:
+            self.write(lambda: self.host.on_customization_changed(index, "label", new))
+        # Show what is stored even though the entry still has focus.
+        self.name_entry.setText(self.host.pane_name(index)[0])
+
+    def commit(self) -> None:
+        # Before the first refresh the entry is empty, not edited.
+        if self._name_index is not None and self.name_entry.text().strip() != self.host.pane_name(self.owner.pane_index)[0]:
+            self._save_name()
 
     def refresh(self) -> None:
         owner, host = self.owner, self.host
@@ -324,8 +339,13 @@ class LookTab(_Tab):
         names = owner.pane_names()
         self.pane_picker.set_choices(names)
         self.pane_picker.set(names[index])
-        if not self.name_entry.hasFocus():
-            self.name_entry.setText(pane._label or "")
+        raw, kind = host.pane_name(index)
+        self.name_hint.setText(f"{kind}{PROVIDER_SEPARATOR}" if kind else "")
+        self.name_hint.setVisible(bool(kind))
+        # A pane switch always refills; an ordinary refresh must not clobber typing.
+        if index != self._name_index or not self.name_entry.hasFocus():
+            self.name_entry.setText(raw)
+        self._name_index = index
         self.colorway.set(pane._colorway)
         self.pattern.set(pane._pattern)
         self.tail.set(pane._tail)
@@ -772,6 +792,9 @@ class SettingsWindow(QWidget):
         self._names: List[str] = []
         self._closed = False
         self.kit.style_window(self)
+        # A press on a NoFocus child (dropdown, rail, blank frame) then takes
+        # focus off an entry, so its editingFinished fires before the click acts.
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setWindowTitle("Tokitty: Settings")
         self.setMinimumSize(BASE_WIDTH, BASE_HEIGHT)
         # Parentless, so it follows the widget's Always in front itself.
@@ -838,7 +861,12 @@ class SettingsWindow(QWidget):
 
     # -- shell ---------------------------------------------------------------
 
+    def _commit(self) -> None:
+        for tab in self.tabs.values():
+            tab.commit()
+
     def _show(self, key: str) -> None:
+        self._commit()
         self.current = key
         self.rail.paint(key)
         for tab_key, tab in self.tabs.items():
@@ -869,6 +897,7 @@ class SettingsWindow(QWidget):
             self.set_pane(names.index(name))
 
     def set_pane(self, index: int) -> None:
+        self._commit()
         self.pane_index = self._clamp(index)
         self.refresh()
 
@@ -898,6 +927,7 @@ class SettingsWindow(QWidget):
         if any(tab.close_blocked() for tab in self.tabs.values()):
             event.ignore()
             return
+        self._commit()
         self._release()
         super().closeEvent(event)
 

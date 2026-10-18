@@ -459,3 +459,16 @@ def test_randomize_and_reset_keep_the_tail(tmp_path, monkeypatch):
     seams.on_customization_changed(0, "reset", None)
     assert world.store["k0"].tail == "ringed"
     assert world.store["k0"].overrides == {}
+
+
+def test_pane_name_returns_the_stored_label_and_the_harness_tag(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.units[1]["tag_kind"] = "codex"
+    seams = world.seams
+    assert seams.pane_name(0) == ("", None)
+    seams.on_customization_changed(1, "label", "sys")
+    # The stored label, not the "codex·sys" the pane shows.
+    assert seams.pane_name(1) == ("sys", "codex")
+    assert world.units[1]["pane"]._label == "Cat 1"
+    seams.on_customization_changed(1, "label", "")
+    assert seams.pane_name(1) == ("", "codex")

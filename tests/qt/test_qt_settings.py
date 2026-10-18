@@ -5,8 +5,9 @@ import threading
 import time
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from tokitty import sprites, theme as T
@@ -225,6 +226,171 @@ def test_look_name_entry_writes_the_label(make_world):
     assert world.store["k0"].label == "Work"
     assert world.widget.panes[0]._label == "Work"
     assert look.pane_picker.get() == "Work"
+
+
+# ---- name field in a mixed window and its save triggers ----------------------
+
+def mixed(make_world, **kw):
+    return make_world(2, tag_kinds=["claude", "codex"], **kw)
+
+
+def committed(world, key="k0"):
+    return load_customization(world.state_dir).get(key, Customization()).label
+
+
+def test_mixed_window_name_field_shows_only_the_users_part(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    assert world.widget.panes[0]._label == "claude\u00b7work"
+    assert look.name_entry.text() == "work"
+    assert look.name_hint.text() == "claude\u00b7"
+    assert not look.name_hint.isHidden()
+    window.set_pane(1)
+    assert look.name_entry.text() == ""
+    assert look.name_hint.text() == "codex\u00b7"
+
+
+def test_mixed_window_name_saves_without_doubling_the_prefix(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    look.name_entry.setText("sys")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "sys"
+    assert world.widget.panes[0]._label == "claude\u00b7sys"
+    assert look.name_entry.text() == "sys"
+    look.name_entry.setText("claude\u00b7again")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "again"
+    # Only the pane's own tag is stripped.
+    look.name_entry.setText("codex\u00b7x")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "codex\u00b7x"
+
+
+def test_a_doubled_stored_label_heals_when_committed(make_world):
+    world = mixed(make_world, customs=[Customization(label="claude\u00b7sys"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    assert look.name_entry.text() == "claude\u00b7sys"
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "sys"
+    assert look.name_entry.text() == "sys"
+    assert world.widget.panes[0]._label == "claude\u00b7sys"
+
+
+def test_blank_name_in_a_mixed_window_shows_the_bare_harness(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    look.name_entry.setText("")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == ""
+    assert world.widget.panes[0]._label == "claude"
+    look.name_entry.setText("claude\u00b7")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == ""
+
+
+def test_single_harness_window_hides_the_hint(make_world):
+    world = make_world(1)
+    window = open_window(world)
+    assert window.tabs["look"].name_hint.isHidden()
+
+
+def test_an_unchanged_name_is_not_written_twice(make_world):
+    world = mixed(make_world)
+    window = open_window(world)
+    look = window.tabs["look"]
+    calls = counted(world)
+    look.name_entry.setText("sys")
+    look.name_entry.editingFinished.emit()
+    look.commit()
+    window.close()
+    assert len(calls) == 1
+
+
+def focused_look(world):
+    window = open_window(world)
+    window.select_tab("look")
+    window.show()
+    window.activateWindow()
+    QApplication.processEvents()
+    look = window.tabs["look"]
+    look.name_entry.setFocus()
+    QApplication.processEvents()
+    assert look.name_entry.hasFocus()
+    look.name_entry.setText("typed")
+    return window, look
+
+
+def assert_saved_to_first_cat(world):
+    assert committed(world, "k0") == "typed"
+    assert world.store["k0"].label == "typed"
+    assert committed(world, "k1") == ""
+    assert world.store["k1"].label == ""
+
+
+def test_clicking_a_blank_area_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    QTest.mouseClick(look.frame, Qt.MouseButton.LeftButton, pos=QPoint(2, 2))
+    assert not look.name_entry.hasFocus()
+    assert_saved_to_first_cat(world)
+
+
+def test_clicking_outside_the_scroll_area_saves_the_name(make_world):
+    # The rail and footer are not in the scroll area, which takes click focus
+    # itself; only the window's own click focus covers them.
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    QTest.mouseClick(window.rail, Qt.MouseButton.LeftButton, pos=QPoint(2, 2))
+    assert not look.name_entry.hasFocus()
+    assert_saved_to_first_cat(world)
+
+
+def test_clicking_a_rail_tab_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    strip = window.rail.strips["usage"]
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton)
+    assert window.current == "usage"
+    assert_saved_to_first_cat(world)
+
+
+def test_switching_cats_saves_the_name_and_shows_the_new_cats(make_world):
+    world = mixed(make_world, customs=[Customization(), Customization(label="other")])
+    window, look = focused_look(world)
+
+    menu = look.pane_picker.menu
+    QTest.mouseClick(look.pane_picker, Qt.MouseButton.LeftButton)
+    # The press alone moves focus off the entry and saves.
+    assert not look.name_entry.hasFocus()
+    assert committed(world, "k0") == "typed"
+    menu.actions()[1].trigger()
+    menu.close()
+    assert window.pane_index == 1
+    assert committed(world, "k0") == "typed"
+    assert look.name_entry.text() == "other"
+    assert world.store["k1"].label == "other"
+    assert look.name_hint.text() == "codex\u00b7"
+
+
+def test_picking_a_cat_without_a_click_still_saves_the_name(make_world):
+    world = mixed(make_world, customs=[Customization(), Customization(label="other")])
+    window, look = focused_look(world)
+    look.pane_picker.menu.actions()[1].trigger()
+    assert committed(world, "k0") == "typed"
+    assert look.name_entry.text() == "other"
+    assert world.store["k1"].label == "other"
+
+
+def test_closing_the_window_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    window.close()
+    assert_saved_to_first_cat(world)
 
 
 def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_world, monkeypatch):

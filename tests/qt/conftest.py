@@ -28,7 +28,7 @@ def make_world(qapp, tmp_path, monkeypatch):
     from tokitty import app_controls, autostart
     from tokitty import settings as settings_mod
     from tokitty import theme as T
-    from tokitty.app_core import make_usage_state
+    from tokitty.app_core import initial_label, make_usage_state
     from tokitty.customize import Customization
     from tokitty.qt import settings as qt_settings
     from tokitty.qt.app import apply_customization
@@ -42,15 +42,19 @@ def make_world(qapp, tmp_path, monkeypatch):
         def rebuild_for_window(self):
             pass
 
-    def build(count=2, theme=None, customs=None, warn=None):
+    def build(count=2, theme=None, customs=None, warn=None, tag_kinds=None):
         state_dir = tmp_path / f"state{len(opened)}"
         state_dir.mkdir()
         customs = customs or [Customization() for _ in range(count)]
+        tag_kinds = tag_kinds or [None] * len(customs)
         widget = TokittyQtWidget(theme or T.Theme(cat=T.CatStyle(wander=False)), customs, len(customs))
         widget.anim.stop()
-        units = [{"key": f"k{i}", "account": None, "tag_kind": None, "pane": pane,
+        units = [{"key": f"k{i}", "account": None, "tag_kind": kind, "pane": pane,
                   "usage": FakeUsage(), "custom": c}
-                 for i, (pane, c) in enumerate(zip(widget.panes, customs))]
+                 for i, (pane, c, kind) in enumerate(zip(widget.panes, customs, tag_kinds))]
+        for u in units:
+            if u["tag_kind"]:
+                u["pane"].set_appearance(label=initial_label(None, u["custom"], u["tag_kind"]))
         settings = settings_mod.load_settings(state_dir)
         usage_state = make_usage_state(settings)
         store = {u["key"]: c for u, c in zip(units, customs)}
