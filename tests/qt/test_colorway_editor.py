@@ -87,12 +87,15 @@ def test_edit_is_enabled_only_for_a_custom_colorway(make_world):
     look = window.tabs["look"]
     assert look.new_colorway_button.isEnabled()
     assert not look.edit_colorway_button.isEnabled()
+    assert not look.builtin_hint.isHidden()
     select(world, cid)
     world.host.notify_state_changed()
     assert look.edit_colorway_button.isEnabled()
+    assert look.builtin_hint.isHidden()
     select(world, "gray")
     world.host.notify_state_changed()
     assert not look.edit_colorway_button.isEnabled()
+    assert not look.builtin_hint.isHidden()
 
 
 def test_new_and_edit_buttons_open_the_editor(make_world, monkeypatch):

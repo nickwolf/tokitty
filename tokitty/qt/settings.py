@@ -340,6 +340,12 @@ class LookTab(_Tab):
         make_layout.addWidget(self.new_colorway_button)
         make_layout.addSpacing(6)
         make_layout.addWidget(self.edit_colorway_button)
+        make_layout.addSpacing(8)
+        # Shown while a built-in is selected, so a greyed-out Edit… reads as
+        # intended rather than broken.
+        self.builtin_hint = text("Built-in colorways can't be changed.\nNew… starts from this one.",
+                                 color=MUTED, font=FONT_SMALL)
+        make_layout.addWidget(self.builtin_hint)
         make_layout.addStretch(1)
         left_col.addWidget(make_row)
         left_col.addSpacing(8)
@@ -464,6 +470,7 @@ class LookTab(_Tab):
         self._refresh_colorways(pane._colorway)
         editable = self._custom_id(index) is not None
         self.edit_colorway_button.setEnabled(editable)
+        self.builtin_hint.setVisible(not editable)
         self.edit_colorway_button.setCursor(
             Qt.CursorShape.PointingHandCursor if editable else Qt.CursorShape.ArrowCursor)
         self.pattern.set(pane._pattern)
