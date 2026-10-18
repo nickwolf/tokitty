@@ -545,6 +545,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                     customization_store=customization_store, notes_removed=notes_removed,
                     onboard=maybe_onboard, now=now,
                     time_of_day=widget.theme.cat.time_of_day,
+                    wander=widget.theme.cat.wander,
                 )
                 if update is not None:
                     getattr(unit["pane"], "render" if update.kind == "limits" else "render_usage")(

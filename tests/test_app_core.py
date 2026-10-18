@@ -1,6 +1,7 @@
 """Direct tests for tokitty.app_core, the toolkit-free half of the app."""
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -488,6 +489,14 @@ def test_step_unit_without_time_of_day_has_plain_drives(events, view):
     unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
     update = _step(unit, events, usage_state=_usage_state(view=view), tz=_MEXICO)
     assert update.kwargs["drives"] == Drives()
+
+
+@pytest.mark.parametrize("view", ["limits", "models"])
+def test_step_unit_without_wander_never_plays(events, view):
+    unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
+    update = _step(unit, events, usage_state=_usage_state(view=view), time_of_day=True,
+                   tz=_MEXICO, wander=False)
+    assert update.kwargs["drives"] == replace(drives(3), play=0.0)
 
 
 # ---- limits hover ------------------------------------------------------------
