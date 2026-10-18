@@ -54,8 +54,6 @@ _BUDGET_HINTS = {"24h": "last 24 hours", "7d": "last 7 days", "month": "this mon
 
 # (caption, customization field)
 _COLOR_ROWS = (
-    ("Coat", "coat_base"),
-    ("Shade", "coat_shade"),
     ("Card background", "card_bg"),
     ("Bar fill", "bar_fill"),
 )
@@ -323,13 +321,27 @@ class LookTab(_Tab):
         self.name_entry.editingFinished.connect(self._save_name)
 
         choices, choice_row = _hrow()
-        self.colorway = self._choice(choice_row, "Colorway", list(sprites.COLORWAYS),
-                                     lambda i, name: host.on_customization_changed(i, "colorway", name))
+        self.colorway = self._choice(
+            choice_row, "Colorway", list(sprites.COLORWAYS),
+            lambda i, label: host.on_customization_changed(i, "colorway", self._colorway_ids.get(label, label)))
         self.pattern = self._choice(choice_row, "Pattern", list(sprites.PATTERNS),
                                     lambda i, name: host.on_customization_changed(i, "pattern", name))
         self.tail = self._choice(choice_row, "Tail", list(sprites.TAIL_STYLES),
                                  lambda i, name: host.on_customization_changed(i, "tail", name))
         left_col.addWidget(choices)
+        # The dropdown shows names; the pane stores ids. Rebuilt by refresh().
+        self._colorway_ids: Dict[str, str] = {}
+        make_row, make_layout = _hrow()
+        make_row.setContentsMargins(0, 6, 0, 0)
+        self.new_colorway_button = kit.button("New…", "secondary", lambda: self._edit_colorway(False),
+                                              compact=True)
+        self.edit_colorway_button = kit.button("Edit…", "secondary", lambda: self._edit_colorway(True),
+                                               compact=True)
+        make_layout.addWidget(self.new_colorway_button)
+        make_layout.addSpacing(6)
+        make_layout.addWidget(self.edit_colorway_button)
+        make_layout.addStretch(1)
+        left_col.addWidget(make_row)
         left_col.addSpacing(8)
 
         sits = text("Cat sits", color=MUTED, font=FONT_SMALL)
@@ -340,7 +352,7 @@ class LookTab(_Tab):
                 lambda: host.on_customization_changed(self.owner.pane_index, "cat_home", spot)))
         left_col.addWidget(self.cat_sits)
 
-        kit.section_header(self.frame, "Custom colors", "Overrides the preset", top=14)
+        kit.section_header(self.frame, "Card colors", "Override the theme for this cat", top=14)
         self.color_rows: Dict[str, ColorRow] = {}
         for label, field in _COLOR_ROWS:
             self.color_rows[field] = self.color_row(
@@ -368,6 +380,37 @@ class LookTab(_Tab):
         row_layout.addWidget(box, 1)
         row_layout.addSpacing(6)
         return dropdown
+
+    def _edit_colorway(self, edit: bool) -> None:
+        """Open the colorway editor for this pane: Edit on its custom colorway,
+        else New. The dialog writes through the host and refreshes this tab."""
+        from tokitty.qt.colorway_editor import ColorwayEditor
+
+        index = self.owner.pane_index
+        cid = self._custom_id(index) if edit else None
+        if edit and cid is None:
+            return
+        ColorwayEditor(self.owner, self.host, index, cid).exec()
+
+    def _custom_id(self, index: int) -> Optional[str]:
+        """The pane's colorway id when it is a stored custom one, else None."""
+        cid = self.host.panes[index]._colorway
+        return cid if sprites.is_custom_id(cid) and cid in self.host.colorway_store() else None
+
+    def _refresh_colorways(self, current: str) -> None:
+        """Refill the colorway dropdown (built-ins, then each custom by name)
+        and show `current`; a dangling id shows as orange."""
+        store = self.host.colorway_store()
+        ids = {name: name for name in sprites.COLORWAYS}
+        for cid in sprites.colorway_names():
+            if cid in store:
+                ids[store[cid]["name"]] = cid
+        self._colorway_ids = ids
+        labels = list(ids)
+        if self.colorway.choices() != labels:
+            self.colorway.set_choices(labels)
+        label = next((name for name, cid in ids.items() if cid == current), "orange")
+        self.colorway.set(label)
 
     def _build_preview(self) -> QFrame:
         frame = self.kit.surface()
@@ -418,7 +461,11 @@ class LookTab(_Tab):
         if index != self._name_index or not self.name_entry.hasFocus():
             self.name_entry.setText(raw)
         self._name_index = index
-        self.colorway.set(pane._colorway)
+        self._refresh_colorways(pane._colorway)
+        editable = self._custom_id(index) is not None
+        self.edit_colorway_button.setEnabled(editable)
+        self.edit_colorway_button.setCursor(
+            Qt.CursorShape.PointingHandCursor if editable else Qt.CursorShape.ArrowCursor)
         self.pattern.set(pane._pattern)
         self.tail.set(pane._tail)
         for _caption, field in _COLOR_ROWS:

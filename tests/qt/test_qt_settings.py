@@ -467,18 +467,15 @@ def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_wor
         return QColor("#112233")
 
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(get_color))
-    look.color_rows["coat_base"].button.click()
+    assert set(look.color_rows) == {"card_bg", "bar_fill"}  # the coat rows are retired (#156)
     look.color_rows["bar_fill"].button.click()
     look.color_rows["card_bg"].button.click()
 
-    assert [a[2] for a in asked] == ["Coat", "Bar fill", "Card background"]
+    assert [a[2] for a in asked] == ["Bar fill", "Card background"]
     assert all(a[1] is window for a in asked)
-    assert world.store["k0"].overrides == {"coat_base": "#112233", "bar_fill": "#112233",
-                                           "card_bg": "#112233"}
+    assert world.store["k0"].overrides == {"bar_fill": "#112233", "card_bg": "#112233"}
     assert look.color_rows["bar_fill"].value.text() == "#112233".upper()
     assert world.host.pane_color(0, "card_bg") == "#112233"
-    assert world.host.pane_color(0, "coat_base") == "#112233"
-    assert world.widget.panes[0].palette["o"] == "#112233"
 
     look.reset_button.click()
     assert world.store["k0"].overrides == {}
@@ -489,7 +486,7 @@ def test_a_cancelled_color_dialog_writes_nothing(make_world, monkeypatch):
     world = make_world(1)
     window = open_window(world)
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor()))
-    window.tabs["look"].color_rows["coat_base"].button.click()
+    window.tabs["look"].color_rows["bar_fill"].button.click()
     assert world.store["k0"].overrides == {}
 
 
@@ -552,7 +549,7 @@ def test_a_colour_change_after_cat_sits_keeps_the_home(make_world, monkeypatch):
     look = window.tabs["look"]
     look.cat_sits.items["on_top"].click()
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor("#445566")))
-    look.color_rows["coat_shade"].button.click()
+    look.color_rows["bar_fill"].button.click()
     look.colorway.menu.actions()[1].trigger()
     assert world.widget.panes[0].customization.cat_home == "on_top"
     assert world.store["k0"].cat_home == "on_top"

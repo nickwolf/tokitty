@@ -537,6 +537,9 @@ class FakeTray:
     def stop(self):
         self.calls.append("stop")
 
+    def set_look(self, colorway, pattern, tail="plain"):
+        self.colorway, self.pattern = colorway, pattern
+
     def refresh(self):
         self.calls.append("refresh")
 

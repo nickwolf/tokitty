@@ -403,7 +403,14 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         tray = QtTray(lambda: menu_model(0), state_dir,
                       colorway=pane0._colorway, pattern=pane0._pattern, tail=pane0._tail,
                       on_action_done=host.notify_state_changed)
-        host.tray_refresh = tray.refresh
+
+        def refresh_tray() -> None:
+            # The icon wears pane 0's look, which a colorway edit can change.
+            first = widget.panes[0]
+            tray.set_look(first._colorway, first._pattern, first._tail)
+            tray.refresh()
+
+        host.tray_refresh = refresh_tray
         # stop() schedules deleteLater, which Qt never processes once the loop
         # has ended; the finally's stop is the backstop for a failed launch.
         app.aboutToQuit.connect(tray.stop)
