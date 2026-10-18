@@ -18,7 +18,7 @@ from tokitty.accounts import Account
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.behaviour import drives
-from tokitty.burn import BurnTracker
+from tokitty.burn import PACE_UNKNOWN, BurnTracker, Pace
 from tokitty.credentials import CredentialLoader
 from tokitty.customize import SINGLE_KEY, Customization, save_customization
 from tokitty.display import (
@@ -30,6 +30,7 @@ from tokitty.display import (
     format_reset_time,
 )
 from tokitty.hooks_install import retry_pending_hook_op
+from tokitty.hover import LimitHover, LimitsHover
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.poller import PollResult, Poller
 from tokitty.pose import resolve_pose
@@ -249,6 +250,28 @@ def _projection_text_for(tracker: BurnTracker, display: dict, now: datetime) -> 
     if projection is None:
         return None
     return format_projection(projection.kind, projection.caps_at)
+
+
+def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: datetime) -> Optional[LimitsHover]:
+    """The raw numbers behind the limits popup, or None when no snapshot was
+    ever read. The pace is left out whenever the numbers are dimmed or old,
+    for the same reason the status line's projection is."""
+    if snapshot is None:
+        return None
+    binding = select_binding_capped_limit(snapshot.limits)
+    trusted = not display.get("dimmed") and not display.get("stale_text")
+
+    def row(title: str, kind: str, pct: float, resets_at) -> LimitHover:
+        return LimitHover(
+            title=title, kind=kind, pct=pct, resets_at=resets_at,
+            capped=binding is not None and (binding.kind == "session") == (kind == "session"),
+            pace=tracker.pace(kind, now) if trusted else Pace(PACE_UNKNOWN),
+        )
+
+    return LimitsHover(
+        session=row("Session", "session", snapshot.session_pct, snapshot.session_resets_at),
+        weekly=row("Week", "weekly", snapshot.weekly_pct, snapshot.weekly_resets_at),
+    )
 
 
 def _seed_from_account(account: Optional[Account]) -> Tuple[Optional[str], Optional[str]]:
@@ -512,6 +535,9 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]
         display["drives"] = cat_drives
+        shown = latest.snapshot if latest.status == "ok" and latest.snapshot is not None else (
+            unit["last_good"].snapshot if unit["last_good"] is not None else None)
+        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
     return update

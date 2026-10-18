@@ -1,9 +1,11 @@
+import pytest
 import re
 from datetime import datetime, timezone
 
 from tokitty.display import (
     bar_color,
     format_countdown,
+    format_time_left,
     format_projection,
     format_reset_day,
     format_reset_time,
@@ -113,3 +115,13 @@ def test_reset_phrase_reads_for_each_reset_form():
     assert reset_phrase("9s") == "resets in 9s"
     assert reset_phrase("—") == ""
     assert reset_phrase("") == ""
+
+
+@pytest.mark.parametrize("seconds, expected", [
+    (30, "30s"), (0, "0s"), (-5, "0s"), (59.9, "59s"),
+    (60, "1m"), (45 * 60 + 59, "45m"),
+    (3600, "1h 00m"), (2 * 3600 + 14 * 60 + 59, "2h 14m"),
+    (86400, "1d 0h"), (2 * 86400 + 3 * 3600 + 1800, "2d 3h"),
+])
+def test_format_time_left_keeps_the_two_coarsest_units(seconds, expected):
+    assert format_time_left(seconds) == expected

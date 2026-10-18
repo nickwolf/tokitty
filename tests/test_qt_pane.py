@@ -573,3 +573,27 @@ def test_set_spot_with_roams_sends_the_new_home_wandering():
     assert _walk_until(pane, clock, lambda p: p.pose.spot == "on_top")
     pane.set_spot("on_top")  # roams stays on
     assert pane.pose.spot == "on_top" and pane.spot == "on_top"
+
+
+def test_cat_hover_text_counts_from_when_the_phase_began():
+    clock = [1_000]
+    pane = QtPane(clock=lambda: clock[0])
+    pane.render("working", 0, 0, "", "", "", None, None, False, tool_label="Bash")
+    clock[0] += 125_000
+    assert pane.cat_hover_text() == "Working: Bash, 2m"
+    # a poll re-rendering the same state does not restart the count
+    pane.render("working", 1, 0, "", "", "", None, None, False, tool_label="Bash")
+    assert pane.cat_hover_text() == "Working: Bash, 2m"
+    pane.render("permission", 1, 0, "", "", "", None, None, False)
+    clock[0] += 45_000
+    assert pane.cat_hover_text() == "Waiting for permission, 45s"
+    # impatience does not restart it either
+    pane.render("permission_urgent", 1, 0, "", "", "", None, None, False)
+    assert pane.cat_hover_text() == "Waiting for permission, 45s"
+
+
+def test_render_keeps_the_hover_data_for_the_limits_popup():
+    pane = QtPane()
+    sentinel = object()
+    pane.render("content", 1, 1, "", "", "", None, None, False, hover=sentinel)
+    assert pane.limits_hover is sentinel

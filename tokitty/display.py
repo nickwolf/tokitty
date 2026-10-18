@@ -35,6 +35,23 @@ def format_countdown(seconds_left: float) -> str:
     return f"{seconds}s"
 
 
+def format_time_left(seconds_left: float) -> str:
+    """The two coarsest units of a wait, for the hover popup: "2d 3h",
+    "2h 14m", "45m", "30s". Truncates, so it never promises more time than
+    there is."""
+    seconds_left = max(int(seconds_left), 0)
+    days, remainder = divmod(seconds_left, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
+
+
 _COUNTDOWN = re.compile(r"\d+[hms]( |$)")
 
 
