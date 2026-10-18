@@ -2283,6 +2283,59 @@ def _working_to_thinking() -> Animation:
     ], loop_from=None)
 
 
+def _rise(base: List[str], target: List[str], drop: int) -> List[str]:
+    """`base` with what `target` adds to it moved `drop` rows down and drawn
+    behind it, as a prop comes up from behind the body."""
+    patches = {}
+    for r, row in enumerate(target):
+        for c, ch in enumerate(row):
+            if ch != base[r][c] and r + drop < len(base) and base[r + drop][c] == ".":
+                patches[(r + drop, c)] = ch
+    return _overlay(base, patches)
+
+
+def _notice() -> List[Frame]:
+    """The lead-in to a prompt from anywhere: the cat sits up and its ears
+    go up, eyes wide (alert with its mark hidden)."""
+    return [
+        Frame({}, 140, template=_at("thinking", bubble=2)),
+        Frame({}, 200, template=_at("alert", bang=1)),
+    ]
+
+
+def _raise_pennant() -> Animation:
+    """Into permission from anywhere: the cat notices, its paw shoots up with
+    the pole, and the pennant unfurls from the pole outward."""
+    flag = _at("permission")
+
+    def furled(from_col: int) -> List[str]:
+        return [
+            "".join("." if ch == "f" and c < from_col else ch for c, ch in enumerate(row))
+            for row in flag
+        ]
+
+    return single_track(_at("alert", bang=1), _notice() + [
+        Frame({}, 140, template=furled(28)),
+        Frame({}, 80, template=furled(24)),
+        Frame({}, 80, template=furled(21)),
+        Frame({}, 100, template=flag),
+    ], loop_from=None)
+
+
+def _pop_question() -> Animation:
+    """Into question from anywhere: the cat notices, tilts its head, and the
+    bubble pops up beside it."""
+    start = _at("alert", bang=1)
+    ask = _at("question")
+    tilt = _overlay(ask, {cell: "." for cell in _ask_bubble(0)})
+    return single_track(start, _notice() + [
+        Frame({}, 180, template=tilt),
+        Frame({}, 80, template=_rise(tilt, ask, 4)),
+        Frame({}, 80, template=_rise(tilt, ask, 2)),
+        Frame({}, 100, template=ask),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2335,6 +2388,8 @@ TRANSITIONS[("permission", "permission_urgent")] = _permission_to_urgent()
 TRANSITIONS[("thinking", "working")] = _thinking_to_working()
 TRANSITIONS[("working", "thinking")] = _working_to_thinking()
 TRANSITIONS[(ANY_STATE, "working")] = _settle_at_keys()
+TRANSITIONS[(ANY_STATE, "permission")] = _raise_pennant()
+TRANSITIONS[(ANY_STATE, "question")] = _pop_question()
 TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
