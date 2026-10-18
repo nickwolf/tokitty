@@ -322,12 +322,14 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
     customization_store = load_customization(state_dir)
 
+    from tokitty import colorways
     from tokitty.migration import (
         CUSTOMIZATION_MIGRATION_KEY,
         LEGACY_ACCOUNT_LABELS_MIGRATION_KEY,
         mark_customization_migration_complete,
         migrate_default_customization,
         migrate_legacy_account_labels,
+        run_coat_overrides_migration,
     )
 
     customization_store = migrate_default_customization(state_dir, accounts, customization_store)
@@ -336,6 +338,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     save_customization(state_dir, customization_store)
     mark_customization_migration_complete(state_dir, CUSTOMIZATION_MIGRATION_KEY)
     mark_customization_migration_complete(state_dir, LEGACY_ACCOUNT_LABELS_MIGRATION_KEY)
+    # Coat overrides become custom colorways (#156), then the colorways reach
+    # sprites before any pane, tray icon or preview resolves a palette.
+    customization_store = run_coat_overrides_migration(state_dir, customization_store)
+    colorways.install(state_dir)
 
     notifier = Notifier(state_dir)
     units: list = []

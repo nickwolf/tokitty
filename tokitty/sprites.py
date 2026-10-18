@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import functools
 import random
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -71,6 +72,59 @@ COLORWAYS: Dict[str, Dict[str, str]] = {
     "cream":  {"coat": "#e9d9bd", "shade": "#cdb894", "mark": "#a98d63", "light": "#f7efdd", "ear": "#f0c4cf"},
     "brown":  {"coat": "#8a5a3c", "shade": "#6d452d", "mark": "#4f3020", "light": "#d9c4ab", "ear": "#d69aa6"},
 }
+
+# User-made colorways (colorways.json), installed at startup and after every
+# edit by colorways.apply. Ids are "custom-<N>", so they can never collide with
+# a built-in name. The built-in table above stays the six presets: randomize
+# and the pixel references iterate COLORWAYS, never this registry.
+TONE_KEYS: Tuple[str, ...] = ("coat", "shade", "mark", "light", "ear")
+_CUSTOM_ID_RE = re.compile(r"custom-[0-9]+")
+_custom_colorways: Dict[str, Dict[str, str]] = {}
+_custom_generation = 0
+
+
+def is_custom_id(name: object) -> bool:
+    """True for a well-formed custom id ("custom-<digits>"), registered or not."""
+    return isinstance(name, str) and _CUSTOM_ID_RE.fullmatch(name) is not None
+
+
+def set_custom_colorways(mapping: Dict[str, Dict[str, str]]) -> None:
+    """Replace the custom table (id -> tones; extra keys such as a display
+    name are ignored; entries missing a tone are skipped) and drop every
+    palette resolved from the old one. Bumps custom_colorway_generation so
+    caches keyed outside this module can tell the tones changed."""
+    global _custom_generation
+    table: Dict[str, Dict[str, str]] = {}
+    for cid, tones in mapping.items():
+        if is_custom_id(cid) and all(isinstance(tones.get(k), str) for k in TONE_KEYS):
+            table[cid] = {k: tones[k] for k in TONE_KEYS}
+    _custom_colorways.clear()
+    _custom_colorways.update(table)
+    _custom_generation += 1
+    _resolved_palette.cache_clear()
+
+
+def custom_colorway_generation() -> int:
+    """Changes every time set_custom_colorways runs; a cache key component."""
+    return _custom_generation
+
+
+def colorway_tones(name: str) -> Dict[str, str]:
+    """A colorway's five tones: built-in, else custom, else orange's, so a
+    dangling id (a deleted or not-yet-loaded custom) never raises."""
+    return COLORWAYS.get(name) or _custom_colorways.get(name) or COLORWAYS["orange"]
+
+
+def colorway_names() -> List[str]:
+    """Built-ins first, then customs in id order."""
+    customs = sorted(_custom_colorways, key=lambda cid: int(cid.split("-", 1)[1]))
+    return list(COLORWAYS) + customs
+
+
+def is_colorway(name: object) -> bool:
+    """True when `name` is a built-in or a currently registered custom."""
+    return isinstance(name, str) and (name in COLORWAYS or name in _custom_colorways)
+
 
 # Which template chars a pattern controls: the base fill/shade plus the body
 # regions -- m paws, x points (outer ears + face mask), y tail, u belly, and
@@ -139,7 +193,7 @@ def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
 
 @functools.lru_cache(maxsize=None)
 def _resolved_palette(colorway: str, pattern: str, tail: str) -> Dict[str, str]:
-    cw = COLORWAYS[colorway]
+    cw = colorway_tones(colorway)
     tones = {
         "coat": cw["coat"], "shade": cw["shade"], "mark": cw["mark"],
         "light": cw["light"], "white": BASE_PALETTE["w"],

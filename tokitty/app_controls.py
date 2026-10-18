@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, fields, replace
 from typing import Callable, Optional, Tuple
 
-from tokitty import sprites, theme
+from tokitty import colorways, sprites, theme
 from tokitty.app_core import initial_label
 from tokitty.customize import load_customization, save_customization_entry
 from tokitty.ntfy import send_test as ntfy_send_test
@@ -47,6 +47,12 @@ class Controls:
     # (stored label, harness prefix or None): the part of the name the user
     # typed, apart from the "claude·" tag the pane adds in a mixed window.
     pane_name: Callable[[int], Tuple[str, Optional[str]]]
+    # Custom colorways (#156). The UI writes colorways.json through
+    # tokitty.colorways, then calls on_colorways_changed(): it re-reads the
+    # file into sprites and restyles every pane (and the tray menu) from the
+    # latest customization.json. colorway_store() is a fresh read of the file.
+    on_colorways_changed: Callable[[], None]
+    colorway_store: Callable[[], dict]
     # None when there is no backend or its state is unreadable; the General
     # tab hides the row then.
     autostart_enabled: Optional[Callable[[], bool]] = None
@@ -82,7 +88,7 @@ def make_controls(
         custom = load_customization(state_dir).get(key, customization_store[key])
 
         if field == "colorway":
-            if value in sprites.COLORWAYS:
+            if sprites.is_colorway(value):
                 custom = replace(custom, colorway=value)
         elif field == "pattern":
             if value in sprites.PATTERNS:
@@ -122,6 +128,16 @@ def make_controls(
         key = unit["key"]
         custom = load_customization(state_dir).get(key, customization_store[key])
         return custom.label or "", unit["tag_kind"]
+
+    def on_colorways_changed() -> None:
+        colorways.install(state_dir)
+        latest = load_customization(state_dir)
+        for index, unit in enumerate(units):
+            key = unit["key"]
+            custom = latest.get(key, customization_store[key])
+            customization_store[key] = custom
+            apply_customization(unit["pane"], custom)
+            on_layout_changed(index, custom)
 
     surprise_state = {"on": settings.surprise_me}
 
@@ -282,6 +298,8 @@ def make_controls(
         send_ntfy_test=send_ntfy_test,
         streamdock_account_toggles=streamdock_account_toggles,
         pane_name=pane_name,
+        on_colorways_changed=on_colorways_changed,
+        colorway_store=lambda: colorways.load_colorways(state_dir),
     )
 
     from tokitty.autostart import (

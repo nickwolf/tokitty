@@ -4,9 +4,14 @@ Lives in the same per-user state dir as position.json and accounts.json
 (see paths.py). customization.json is optional: absent or unparseable
 => {}, and callers fall back to the default Customization() per account.
 
+The "colorway" field is a built-in name or a custom id ("custom-<N>") from
+colorways.json. A well-formed custom id is kept even before that file is
+installed into sprites (or after its colorway was deleted: the palette then
+falls back to orange), so load order never rewrites it on the next save.
+
 Override keys are a closed set:
-  - "coat_base"  -> sprite char "o" (coat fill)
-  - "coat_shade" -> sprite char "O" (coat shading)
+  - "coat_base"  -> sprite char "o" (coat fill); retired, see migration.py
+  - "coat_shade" -> sprite char "O" (coat shading); retired, see migration.py
   - "card_bg"    -> consumed by the UI, not the sprite palette
   - "bar_fill"   -> consumed by the UI, not the sprite palette
 "cat_home" is the cat's resting spot (one of theme.SPOTS), default "inside".
@@ -64,7 +69,8 @@ def _resolve_colorway_pattern(entry: dict) -> "tuple[str, str]":
     orange+tabby default."""
     colorway = entry.get("colorway")
     pattern = entry.get("pattern")
-    if not (isinstance(colorway, str) and colorway in sprites.COLORWAYS):
+    if not (isinstance(colorway, str)
+            and (colorway in sprites.COLORWAYS or sprites.is_custom_id(colorway))):
         colorway = None
     if not (isinstance(pattern, str) and pattern in sprites.PATTERNS):
         pattern = None
@@ -147,17 +153,20 @@ def rename_account(state_dir: Path, slug: str, label: str) -> None:
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:
-    """The sprite palette for a customization. Pure in the coat axes and the
-    two coat overrides, so it is computed once per distinct set of them; each
+    """The sprite palette for a customization. Pure in the coat axes, the
+    two coat overrides and the custom-colorway table (its generation is part
+    of the cache key), so it is computed once per distinct set of them; each
     call returns a fresh dict the caller may mutate."""
     return dict(_effective_palette(
         custom.colorway, custom.pattern, custom.tail,
-        custom.overrides.get("coat_base"), custom.overrides.get("coat_shade")))
+        custom.overrides.get("coat_base"), custom.overrides.get("coat_shade"),
+        sprites.custom_colorway_generation()))
 
 
 @functools.lru_cache(maxsize=None)
 def _effective_palette(colorway: str, pattern: str, tail: str,
-                       coat_base: Optional[str], coat_shade: Optional[str]) -> Dict[str, str]:
+                       coat_base: Optional[str], coat_shade: Optional[str],
+                       generation: int = 0) -> Dict[str, str]:
     palette = sprites.resolve_palette(colorway, pattern, tail)
     if coat_base is not None:
         palette["o"] = coat_base

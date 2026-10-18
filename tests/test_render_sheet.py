@@ -411,3 +411,26 @@ def test_render_media_writes_gifs_for_moves_and_variants(tmp_path, hop, monkeypa
     monkeypatch.setattr(render_media, "MOVES", sprites.MOVES)
     render_media.write_anims(tmp_path, 1)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["anim-content-at-on_top.gif", "anim-move-hop.gif"]
+
+
+def test_tones_flag_renders_custom_colorway(tmp_path):
+    from render_sheet import main
+    import sys as _sys
+    out = tmp_path / "t.png"
+    tones = "#7d8aa6,#626e88,#4a5468,#e0e5ef,#f2a7b8"
+    old_argv = _sys.argv
+    _sys.argv = ["render_sheet", "--out", str(out), "--scale", "1", "--tones", tones,
+                 "--pattern", "solid", "--state", "content"]
+    try:
+        assert main() == 0
+    finally:
+        _sys.argv = old_argv
+    assert out.is_file()
+    grid = tmp_path / "g.png"
+    _sys.argv = ["render_sheet", "--out", str(grid), "--scale", "1", "--grid", "--tones", tones, "--tones", tones]
+    try:
+        assert main() == 0
+    finally:
+        _sys.argv = old_argv
+    w, h = _png_size(grid)
+    assert h == 4 + 2 * (26 + 4)  # two rows, not six
