@@ -107,6 +107,13 @@ def test_effective_palette_ignores_card_bg_and_bar_fill():
     assert palette == sprites.get_palette("orange_tabby")
 
 
+def test_bar_override_keys_survive_load_and_unknown_keys_do_not(tmp_path):
+    save_customization(tmp_path, {"k": Customization(overrides={
+        "session_bar": "#111111", "weekly_bar": "#222222", "bar_fill": "#333333"})})
+    assert load_customization(tmp_path)["k"].overrides == {
+        "session_bar": "#111111", "weekly_bar": "#222222", "bar_fill": "#333333"}
+
+
 def test_load_migrates_legacy_coat(tmp_path):
     (tmp_path / "customization.json").write_text(
         '{"default": {"coat": "calico", "label": "Mimi"}}', encoding="utf-8")

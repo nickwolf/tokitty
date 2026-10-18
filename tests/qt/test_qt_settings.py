@@ -459,7 +459,8 @@ def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_wor
     window = open_window(world)
     look = window.tabs["look"]
     assert look.color_rows["card_bg"].value.text() == T.CardStyle.background.upper()
-    assert look.color_rows["bar_fill"].value.text() == "AUTOMATIC"
+    assert look.color_rows["session_bar"].value.text() == "AUTOMATIC"
+    assert look.color_rows["weekly_bar"].value.text() == "AUTOMATIC"
     asked = []
 
     def get_color(initial, parent, title):
@@ -467,36 +468,38 @@ def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_wor
         return QColor("#112233")
 
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(get_color))
-    look.color_rows["coat_base"].button.click()
-    look.color_rows["bar_fill"].button.click()
+    assert list(look.color_rows) == ["card_bg", "session_bar", "weekly_bar"]  # coat rows retired (#156)
+    look.color_rows["session_bar"].button.click()
+    look.color_rows["weekly_bar"].button.click()
     look.color_rows["card_bg"].button.click()
 
-    assert [a[2] for a in asked] == ["Coat", "Bar fill", "Card background"]
+    assert [a[2] for a in asked] == ["Session bar", "Weekly bar", "Card background"]
     assert all(a[1] is window for a in asked)
-    assert world.store["k0"].overrides == {"coat_base": "#112233", "bar_fill": "#112233",
-                                           "card_bg": "#112233"}
-    assert look.color_rows["bar_fill"].value.text() == "#112233".upper()
+    assert world.store["k0"].overrides == {
+        "session_bar": "#112233", "weekly_bar": "#112233", "card_bg": "#112233"}
+    assert look.color_rows["session_bar"].value.text() == "#112233".upper()
+    assert look.color_rows["weekly_bar"].value.text() == "#112233".upper()
     assert world.host.pane_color(0, "card_bg") == "#112233"
-    assert world.host.pane_color(0, "coat_base") == "#112233"
-    assert world.widget.panes[0].palette["o"] == "#112233"
 
     look.reset_button.click()
     assert world.store["k0"].overrides == {}
-    assert look.color_rows["bar_fill"].value.text() == "AUTOMATIC"
+    assert look.color_rows["session_bar"].value.text() == "AUTOMATIC"
+    assert look.color_rows["weekly_bar"].value.text() == "AUTOMATIC"
 
 
 def test_a_cancelled_color_dialog_writes_nothing(make_world, monkeypatch):
     world = make_world(1)
     window = open_window(world)
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor()))
-    window.tabs["look"].color_rows["coat_base"].button.click()
+    window.tabs["look"].color_rows["session_bar"].button.click()
     assert world.store["k0"].overrides == {}
 
 
 def test_card_background_reports_the_theme_color_when_unset(make_world):
     world = make_world(1, theme=T.Theme(card=T.CardStyle(background="#223344")))
     assert world.host.pane_color(0, "card_bg") == "#223344"
-    assert world.host.pane_color(0, "bar_fill") is None
+    assert world.host.pane_color(0, "session_bar") is None
+    assert world.host.pane_color(0, "weekly_bar") is None
 
 
 @pytest.mark.parametrize("count,first_row", [(1, {0}), (2, {0}), (4, {0}), (5, {0, 1})])
@@ -552,7 +555,7 @@ def test_a_colour_change_after_cat_sits_keeps_the_home(make_world, monkeypatch):
     look = window.tabs["look"]
     look.cat_sits.items["on_top"].click()
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor("#445566")))
-    look.color_rows["coat_shade"].button.click()
+    look.color_rows["session_bar"].button.click()
     look.colorway.menu.actions()[1].trigger()
     assert world.widget.panes[0].customization.cat_home == "on_top"
     assert world.store["k0"].cat_home == "on_top"

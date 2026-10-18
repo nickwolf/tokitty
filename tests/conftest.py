@@ -96,3 +96,13 @@ def _keep_stderr_untee(monkeypatch):
 
     monkeypatch.setattr(sys, "stderr", sys.stderr)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_custom_colorways_leak():
+    """The custom-colorway table is module state; start and end every test empty."""
+    from tokitty import sprites
+
+    sprites.set_custom_colorways({})
+    yield
+    sprites.set_custom_colorways({})

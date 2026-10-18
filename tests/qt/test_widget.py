@@ -423,3 +423,59 @@ def test_changing_the_design_repaints_the_cached_card(qapp):
     widget.theme = replace(widget.theme, card=replace(widget.theme.card, design="classic"))
     after = widget._card_signature(pane, style, layout, 0, 0, 1.0)
     assert before != after
+
+
+# ---- per-bar colour overrides (#156) ----------------------------------------
+
+def _bar_px(widget, layout, name, pct):
+    r = layout[name]
+    return widget.grab().toImage().pixelColor(r.x + int(r.w * pct / 200), r.y + r.h // 2).name()
+
+
+def _overridden(design, overrides):
+    theme = replace(T.Theme(cat=STILL), card=replace(T.Theme().card, design=design))
+    widget = TokittyQtWidget(theme, [Customization(overrides=overrides)], 1)
+    widget.anim.stop()
+    return widget
+
+
+@pytest.mark.parametrize("design", ["classic", "refined"])
+@pytest.mark.parametrize("overrides,session,weekly", [
+    ({}, None, None),
+    ({"bar_fill": "#aa0000"}, "#aa0000", "#aa0000"),
+    ({"session_bar": "#00aa00"}, "#00aa00", None),
+    ({"weekly_bar": "#0000aa"}, None, "#0000aa"),
+    ({"bar_fill": "#aa0000", "weekly_bar": "#0000aa"}, "#aa0000", "#0000aa"),
+])
+def test_bar_overrides_colour_each_bar_and_the_model_rows(qapp, design, overrides, session, weekly):
+    from tokitty.usage_display import UsageRow, UsageView
+
+    widget = _overridden(design, overrides)
+    layout = widget._layout_for("limits", "inside")
+    ramp = lambda pct: T.bar_fill(widget.theme, pct, None)  # noqa: E731
+    render(widget.panes[0], session=42, weekly=67)
+    assert _bar_px(widget, layout, "session_bar", 42) == (session or ramp(42))
+    assert _bar_px(widget, layout, "weekly_bar", 67) == (weekly or ramp(67))
+
+    widget.panes[0].render_usage("working", UsageView(
+        rows=(UsageRow("Opus", "$1.20", 60.0),), status_text="note", ramp_pct=30.0))
+    models = widget._layout_for("models", "inside")
+    assert _bar_px(widget, models, "model_bar_0", 60) == (weekly or ramp(30.0))
+
+
+def test_the_card_repaints_when_either_bar_override_changes(qapp):
+    widget = make(qapp)
+    render(widget.panes[0])
+    pane = widget.panes[0]
+    layout = widget._layout_for(pane._view_mode, "inside")
+    widget._font_set()
+
+    def signature():
+        return widget._card_signature(pane, widget._style_for(0, pane), layout, 0, 0, 1.0)
+
+    base = signature()
+    pane.set_appearance(session_bar="#111111")
+    with_session = signature()
+    pane.set_appearance(weekly_bar="#222222")
+    with_both = signature()
+    assert len({base, with_session, with_both}) == 3

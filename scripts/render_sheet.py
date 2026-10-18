@@ -8,6 +8,9 @@ Usage: python3 scripts/render_sheet.py --out sheet.png [--scale 8] [--colorway o
                                        [--state NAME ...] [--wrap 8] [--spot SPOT]
                                        [--gif DIR [--seed 0] [--gif-seconds 12]]
        python3 scripts/render_sheet.py --grid --out grid.png [--scale 6]
+       python3 scripts/render_sheet.py --tones COAT,SHADE,MARK,LIGHT,EAR --out custom.png
+--tones (five #rrggbb, repeatable) renders a temporary custom colorway instead of
+--colorway; with --grid the grid is one row per --tones, across every pattern.
 Prints one legend line per track (top to bottom; "state" for a one-track state,
 "state/track" otherwise) with its frame holds in ms, e.g.
 "content: 800 800 (loop from 0)"; with --grid, prints one "colorway/pattern"
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import struct
 import sys
 import zlib
@@ -40,7 +44,7 @@ from tokitty import shadow, theme
 from tokitty.sprites import (
     ALL_STATES, ANY_STATE, COLORWAYS, MOVE_PREFIX, MOVES, PATTERNS, SCALE as CELL, SPOT_SEP, SPOT_VARIANTS,
     TRANSITION_SEP, TRANSITIONS, compose, compose_offset, frame_ms_max, get_frames, get_tracks,
-    move_name, resolve_palette, spot_state, transition_name,
+    move_name, resolve_palette, set_custom_colorways, spot_state, transition_name,
 )
 
 BG = "#1c1c22"  # ui.py card background
@@ -324,14 +328,37 @@ def write_gifs(out_dir: Path, states: Sequence[str], **kw) -> List[Path]:
     return paths
 
 
-def render_grid(out_path: Path, scale: int = 6) -> List[str]:
-    """One 'content' cat per colorway x pattern, laid out as a matrix.
+TONE_ORDER = ("coat", "shade", "mark", "light", "ear")
+TONES_ID_BASE = 999  # --tones rows register as custom-999, custom-998, ...
+
+
+def parse_tones(text: str) -> dict:
+    """"COAT,SHADE,MARK,LIGHT,EAR" (five #rrggbb) -> a tones dict."""
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != len(TONE_ORDER) or not all(re.fullmatch(r"#[0-9a-fA-F]{6}", p) for p in parts):
+        raise ValueError(f"expected five #rrggbb colours as COAT,SHADE,MARK,LIGHT,EAR, got {text!r}")
+    return dict(zip(TONE_ORDER, (p.lower() for p in parts)))
+
+
+def register_tones(specs: Sequence[str]) -> List[str]:
+    """Register each --tones value as a temporary custom colorway and return
+    their ids, in order."""
+    table = {f"custom-{TONES_ID_BASE - i}": parse_tones(spec) for i, spec in enumerate(specs)}
+    set_custom_colorways(table)
+    return list(table)
+
+
+def render_grid(out_path: Path, scale: int = 6,
+                colorways: Optional[Sequence[str]] = None) -> List[str]:
+    """One 'content' cat per colorway x pattern, laid out as a matrix
+    (the built-in colorways unless `colorways` is given).
     Returns the row-major cell legend ("colorway/pattern")."""
     from tokitty.sprites import _apply, SITTING_TEMPLATE
     pose = _apply(SITTING_TEMPLATE, {"L": "e", "R": "e", "A": "n"})
     rows_n, cols_n = len(pose), len(pose[0])
     cell_w, cell_h = cols_n * scale, rows_n * scale
-    colorways, patterns = list(COLORWAYS), list(PATTERNS)
+    colorways = list(COLORWAYS) if colorways is None else list(colorways)
+    patterns = list(PATTERNS)
     width = GAP + len(patterns) * (cell_w + GAP)
     height = GAP + len(colorways) * (cell_h + GAP)
     bg = _hex_to_rgb(BG)
@@ -362,6 +389,9 @@ def main() -> int:
     parser.add_argument("--scale", type=int, default=8)
     parser.add_argument("--colorway", default="orange")
     parser.add_argument("--pattern", default="tabby")
+    parser.add_argument("--tones", action="append", metavar="COAT,SHADE,MARK,LIGHT,EAR",
+                        help="five #rrggbb tones for a temporary custom colorway (repeatable; "
+                             "replaces --colorway; --grid draws one row per value)")
     parser.add_argument("--grid", action="store_true")
     parser.add_argument("--state", action="append",
                         choices=(list(ALL_STATES) + [transition_name(*pair) for pair in TRANSITIONS]
@@ -378,8 +408,15 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0, help="rng seed for --gif ranged holds")
     parser.add_argument("--gif-seconds", type=float, default=DEFAULT_GIF_SECONDS)
     args = parser.parse_args()
+    colorways = None
+    if args.tones:
+        try:
+            colorways = register_tones(args.tones)
+        except ValueError as exc:
+            parser.error(str(exc))
+        args.colorway = colorways[0]
     if args.grid:
-        for label in render_grid(args.out, scale=args.scale):
+        for label in render_grid(args.out, scale=args.scale, colorways=colorways):
             print(label)
     else:
         states = resolve_states(args.state or list(ALL_STATES), args.spot)

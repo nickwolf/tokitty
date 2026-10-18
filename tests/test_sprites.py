@@ -629,3 +629,19 @@ def test_spot_variants_and_moves_resolve_and_are_checked(monkeypatch):
     with pytest.raises(ValueError):
         _check_transitions()
     assert sprites.SPOT_SEP not in "".join(ALL_STATES)
+
+
+def test_every_colorway_routes_its_tones_through_every_pattern():
+    """The cat pixel refs draw one colorway (#156), so this pins the rest: each
+    region char takes the tone its pattern names, the ears take the colorway's
+    ear tone, and every other char is BASE_PALETTE's."""
+    for colorway, tones in COLORWAYS.items():
+        tone_of = dict(tones, white=BASE_PALETTE["w"])
+        for pattern, regions in PATTERNS.items():
+            palette = resolve_palette(colorway, pattern)
+            for char, src in regions.items():
+                assert palette[char] == tone_of.get(src, src), (colorway, pattern, char)
+            assert palette["p"] == tones["ear"], (colorway, pattern)
+            for char, value in BASE_PALETTE.items():
+                if char not in regions and char != "p":
+                    assert palette[char] == value, (colorway, pattern, char)
