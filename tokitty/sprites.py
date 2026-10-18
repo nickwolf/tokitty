@@ -2336,6 +2336,41 @@ def _pop_question() -> Animation:
     ], loop_from=None)
 
 
+def _lean(grid: List[str], cols: int) -> List[str]:
+    """The grid sheared left by up to `cols` (right when negative) at the top
+    row, nothing at the bottom: the cat tipping over."""
+    rows = []
+    for r, row in enumerate(grid):
+        dc = round(cols * (len(grid) - 1 - r) / (len(grid) - 1))
+        rows.append(row[dc:] + "." * dc if dc >= 0 else "." * -dc + row[:dc])
+    return rows
+
+
+def _drop(grid: List[str], rows: int) -> List[str]:
+    """The grid moved `rows` down, its bottom rows cut off by the ground."""
+    return ["." * len(grid[0])] * rows + grid[:len(grid) - rows]
+
+
+def _panicked_to_flopped() -> Animation:
+    """The cap hits mid-panic: the alarm drains out of the cat, its eyes go
+    heavy, it wobbles, tips over and rolls onto its back (flopped>stirring's
+    roll run backward), and its legs flop up."""
+    spent = [row.replace("!", ".") for row in _at("panicked")]
+    spent = _overlay(spent, {(7, 10): LID_CHAR, (7, 16): LID_CHAR})
+    roll = get_frames(transition_name("flopped", "stirring"))
+    return single_track(_at("panicked"), [
+        Frame({}, 120, template=_at("panicked")),
+        Frame({}, 300, template=spent),
+        Frame({}, 140, template=_lean(spent, -1)),
+        Frame({}, 120, template=_lean(spent, 3)),
+        Frame({}, 80, template=_lean(spent, 7)),
+        Frame({}, 70, template=_lean(_drop(spent, 4), 9)),
+        Frame({}, 140, template=_ROLL_CURL),
+        Frame({}, 160, template=roll[1]),
+        Frame({}, 100, template=_at("flopped")),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2394,4 +2429,5 @@ TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
 TRANSITIONS[("flopped", "stirring")] = _flopped_to_stirring()
+TRANSITIONS[("panicked", "flopped")] = _panicked_to_flopped()
 _check_transitions()
