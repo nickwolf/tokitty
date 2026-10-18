@@ -20,6 +20,7 @@ from typing import Callable, Dict, Optional, Tuple
 from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
 from tokitty import sprites
+from tokitty.behaviour import Drives
 from tokitty.wander import Pose, Roam
 from tokitty.theme import CLASSIC, CardStyle
 
@@ -161,7 +162,9 @@ class QtPane:
         tool_label: str = "",
         accent: bool = False,
         dimmed: bool = False,
+        drives: Drives = Drives(),
     ) -> None:
+        self._roam.set_drives(drives, self._clock())
         self._set_state(state)
         self._driving_tag = driving_tag
         self._tool_label = tool_label
@@ -186,7 +189,9 @@ class QtPane:
         tool_label: str = "",
         accent: bool = False,
         projection_text: Optional[str] = None,
+        drives: Drives = Drives(),
     ) -> None:
+        self._roam.set_drives(drives, self._clock())
         self._set_state(state)
         self._driving_tag = driving_tag
         self._tool_label = tool_label

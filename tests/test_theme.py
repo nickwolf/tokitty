@@ -732,9 +732,9 @@ def test_cat_shadow_off_round_trips(tmp_path):
     from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
 
     theme = Theme(cat=CatStyle(shadow=False))
-    assert theme_to_dict(theme)["cat"] == {"shadow": False, "wander": True}
+    assert theme_to_dict(theme)["cat"] == {"shadow": False, "wander": True, "time_of_day": True}
     save_theme(tmp_path, theme)
-    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False, "wander": True}
+    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False, "wander": True, "time_of_day": True}
     assert load_theme(tmp_path).cat.shadow is False
     assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.shadow is False
 
@@ -752,10 +752,25 @@ def test_cat_wander_off_round_trips(tmp_path):
     from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
 
     theme = Theme(cat=CatStyle(wander=False))
-    assert theme_to_dict(theme)["cat"] == {"shadow": True, "wander": False}
+    assert theme_to_dict(theme)["cat"] == {"shadow": True, "wander": False, "time_of_day": True}
     save_theme(tmp_path, theme)
     assert load_theme(tmp_path).cat.wander is False
     assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.wander is True
+
+
+def test_cat_time_of_day_defaults_on_and_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme
+
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.time_of_day is True
+    save_theme(tmp_path, Theme(cat=CatStyle(time_of_day=False)))
+    assert load_theme(tmp_path).cat.time_of_day is False
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_time_of_day_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"time_of_day": bad}}
+    assert theme_from_dict(raw, Theme()).cat.time_of_day is True
+    assert rejected_fields(raw, Theme()) == {"cat.time_of_day"}
 
 
 @pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])

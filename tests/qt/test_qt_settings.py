@@ -959,3 +959,20 @@ def test_cat_wander_toggle_reflects_the_theme_after_a_refresh(make_world):
     world = make_world(1, theme=T.Theme(cat=T.CatStyle(wander=False)))
     theme_tab = open_window(world).tabs["theme"]
     assert theme_tab.wander_toggle.get() is False
+
+
+def test_cat_time_of_day_toggle_writes_the_theme(make_world):
+    world = make_world(1, theme=T.Theme())  # follows the clock by default
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.time_of_day_toggle.get() is True
+    theme_tab.time_of_day_toggle._clicked()
+    assert saved_theme(world).cat.time_of_day is False
+    assert world.widget.theme.cat.time_of_day is False
+    theme_tab.time_of_day_toggle._clicked()
+    assert saved_theme(world).cat.time_of_day is True and world.widget.theme.cat.time_of_day is True
+
+
+def test_cat_time_of_day_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(time_of_day=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.time_of_day_toggle.get() is False

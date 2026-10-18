@@ -10,6 +10,7 @@ from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
 from tokitty.api import UsageSnapshot
 from tokitty.app_core import PaneUpdate, build_units, make_onboarder, step_unit
+from tokitty.behaviour import Drives, drives
 from tokitty.burn import BurnTracker
 from tokitty.customize import Customization, load_customization, save_customization
 from tokitty.display import format_reset_day, format_reset_time
@@ -103,7 +104,8 @@ def events(monkeypatch):
     return log
 
 
-def _step(unit, events, *, usage_state=None, notifier=None, store=None, removed=None, onboard=None):
+def _step(unit, events, *, usage_state=None, notifier=None, store=None, removed=None, onboard=None,
+          **extra):
     return step_unit(
         unit,
         usage_state=usage_state or _usage_state(),
@@ -112,6 +114,7 @@ def _step(unit, events, *, usage_state=None, notifier=None, store=None, removed=
         notes_removed=removed if removed is not None else set(),
         onboard=onboard or (lambda unit, latest, breakdown: events.append(("onboard", latest, breakdown))),
         now=NOW,
+        **extra,
     )
 
 
@@ -135,6 +138,7 @@ def test_step_unit_limits_ok(events):
         "projection_text": None,
         "tool_label": "",
         "accent": False,
+        "drives": Drives(),
     })
     assert [e[0] for e in events] == ["onboard", "note_write"]
     assert events[0][1:] == (poll, None)
@@ -159,6 +163,7 @@ def test_step_unit_models_view(events):
         "driving_tag": "",
         "tool_label": "",
         "accent": False,
+        "drives": Drives(),
     })
     assert unit["last_good"] is poll
     assert len(unit["burn"].samples) == 1
@@ -194,6 +199,7 @@ def test_step_unit_stale_token_without_history(events):
         "projection_text": None,
         "tool_label": "",
         "accent": False,
+        "drives": Drives(),
     })
     assert unit["last_good"] is None
     assert unit["burn"].samples == []
@@ -454,3 +460,25 @@ def test_build_units_names_each_units_threads_by_index(tmp_path):
         assert unit["poller"]._name == f"poller-{index}"
         assert unit["watcher"]._name == f"activity-{index}"
         assert unit["usage"]._name == f"usage-{index}"
+
+
+_MEXICO = timezone(timedelta(hours=-6))
+
+
+@pytest.mark.parametrize("view", ["limits", "models"])
+def test_step_unit_drives_follow_the_hour_in_the_given_zone(events, view):
+    # 09:00 UTC is 03:00 in UTC-6: night there, morning in UTC
+    usage_state = _usage_state(view=view)
+    unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
+    night = _step(unit, events, usage_state=usage_state, time_of_day=True, tz=_MEXICO)
+    assert night.kwargs["drives"] == drives(3)
+    morning = _step(unit, events, usage_state=usage_state, time_of_day=True, tz=timezone.utc)
+    assert morning.kwargs["drives"] == drives(9)
+    assert night.kwargs["drives"] != morning.kwargs["drives"]
+
+
+@pytest.mark.parametrize("view", ["limits", "models"])
+def test_step_unit_without_time_of_day_has_plain_drives(events, view):
+    unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
+    update = _step(unit, events, usage_state=_usage_state(view=view), tz=_MEXICO)
+    assert update.kwargs["drives"] == Drives()

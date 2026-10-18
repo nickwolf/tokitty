@@ -721,9 +721,14 @@ class ThemeTab(_Tab):
         self.wander_toggle = kit.toggle(
             "Cat wanders", compact=True, on_change=lambda on: self._edit("cat", "wander", on))
         self.wander_toggle.setContentsMargins(12, 4, 12, 4)
+        self.time_of_day_toggle = kit.toggle(
+            "Follows the clock", compact=True,
+            on_change=lambda on: self._edit("cat", "time_of_day", on))
+        self.time_of_day_toggle.setContentsMargins(12, 4, 12, 4)
         card = self.card()
         kit.add(card, self.shadow_toggle)
         kit.add(card, self.wander_toggle)
+        kit.add(card, self.time_of_day_toggle)
         kit.section_header(self.frame, "Outline", "Helps text over a see-through card", top=10)
         self.halo = kit.segmented([("off", "Off"), ("auto", "Auto"), ("on", "On")],
                                   on_change=lambda v: self._edit("text", "halo", v))
@@ -813,6 +818,7 @@ class ThemeTab(_Tab):
             toggle.set(element in theme.text.show)
         self.shadow_toggle.set(theme.cat.shadow)
         self.wander_toggle.set(theme.cat.wander)
+        self.time_of_day_toggle.set(theme.cat.time_of_day)
         for holder in self.entries.values():
             self.kit.set_entry_error(holder, False)
 
