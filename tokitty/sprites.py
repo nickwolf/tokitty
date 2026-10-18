@@ -2453,6 +2453,30 @@ def _activate_dozes_off() -> Animation:
 _ACTIVATE_SETTLES_INTO = ("content", "interested", "alert")
 
 
+def _interested_to_alert() -> Animation:
+    """An ear perks, the cat sits up tall, and the "!" pops up beside it."""
+    return single_track(_at("interested"), [
+        Frame({}, 120, template=_at("interested")),
+        Frame({}, 220, template=_at("interested", ears=1)),
+        Frame({}, 180, template=_at("alert", bang=1)),
+        Frame({}, 80, template=_at("alert", bang=2)),
+        Frame({}, 100, template=_at("alert", bang=3)),
+        Frame({}, 100, template=_at("alert")),
+    ], loop_from=None)
+
+
+def _alert_to_interested() -> Animation:
+    """The "!" goes, the cat lets out a sigh (its head sinks a row) and
+    settles back down."""
+    calm = _at("alert", bang=1)
+    return single_track(_at("alert"), [
+        Frame({}, 120, template=_at("alert")),
+        Frame({}, 300, template=calm),
+        Frame({}, 400, template=_sink_head(calm, neck_row=14)),
+        Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2517,4 +2541,6 @@ for _mood in _ACTIVATE_SETTLES_INTO:
     TRANSITIONS[("activate", _mood)] = _activate_settles(_mood)
 del _mood
 TRANSITIONS[("activate", "sleeping")] = _activate_dozes_off()
+TRANSITIONS[("interested", "alert")] = _interested_to_alert()
+TRANSITIONS[("alert", "interested")] = _alert_to_interested()
 _check_transitions()
