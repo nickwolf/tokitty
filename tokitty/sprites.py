@@ -2477,6 +2477,23 @@ def _alert_to_interested() -> Animation:
     ], loop_from=None)
 
 
+def _double_take() -> Animation:
+    """Into confused from anywhere: a squint one way, then the other, the
+    ear comes up, and the "?" floats up beside the cat."""
+    puzzled = _at("confused")
+    blank = [row.replace("?", ".") for row in puzzled]
+    return single_track(blank, [
+        Frame({}, 180, template=blank),
+        Frame({}, 160, template=[row.replace("?", ".") for row in _at("confused", eyes=1)]),
+        Frame({}, 120, template=blank),
+        Frame({}, 160, template=[row.replace("?", ".") for row in _at("confused", eyes=3)]),
+        Frame({}, 200, template=[row.replace("?", ".") for row in _at("confused", ears=1)]),
+        Frame({}, 90, template=_rise(blank, puzzled, 4)),
+        Frame({}, 90, template=_rise(blank, puzzled, 2)),
+        Frame({}, 100, template=puzzled),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2543,4 +2560,5 @@ del _mood
 TRANSITIONS[("activate", "sleeping")] = _activate_dozes_off()
 TRANSITIONS[("interested", "alert")] = _interested_to_alert()
 TRANSITIONS[("alert", "interested")] = _alert_to_interested()
+TRANSITIONS[(ANY_STATE, "confused")] = _double_take()
 _check_transitions()
