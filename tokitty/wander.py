@@ -7,8 +7,9 @@ where the cat is and which move comes next; a Roam pairs it with the Player
 that shows it, starting each move the moment the last one ends.
 
 When a rest at home runs out, the cat's Drives (behaviour.py, #138) weigh a
-trip against a nap or simply resting on. A nap is drawn as the sleeping art
-while the logical state stays what it was, so an alert always ends it.
+trip against a nap, play or simply resting on. A nap is drawn as the sleeping
+art while the logical state stays what it was, so an alert always ends it.
+Play is a scratch (#124), as is a stop now and then on a trip.
 """
 from __future__ import annotations
 
@@ -32,6 +33,12 @@ STOP_REST_MS = (20_000, 60_000)   # at each stop along the edge
 NAP_MS = (180_000, 600_000)       # a nap at home
 MIN_LEG = 2                       # strides between one stop and the next
 STALL_MS = 5_000                  # later than this, a step starts now instead
+# What play plays, by where the cat is: the upright scratches need the stats
+# or the card's side beside it, so on the top edge only the stretch fits.
+PLAY_MOVES = {"inside": ("scratch", "scratch_stats", "scratch_edge"),
+              "inside_right": ("scratch", "scratch_stats", "scratch_edge"),
+              "on_top": ("scratch",)}
+STOP_SCRATCH = 1 / 3              # chance of a scratch at a stop, while play > 0
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,7 @@ class Wanderer:
         self.due: Optional[int] = None     # when the rest ends; None waits for a state
         self.drives = Drives()
         self.nap_until: Optional[int] = None  # dozing at home until then
+        self.play: Optional[str] = None    # a move to play once the cat is up for it
 
     @property
     def away(self) -> bool:
@@ -106,6 +114,8 @@ class Wanderer:
         if state != self.state and self.nap_until is not None:
             self.nap_until = self.rest_until = self.due = None
         self.state = state
+        if state not in WANDER_STATES:
+            self.play = None
         if state not in WANDER_STATES | STAY_STATES:
             if self.away:
                 self._go_home()
@@ -151,6 +161,7 @@ class Wanderer:
         weights = [
             ("trip", d.trip if self.roams else 0.0),
             ("nap", d.nap if self.state == "content" else 0.0),
+            ("play", d.play),
             ("stay", d.stay),
         ]
         weights = [(name, w) for name, w in weights if w > 0]
@@ -168,6 +179,8 @@ class Wanderer:
             self._plan()
         elif choice == "nap":
             self.nap_until = at + self._span(NAP_MS)
+        elif choice == "play":
+            self.play = self.rng.choice(PLAY_MOVES[self.pose.spot])
 
     def _span(self, span) -> int:
         return int(self.rng.randint(*span) * self.drives.pace)
@@ -188,6 +201,11 @@ class Wanderer:
             if self.walking:
                 return "walk_stop"
             return None if lies == self.lying else ("lie_down" if lies else "sit_up")
+        if self.play is not None:
+            if self.lying:
+                return "sit_up"
+            move, self.play = self.play, None
+            return move
         if not self.stops:
             return None if lies == self.lying else ("lie_down" if lies else "sit_up")
         target = self.stops[0]
@@ -230,6 +248,9 @@ class Wanderer:
             self.stops = []
         elif move == "walk":
             pose = replace(pose, x=pose.x + (-STRIDE_PX if pose.mirrored else STRIDE_PX))
+        elif (move == "walk_stop" and len(self.stops) > 1 and self.drives.play > 0
+              and self.rng.random() < STOP_SCRATCH):
+            self.play = "scratch"
         self.walking = move in ("walk_start", "walk")
         self.lying = move == "lie_down"
         self.pose = pose
@@ -244,8 +265,8 @@ class Wanderer:
         if self.nap_until is not None:
             self.rest_until = self.due = self.nap_until
             return
-        # A cat that cannot roam rests only if it could doze off.
-        if not self.away and not self.roams and not self._can_nap():
+        # A cat that cannot roam rests only if it could doze off or play.
+        if not self.away and not self.roams and not self._can_nap() and self.drives.play <= 0:
             self.rest_until = self.due = None
             return
         if self.rest_until is None:
@@ -257,6 +278,7 @@ class Wanderer:
 
     def _go_home(self) -> None:
         self.move = None
+        self.play = None
         self.stops = []
         self.walking = self.at_stop = False
         self.pose = self.home
