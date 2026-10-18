@@ -490,6 +490,21 @@ def test_step_unit_without_time_of_day_has_plain_drives(events, view):
     assert update.kwargs["drives"] == Drives()
 
 
+def test_step_unit_drives_follow_the_stores_personality(events):
+
+    unit = _unit(poll=_poll(snapshot=_snapshot()))
+    store = {"default": Customization(personality="lazy")}
+    update = _step(unit, events, store=store, time_of_day=True, tz=timezone.utc)
+    assert update.kwargs["drives"] == drives(NOW.hour, "lazy")
+    assert update.kwargs["drives"].nap == pytest.approx(drives(NOW.hour).nap * 2.5)
+    # a live change reaches the next tick; no entry is the balanced cat
+    store["default"] = Customization(personality="playful")
+    unit = _unit(poll=_poll(snapshot=_snapshot()))
+    assert _step(unit, events, store=store, time_of_day=True, tz=timezone.utc).kwargs["drives"] == drives(NOW.hour, "playful")
+    unit = _unit(poll=_poll(snapshot=_snapshot()))
+    assert _step(unit, events, time_of_day=True, tz=timezone.utc).kwargs["drives"] == drives(NOW.hour)
+
+
 # ---- limits hover ------------------------------------------------------------
 
 def _burning(*, start_pct=10.0, end_pct=40.0):

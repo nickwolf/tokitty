@@ -6,7 +6,7 @@ Drives() is the cat as it was before any of this existed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 # Bounds on `pace`, the idle-CPU budget: a longer rest is cheaper, a shorter
@@ -33,14 +33,32 @@ _BANDS = (
     (23, Drives(trip=0.3, nap=3.0, stay=1.0, pace=1.6)),   # night, until 6
 )
 
+PERSONALITIES = ("balanced", "lazy", "playful", "curious")
 
-def drives(hour: Optional[int]) -> Drives:
-    """The drives for a local hour (0-23); None, the setting being off, is the
-    plain cat."""
+# Per personality, what the band's drives are multiplied by; `stops` replaces.
+_PERSONALITY = {
+    "balanced": Drives(trip=1.0, nap=1.0, stay=1.0, play=1.0, pace=1.0, stops=(1, 3)),
+    "lazy":     Drives(trip=0.5, nap=2.5, stay=1.5, play=0.5, pace=1.4, stops=(1, 2)),
+    "playful":  Drives(trip=1.2, nap=0.6, stay=0.5, play=3.0, pace=0.8, stops=(1, 3)),
+    "curious":  Drives(trip=1.6, nap=0.6, stay=0.5, play=1.0, pace=0.9, stops=(2, 4)),
+}
+
+
+def drives(hour: Optional[int], personality: str = "balanced") -> Drives:
+    """The drives for a local hour (0-23) as a personality sets them; None for
+    the hour, the setting being off, is the plain cat's baseline. An unknown
+    personality is balanced."""
     if hour is None:
-        return Drives()
-    row = _BANDS[-1][1]                # before 6 is still the night before
-    for start, band in _BANDS:
-        if hour >= start:
-            row = band
-    return replace(row, pace=min(PACE_MAX, max(PACE_MIN, row.pace)))
+        row = Drives()
+    else:
+        row = _BANDS[-1][1]            # before 6 is still the night before
+        for start, band in _BANDS:
+            if hour >= start:
+                row = band
+    mult = _PERSONALITY.get(personality, _PERSONALITY["balanced"])
+    return Drives(
+        trip=row.trip * mult.trip, nap=row.nap * mult.nap, stay=row.stay * mult.stay,
+        play=row.play * mult.play,
+        pace=min(PACE_MAX, max(PACE_MIN, row.pace * mult.pace)),
+        stops=mult.stops,
+    )

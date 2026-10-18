@@ -99,6 +99,8 @@ def build(kind, tmp_path, monkeypatch, *, panes=2, with_accounts=True, startup=N
         return "boom" if topic == "bad" else None
 
     monkeypatch.setattr(app_controls, "random_look", fake_random)
+    # The original seams predate personalities and leave them alone.
+    monkeypatch.setattr(app_controls, "random_personality", lambda: "balanced")
     monkeypatch.setattr(app_controls, "ntfy_send_test", fake_send)
     monkeypatch.setattr(old_seams, "random_look", fake_random)
     monkeypatch.setattr(old_seams, "ntfy_send_test", fake_send)
@@ -505,3 +507,39 @@ def test_reset_clears_every_bar_override(tmp_path, monkeypatch):
     world.store["k0"] = Customization(overrides={
         "bar_fill": "#aaaaaa", "session_bar": "#111111", "weekly_bar": "#222222"})
     assert _set(world, "reset", None) == {}
+
+
+def test_personality_saves_and_validates(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(1, "personality", "lazy")
+    assert world.store["k1"].personality == "lazy"
+    assert load_customization(world.state_dir)["k1"].personality == "lazy"
+    assert world.store["k0"].personality == "balanced"
+    assert ("apply", 1, world.store["k1"]) in world.log
+    seams.on_customization_changed(1, "personality", "nope")
+    seams.on_customization_changed(1, "personality", None)
+    assert world.store["k1"].personality == "lazy"
+
+
+def test_randomize_picks_a_personality_and_reset_keeps_it(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    picks = iter(["curious", "lazy"])
+    monkeypatch.setattr(app_controls, "random_personality", lambda: next(picks))
+    world.seams.on_randomize(0)
+    assert world.store["k0"].personality == "curious"
+    world.seams.on_randomize(0)
+    assert world.store["k0"].personality == "lazy"
+    world.seams.on_customization_changed(0, "reset", None)
+    assert world.store["k0"].personality == "lazy"
+
+
+def test_random_personality_is_seedable():
+    import random
+
+    from tokitty.behaviour import PERSONALITIES
+    from tokitty.randomize import random_personality
+
+    seen = {random_personality(random.Random(s)) for s in range(40)}
+    assert seen == set(PERSONALITIES)
+    assert random_personality(random.Random(3)) == random_personality(random.Random(3))
