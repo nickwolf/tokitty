@@ -2250,6 +2250,25 @@ def _thinking_to_working() -> Animation:
     ], loop_from=None)
 
 
+def _working_to_thinking() -> Animation:
+    """thinking>working run back: the lights come up, the paws lift, the
+    laptop slides off to the left, and a thought bubbles up dot by dot."""
+    clear = _at("thinking", bubble=2)
+    return single_track(_at("working"), [
+        Frame({}, 150, template=_at("working")),
+        Frame({}, 140, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 120, template=_overlay(clear, _laptop())),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-9))),
+        Frame({}, 260, template=clear),
+        Frame({}, 200, template=_at("thinking", bubble=3)),
+        Frame({}, 200, template=_at("thinking", bubble=4)),
+        Frame({}, 240, template=_at("thinking", bubble=5)),
+        Frame({}, 100, template=_at("thinking")),
+    ], loop_from=None)
+
+
 def _working_to_done_hop() -> Animation:
     """The lights come up as the lid swings shut, and the laptop slides away."""
     sit = _hop_frame()
@@ -2300,6 +2319,7 @@ def _permission_to_urgent() -> Animation:
 
 TRANSITIONS[("permission", "permission_urgent")] = _permission_to_urgent()
 TRANSITIONS[("thinking", "working")] = _thinking_to_working()
+TRANSITIONS[("working", "thinking")] = _working_to_thinking()
 TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
