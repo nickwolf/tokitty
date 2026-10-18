@@ -329,3 +329,21 @@ def test_tray_set_look_repaints_the_icon_only_when_the_look_changes(qapp):
     sprites.set_custom_colorways({"custom-1": {**SLATE, "coat": "#aa0000"}})
     tray.set_look("custom-1", "tabby", "plain")
     assert len(fake.icons) == 4  # same id, new tones
+
+
+def test_every_pattern_in_the_strip_is_named(make_world):
+    dlg = editor(make_world(1))
+    assert list(dlg.strip_labels) == list(sprites.PATTERNS)
+    assert dlg.strip_labels["tabby_white"].text() == "tabby white"
+
+
+def test_preview_pattern_pick_repaints_the_preview_only(make_world):
+    world = make_world(1)
+    dlg = editor(world)
+    assert dlg.pattern_pick.get() == world.widget.panes[0]._pattern
+    dlg.pattern_pick.set("van")
+    dlg._pick_pattern("van")
+    assert dlg.pattern == "van"
+    assert dlg.preview.image == dlg.kit.sprite_preview(
+        colorways.palette_from_tones(dlg.draft, "van", dlg.tail), cell=dlg.preview._cell).image
+    assert world.widget.panes[0]._pattern != "van"  # the pane keeps its own

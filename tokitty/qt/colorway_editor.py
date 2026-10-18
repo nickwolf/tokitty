@@ -110,7 +110,7 @@ class ColorwayEditor(QDialog):
         left_col.addStretch(1)
 
         card = kit.surface()
-        card.setFixedSize(PREVIEW_CELL * 28 + 24, PREVIEW_CELL * 26 + 40)
+        card.setFixedSize(PREVIEW_CELL * 28 + 24, PREVIEW_CELL * 26 + 80)
         card_col = card.layout()
         title = text("PREVIEW", color=DIM_COLOR, font=FONT_SMALL)
         title.setContentsMargins(10, 8, 0, 0)
@@ -118,6 +118,15 @@ class ColorwayEditor(QDialog):
         self.preview: SpritePreview = kit.sprite_preview(
             self._palette(self.pattern), cell=PREVIEW_CELL)
         card_col.addWidget(self.preview, 1, Qt.AlignmentFlag.AlignCenter)
+        # Preview only: which pattern the big cat wears here. The pane's own
+        # pattern is chosen on the Look tab.
+        self.pattern_pick = kit.dropdown(list(sprites.PATTERNS), on_change=self._pick_pattern)
+        self.pattern_pick.set(self.pattern)
+        pick_row = QWidget()
+        pick_layout = hbox(pick_row)
+        pick_layout.setContentsMargins(10, 0, 10, 10)
+        pick_layout.addWidget(self.pattern_pick, 1)
+        card_col.addWidget(pick_row)
         cols.addWidget(card, 0, Qt.AlignmentFlag.AlignTop)
 
         root.addSpacing(12)
@@ -126,11 +135,22 @@ class ColorwayEditor(QDialog):
         strip = QWidget()
         strip_row = hbox(strip, spacing=4)
         self.strip: Dict[str, SpritePreview] = {}
+        self.strip_labels: Dict[str, QWidget] = {}
         for pattern in sprites.PATTERNS:
             cell = kit.sprite_preview(self._palette(pattern), cell=STRIP_CELL)
             cell.setToolTip(pattern.replace("_", " "))
             self.strip[pattern] = cell
-            strip_row.addWidget(cell)
+            column = QWidget()
+            column_layout = vbox(column)
+            column_layout.addWidget(cell, 0, Qt.AlignmentFlag.AlignHCenter)
+            # Spaces, not underscores, so "tabby white" can wrap under its cat.
+            label = text(pattern.replace("_", " "), color=MUTED, font=FONT_SMALL)
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            label.setFixedWidth(STRIP_CELL * 28 + 4)
+            column_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignHCenter)
+            self.strip_labels[pattern] = label
+            strip_row.addWidget(column, 0, Qt.AlignmentFlag.AlignTop)
         strip_row.addStretch(1)
         root.addWidget(strip)
         root.addSpacing(14)
@@ -161,6 +181,11 @@ class ColorwayEditor(QDialog):
         self.preview.set_sprite(self._palette(self.pattern))
         for pattern, cell in self.strip.items():
             cell.set_sprite(self._palette(pattern))
+
+    def _pick_pattern(self, pattern: str) -> None:
+        if pattern in sprites.PATTERNS:
+            self.pattern = pattern
+            self._sync()
 
     def _choose(self, key: str, caption: str) -> None:
         chosen = QColorDialog.getColor(QColor(self.draft[key]), self, caption)
