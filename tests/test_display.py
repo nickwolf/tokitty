@@ -125,3 +125,10 @@ def test_reset_phrase_reads_for_each_reset_form():
 ])
 def test_format_time_left_keeps_the_two_coarsest_units(seconds, expected):
     assert format_time_left(seconds) == expected
+
+
+def test_resolve_status_text_orders_the_handoff_text():
+    assert resolve_status_text(None, "$1", "proj", None, "Codex has room") == "Codex has room"
+    assert resolve_status_text(None, "$1", "proj", "as of 4:12 PM", "Codex has room") == "as of 4:12 PM"
+    assert resolve_status_text("hint", None, None, "as of 4:12 PM", "Codex has room") == "hint"
+    assert resolve_status_text(None, "$1", "proj", None, None) == "$1"

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 
@@ -29,6 +29,7 @@ from tokitty.display import (
     format_reset_day,
     format_reset_time,
 )
+from tokitty.handoff import Hint, Standing, handoff_hints
 from tokitty.hooks_install import retry_pending_hook_op
 from tokitty.hover import LimitHover, LimitsHover
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
@@ -377,6 +378,48 @@ class PaneUpdate:
     kwargs: dict
 
 
+# The only resting ladder states a perk up may lift to "interested".
+_PERK_UP_FROM = frozenset({"sleeping", "content"})
+
+
+def apply_hint(update: PaneUpdate, hint: Optional[Hint], ladder_state: str) -> PaneUpdate:
+    """The update with `hint` applied; `ladder_state` is the mood or capped
+    state before activity poses were resolved. Models-view updates and a
+    missing hint pass through."""
+    if hint is None or update.kind != "limits":
+        return update
+    kwargs = update.kwargs
+    if hint.kind == "near":
+        changes = {"handoff_text": hint.text}
+        # Only an alert cat droops, and only once the art exists. Panicked,
+        # capped, wake, prompt and activity poses are left alone.
+        if kwargs["state"] == "alert" and "tired" in sprites.ANIMATIONS:
+            changes["state"] = "tired"
+        return PaneUpdate("limits", {**kwargs, **changes})
+    # A perk up only lifts a cat that is resting on its own ladder state: an
+    # activity or prompt pose, a capped state or a dimmed look stays as it is.
+    if not kwargs["dimmed"] and kwargs["state"] == ladder_state and ladder_state in _PERK_UP_FROM:
+        return replace(update, kwargs={**kwargs, "state": "interested"})
+    return update
+
+
+def apply_handoff(stepped: List[Tuple[dict, Optional[PaneUpdate]]]) -> List[Optional[PaneUpdate]]:
+    """Second pass of the tick: compare every stepped unit's standing, carry
+    each unit's near-cap flag in unit["handoff_near"] and return the updates
+    with their hints applied, in order. Units without a standing (models view,
+    no result yet) are neither near cap nor roomy."""
+    standings = [u["handoff_standing"] for u, update in stepped if update is not None and u["handoff_standing"]]
+    flags = {u["key"]: u.get("handoff_near", False) for u, _ in stepped}
+    hints, flags = handoff_hints(standings, flags)
+    out = []
+    for unit, update in stepped:
+        unit["handoff_near"] = flags.get(unit["key"], False)
+        if update is not None:
+            update = apply_hint(update, hints.get(unit["key"]), unit.get("handoff_ladder", ""))
+        out.append(update)
+    return out
+
+
 def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentials,
                 distro_probe, usage_state: dict) -> List[dict]:
     """One unit per account (one default unit with no accounts), without a pane.
@@ -503,6 +546,17 @@ def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None])
     return maybe_onboard
 
 
+def _handoff_standing(unit: dict, latest: PollResult, display: dict, custom) -> Standing:
+    """This unit's place in the handoff comparison. Capped means the numbers
+    on screen came from a binding capped limit; a dimmed display is not trusted."""
+    from_poll = latest.status == "ok" and latest.snapshot is not None
+    snapshot = latest.snapshot if from_poll else (unit["last_good"].snapshot if unit["last_good"] else None)
+    capped = snapshot is not None and select_binding_capped_limit(snapshot.limits) is not None
+    label = (custom.label.strip() if custom is not None else "") or unit["provider"].kind.capitalize()
+    return Standing(unit["key"], label, display["session_pct"], display["weekly_pct"], capped,
+                    confirmed=not display["dimmed"])
+
+
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
               notes_removed: set, onboard: Callable, now: datetime,
               time_of_day: bool = False, tz=None) -> Optional[PaneUpdate]:
@@ -512,6 +566,7 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     the hour of `now` in `tz` (None is local time)."""
     latest = unit["poller"].get_latest()
     breakdown = unit["usage"].get_latest()
+    unit["handoff_standing"] = None
     onboard(unit, latest, breakdown)
 
     publish_usage_notes(unit, latest, usage_state["notes"], notes_removed)
@@ -532,6 +587,10 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
         args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
         update = PaneUpdate("models", {**args, "drives": cat_drives})
     else:
+        # The handoff comparison (#129) needs the ladder state and the cap as
+        # they were before activity poses overwrite display["state"].
+        unit["handoff_ladder"] = display["state"]
+        unit["handoff_standing"] = _handoff_standing(unit, latest, display, custom)
         pose = resolve_pose(display["state"], activity, now.timestamp())
         display["state"] = pose["sprite_state"]
         display["tool_label"] = pose["tool_label"]

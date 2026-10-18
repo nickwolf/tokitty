@@ -96,15 +96,17 @@ def resolve_status_text(
     credits_text: Optional[str],
     projection_text: Optional[str],
     stale_text: Optional[str] = None,
+    handoff_text: Optional[str] = None,
 ) -> str:
     """Pick what the single shared status line shows. An error hint always
-    wins, then the observation age, then credits, then the burn projection.
+    wins, then the observation age, then the handoff hint, then credits, then
+    the burn projection.
 
     Age outranks both of the lines below it because they describe the same
     numbers it is qualifying: a projection computed from a snapshot hours
     old is the most confidently wrong thing the pane can say.
     """
-    return hint_text or stale_text or credits_text or projection_text or ""
+    return hint_text or stale_text or handoff_text or credits_text or projection_text or ""
 
 
 # How old a snapshot has to be before the pane says so. A Claude poll
