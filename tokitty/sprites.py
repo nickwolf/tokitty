@@ -2250,6 +2250,20 @@ def _thinking_to_working() -> Animation:
     ], loop_from=None)
 
 
+def _settle_at_keys() -> Animation:
+    """Into working from anywhere without its own entry: the cat sits up,
+    pulls the laptop over from the left, and the room goes dark."""
+    clear = _at("thinking", bubble=2)
+    return single_track(clear, [
+        Frame({}, 180, template=clear),
+        Frame({}, 90, template=_overlay(clear, _laptop(-9))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-6))),
+        Frame({}, 90, template=_overlay(clear, _laptop(-3))),
+        Frame({}, 160, template=_overlay(clear, {**_laptop(), **_PAWS_DOWN})),
+        Frame({}, 100, template=_at("working")),
+    ], loop_from=None)
+
+
 def _working_to_thinking() -> Animation:
     """thinking>working run back: the lights come up, the paws lift, the
     laptop slides off to the left, and a thought bubbles up dot by dot."""
@@ -2320,6 +2334,7 @@ def _permission_to_urgent() -> Animation:
 TRANSITIONS[("permission", "permission_urgent")] = _permission_to_urgent()
 TRANSITIONS[("thinking", "working")] = _thinking_to_working()
 TRANSITIONS[("working", "thinking")] = _working_to_thinking()
+TRANSITIONS[(ANY_STATE, "working")] = _settle_at_keys()
 TRANSITIONS[("working", "done_hop")] = _working_to_done_hop()
 TRANSITIONS[("sleeping", "interested")] = _sleeping_to_interested()
 TRANSITIONS[(ANY_STATE, "panicked")] = _startle()
