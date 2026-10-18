@@ -37,7 +37,9 @@ class Poller:
         poll_interval: float = POLL_INTERVAL,
         waking_poll_interval: float = WAKING_POLL_INTERVAL,
         sleep_fn: Optional[Callable[[float], bool]] = None,
+        name: Optional[str] = None,
     ):
+        self._name = name
         self._fetch_fn = fetch_fn
         self._poll_interval = poll_interval
         self._waking_poll_interval = waking_poll_interval
@@ -49,7 +51,7 @@ class Poller:
         self._sleep_fn = sleep_fn or self._wake_event.wait
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True, name=self._name)
         self._thread.start()
 
     def stop(self) -> None:

@@ -263,7 +263,7 @@ def _run_mutation_off_thread(state_dir: Path, accounts: List[Account], op: str,
             outcome = exc
         on_done(outcome)
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, daemon=True, name="account-mutation").start()
 
 
 def _run_validation_off_thread(provider: str, raw: str, active_dirs: List[str], on_done) -> None:
@@ -274,7 +274,7 @@ def _run_validation_off_thread(provider: str, raw: str, active_dirs: List[str], 
             outcome = PathValidationResult(ok=False, error=str(exc))
         on_done(outcome)
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, daemon=True, name="account-validation").start()
 
 
 def _run_retry_off_thread(state_dir: Path, on_done) -> None:

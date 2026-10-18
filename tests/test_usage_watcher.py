@@ -142,3 +142,23 @@ def test_a_pricing_failure_costs_the_readout_not_the_worker(tmp_path, monkeypatc
     watcher._tick_once()
     assert watcher.get_latest().status == STATUS_UNAVAILABLE
     assert watcher.rebuild_for_window().status == STATUS_UNAVAILABLE
+
+
+def test_thread_gets_the_given_name(tmp_path):
+    import threading
+
+    names = []
+    done = threading.Event()
+
+    def sleep_fn(seconds):
+        names.append(threading.current_thread().name)
+        done.set()
+        return True
+
+    watcher = make(transcript(tmp_path), sleep_fn=sleep_fn, name="usage-2")
+    watcher.start()
+    try:
+        assert done.wait(timeout=2)
+    finally:
+        watcher.stop()
+    assert names[0] == "usage-2"
