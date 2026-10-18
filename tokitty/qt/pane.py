@@ -63,6 +63,7 @@ class QtPane:
         self._colorway = self.customization.colorway
         self._pattern = self.customization.pattern
         self._tail = self.customization.tail
+        self._personality = self.customization.personality
         self._accent = False
         self._dimmed = False
         self._current_state = "sleeping"
@@ -113,7 +114,7 @@ class QtPane:
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None,
                        colorway=None, pattern=None, tail=None,
-                       session_bar=None, weekly_bar=None) -> None:
+                       session_bar=None, weekly_bar=None, personality=None) -> None:
         """Live re-style. None leaves a slot unchanged, """
         overrides = dict(self.customization.overrides)
         if card_bg is not None:
@@ -138,9 +139,12 @@ class QtPane:
             self._pattern = pattern
         if tail is not None:
             self._tail = tail
+        if personality is not None:
+            self._personality = personality
         self.customization = replace(
             self.customization, overrides=overrides, label=self._label,
             colorway=self._colorway, pattern=self._pattern, tail=self._tail,
+            personality=self._personality,
         )
         if palette is not None:
             self._palette = palette
@@ -160,6 +164,7 @@ class QtPane:
         self._colorway = custom.colorway
         self._pattern = custom.pattern
         self._tail = custom.tail
+        self._personality = custom.personality
         self._palette = effective_palette(custom)
         self._changed()
 

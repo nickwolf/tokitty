@@ -930,6 +930,22 @@ def test_look_has_a_tail_dropdown_that_writes_through(make_world):
     assert look.tail.get() == "ringed"
 
 
+def test_look_has_a_personality_dropdown_that_writes_through(make_world):
+    from tokitty.behaviour import PERSONALITIES
+
+    world = make_world(2)
+    window = open_window(world, 1)
+    look = window.tabs["look"]
+    assert look.personality.choices() == list(PERSONALITIES)
+    assert look.personality.get() == "balanced"
+    look.personality.menu.actions()[look.personality.choices().index("curious")].trigger()
+    assert world.store["k1"].personality == "curious"
+    assert world.store["k0"].personality == "balanced"
+    assert load_customization(world.state_dir)["k1"].personality == "curious"
+    assert world.widget.panes[1]._personality == "curious"
+    assert look.personality.get() == "curious"
+
+
 def test_cat_shadow_toggle_writes_the_theme(make_world):
     world = make_world(1)
     theme_tab = open_window(world).tabs["theme"]

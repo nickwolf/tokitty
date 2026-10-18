@@ -526,7 +526,9 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     display["projection_text"] = _projection_text_for(unit["burn"], display, now)
     activity = unit["watcher"].get_latest()
 
-    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None)
+    custom = customization_store.get(unit["key"])
+    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None,
+                        custom.personality if custom else "balanced")
     if not wander:
         cat_drives = replace(cat_drives, play=0.0)
     if usage_state["view"] == "models":

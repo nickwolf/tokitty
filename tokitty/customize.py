@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from tokitty import sprites
+from tokitty.behaviour import PERSONALITIES
 from tokitty.theme import SPOTS
 
 CUSTOMIZATION_FILENAME = "customization.json"
@@ -54,6 +55,7 @@ class Customization:
     label: str = ""
     cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
     tail: str = "plain"  # a sprites.TAIL_STYLES name
+    personality: str = "balanced"  # a behaviour.PERSONALITIES name
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -114,6 +116,9 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         tail = entry.get("tail")
         if not (isinstance(tail, str) and tail in sprites.TAIL_STYLES):
             tail = "plain"
+        personality = entry.get("personality")
+        if not (isinstance(personality, str) and personality in PERSONALITIES):
+            personality = "balanced"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
@@ -121,6 +126,7 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
             label=label,
             cat_home=cat_home,
             tail=tail,
+            personality=personality,
         )
     return result
 

@@ -271,3 +271,17 @@ def test_effective_palette_follows_override_changes():
     # unrelated overrides do not change the sprite palette
     assert effective_palette(Customization(overrides={"card_bg": "#222222"})) == base
     assert effective_palette(Customization()) == base
+
+
+def test_personality_round_trips(tmp_path):
+    save_customization(tmp_path, {SINGLE_KEY: Customization(personality="lazy")})
+    assert load_customization(tmp_path)[SINGLE_KEY].personality == "lazy"
+
+
+@pytest.mark.parametrize("raw", ['"personality": "grumpy"', '"personality": 3', '"personality": null', '"x": 1'])
+def test_missing_or_invalid_personality_loads_balanced(tmp_path, raw):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"colorway": "gray", "pattern": "solid", ' + raw + '}}', encoding="utf-8")
+    got = load_customization(tmp_path)[SINGLE_KEY]
+    assert got.personality == "balanced"
+    assert (got.colorway, got.pattern) == ("gray", "solid")

@@ -498,3 +498,21 @@ def test_an_alert_cuts_a_scratch_and_a_nap_drops_one_still_to_come():
     w.play = "scratch"
     w.set_state("sleeping", 0)
     assert w.play is None
+
+
+def test_a_lazy_cat_makes_fewer_trips_than_a_balanced_one_at_night():
+    lazy = sum(_count(_driven(seed=s, d=drives(2, "lazy")), 8)[0] for s in range(5))
+    balanced = sum(_count(_driven(seed=s, d=drives(2, "balanced")), 8)[0] for s in range(5))
+    assert lazy < balanced
+
+
+@pytest.mark.parametrize("home", ["inside", "on_top", "inside_right"])
+def test_a_curious_trip_has_two_to_four_stops_on_the_real_track(home):
+    seen = set()
+    for seed in range(60):
+        w = Wanderer(home, True, random.Random(seed), "content")
+        w.drives = drives(7, "curious")
+        w._plan()
+        assert w.stops[-1] == w.home.x
+        seen.add(len(w.stops) - 1)
+    assert seen == {2, 3, 4}

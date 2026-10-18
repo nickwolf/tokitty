@@ -6,8 +6,15 @@ from __future__ import annotations
 import random
 from typing import Optional, Sequence, Tuple
 
+from tokitty.behaviour import PERSONALITIES
+
 
 def random_look(colorways: Sequence[str], patterns: Sequence[str],
                 rng: Optional[random.Random] = None) -> Tuple[str, str]:
     r = rng or random
     return r.choice(list(colorways)), r.choice(list(patterns))
+
+
+def random_personality(rng: Optional[random.Random] = None) -> str:
+    r = rng or random
+    return r.choice(list(PERSONALITIES))
