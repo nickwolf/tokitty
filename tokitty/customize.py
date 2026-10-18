@@ -13,7 +13,12 @@ Override keys are a closed set:
   - "coat_base"  -> sprite char "o" (coat fill); retired, see migration.py
   - "coat_shade" -> sprite char "O" (coat shading); retired, see migration.py
   - "card_bg"    -> consumed by the UI, not the sprite palette
-  - "bar_fill"   -> consumed by the UI, not the sprite palette
+  - "session_bar" -> the session bar colour; consumed by the UI
+  - "weekly_bar"  -> the weekly bar and per-model rows colour; consumed by the UI
+  - "bar_fill"   -> legacy: both of the above when they are unset. Still read,
+                    never rewritten on load; the UI drops it on the first edit
+                    of either bar (see app_controls).
+Unset bar colours follow the usage ramp.
 "cat_home" is the cat's resting spot (one of theme.SPOTS), default "inside".
 All override values must be "#rrggbb"; unknown keys and invalid hex
 values are silently dropped on load so a hand-edited file degrades
@@ -36,7 +41,8 @@ CUSTOMIZATION_FILENAME = "customization.json"
 
 SINGLE_KEY = "default"
 
-_OVERRIDE_KEYS = frozenset({"coat_base", "coat_shade", "card_bg", "bar_fill"})
+_OVERRIDE_KEYS = frozenset(
+    {"coat_base", "coat_shade", "card_bg", "bar_fill", "session_bar", "weekly_bar"})
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 

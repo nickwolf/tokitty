@@ -58,7 +58,11 @@ LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models",
            "classic", "classic_models")
 # Layouts whose text sits on a translucent card: Intel and AMD round it differently.
 TRANSLUCENT_LAYOUTS = frozenset({"low_opacity"})
-COATS = [(c, p) for c in sprites.COLORWAYS for p in sprites.PATTERNS]
+# One colorway across every pattern: the patterns are what route tones to the
+# body regions, while a colorway only swaps the tones, which
+# tests/test_sprites.py checks for every colorway. A row per colorway grew the
+# 2x sheets to ~375 MB each and ran WSL out of memory at 14 colorways (#156).
+COATS = [("orange", p) for p in sprites.PATTERNS]
 
 
 # ---- images -----------------------------------------------------------------

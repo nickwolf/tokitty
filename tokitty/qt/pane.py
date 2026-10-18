@@ -106,7 +106,8 @@ class QtPane:
             self.on_change()
 
     def set_appearance(self, palette=None, card_bg=None, bar_fill=None, label=None,
-                       colorway=None, pattern=None, tail=None) -> None:
+                       colorway=None, pattern=None, tail=None,
+                       session_bar=None, weekly_bar=None) -> None:
         """Live re-style. None leaves a slot unchanged, """
         overrides = dict(self.customization.overrides)
         if card_bg is not None:
@@ -116,11 +117,13 @@ class QtPane:
                 overrides["card_bg"] = card_bg
             else:
                 overrides.pop("card_bg", None)
-        if bar_fill is not None:
-            if bar_fill:
-                overrides["bar_fill"] = bar_fill
-            else:
-                overrides.pop("bar_fill", None)
+        for key, value in (("bar_fill", bar_fill), ("session_bar", session_bar),
+                           ("weekly_bar", weekly_bar)):
+            if value is not None:
+                if value:
+                    overrides[key] = value
+                else:
+                    overrides.pop(key, None)
         if label is not None:
             self._label = label
         if colorway is not None:

@@ -104,10 +104,17 @@ def make_controls(
             custom = replace(custom, colorway=cw, pattern=pat)
         elif field == "reset":
             custom = replace(custom, overrides={})
-        elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill"):
+        elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill", "session_bar",
+                       "weekly_bar"):
             if value:
                 overrides = dict(custom.overrides)
                 overrides[field] = value
+                if field in ("session_bar", "weekly_bar") and "bar_fill" in overrides:
+                    # Setting one bar must not recolour the other: the legacy
+                    # shared colour moves to whichever bar is still unset.
+                    legacy = overrides.pop("bar_fill")
+                    overrides.setdefault("session_bar", legacy)
+                    overrides.setdefault("weekly_bar", legacy)
                 custom = replace(custom, overrides=overrides)
         elif field == "label":
             if value is not None:

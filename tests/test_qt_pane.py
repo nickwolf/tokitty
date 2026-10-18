@@ -73,6 +73,14 @@ def test_set_appearance_updates_the_customization():
     assert "bar_fill" not in pane.customization.overrides
 
 
+def test_set_appearance_sets_and_clears_the_bar_overrides():
+    pane = QtPane()
+    pane.set_appearance(session_bar="#111111", weekly_bar="#222222")
+    assert pane.customization.overrides == {"session_bar": "#111111", "weekly_bar": "#222222"}
+    pane.set_appearance(session_bar="")
+    assert pane.customization.overrides == {"weekly_bar": "#222222"}
+
+
 def test_tk_default_card_bg_clears_the_override():
     pane = QtPane(Customization(overrides={"card_bg": "#112233"}))
     pane.set_appearance(card_bg="#1c1c22")

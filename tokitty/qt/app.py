@@ -46,6 +46,8 @@ def apply_customization(pane, custom) -> None:
         palette=effective_palette(custom),
         card_bg=custom.overrides.get("card_bg", ""),
         bar_fill=custom.overrides.get("bar_fill", ""),
+        session_bar=custom.overrides.get("session_bar", ""),
+        weekly_bar=custom.overrides.get("weekly_bar", ""),
         colorway=custom.colorway, pattern=custom.pattern, tail=custom.tail,
     )
 

@@ -772,7 +772,8 @@ class PaneStyle:
     foreground: str
     dim: str
     opacity: int
-    bar_fill_override: Optional[str]
+    session_bar_override: Optional[str]
+    weekly_bar_override: Optional[str]  # also the per-model rows
     palette: Mapping[str, str]
     home: str
 
@@ -795,7 +796,8 @@ def resolve_pane_style(theme: Theme, customization, has_accent: bool,
         foreground=foreground,
         dim=theme.text.dim,
         opacity=opacity,
-        bar_fill_override=overrides.get("bar_fill"),
+        session_bar_override=overrides.get("session_bar") or overrides.get("bar_fill"),
+        weekly_bar_override=overrides.get("weekly_bar") or overrides.get("bar_fill"),
         palette=effective_palette(customization),
         home=resolve_home(customization.cat_home, pane_index, pane_count),
     )

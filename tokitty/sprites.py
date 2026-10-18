@@ -71,12 +71,20 @@ COLORWAYS: Dict[str, Dict[str, str]] = {
     "white":  {"coat": "#f1ebdf", "shade": "#c4bcae", "mark": "#ded6c6", "light": "#f8f4ec", "ear": "#f6b8c8"},
     "cream":  {"coat": "#e9d9bd", "shade": "#cdb894", "mark": "#a98d63", "light": "#f7efdd", "ear": "#f0c4cf"},
     "brown":  {"coat": "#8a5a3c", "shade": "#6d452d", "mark": "#4f3020", "light": "#d9c4ab", "ear": "#d69aa6"},
+    "blue":     {"coat": "#6c7d9c", "shade": "#56657f", "mark": "#414c61", "light": "#d8dfea", "ear": "#d9a0b4"},
+    "lilac":    {"coat": "#b9a6b8", "shade": "#9a8699", "mark": "#7a6779", "light": "#ece4ec", "ear": "#f0b3c6"},
+    "cinnamon": {"coat": "#b3693f", "shade": "#965530", "mark": "#743f22", "light": "#efd2bb", "ear": "#eba7b2"},
+    "silver":   {"coat": "#c9cdd2", "shade": "#a3a8b0", "mark": "#4d525a", "light": "#eef0f2", "ear": "#efb2c0"},
+    "golden":   {"coat": "#d8a447", "shade": "#b8862f", "mark": "#94661c", "light": "#f6e4bd", "ear": "#f2b0a8"},
+    "auburn":   {"coat": "#b5482a", "shade": "#933a22", "mark": "#6e2a18", "light": "#f3d6c4", "ear": "#eaa3ae"},
+    "seal":     {"coat": "#4a3226", "shade": "#3a271d", "mark": "#2a1b14", "light": "#efe2cc", "ear": "#c99aa0"},
+    "midnight": {"coat": "#3d4558", "shade": "#30374a", "mark": "#232a3a", "light": "#e4e8f0", "ear": "#c7a0b0"},
 }
 
 # User-made colorways (colorways.json), installed at startup and after every
 # edit by colorways.apply. Ids are "custom-<N>", so they can never collide with
-# a built-in name. The built-in table above stays the six presets: randomize
-# and the pixel references iterate COLORWAYS, never this registry.
+# a built-in name. Randomize draws from the built-in table above, never from
+# this registry.
 TONE_KEYS: Tuple[str, ...] = ("coat", "shade", "mark", "light", "ear")
 _CUSTOM_ID_RE = re.compile(r"custom-[0-9]+")
 _custom_colorways: Dict[str, Dict[str, str]] = {}

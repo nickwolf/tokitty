@@ -472,3 +472,36 @@ def test_pane_name_returns_the_stored_label_and_the_harness_tag(tmp_path, monkey
     assert world.units[1]["pane"]._label == "Cat 1"
     seams.on_customization_changed(1, "label", "")
     assert seams.pane_name(1) == ("", "codex")
+
+
+def _set(world, field, value):
+    world.seams.on_customization_changed(0, field, value)
+    return world.store["k0"].overrides
+
+
+def test_setting_a_bar_with_legacy_bar_fill_expands_it(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={"bar_fill": "#aaaaaa", "card_bg": "#010101"})
+    assert _set(world, "session_bar", "#112233") == {
+        "card_bg": "#010101", "session_bar": "#112233", "weekly_bar": "#aaaaaa"}
+    assert "bar_fill" not in load_customization(world.state_dir)["k0"].overrides
+
+
+def test_setting_weekly_with_legacy_bar_fill_keeps_the_session_look(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={"bar_fill": "#aaaaaa"})
+    assert _set(world, "weekly_bar", "#445566") == {"weekly_bar": "#445566", "session_bar": "#aaaaaa"}
+
+
+def test_setting_a_bar_without_legacy_touches_only_that_key(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    assert _set(world, "session_bar", "#112233") == {"session_bar": "#112233"}
+    assert _set(world, "weekly_bar", "#445566") == {"session_bar": "#112233", "weekly_bar": "#445566"}
+    assert _set(world, "session_bar", "") == {"session_bar": "#112233", "weekly_bar": "#445566"}
+
+
+def test_reset_clears_every_bar_override(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={
+        "bar_fill": "#aaaaaa", "session_bar": "#111111", "weekly_bar": "#222222"})
+    assert _set(world, "reset", None) == {}

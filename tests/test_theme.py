@@ -584,7 +584,8 @@ def test_pane_style_theme_only():
     th = Theme()
     ps = resolve_pane_style(th, Customization(), False, 0, 1)
     assert (ps.background, ps.foreground, ps.dim) == ("#1b1b21", "#ececf1", "#8e8e98")
-    assert ps.opacity == 100 and ps.bar_fill_override is None and ps.home == "inside"
+    assert ps.opacity == 100 and ps.session_bar_override is None and ps.weekly_bar_override is None
+    assert ps.home == "inside"
     assert ps.palette == effective_palette(Customization())
 
 
@@ -595,9 +596,20 @@ def test_pane_style_account_override():
                          cat_home="inside_right")
     ps = resolve_pane_style(th, cust, False, 0, 2)
     assert ps.background == "#112233" and ps.opacity == 70
-    assert ps.bar_fill_override == "#445566"
+    assert ps.session_bar_override == ps.weekly_bar_override == "#445566"
     assert ps.palette == effective_palette(cust) and ps.palette["o"] == "#010101"
     assert ps.home == "inside_right"
+
+
+def test_pane_style_bar_overrides_resolve_per_bar():
+    def style(**overrides):
+        ps = resolve_pane_style(Theme(), Customization(overrides=overrides), False, 0, 1)
+        return ps.session_bar_override, ps.weekly_bar_override
+
+    assert style(session_bar="#111111") == ("#111111", None)
+    assert style(weekly_bar="#222222") == (None, "#222222")
+    assert style(bar_fill="#333333", weekly_bar="#222222") == ("#333333", "#222222")
+    assert style(bar_fill="#333333", session_bar="#111111", weekly_bar="#222222") == ("#111111", "#222222")
 
 
 def test_pane_style_accent_wins():

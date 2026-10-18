@@ -55,7 +55,8 @@ _BUDGET_HINTS = {"24h": "last 24 hours", "7d": "last 7 days", "month": "this mon
 # (caption, customization field)
 _COLOR_ROWS = (
     ("Card background", "card_bg"),
-    ("Bar fill", "bar_fill"),
+    ("Session bar", "session_bar"),
+    ("Weekly bar", "weekly_bar"),
 )
 
 CAT_SPOT_LABELS = (("inside", "Left"), ("inside_right", "Right"), ("on_top", "On top"))

@@ -11,9 +11,11 @@ renaming or re-toning a colorway never touches the accounts that use it.
 Deleting one rewrites those accounts to orange first.
 
 The file is optional and read defensively: absent or unparseable => {}; an
-entry with a bad id, a bad name or any tone that is not "#rrggbb" is dropped.
-Randomize and "Surprise me" never draw from here (sprites.COLORWAYS stays the
-six built-ins).
+entry with a bad id or any tone that is not "#rrggbb" is dropped. A bad,
+empty or colliding name never drops an entry (a built-in added later could
+otherwise orphan a user's cat): it gets a deterministic replacement, see
+_resolve_name. Randomize and "Surprise me" never draw from here
+(sprites.COLORWAYS holds the built-ins only).
 """
 from __future__ import annotations
 
@@ -71,6 +73,34 @@ def _clean_tones(tones: object) -> Optional[Dict[str, str]]:
     return out
 
 
+def _custom_number(name: str) -> int:
+    """N for a name of the form "Custom <N>", else 0."""
+    head, _, tail = name.partition(" ")
+    return int(tail) if head == "Custom" and tail.isdigit() else 0
+
+
+def _resolve_name(name: object, store: Store, counter: int) -> str:
+    """A name validate_name accepts for an entry that must be kept. A usable
+    name stays as is. A colliding or over-long one becomes "<name> (custom)",
+    then "<name> (custom 2)", ... (the base is trimmed to fit MAX_NAME_LEN);
+    an empty or non-string one becomes "Custom <N>" with N above `counter`."""
+    if isinstance(name, str) and name.strip():
+        clean = name.strip()
+        if validate_name(clean, store) is None:
+            return clean
+        n = 1
+        while True:
+            suffix = " (custom)" if n == 1 else f" (custom {n})"
+            candidate = clean[:MAX_NAME_LEN - len(suffix)].rstrip() + suffix
+            if validate_name(candidate, store) is None:
+                return candidate
+            n += 1
+    n = counter + 1
+    while validate_name(f"Custom {n}", store) is not None:
+        n += 1
+    return f"Custom {n}"
+
+
 def load_colorways(state_dir: Path) -> Store:
     path = Path(state_dir) / COLORWAYS_FILENAME
     if not path.is_file():
@@ -83,6 +113,7 @@ def load_colorways(state_dir: Path) -> Store:
     if not isinstance(raw, dict):
         return {}
     store: Store = {}
+    counter = 0
     for cid in sorted((k for k in raw if sprites.is_custom_id(k)), key=_id_number):
         entry = raw[cid]
         if not isinstance(entry, dict):
@@ -90,12 +121,10 @@ def load_colorways(state_dir: Path) -> Store:
         tones = _clean_tones(entry)
         if tones is None:
             continue
-        # Names are checked against what has been kept so far, so a hand-made
-        # duplicate loses to the lower id instead of both surviving.
-        name = entry.get("name")
-        if validate_name(name, store) is not None:
-            continue
-        store[cid] = {"name": name.strip(), **tones}
+        # Applied in id order, so a hand-made duplicate gives way to the lower id.
+        name = _resolve_name(entry.get("name"), store, counter)
+        counter = max(counter, _custom_number(name))
+        store[cid] = {"name": name, **tones}
     return store
 
 

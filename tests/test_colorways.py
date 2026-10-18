@@ -55,7 +55,40 @@ def test_bad_entries_are_dropped(tmp_path):
         "custom-7": {"name": "x" * 25, **TONES},
         "custom-8": "nope",
     })
-    assert list(colorways.load_colorways(tmp_path)) == ["custom-1"]
+    store = colorways.load_colorways(tmp_path)
+    # Only a bad id, a bad tone or a non-dict entry drops an entry; bad names are repaired.
+    assert list(store) == ["custom-1", "custom-4", "custom-5", "custom-6", "custom-7"]
+
+
+def test_a_bad_or_colliding_name_is_repaired_not_dropped(tmp_path):
+    write(tmp_path, {
+        "custom-1": {"name": "Good", **TONES},
+        "custom-2": {"name": "   ", **TONES},
+        "custom-3": {"name": "good", **TONES},
+        "custom-4": {"name": "Orange", **TONES},
+        "custom-5": {"name": "orange", **TONES},
+        "custom-6": {"name": "x" * 25, **TONES},
+        "custom-7": {"name": 7, **TONES},
+        "custom-8": {**TONES},
+    })
+    got = {cid: e["name"] for cid, e in colorways.load_colorways(tmp_path).items()}
+    assert got == {
+        "custom-1": "Good", "custom-2": "Custom 1", "custom-3": "good (custom)",
+        "custom-4": "Orange (custom)", "custom-5": "orange (custom 2)",
+        "custom-6": "x" * 15 + " (custom)", "custom-7": "Custom 2", "custom-8": "Custom 3",
+    }
+    assert all(len(n) <= colorways.MAX_NAME_LEN for n in got.values())
+    assert colorways.load_colorways(tmp_path) == colorways.load_colorways(tmp_path)
+
+
+@pytest.mark.parametrize("builtin", ["blue", "lilac", "cinnamon", "silver", "golden", "auburn", "seal",
+                                       "midnight"])
+def test_a_custom_named_like_a_new_builtin_survives(tmp_path, builtin):
+    assert builtin in sprites.COLORWAYS
+    write(tmp_path, {"custom-1": {"name": builtin.capitalize(), **TONES}})
+    store = colorways.load_colorways(tmp_path)
+    assert store["custom-1"]["name"] == f"{builtin.capitalize()} (custom)"
+    assert colorways.validate_name(builtin.capitalize(), store) is not None  # still strict for saves
 
 
 def test_validate_name_rules():
@@ -128,7 +161,9 @@ def test_builtin_palettes_unchanged_by_registry():
     before = {(c, p): sprites.resolve_palette(c, p) for c in sprites.COLORWAYS for p in sprites.PATTERNS}
     sprites.set_custom_colorways({"custom-1": TONES})
     assert {(c, p): sprites.resolve_palette(c, p) for c in sprites.COLORWAYS for p in sprites.PATTERNS} == before
-    assert list(sprites.COLORWAYS) == ["orange", "gray", "black", "white", "cream", "brown"]
+    assert list(sprites.COLORWAYS) == ["orange", "gray", "black", "white", "cream", "brown",
+                                       "blue", "lilac", "cinnamon", "silver", "golden", "auburn", "seal",
+                                       "midnight"]
 
 
 def test_custom_id_resolves_and_dangling_falls_back_to_orange():

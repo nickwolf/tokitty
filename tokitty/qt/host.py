@@ -134,7 +134,9 @@ class QtHost:
         if field == "card_bg":
             # What the widget paints: the override, else the theme's card.
             return overrides.get("card_bg") or self.widget.theme.card.background
-        return overrides.get("bar_fill") or None
+        if field == "session_bar":
+            return overrides.get("session_bar") or overrides.get("bar_fill") or None
+        return overrides.get("weekly_bar") or overrides.get("bar_fill") or None
 
     def on_layout_changed(self, pane_index: int, custom: Customization) -> None:
         """Called by Controls after every customization save. The pane takes

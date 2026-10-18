@@ -78,6 +78,11 @@ def _text_rect(r: T.Rect, right: bool = False) -> QRectF:
     return QRectF(r.x + dx, r.y + TK_LABEL_PAD_Y, r.w, r.h)
 
 
+def _bar_override(style: T.PaneStyle, name: str):
+    """The pane style's colour override for the "session" or "weekly" bar."""
+    return style.session_bar_override if name == "session" else style.weekly_bar_override
+
+
 class TokittyQtWidget(QWidget):
     def __init__(self, theme: T.Theme, customizations: Sequence[Customization],
                  pane_count: int, *, parent=None, position_path=None,
@@ -507,7 +512,7 @@ class TokittyQtWidget(QWidget):
                     pane.weekly_reset_text, pane.status_text)
         return (id(self.theme), self.theme.card.design, id(layout), dpr, ox, oy, models, pane._dimmed, pane._label,
                 style.background, style.foreground, style.dim, style.opacity,
-                style.bar_fill_override, id(self._fonts), body)
+                style.session_bar_override, style.weekly_bar_override, id(self._fonts), body)
 
     def _draw_card(self, p: QPainter, index: int, pane: QtPane, style, layout,
                    ox, oy, dpr: float) -> None:
@@ -656,7 +661,7 @@ class TokittyQtWidget(QWidget):
                 self._text(p, label_fg, _text_rect(layout[f"{name}_label"]), _LEFT_VCENTER, title,
                            halo and T.halo_applies("section_labels"))
             self._bar(p, layout[f"{name}_bar"], pct,
-                      T.bar_fill(self.theme, pct, style.bar_fill_override))
+                      T.bar_fill(self.theme, pct, _bar_override(style, name)))
             p.setFont(text_font)
             reset_box = _text_rect(layout[f"{name}_reset"]) if f"{name}_reset" in layout else None
             if f"{name}_percent" in layout:
@@ -689,7 +694,7 @@ class TokittyQtWidget(QWidget):
                 self._text(p, label_fg, _qrect(layout[f"{name}_percent"]), _RIGHT_BOTTOM,
                            f"{pct:.0f}%", halo and T.halo_applies("percent"))
             self._bar(p, layout[f"{name}_bar"], pct,
-                      T.bar_fill(self.theme, pct, style.bar_fill_override))
+                      T.bar_fill(self.theme, pct, _bar_override(style, name)))
             phrase = reset_phrase(reset)
             if f"{name}_reset" in layout and phrase:
                 p.setFont(text_font)
@@ -719,7 +724,7 @@ class TokittyQtWidget(QWidget):
                                row.value_text)
             # The track is always there; the fill only when there is a share.
             pct = row.bar_pct if row is not None else 0.0
-            fill = T.bar_fill(self.theme, view.ramp_pct if view else None, style.bar_fill_override)
+            fill = T.bar_fill(self.theme, view.ramp_pct if view else None, style.weekly_bar_override)
             self._bar(p, layout[f"model_bar_{i}"], pct, fill)
 
     def _paint_cat(self, p, index, pane, palette, home, dpr) -> None:

@@ -113,7 +113,7 @@ def test_new_and_edit_buttons_open_the_editor(make_world, monkeypatch):
 
 def test_coat_rows_are_gone_and_card_and_bar_remain(make_world):
     look = SettingsWindow.open(make_world(1).host, 0).tabs["look"]
-    assert list(look.color_rows) == ["card_bg", "bar_fill"]
+    assert list(look.color_rows) == ["card_bg", "session_bar", "weekly_bar"]
     assert look.reset_button.text() == "Reset to preset"
 
 
