@@ -54,7 +54,8 @@ Rect = Tuple[int, int, int, int]  # x0, y0, x1, y1 in device pixels, x1/y1 exclu
 MASK_PAD = 2        # logical px added around each text rect; the halo reaches 1
 MASK_COLOR = b"\xff\x00\xff\xff"
 
-LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models")
+LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models",
+           "classic", "classic_models")
 # Layouts whose text sits on a translucent card: Intel and AMD round it differently.
 TRANSLUCENT_LAYOUTS = frozenset({"low_opacity"})
 COATS = [(c, p) for c in sprites.COLORWAYS for p in sprites.PATTERNS]
@@ -237,10 +238,12 @@ class PixelWidget(RecordingWidget):
     """RecordingWidget with the bundled Aileron instead of the platform font,
     so Linux and Windows rasterize alike."""
 
-    def _make_font(self, points: int, bold: bool) -> QFont:
+    def _make_font(self, points: int, weight: QFont.Weight) -> QFont:
         font = QFont(key_render.register_font())
         font.setPixelSize(round(points * 96 / 72))
-        font.setBold(bold)
+        # Aileron ships only Regular, so Qt synthesizes any heavier face; ask
+        # for bold or regular outright so semibold renders the same everywhere.
+        font.setBold(weight >= QFont.Weight.DemiBold)
         font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
         font.setStyleStrategy(QFont.StyleStrategy.NoSubpixelAntialias)
         return font
@@ -315,12 +318,14 @@ def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
         home = "inside_right"
     elif name == "cat_top":
         home = "on_top"
+    elif name in ("classic", "classic_models"):
+        theme = replace(T.CLASSIC, cat=theme.cat)  # the look before #139, pinned
     elif name not in ("default", "models"):
         raise KeyError(name)
     widget = cls(theme, [Customization(cat_home=home, label="work")], 1)
     widget.anim.stop()
     pane = widget.panes[0]
-    if name == "models":
+    if name in ("models", "classic_models"):
         view = UsageView(
             rows=(UsageRow("Opus 4", "$12.40", 62.0), UsageRow("Sonnet 4", "$6.10", 31.0),
                   UsageRow("Haiku", "$1.60", 8.0)),

@@ -704,6 +704,7 @@ def test_card_background_border_and_radius_reach_the_pixels(make_world, monkeypa
     assert saved_theme(world).card.border_width == 2
     assert saved_theme(world).card.border_color == "#102030"
 
+    theme_tab.controls[("card", "radius")].setValue(0)
     assert card_pixel(world, 0, 0).alpha() == 255
     theme_tab.controls[("card", "radius")].setValue(16)
     assert saved_theme(world).card.radius == 16
@@ -801,7 +802,38 @@ def test_reset_theme_writes_the_defaults(make_world):
     assert saved_theme(world) == T.Theme()
     assert world.widget.theme == T.Theme()
     assert theme_tab.opacity.get() == "100"
+    assert theme_tab.controls[("card", "radius")].get() == T.Theme().card.radius
+    assert theme_tab.design.get() == "refined"
+
+
+def test_card_style_switches_the_look_and_keeps_the_rest(make_world):
+    mine = T.Theme(card=T.CardStyle(opacity=60, radius=3),
+                   bars=T.BarStyle(layout="full_width", mid_at=30),
+                   text=T.TextStyle(halo="on"), cat=T.CatStyle(wander=False))
+    world = make_world(1, theme=mine)
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.design.get() == "refined"
+    theme_tab.design.items["classic"].click()
+    saved = saved_theme(world)
+    assert saved == T.apply_design(mine, "classic")
+    assert saved.card.design == "classic" and saved.card.radius == 0
+    assert (saved.card.opacity, saved.bars.layout, saved.bars.mid_at, saved.text.halo) == (
+        60, "full_width", 30, "on")
+    assert world.widget.theme == saved
+    assert theme_tab.design.get() == "classic"
     assert theme_tab.controls[("card", "radius")].get() == 0
+    assert theme_tab.shape.get() == "flat"
+    theme_tab.design.items["refined"].click()
+    assert saved_theme(world).card.design == "refined"
+    assert theme_tab.design.get() == "refined" and theme_tab.shape.get() == "rounded"
+
+
+def test_card_style_follows_a_theme_changed_elsewhere(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    world.host.set_theme(T.apply_design(world.host.theme(), "classic"))
+    theme_tab.refresh()
+    assert theme_tab.design.get() == "classic"
 
 
 def test_a_theme_change_keeps_the_window_matching_its_layout(make_world):

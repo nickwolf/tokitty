@@ -6,7 +6,7 @@ These PNGs are what the Qt widget's real paint output must match, pixel for pixe
 
 `cat/<state>@1x.png` and `@2x.png` are one sheet per sprite state: every coat (6 colourways x 9 patterns) as a row and every frame of the state as a column, drawn by the widget and cropped from a grab. They are exact-palette indexed PNGs.
 
-`card/<layout>@1x.png` and `@2x.png` are whole-widget grabs of six layouts: default, halo (halo on, opaque), low_opacity (20 percent, halo auto), cat_right (`inside_right`), cat_top (`on_top`) and models. Card text is drawn in the bundled Aileron font with full hinting and no subpixel antialiasing, so Linux and Windows agree. The product's own fonts are covered by a fit check, not by pixels.
+`card/<layout>@1x.png` and `@2x.png` are whole-widget grabs of eight layouts, all in the refined card look except the last two: default, halo (halo on, opaque), low_opacity (20 percent, halo auto), cat_right (`inside_right`), cat_top (`on_top`), models, classic and classic_models (the pre-#139 look, built from `theme.CLASSIC`, which pins that look). Card text is drawn in the bundled Aileron font with full hinting and no subpixel antialiasing, so Linux and Windows agree. The product's own fonts are covered by a fit check, not by pixels.
 
 `card/masks.json` holds the text regions each card reference was made with, in device pixels.
 

@@ -21,7 +21,7 @@ from tokitty.customize import Customization, effective_palette
 from tokitty.display import resolve_status_text
 from tokitty import sprites
 from tokitty.wander import Pose, Roam
-from tokitty.theme import CardStyle
+from tokitty.theme import CLASSIC, CardStyle
 
 # ui.fit_tag's limit: the longest label the table produces is 10 characters.
 TOOL_LABEL_MAX = 12
@@ -109,9 +109,9 @@ class QtPane:
         """Live re-style. None leaves a slot unchanged, """
         overrides = dict(self.customization.overrides)
         if card_bg is not None:
-            # The card's default colour means "no override"; keep
-            # that from pinning the card against a themed background.
-            if card_bg and card_bg != CardStyle.background:
+            # A look's default colour means "no override"; keep that from
+            # pinning the card against a themed background.
+            if card_bg and card_bg not in (CardStyle.background, CLASSIC.card.background):
                 overrides["card_bg"] = card_bg
             else:
                 overrides.pop("card_bg", None)
