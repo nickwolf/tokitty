@@ -150,8 +150,8 @@ PATTERNS: Dict[str, Dict[str, str]] = {
                     "m": "coat", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "tabby":       {"o": "coat", "O": "shade", "s": "mark", "c": "coat",
                     "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
-    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "white",
-                    "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
+    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "tabby_white": {"o": "coat", "O": "shade", "s": "mark", "c": "white",
                     "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
     "calico":      {"o": "coat", "O": "shade", "s": "#453a33", "c": "#e8823c",
@@ -159,14 +159,20 @@ PATTERNS: Dict[str, Dict[str, str]] = {
     # Silhouette patterns -- these use the new regions to change the cat's
     # read, not just tint it. colorpoint/van pale the body toward the
     # colorway's `light` tone, so they only sing on light colorways.
-    "tuxedo":      {"o": "coat", "O": "shade", "s": "coat", "c": "white",
-                    "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
+    "tuxedo":      {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "socks":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
                     "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "colorpoint":  {"o": "light", "O": "light", "s": "light", "c": "light",
                     "m": "mark", "x": "mark", "y": "mark", "u": "light", "Y": "mark"},
     "van":         {"o": "white", "O": "shade", "s": "white", "c": "white",
                     "m": "white", "x": "coat", "y": "coat", "u": "white", "Y": "coat"},
+    # Piebald patterns (#211): coat everywhere but the paws, white where the
+    # drawing's piebald class carries the pattern's bit (PATTERN_PIEBALD).
+    "harlequin":   {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
+    "cap_and_saddle": {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                       "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
 }
 
 # White spotting (#211): a pattern can also paint white the cells whose
@@ -174,7 +180,8 @@ PATTERNS: Dict[str, Dict[str, str]] = {
 # cell's class into its char, so a piebald char is a (region char, class)
 # pair; every other pattern draws it exactly as its region char.
 PIEBALD_BASES = "oOscxu"
-PATTERN_PIEBALD: Dict[str, int] = {}
+PATTERN_PIEBALD: Dict[str, int] = {"tuxedo": piebald.TUXEDO, "bicolor": piebald.BICOLOR,
+                                   "harlequin": piebald.HARLEQUIN, "cap_and_saddle": piebald.CAP_SADDLE}
 
 
 def piebald_char(base: str, bits: int) -> str:
@@ -2716,7 +2723,7 @@ def _scratch_frame(near: int = 0, far: int = 0) -> List[str]:
             rows[25][c] = "B"
     for i, (r, c) in enumerate(_SCRATCH_TAIL):
         rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
-    return ["".join(row) for row in rows]
+    return _piebald(["".join(row) for row in rows], piebald.SCRATCH)
 
 
 _SCRATCH_REACH = _scratch_frame()
@@ -2782,7 +2789,7 @@ def _scratch_upright(near: int = 0, far: int = 0,
         put(r, c, "s")
     for r in (23, 24):
         for c, ch in ((9, "o"), (10, "o"), (15, "O"), (16, "O")):
-            put(r, c, ch)
+            put(r, c, piebald_char(ch, piebald.HIND_LEG))
     for c in (8, 9, 10, 15, 16, 17):
         put(25, c, "m")
     # the walking cat's head, turned to face the edge and raised
@@ -2795,6 +2802,7 @@ def _scratch_upright(near: int = 0, far: int = 0,
     if paws is None:
         paws = ((14 + far, 0, "O"), (11 + near, 0, "o"))
     for (shoulder_r, shoulder_c), (paw_r, paw_c, ch) in zip(((15, 10), (13, 9)), paws):
+        ch = piebald_char(ch, piebald.FRONT_LEG)
         for c in range(paw_c + 2, shoulder_c + 1):
             r = round(paw_r + (shoulder_r - paw_r) * (c - paw_c - 2) / (shoulder_c - paw_c - 2))
             put(r, c, ch, behind)
@@ -2802,13 +2810,12 @@ def _scratch_upright(near: int = 0, far: int = 0,
         for r in (paw_r, paw_r + 1):
             put(r, paw_c, "m")
             put(r, paw_c + 1, "m")
-    if behind:
-        return ["".join(row) for row in rows]
-    for r in range(11, 11 + near, 2):
-        put(r, 0, "B")
-    for r in range(14, 14 + far, 2):
-        put(r, 0, "B")
-    return ["".join(row) for row in rows]
+    if not behind:
+        for r in range(11, 11 + near, 2):
+            put(r, 0, "B")
+        for r in range(14, 14 + far, 2):
+            put(r, 0, "B")
+    return _piebald(["".join(row) for row in rows], piebald.SCRATCH_UPRIGHT)
 
 
 def _facing_left(grid: List[str]) -> List[str]:
@@ -2927,7 +2934,7 @@ def _side_frame(legs: Sequence[Tuple[int, int, int, int, str]],
     # the raised rear is painted over the rear where it was, so the haunches
     # bunch up rather than tearing away from the back
     for lift in sorted({0, rear}):
-        for r, line in enumerate(_WALK_BODY):
+        for r, line in enumerate(_piebald(_WALK_BODY, piebald.WALK)):
             for c, ch in enumerate(line):
                 if ch == "." or (lift and c >= 12):
                     continue
@@ -2935,6 +2942,7 @@ def _side_frame(legs: Sequence[Tuple[int, int, int, int, str]],
                 if 0 <= r + dr < 26:
                     rows[r + dr][c] = ch
     for hip_r, hip_c, paw_r, paw_c, fur in legs:
+        fur = piebald_char(fur, piebald.FRONT_LEG if hip_c >= 12 else piebald.HIND_LEG)
         n = max(abs(paw_r - hip_r), abs(paw_c - hip_c), 1)
         for i in range(n):
             r = round(hip_r + (paw_r - hip_r) * i / n)
@@ -4082,7 +4090,7 @@ def _back_view() -> List[str]:
         for c in range(c0, c1 + 1):
             if rows[r][c] in ".oO":
                 rows[r][c] = _tail_band(r)
-    return ["".join(row) for row in rows]
+    return _piebald(["".join(row) for row in rows], piebald.BACK_VIEW)
 
 
 _BACK_VIEW = _back_view()

@@ -229,6 +229,38 @@ ROLL_CURL = _drawing(
 )
 
 
+
+# --- scratch: stretched out low, facing right, the walking cat's head ------
+SCRATCH = _drawing(
+    SIDES=box(8, 17, 0, 19) | box(17, 24, 0, 7),
+    SADDLE=spans({8: [(5, 8)], 9: [(3, 9)], 10: [(2, 9)], 11: [(2, 9)], 12: [(2, 8)], 13: [(2, 6)]}),
+    SPOTS=[(9, 12, 5, 8), (12, 15, 10, 13)],
+    BIB=front({19: (15, 19), 20: (15, 19), 21: (16, 19), 22: (17, 19)}),
+)
+
+# --- up on the hind legs facing left (scratch_stats, bat): chest and belly
+# down the left edge, the forelegs classed where they're drawn --------------
+_UP_FRONT = {10: (8, 10), 11: (7, 9), 12: (7, 9), 13: (7, 9), 14: (8, 10), 15: (8, 10), 16: (8, 10),
+             17: (8, 10), 18: (8, 10), 19: (8, 10), 20: (8, 10), 21: (9, 11)}
+SCRATCH_UPRIGHT = _drawing(
+    SIDES=outside(_UP_FRONT, 3, 22),
+    SADDLE=spans({15: [(15, 17)], 16: [(14, 18)], 17: [(14, 18)], 18: [(14, 18)], 19: [(14, 19)],
+                  20: [(15, 19)], 21: [(15, 18)]}),
+    SPOTS=[(12, 15, 12, 15), (17, 20, 13, 16)],
+    BIB=front(_UP_FRONT),
+)
+
+# --- the sitting cat from behind: the front's white is out of sight, so
+# tuxedo and bicolor are all coat; harlequin's spots and the saddle are the
+# sitting cat's, mirrored ---------------------------------------------------
+BACK_VIEW = _drawing(
+    EARS=box(0, 4, 0, 27), CAP=box(0, 25, 0, 27), SIDES=box(0, 25, 0, 27),
+    SOFT_CAP=box(0, 10, 0, 27),
+    SADDLE=spans({17: [(6, 9)], 18: [(5, 10)], 19: [(5, 11)], 20: [(5, 11)], 21: [(5, 11)],
+                  22: [(5, 10)], 23: [(6, 9)]}),
+    SPOTS=[(15, 18, 17, 20), (19, 22, 8, 11), (5, 6, 8, 11)],
+)
+
 # --- the rolling loaf frames (sprites._ROLL_DIAGONALS and friends), turned
 # by RotSprite rather than drawn: each cell sampled from LOAF through the
 # frame's fitted rotation. One hex digit per body cell, the class bits. ----
