@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import threading
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
 from tokitty.accounts import Account
@@ -557,6 +557,41 @@ def _handoff_standing(unit: dict, latest: PollResult, display: dict, custom) -> 
                     confirmed=not display["dimmed"])
 
 
+# A session window that rolled over this far ahead without capping is a reset.
+RESET_GAP = timedelta(hours=1)
+
+
+def _note_bars(unit: dict, latest: PollResult, display: dict, count: bool) -> Tuple[int, int]:
+    """Fold a fresh poll into unit["bars_seen"] and return its (moved, reset)
+    counters (#135). Moved: the session bar's whole percent went up. Reset:
+    the window rolled over without capping (a capped one plays activate), so
+    resets_at is over an hour on and the percent dropped. Without `count`
+    (the models view, which shows no bars) only the baseline moves, so an old
+    tick-up cannot fire when the limits come back."""
+    # window_pct and capped belong to the last poll that had a resets_at: an
+    # idle window can come back without one, and the drop must still count
+    # when the next window's resets_at shows up.
+    seen = unit.setdefault("bars_seen", {"pct": None, "resets_at": None, "window_pct": None,
+                                         "capped": False, "moved": 0, "reset": 0})
+    if latest.status != "ok" or latest.snapshot is None or display["dimmed"]:
+        return seen["moved"], seen["reset"]
+    snapshot = latest.snapshot
+    pct = round(snapshot.session_pct)
+    resets_at = snapshot.session_resets_at
+    if count and seen["pct"] is not None:
+        if (resets_at is not None and seen["resets_at"] is not None and not seen["capped"]
+                and resets_at - seen["resets_at"] > RESET_GAP and pct < seen["window_pct"]):
+            seen["reset"] += 1
+        elif pct > seen["pct"]:
+            seen["moved"] += 1
+    seen["pct"] = pct
+    if resets_at is not None:
+        seen["resets_at"] = resets_at
+        seen["window_pct"] = pct
+        seen["capped"] = select_binding_capped_limit(snapshot.limits) is not None
+    return seen["moved"], seen["reset"]
+
+
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
               notes_removed: set, onboard: Callable, now: datetime,
               time_of_day: bool = False, tz=None, wander: bool = True) -> Optional[PaneUpdate]:
@@ -564,7 +599,7 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     unit's bookkeeping and say what to draw. None means there is no poll result
     yet, so the pane stays as it is. With `time_of_day` the cat's drives follow
     the hour of `now` in `tz` (None is local time). Without `wander` the cat
-    holds still apart from naps, so it never plays (#124)."""
+    holds still apart from naps, so it never plays, bats or pounces (#124, #135)."""
     latest = unit["poller"].get_latest()
     breakdown = unit["usage"].get_latest()
     unit["handoff_standing"] = None
@@ -585,7 +620,8 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     cat_drives = drives(now.astimezone(tz).hour if time_of_day else None,
                         custom.personality if custom else "balanced")
     if not wander:
-        cat_drives = replace(cat_drives, play=0.0)
+        cat_drives = replace(cat_drives, play=0.0, bat=0.0, pounce=0.0)
+    bar_events = _note_bars(unit, latest, display, usage_state["view"] != "models")
     if usage_state["view"] == "models":
         args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
         update = PaneUpdate("models", {**args, "drives": cat_drives})
@@ -599,6 +635,7 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]
         display["drives"] = cat_drives
+        display["bar_events"] = bar_events
         shown = latest.snapshot if latest.status == "ok" and latest.snapshot is not None else (
             unit["last_good"].snapshot if unit["last_good"] is not None else None)
         display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)

@@ -479,3 +479,32 @@ def test_the_card_repaints_when_either_bar_override_changes(qapp):
     pane.set_appearance(weekly_bar="#222222")
     with_both = signature()
     assert len({base, with_session, with_both}) == 3
+
+
+# ---- the bars the watching cat reads (#135) ------------------------------------
+
+@pytest.mark.parametrize("home", ["inside", "inside_right", "on_top"])
+@pytest.mark.parametrize("layout", ["beside_cat", "full_width"])
+def test_each_pane_is_told_where_its_bars_are(qapp, home, layout):
+    theme = T.Theme(cat=STILL, bars=T.BarStyle(layout=layout))
+    widget = make(qapp, theme=theme, homes=[home])
+    expected = T.layout_card(theme, "limits", home)
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"])
+    if home == "on_top" and layout == "full_width":
+        assert expected["session_bar"].w == T.FULL_W
+
+
+def test_the_bars_are_told_again_when_the_theme_or_the_home_changes(qapp):
+    widget = make(qapp, 2, homes=["on_top", "inside"])
+    old = widget.panes[0]._bar_rects
+    theme = T.Theme(cat=STILL, bars=T.BarStyle(layout="full_width", height=10))
+    widget.set_theme(theme)
+    expected = T.layout_card(theme, "limits", "on_top")
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"]) != old
+    widget.rebuild_layout(["inside", "inside"])
+    expected = T.layout_card(theme, "limits", "inside")
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"])
+    # a theme change that leaves the window alone
+    widget.set_theme(replace(theme, bars=T.BarStyle(height=6)))
+    expected = T.layout_card(widget.theme, "limits", "inside")
+    assert widget.panes[1]._bar_rects == (expected["session_bar"], expected["weekly_bar"])

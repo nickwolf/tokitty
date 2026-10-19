@@ -10,6 +10,11 @@ When a rest at home runs out, the cat's Drives (behaviour.py, #138) weigh a
 trip against a nap, play or simply resting on. A nap is drawn as the sleeping
 art while the logical state stays what it was, so an alert always ends it.
 Play is a scratch (#124), as is a stop now and then on a trip.
+
+The cat also answers its own bars (#135). A tick-up of the session bar latches
+a bat and a window reset a pounce, played from home once the cat is calm and
+idle. An alert cat may walk to the top edge and sit over the fill end of the
+bar that drives it, the one exception to the ladder staying honest.
 """
 from __future__ import annotations
 
@@ -26,6 +31,8 @@ WANDER_STATES = frozenset({"content", "interested"})
 # A cat that falls asleep on the top edge lies down and sleeps where it is.
 # Any other state sends it straight home.
 STAY_STATES = frozenset({"sleeping"})
+# States that may leave home for a stop over the driving bar's fill end (#135).
+WATCH_STATES = frozenset({"alert"})
 
 STRIDE_PX = sprites._WALK_STRIDE * sprites.SCALE
 HOME_WAIT_MS = (45_000, 120_000)  # at home between trips
@@ -46,6 +53,12 @@ PLAY_MOVES = {"inside": _FLOOR_PLAY,
 # Moves only a first-row card can play: the wand's string comes down from
 # above the card, which only a first-row pane has clear.
 FIRST_ROW_MOVES = frozenset({"wand"})
+BAR_EVENT_TTL_MS = 600_000        # a bar event that finds no calm moment is dropped
+BAT_COOLDOWN_MS = 120_000         # between the starts of two bats
+WATCH_SETTLE_MS = 25_000          # an alert must hold this long before the cat goes to watch
+# Where the head sits in alert@on_top, in px from the sprite's left edge when
+# not mirrored: the middle of the head's columns, which is the nose's column.
+PERCH_HEAD_PX = 54
 STOP_SCRATCH = 1 / 3              # chance of a scratch at a stop, while play > 0
 # The bat a bar ticking up plays (#135), by where the cat is: on the edge
 # it reaches down over it, and one time in five rolls home instead of walking.
@@ -64,9 +77,6 @@ def bat_move(spot: str, rng: random.Random) -> str:
         if pick < 0:
             return name
     return options[-1][0]
-
-
-
 
 @dataclass(frozen=True)
 class Pose:
@@ -115,6 +125,25 @@ class Wanderer:
         self.drives = Drives()
         self.nap_until: Optional[int] = None  # dozing at home until then
         self.play: Optional[str] = None    # a move to play once the cat is up for it
+        # Bar events (#135): the last seq taken per kind, and each pending
+        # event's deadline. A bat is started at most once per BAT_COOLDOWN_MS.
+        self.bar_seen = [0, 0]             # moved, reset
+        self.moved_until: Optional[int] = None
+        self.reset_until: Optional[int] = None
+        self.last_bat: Optional[int] = None
+        # Watch: the driving bar's fill end in card px, whether the cat is
+        # on its way to or at the stop over it (stops = [that stop, home]),
+        # and whether this alert episode has had its one draw.
+        self.fill_x: Optional[float] = None
+        self.watching = False
+        self.watch_drawn = False
+
+    def inherit(self, old: "Wanderer") -> None:
+        """Take over what outlives a change of home: drives and the bar events."""
+        self.drives = old.drives
+        self.bar_seen = list(old.bar_seen)
+        self.moved_until, self.reset_until = old.moved_until, old.reset_until
+        self.last_bat = old.last_bat
 
     @property
     def away(self) -> bool:
@@ -140,14 +169,21 @@ class Wanderer:
         alone; any other state ends it."""
         if state != self.state and self.nap_until is not None:
             self.nap_until = self.rest_until = self.due = None
-        self.state = state
+        prev, self.state = self.state, state
         if state not in WANDER_STATES:
             self.play = None
+        if prev in WATCH_STATES and state not in WATCH_STATES:
+            self.watching = self.watch_drawn = False
+            self.rest_until = self.due = None
         if state not in WANDER_STATES | STAY_STATES:
+            if state in WATCH_STATES and self._watch_on_trip():
+                return
             if self.away:
                 self._go_home()
             self.lying = _lies(state, self.pose.spot)
-            self.rest_until = self.due = None
+            if state not in WATCH_STATES or prev != state:
+                self.rest_until = self.due = None
+            self._watch_arm(now)
             return
         if self.move is not None:
             return
@@ -167,6 +203,8 @@ class Wanderer:
             self.rest_until = self.due = None
             if self.nap_until is not None:
                 self.nap_until = None     # awake: sit up, then a fresh rest
+            elif self.state in WATCH_STATES:
+                self._watch_decide()      # the settle wait at home ran out
             elif not self.stops:
                 self._decide(at)
             elif self.at_stop:
@@ -176,6 +214,133 @@ class Wanderer:
         if move is None:
             self._rest(at)
         else:
+            self._start(move)
+
+    # ---- bar events ------------------------------------------------------
+
+    def set_bar_events(self, events, now: int) -> None:
+        """The (moved, reset) counters from the poll. A new count latches that
+        event until it is played (Roam tries at every render) or
+        BAR_EVENT_TTL_MS passes."""
+        moved, reset = events
+        if moved != self.bar_seen[0]:
+            self.moved_until = now + BAR_EVENT_TTL_MS
+        if reset != self.bar_seen[1]:
+            self.reset_until = now + BAR_EVENT_TTL_MS
+        self.bar_seen = [moved, reset]
+
+    def bar_play(self, now: int) -> None:
+        """Play a latched event if the cat is calm, home, idle and not napping.
+        A pounce wins over a bat. A taken event is spent whether or not its
+        chance passes; a chance of 0 leaves it pending until it expires, and a
+        bat still cooling down waits too."""
+        if self.moved_until is not None and now >= self.moved_until:
+            self.moved_until = None
+        if self.reset_until is not None and now >= self.reset_until:
+            self.reset_until = None
+        if (self.state not in WANDER_STATES or self.away or self.nap_until is not None
+                or self.play is not None):
+            return
+        d = self.drives
+        if self.reset_until is not None and d.pounce > 0:
+            self.reset_until = None
+            if self._chance(d.pounce):
+                self._play_now("pounce")
+            return
+        if (self.moved_until is not None and d.bat > 0
+                and (self.last_bat is None or now - self.last_bat >= BAT_COOLDOWN_MS)):
+            self.moved_until = None
+            if self._chance(d.bat):
+                self.last_bat = now
+                self._play_now(bat_move(self.home.spot, self.rng))
+
+    def _chance(self, p: float) -> bool:
+        """Whether a chance in (0, 1] passes; a certain one draws nothing."""
+        return p >= 1.0 or self.rng.random() < p
+
+    def _play_now(self, move: str) -> None:
+        """Skip the home rest: the move starts now, after a sit_up if lying."""
+        self.play = move
+        self.rest_until = self.due = None
+        self._start(self._next_move())
+
+    # ---- watching the bar (#135) -----------------------------------------
+
+    def set_watch(self, fill_x: Optional[float], now: int) -> None:
+        """Where the driving bar's fill ends, in card px (None: not on show).
+        A cat on watch follows it to the nearest stop."""
+        self.fill_x = fill_x
+        if self.state not in WATCH_STATES:
+            return
+        if not self.watching:
+            if not self.away:
+                self._watch_arm(now)
+            return
+        if fill_x is None:
+            return
+        target = self._watch_stop()
+        if self.stops[0] != target:
+            self.stops[0] = target
+            if self.move is None:
+                self.at_stop = False
+                self._kick()
+
+    def _can_watch(self) -> bool:
+        return self.roams and self.drives.watch > 0 and self.fill_x is not None
+
+    def _watch_stop(self) -> int:
+        """The stop whose sprite has its head over the fill end."""
+        head = theme.SPRITE_W - PERCH_HEAD_PX if self.home.mirrored else PERCH_HEAD_PX
+        want = self.fill_x - head
+        return min(stops_from(self.home.x), key=lambda x: abs(x - want))
+
+    def _watch_arm(self, now: int) -> None:
+        """An alert cat at home waits out WATCH_SETTLE_MS before its one draw.
+        The wait is kept across renders of the same alert."""
+        if self.state not in WATCH_STATES:
+            return
+        if not self.away and not self.watch_drawn and self._can_watch():
+            if self.rest_until is None:
+                self.rest_until = now + WATCH_SETTLE_MS
+            self.due = self.rest_until
+        else:
+            self.rest_until = self.due = None
+
+    def _watch_decide(self) -> None:
+        """The settle wait ran out: draw once for this alert episode."""
+        if self.watch_drawn or not self._can_watch():
+            return
+        self.watch_drawn = True
+        if self._chance(self.drives.watch):
+            self._watch_begin()
+
+    def _watch_on_trip(self) -> bool:
+        """Alert arrives while the cat is out on the top edge: draw at once and,
+        on a pass, carry on to the watch stop once the move playing ends. True
+        when the cat is (now) on watch; otherwise it goes home as usual."""
+        if self.watching:
+            return True
+        if self.watch_drawn or not self.stops or self.move == "jump_down" or not self._can_watch():
+            return False
+        self.watch_drawn = True
+        if not self._chance(self.drives.watch):
+            return False
+        self._watch_begin()
+        if self.move is None:
+            self._kick()
+        return True
+
+    def _watch_begin(self) -> None:
+        self.watching = True
+        self.play = None
+        self.at_stop = False
+        self.rest_until = self.due = None
+        self.stops = [self._watch_stop(), self.home.x]
+
+    def _kick(self) -> None:
+        """Start whatever the cat has to do next, now, instead of resting."""
+        move = self._next_move()
+        if move is not None:
             self._start(move)
 
     # ---- steps -----------------------------------------------------------
@@ -246,11 +411,13 @@ class Wanderer:
             if not self.walking:
                 self.pose = replace(self.pose, mirrored=target < self.pose.x)
                 return "walk_start"
+            if (target < self.pose.x) != self.pose.mirrored:
+                return "walk_stop"    # the watch stop moved behind it
             return "walk"
         if self.walking:
             return "walk_stop"
         last = len(self.stops) == 1
-        if last and not self.lying:
+        if (last or self.watching) and not self.lying:
             # back where it set out: face the way it does at home
             self.pose = replace(self.pose, mirrored=self.home.mirrored)
         if last and self.home.spot != "on_top":
@@ -277,8 +444,8 @@ class Wanderer:
             self.stops = []
         elif move == "walk":
             pose = replace(pose, x=pose.x + (-STRIDE_PX if pose.mirrored else STRIDE_PX))
-        elif (move == "walk_stop" and len(self.stops) > 1 and self.drives.play > 0
-              and self.rng.random() < STOP_SCRATCH):
+        elif (move == "walk_stop" and len(self.stops) > 1 and not self.watching
+              and self.drives.play > 0 and self.rng.random() < STOP_SCRATCH):
             self.play = "scratch"
         self.walking = move in ("walk_start", "walk")
         self.lying = move in sprites.LYING_MOVES
@@ -309,7 +476,7 @@ class Wanderer:
         self.move = None
         self.play = None
         self.stops = []
-        self.walking = self.at_stop = False
+        self.walking = self.at_stop = self.watching = False
         self.pose = self.home
 
 
@@ -335,13 +502,46 @@ class Roam:
         name = self.wanderer.animation()
         if name != before:
             self.player.restart(name, now_ms, before if transition else None)
+        self._bar_play(now_ms)
+
+    def _bar_play(self, now_ms: int) -> None:
+        """Play a latched bar event, but not over a transition still
+        playing into the state: the next render tries again."""
+        if not self.player.in_transition:
+            self.wanderer.bar_play(now_ms)
+            self._resync(now_ms)
+
+    def _resync(self, now_ms: int) -> None:
+        """Show what the Wanderer started outside a tick (a move from a bar
+        event or a new watch stop), so its end is seen."""
+        name = self.wanderer.animation()
+        if name != self.player.target:
+            self.player.restart(name, now_ms)
+
+    def set_bar_events(self, events, now_ms: int) -> None:
+        """The poll's (moved, reset) counters; see Wanderer.set_bar_events."""
+        self.wanderer.set_bar_events(events, now_ms)
+        self._bar_play(now_ms)
+
+    def note_bars(self, fill_x: Optional[float], events, now_ms: int) -> None:
+        """What this poll shows, taken in before its state: the fill end (or
+        None) and the (moved, reset) counters, or None to keep them. Nothing
+        moves here, so the state change decides with both in hand."""
+        self.wanderer.fill_x = fill_x
+        if events is not None:
+            self.wanderer.set_bar_events(events, now_ms)
+
+    def set_watch(self, fill_x: Optional[float], now_ms: int) -> None:
+        """Where the driving bar's fill ends in card px, or None."""
+        self.wanderer.set_watch(fill_x, now_ms)
+        self._resync(now_ms)
 
     def set_home(self, home: str, roams: bool, now_ms: int) -> None:
         """A new home spot or wander setting: the cat is at home, as it is drawn there."""
-        state = self.wanderer.state
-        drives = self.wanderer.drives
-        self.wanderer = Wanderer(home, roams, self.rng, state)
-        self.wanderer.drives = drives
+        old = self.wanderer
+        self.wanderer = Wanderer(home, roams, self.rng, old.state)
+        self.wanderer.inherit(old)
+        state = old.state
         self.wanderer.set_state(state, now_ms, settle=False)
         if self.wanderer.animation() != self.player.target:
             self.player.restart(self.wanderer.animation(), now_ms)

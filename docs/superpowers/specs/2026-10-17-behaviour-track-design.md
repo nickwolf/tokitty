@@ -101,6 +101,15 @@ The bar rectangles come from `theme.layout_card` (`session_bar`, `weekly_bar`). 
 
 Per-tick work: one comparison per account per 500 ms tick. The cat gets at most one extra move per 2 minutes.
 
+As built (2026-10-18), where it differs from the above:
+- `step_unit` only detects. `_note_bars` keeps `unit["bars_seen"]` from fresh, undimmed polls and passes `bar_events=(moved, reset)` counters to the pane. The Wanderer latches a new count for `BAR_EVENT_TTL_MS` (10 min) and keeps the bat cooldown, because only it knows when a bat starts. A move is the session whole percent going up; the weekly bar has no bat. A reset compares with the last poll that had a `resets_at`.
+- `near` is gone: the band is the alert state, so watch keys off alert as the pane receives it (after `apply_hint`, so tired wins).
+- `Drives` gains `bat`, `pounce` and `watch` chances (0 in `Drives()`; `drives()` gives 0.5, 1.0, 0.5, curious doubles bat and watch, playful doubles bat, lazy halves both). Wander off zeroes bat and pounce.
+- Bat and pounce play from home only, never over a transition. The pane takes in the poll's fill end and counters before its state, and follows the fill end after it.
+- Watch waits `WATCH_SETTLE_MS` (25 s) of alert at home (a cat already out on the edge draws at once), then one draw per alert episode; the head of `alert@on_top` (`PERCH_HEAD_PX`) goes over the fill end, snapped to the stops. Tired does not watch. With the stats on the right (inside, and on_top beside_cat) the fill end at 75 to 90% is beyond the head's reach from the last stop (x=184), so that cat sits at the far end; only inside_right and a full_width on_top card follow the fill end.
+- Only the bat has the 2 minute cooldown. A pounce needs a reset, so it comes at most once per session window.
+
+
 ## #129 Account handoff hints
 
 `app.tick` changes from step-then-render per unit to two passes: step every unit and collect the `PaneUpdate`s, run `handoff_hints` over the limits updates, then render. Today each pane renders inside the per-unit loop (`app.py:526`), so a pass that ran afterwards would be one tick late. `handoff_hints(updates, flags) -> (hints, flags)` is pure. The per-account near-cap flag that hysteresis needs is carried in `unit["handoff_near"]` between ticks. The models view (`render_usage`, model bars instead of session and weekly) gets no hints: that account counts as neither side.

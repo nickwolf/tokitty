@@ -598,3 +598,88 @@ def test_render_keeps_the_hover_data_for_the_limits_popup():
     sentinel = object()
     pane.render("content", 1, 1, "", "", "", None, None, False, hover=sentinel)
     assert pane.limits_hover is sentinel
+
+
+# ---- the bars the cat reacts to (#135) -------------------------------------
+
+def test_the_driving_bars_fill_end_reaches_the_cat():
+    from tokitty.theme import Rect
+
+    pane = QtPane()
+    def fill():
+        return pane._roam.wanderer.fill_x
+
+    pane.render("alert", 50, 67, "2h", "Mon", "5h", None, None, False)
+    assert fill() is None                                # no rects yet
+    pane.set_bar_rects(Rect(100, 20, 200, 6), Rect(50, 60, 100, 6))
+    pane.render("alert", 50, 67, "2h", "Mon", "5h", None, None, False)
+    assert fill() == 200.0
+    pane.render("alert", 50, 67, "2h", "Mon", "7d", None, None, False)
+    assert fill() == 50 + 100 * 67 / 100
+    for tag in ("", "5h Opus"):
+        pane.render("alert", 50, 67, "2h", "Mon", tag, None, None, False)
+        assert fill() is None
+    pane.render("alert", 50, 67, "2h", "Mon", "5h", None, None, False)
+    pane.render_usage("alert", object(), driving_tag="5h")
+    assert fill() is None
+
+
+def test_the_bar_events_of_a_render_reach_the_cat():
+    pane = QtPane()
+    _render(pane)
+    assert pane._roam.wanderer.bar_seen == [0, 0]
+    _render(pane, bar_events=(2, 1))
+    assert pane._roam.wanderer.bar_seen == [2, 1]
+
+
+def test_a_cat_leaving_watch_does_not_chase_the_new_polls_fill_end():
+    import random
+    from tokitty.behaviour import Drives
+    from tokitty.theme import Rect
+
+    now = [0]
+    pane = QtPane(clock=lambda: now[0], rng=random.Random(0), roams=True)
+    pane.set_bar_rects(Rect(132, 20, 158, 6), Rect(132, 60, 158, 6))
+    watch = Drives(trip=0.0, stay=1.0, watch=1.0)
+    pane.render("alert", 80, 30, "2h", "Mon", "5h", None, None, False, drives=watch)
+    w = pane._roam.wanderer
+    while not (w.watching and w.at_stop):
+        now[0] = pane.next_due_ms()
+        pane.tick(now[0])
+    stop = w.stops[0]
+    # a reset: session back near 0, weekly drives at 30%, the cat calm again
+    pane.render("content", 3, 30, "2h", "Mon", "7d", None, None, False, drives=watch)
+    assert w.stops[0] == stop and w.move in (None, "lie_down")
+
+
+def _watching_pane(now):
+    import random
+    from tokitty.behaviour import Drives
+    from tokitty.theme import Rect
+
+    pane = QtPane(clock=lambda: now[0], rng=random.Random(0), roams=True)
+    pane.set_bar_rects(Rect(132, 20, 158, 6), Rect(132, 60, 158, 6))
+    return pane, Drives(trip=1.0, stay=0.0, bat=1.0, pounce=1.0, watch=1.0)
+
+
+def test_a_reset_in_the_same_render_as_the_calm_state_pounces_before_a_pending_bat():
+    now = [0]
+    pane, d = _watching_pane(now)
+    pane.render("alert", 80, 30, "2h", "Mon", "5h", None, None, False, drives=d,
+                bar_events=(1, 0))
+    now[0] = 1_000
+    pane.render("content", 3, 30, "2h", "Mon", "7d", None, None, False, drives=d,
+                bar_events=(1, 1))
+    assert pane._roam.wanderer.move == "pounce"
+
+
+def test_alert_after_the_models_view_redirects_a_trip_to_watch():
+    now = [0]
+    pane, d = _watching_pane(now)
+    pane.render_usage("content", object(), drives=d)
+    w = pane._roam.wanderer
+    while not (w.stops and w.pose.spot == "on_top" and w.move is None):
+        now[0] = pane.next_due_ms()
+        pane.tick(now[0])
+    pane.render("alert", 80, 30, "2h", "Mon", "5h", None, None, False, drives=d)
+    assert w.watching and w.away

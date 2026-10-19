@@ -23,7 +23,7 @@ from tokitty.hover import cat_hover_text, cat_phase
 from tokitty import sprites
 from tokitty.behaviour import Drives
 from tokitty.wander import Pose, Roam
-from tokitty.theme import CLASSIC, CardStyle
+from tokitty.theme import CLASSIC, CardStyle, Rect
 
 # ui.fit_tag's limit: the longest label the table produces is 10 characters.
 TOOL_LABEL_MAX = 12
@@ -79,6 +79,9 @@ class QtPane:
         self._spot = spot
         self._roams = roams
         self._roam = Roam(spot, roams, rng if rng is not None else random.Random(), clock())
+        # The limits view's bar rects in card px (the widget sets them), which
+        # an alert cat on watch reads the fill ends from.
+        self._bar_rects: Optional[Tuple[Rect, Rect]] = None
         self.session_pct = 0.0
         self.weekly_pct = 0.0
         self.session_reset_text = ""
@@ -179,7 +182,9 @@ class QtPane:
         drives: Drives = Drives(),
     ) -> None:
         self._roam.set_drives(drives, self._clock())
+        self._roam.note_bars(None, None, self._clock())
         self._set_state(state)
+        self._roam.set_watch(None, self._clock())
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
@@ -206,9 +211,16 @@ class QtPane:
         drives: Drives = Drives(),
         hover=None,
         handoff_text: Optional[str] = None,
+        bar_events: Tuple[int, int] = (0, 0),
     ) -> None:
         self._roam.set_drives(drives, self._clock())
+        fill_x = self._fill_x(driving_tag, session_pct, weekly_pct)
+        # The poll's bars before its state, so a reset and a fill end are known
+        # when the state decides; following the fill end comes after, so a cat
+        # leaving alert does not chase it.
+        self._roam.note_bars(fill_x, bar_events, self._clock())
         self._set_state(state)
+        self._roam.set_watch(fill_x, self._clock())
         self._driving_tag = driving_tag
         self._tool_label = tool_label
         self._accent = accent
@@ -223,6 +235,19 @@ class QtPane:
             hint_text, credits_text, projection_text, stale_text, handoff_text
         )
         self._finish()
+
+    def set_bar_rects(self, session: Rect, weekly: Rect) -> None:
+        """Where this card's session and weekly bars are, in card px."""
+        self._bar_rects = (session, weekly)
+
+    def _fill_x(self, driving_tag: str, session_pct: float, weekly_pct: float) -> Optional[float]:
+        """Where the driving bar's fill ends in card px, or None when no bar
+        is driving or its rect is unknown."""
+        if self._bar_rects is None or driving_tag not in ("5h", "7d"):
+            return None
+        rect, pct = (self._bar_rects[0], session_pct) if driving_tag == "5h" else (
+            self._bar_rects[1], weekly_pct)
+        return rect.x + rect.w * pct / 100
 
     def cat_hover_text(self) -> str:
         """What the cat's popup says: the state, the tool when it works, and
