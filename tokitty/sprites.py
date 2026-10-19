@@ -34,6 +34,7 @@ import functools
 import math
 import random
 import re
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -420,21 +421,6 @@ WORKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
     (23, 13): "g", (23, 14): "g", (23, 15): "g",
 })
 
-# Contemplative pose -- SITTING_TEMPLATE with a thought bubble above
-# the head. "t" is the small seed dot (lit in BOTH frames, so neither
-# frame is ever pixel-identical to idle); "T" cells extend it into a
-# larger bubble plus an ascending trail dot in the second frame.
-THINKING_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
-    # seed dot, always on
-    (1, 13): "t", (1, 14): "t",
-    # bubble growth + trail dot toward the head, frame 2 only
-    # (avoids (2,13), an existing head-tuft pixel)
-    (0, 14): "T", (0, 15): "T", (0, 16): "T",
-    (1, 15): "T", (1, 16): "T",
-    (2, 14): "T", (2, 15): "T", (2, 16): "T",
-    (2, 12): "T",
-})
-
 # Flag-waving pose -- ALERT_TEMPLATE (upright, attentive) with a thick
 # pole down the right edge and a LARGE solid pennant. "8" is the pole
 # (always on, two cells wide so it reads at real size); "6" is the
@@ -486,35 +472,6 @@ def _shift_up(template: List[str], n: int) -> List[str]:
     blank = "." * len(template[0])
     return template[n:] + [blank] * n
 
-
-# Happy completion hop -- two templates, one per frame, so the WHOLE
-# cat translates upward when airborne instead of just losing its feet.
-# Both share a persistent ground line (literal "G") at the bottom row;
-# the airborne frame is the sitting cat shifted up two rows, leaving a
-# real clearance gap above the unbroken ground, with bright motion
-# dashes (literal "B") in the gap under the paws. "G" is a dedicated
-# non-coat char (BASE_PALETTE) so the earth never recolors with the coat.
-DONE_HOP_GROUNDED_TEMPLATE: List[str] = _overlay(SITTING_TEMPLATE, {
-    # ground line flanking the seated cat
-    (25, 3): "G", (25, 4): "G", (25, 5): "G", (25, 6): "G", (25, 7): "G",
-    (25, 8): "G",
-    (25, 18): "G", (25, 19): "G", (25, 20): "G", (25, 21): "G",
-    (25, 22): "G", (25, 23): "G", (25, 24): "G",
-})
-
-DONE_HOP_AIRBORNE_TEMPLATE: List[str] = _overlay(
-    _shift_up(SITTING_TEMPLATE, 2), {
-        # unbroken ground line: the cat now ends at row 23, so rows
-        # 24-25 read as clear air between paws and ground
-        (25, 3): "G", (25, 4): "G", (25, 5): "G", (25, 6): "G",
-        (25, 7): "G", (25, 8): "G", (25, 9): "G", (25, 10): "G",
-        (25, 11): "G", (25, 12): "G", (25, 13): "G", (25, 14): "G",
-        (25, 15): "G", (25, 16): "G", (25, 17): "G", (25, 18): "G",
-        (25, 19): "G", (25, 20): "G", (25, 21): "G", (25, 22): "G",
-        (25, 23): "G", (25, 24): "G",
-        # bright motion dashes in the clearance gap under the paws
-        (24, 9): "B", (24, 10): "B", (24, 15): "B", (24, 16): "B",
-    })
 
 # Timing. Every frame carries its own hold so art passes can mix fast frames
 # (blinks) with slow ones (breathing, long random holds between blinks).
@@ -631,16 +588,6 @@ def check_animation(anim: Animation) -> None:
         raise ValueError(f"tracks {template_tracks} all override the template")
     if len(offset_tracks) > 1:
         raise ValueError(f"tracks {offset_tracks} all move the sprite")
-
-
-# The flopped tail wags through three 2px-thick positions. Template
-# markers: "1"/"2"/"3" = cells unique to sweep pose 1/2/3; "4" = cells
-# shared by poses 1+2; "5" = shared by poses 2+3. Each frame paints its
-# pose's cells with the tail region char "y" -- so the swept tail takes the
-# pattern's tail tone, matching the resting curl -- and blanks the rest.
-_TAIL_POSE_1 = {"1": "y", "4": "y", "2": ".", "5": ".", "3": "."}
-_TAIL_POSE_2 = {"2": "y", "4": "y", "5": "y", "1": ".", "3": "."}
-_TAIL_POSE_3 = {"3": "y", "5": "y", "1": ".", "2": ".", "4": "."}
 
 
 # Chars _pose_cells may use as markers: any printable ASCII the template and
@@ -1661,8 +1608,6 @@ ANIMATIONS: Dict[str, Animation] = {
     "confused": CONFUSED_ANIMATION,
     "waking": WAKING_ANIMATION,
     "activate": ACTIVATE_ANIMATION,
-    # pose 2 repeats after pose 3 so the wag ping-pongs smoothly
-    # (left, up, right, up, left, ...) instead of snapping right-to-left.
     "flopped": FLOPPED_ANIMATION,
     "stirring": STIRRING_ANIMATION,
     "working": WORKING_ANIMATION,
@@ -1793,12 +1738,15 @@ def _apply(template: List[str], subs: Mapping[str, str]) -> List[str]:
     return ["".join(subs.get(ch, ch) for ch in row) for row in template]
 
 
-# Composed grids are cached per (state, track positions) and interned by
+# Composed grids are cached per state and track positions, and interned by
 # content, so equal grids are one list object for the process and callers
 # (the widget's image cache) can key on its identity. The cache entries
 # remember their Animation so a replaced table entry (tests) rebuilds.
+# The Stream Dock server composes on its own thread, so writes and the
+# known_grids scan hold _CACHE_LOCK.
+_CACHE_LOCK = threading.Lock()
 _GRIDS: Dict[tuple, List[str]] = {}
-_COMPOSED: Dict[Tuple[str, Tuple[int, ...]], Tuple[Animation, List[str]]] = {}
+_COMPOSED: Dict[str, Dict[Tuple[int, ...], Tuple[Animation, List[str]]]] = {}
 _ENUMERATIONS: Dict[str, Tuple[Animation, List[Tuple[int, ...]], List[List[str]]]] = {}
 
 
@@ -1830,8 +1778,8 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
     """The grid with every track at the given frame position: the template
     (or the one frame template override) with all tracks' substitutions."""
     anim = get_animation(state)
-    key = (state, tuple(positions))
-    cached = _COMPOSED.get(key)
+    key = tuple(positions)
+    cached = _COMPOSED.get(state, {}).get(key)
     if cached is not None and cached[0] is anim:
         return cached[1]
     template, subs = anim.template, {}
@@ -1841,8 +1789,9 @@ def compose(state: str, positions: Sequence[int]) -> List[str]:
         if frame.template is not None:
             template = frame.template
     rows = _apply(template, subs)
-    grid = _GRIDS.setdefault(tuple(rows), rows)
-    _COMPOSED[key] = (anim, grid)
+    with _CACHE_LOCK:
+        grid = _GRIDS.setdefault(tuple(rows), rows)
+        _COMPOSED.setdefault(state, {})[key] = (anim, grid)
     return grid
 
 
@@ -1882,8 +1831,9 @@ def _enumeration(state: str):
         for t, track in enumerate(anim.tracks):
             for i in range(1, len(track.frames)):
                 positions.append(tuple(i if k == t else 0 for k in range(len(zero))))
-        cached = _ENUMERATIONS[state] = (
-            anim, positions, [compose(state, pos) for pos in positions])
+        cached = (anim, positions, [compose(state, pos) for pos in positions])
+        with _CACHE_LOCK:
+            _ENUMERATIONS[state] = cached
     return cached
 
 
@@ -1892,7 +1842,8 @@ def known_grids(state: str) -> List[List[str]]:
     what an image cache must keep for a state that is on screen."""
     anim = get_animation(state)
     grids = list(_enumeration(state)[2])
-    grids += [g for (st, _), (a, g) in _COMPOSED.items() if st == state and a is anim]
+    with _CACHE_LOCK:
+        grids += [g for a, g in _COMPOSED.get(state, {}).values() if a is anim]
     return grids
 
 
@@ -2779,11 +2730,10 @@ def _upright_scratch(toward_stats: bool) -> Animation:
     Otherwise two steps left put them on the card's own side (0 = 8 - 2 * 4)."""
     turn = (lambda g: g) if toward_stats else _facing_left
     back = _facing_left if toward_stats else (lambda g: g)
-    up = (lambda g: _facing_left(g)) if toward_stats else (lambda g: g)
     sign = 1 if toward_stats else -1
     steps = (("contact", "up"), ("pass", "sway"), ("contact2", "up"))[:3 if toward_stats else 2]
     at = (sign * len(steps), 0)
-    reach = up(_scratch_upright())
+    reach = back(_scratch_upright())
     frames = [
         Frame({}, 150, template=_hop_frame()),
         Frame({}, 120, template=_hop_frame(pose="crouch")),
@@ -2794,7 +2744,7 @@ def _upright_scratch(toward_stats: bool) -> Animation:
     frames += [Frame({}, 120, template=_drop(reach, 2), offset=at),
                Frame({}, 350, template=reach, offset=at)]
     for paw in ("near", "far", "near", "far"):
-        frames += [Frame({}, 110, template=up(_scratch_upright(**{paw: 3})), offset=at),
+        frames += [Frame({}, 110, template=back(_scratch_upright(**{paw: 3})), offset=at),
                    Frame({}, 110, template=reach, offset=at)]
     frames[-1] = Frame({}, 300, template=reach, offset=at)
     frames.append(Frame({}, 120, template=_drop(reach, 2), offset=at))

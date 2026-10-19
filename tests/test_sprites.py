@@ -1,6 +1,9 @@
 import hashlib
+import itertools
 import json
 import random
+import sys
+import threading
 
 import pytest
 
@@ -373,6 +376,34 @@ def test_composed_grids_are_interned_by_content(monkeypatch):
     assert frames[1] is frames[0]  # but equal content is one object
     assert compose("dup", (1, 0)) is frames[0]
     assert get_frames("dup") is get_frames("dup")
+
+
+def test_known_grids_survives_a_compose_on_another_thread(monkeypatch):
+    # The Stream Dock server composes key images on its own thread while the
+    # widget scans the cache in known_grids.
+    monkeypatch.setattr(sprites, "_COMPOSED", {})
+    monkeypatch.setattr(sprites, "_GRIDS", {})
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        tracks = sprites.get_tracks("sleeping")
+        combos = list(itertools.product(*[range(len(t.frames)) for t in tracks]))
+        done = threading.Event()
+
+        def writer():
+            for pos in combos:
+                compose("sleeping", pos)
+            done.set()
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        try:
+            while not done.is_set():
+                sprites.known_grids("sleeping")
+        finally:
+            thread.join()
+    finally:
+        sys.setswitchinterval(interval)
 
 
 def test_template_override_comes_from_the_one_track_that_has_it(monkeypatch):
