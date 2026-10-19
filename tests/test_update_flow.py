@@ -3,8 +3,8 @@ import pytest
 from tokitty.update_check import CheckResult
 from tokitty.update_controller import UpdateResult
 from tokitty.update_flow import (
-    NO_NOTES, NOTES_CAP, RELEASES_URL, SHORTENED, UpdateActions, UpdateFlow, UpdateStatus, notes_markdown,
-    release_page_url,
+    HISTORY_MIN, INSTALLED, NEW, NO_NOTES, NOTES_CAP, RELEASES_URL, SHORTENED, UpdateActions, UpdateFlow, UpdateStatus,
+    history_entries, notes_markdown, release_badge, release_page_url,
 )
 from tokitty.updater import Release, RunningVersion
 
@@ -33,8 +33,9 @@ class FakeController:
 
 
 class FakeChecker:
-    def __init__(self, latest=None, available=False):
+    def __init__(self, latest=None, available=False, history=None, enabled=False):
         self.latest_release, self.update_available = latest, available
+        self.release_history, self.enabled = history, enabled
         self.waiting = []
 
     def check_now(self, on_result):
@@ -122,6 +123,51 @@ def test_the_headline_for_each_state():
     assert UpdateStatus("v0.2.0", checking=True).headline == "Checking…"
     assert UpdateStatus("v0.2.0", pending=True).headline == "Checking…"
     assert UpdateStatus("v0.2.0", error="offline").headline == "Couldn't check for updates: offline"
+
+
+def releases(*tags):
+    return tuple(Release(tag, None, None, None, None) for tag in tags)
+
+
+def history(newest, oldest=0):
+    """v0.<newest>.0 down to v0.<oldest>.0."""
+    return releases(*(f"v0.{minor}.0" for minor in range(newest, oldest - 1, -1)))
+
+
+def test_badges_mark_newer_and_running_releases_only():
+    assert release_badge(Release("v0.3.0", None, None, None, None), "v0.2.0") == NEW
+    assert release_badge(Release("v0.2.0", None, None, None, None), "v0.2.0") == INSTALLED
+    assert release_badge(Release("v0.1.0", None, None, None, None), "v0.2.0") is None
+    for running in ("dev", "dryrun-abc123", "0.2.0"):
+        assert release_badge(Release("v0.2.0", None, None, None, None), running) is None
+
+
+def test_the_list_is_highest_first_with_badges():
+    got = history_entries(releases("v0.4.0", "v0.3.0", "v0.2.0", "v0.1.0"), "v0.2.0")
+    assert [(e.release.tag, e.badge) for e in got] == [
+        ("v0.4.0", NEW), ("v0.3.0", NEW), ("v0.2.0", INSTALLED), ("v0.1.0", None)]
+
+
+def test_the_list_stops_at_history_min():
+    for running in ("v0.20.0", "v0.15.0", "v0.11.0", "dev"):
+        got = history_entries(history(20), running)
+        assert len(got) == HISTORY_MIN and got[0].release.tag == "v0.20.0"
+
+
+def test_the_list_never_cuts_off_a_skipped_release_or_the_running_one():
+    got = history_entries(history(20), "v0.5.0")
+    assert len(got) == 16 and got[-1].release.tag == "v0.5.0" and got[-1].badge == INSTALLED
+    assert all(e.badge == NEW for e in got[:-1])
+
+
+def test_a_running_version_missing_from_the_list_still_shows_every_newer_one():
+    got = history_entries(releases(*(f"v1.{minor}.0" for minor in range(14, -1, -1))), "v0.9.0")
+    assert len(got) == 15 and all(e.badge == NEW for e in got)
+
+
+def test_status_entries_are_empty_before_a_check():
+    assert UpdateStatus("v0.2.0").entries == []
+    assert [e.badge for e in UpdateStatus("v0.2.0", history=releases("v0.3.0", "v0.2.0")).entries] == [NEW, INSTALLED]
 
 
 def test_install_shows_preparing_with_cancel():
@@ -370,3 +416,54 @@ def test_new_flow_asks_the_controller_once():
     render = Render()
     flow = hooks.actions(FakeChecker(), controller).new_flow(RELEASE, render)
     assert flow.alive and render.labels() == CHOICES and controller.refusals == 1
+
+
+def test_status_carries_the_checkers_history():
+    hooks, checker = Hooks(), FakeChecker(history=releases("v0.2.0"))
+    assert hooks.actions(checker).status().history == releases("v0.2.0")
+
+
+def test_opening_the_tab_checks_quietly_for_the_notes_while_checks_are_on():
+    hooks, checker = Hooks(), FakeChecker(enabled=True)
+    actions = hooks.actions(checker)
+    actions.ensure_release()
+    actions.ensure_release()
+    assert len(checker.waiting) == 1 and actions.status().checking
+    checker.waiting[0](CheckResult(Release("v0.2.0", None, None, None, None), False, history=releases("v0.2.0")))
+    hooks.run_deferred()
+    assert hooks.infos == [] and hooks.offers == [] and hooks.changes == 2
+
+
+def test_a_quiet_check_that_fails_shows_no_box_and_is_not_retried():
+    hooks, checker = Hooks(), FakeChecker(enabled=True)
+    actions = hooks.actions(checker)
+    actions.ensure_release()
+    checker.waiting[0](CheckResult(error="offline"))
+    hooks.run_deferred()
+    actions.ensure_release()
+    assert hooks.errors == [] and actions.status().error == "offline" and len(checker.waiting) == 1
+
+
+def test_no_check_for_the_notes_with_checks_off_or_a_history_in_hand():
+    for checker in (FakeChecker(), FakeChecker(enabled=True, history=()), FakeChecker(enabled=True, history=releases("v0.2.0"))):
+        Hooks().actions(checker).ensure_release()
+        assert checker.waiting == []
+
+
+def test_check_now_during_a_quiet_check_joins_it_and_gets_its_box():
+    hooks, checker = Hooks(), FakeChecker(enabled=True)
+    actions = hooks.actions(checker)
+    actions.ensure_release()
+    actions.check_now()
+    assert len(checker.waiting) == 1
+    checker.waiting[0](CheckResult(Release("v0.2.0", None, None, None, None), False))
+    hooks.run_deferred()
+    assert hooks.infos == [("Check for updates", "Tokitty v0.2.0 is the latest version.")]
+
+
+def test_a_remembered_tag_still_checks_out_loud():
+    hooks, checker = Hooks(), FakeChecker(available=True, enabled=True)
+    hooks.actions(checker).ensure_release()
+    checker.waiting[0](CheckResult(RELEASE, True))
+    hooks.run_deferred()
+    assert hooks.offers == [RELEASE]

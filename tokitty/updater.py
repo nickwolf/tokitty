@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -109,6 +109,8 @@ class Release:
     asset_size: Optional[int]
     sums_url: Optional[str]
     body: Optional[str] = None
+    # The publication date as YYYY-MM-DD.
+    published: Optional[str] = None
 
     @property
     def installable_from_app(self) -> bool:
@@ -144,19 +146,28 @@ def fetch_releases(*, urlopen=None, base_url: Optional[str] = None) -> list:
     return releases
 
 
-def select_latest(releases, target: Optional[str]) -> Optional[Release]:
-    """The highest stable version by number. `releases/latest` isn't used: it
-    sorts by the tagged commit's date, not by version."""
-    best: Optional[Tuple[Version, dict]] = None
+def select_releases(releases, target: Optional[str]) -> List[Release]:
+    """Every stable release, highest version first. Releases with the same
+    version keep their listed order."""
+    found: List[Tuple[Version, dict]] = []
     for entry in releases if isinstance(releases, list) else []:
         if not isinstance(entry, dict) or entry.get("draft") or entry.get("prerelease"):
             continue
         version = parse_version(entry.get("tag_name"))
-        if version is not None and (best is None or version > best[0]):
-            best = (version, entry)
-    if best is None:
-        return None
-    entry = best[1]
+        if version is not None:
+            found.append((version, entry))
+    found.sort(key=lambda pair: pair[0], reverse=True)
+    return [_release(entry, target) for _version, entry in found]
+
+
+def select_latest(releases, target: Optional[str]) -> Optional[Release]:
+    """The highest stable version by number. `releases/latest` isn't used: it
+    sorts by the tagged commit's date, not by version."""
+    found = select_releases(releases, target)
+    return found[0] if found else None
+
+
+def _release(entry: dict, target: Optional[str]) -> Release:
     tag = entry["tag_name"]
     assets = {}
     for asset in entry.get("assets") if isinstance(entry.get("assets"), list) else []:
@@ -174,7 +185,18 @@ def select_latest(releases, target: Optional[str]) -> Optional[Release]:
         asset_size=size if isinstance(size, int) and not isinstance(size, bool) else None,
         sums_url=_url(sums),
         body=body if isinstance(body, str) else None,
+        published=_date_or_none(entry.get("published_at")),
     )
+
+
+def _date_or_none(value) -> Optional[str]:
+    """The date part of a timestamp like 2026-10-19T14:41:12Z."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value[:10]).isoformat()
+    except ValueError:
+        return None
 
 
 def _url(asset: Optional[dict]) -> Optional[str]:
