@@ -325,3 +325,39 @@ def test_randomize_draws_built_ins_only(tmp_path, monkeypatch):
     controls.on_colorways_changed()
     controls.on_randomize(0)
     assert seen == [list(sprites.COLORWAYS)]
+
+
+@pytest.mark.parametrize("pattern", list(sprites.PATTERNS))
+@pytest.mark.parametrize("overrides", [
+    {"coat_base": "#112233", "coat_shade": "#445566"}, {"coat_base": "#112233"}, {"coat_shade": "#445566"},
+])
+def test_migration_keeps_the_coat_cells_in_every_pattern(tmp_path, pattern, overrides):
+    # coat_base painted o and coat_shade painted O, whatever tone the pattern
+    # gave them; the migrated cat paints both the same as before.
+    before = Customization(colorway="gray", pattern=pattern, overrides=overrides)
+    expected = effective_palette(before)
+    store, cws = migrate_coat_overrides(tmp_path, {"a": before})
+    sprites.set_custom_colorways(cws)
+    after = effective_palette(store["a"])
+    assert (after["o"], after["O"]) == (expected["o"], expected["O"])
+
+
+def test_migration_keeps_an_override_with_no_tone_to_move_into(tmp_path):
+    # Van draws o with the fixed white, and colorpoint draws o and O with light.
+    store, cws = migrate_coat_overrides(tmp_path, {
+        "van": Customization(colorway="gray", pattern="van", overrides={"coat_base": "#112233"}),
+        "point": Customization(colorway="gray", pattern="colorpoint",
+                               overrides={"coat_base": "#112233", "coat_shade": "#445566"}),
+    })
+    assert store["van"].colorway == "gray" and store["van"].overrides == {"coat_base": "#112233"}
+    assert cws[store["point"].colorway]["light"] == "#112233"
+    assert store["point"].overrides == {"coat_shade": "#445566"}
+
+
+def test_new_ids_skip_ids_customizations_still_point_at(tmp_path):
+    # A colorways.json that lost custom-1 leaves the cat pointing at it.
+    save_customization(tmp_path, {"a": Customization(colorway="custom-1")})
+    assert colorways.add_colorway(tmp_path, "New", TONES) == "custom-2"
+    store, cws = migrate_coat_overrides(tmp_path / "other", {
+        "a": Customization(colorway="custom-1"), "b": old(coat_base="#112233")})
+    assert store["b"].colorway == "custom-2"
