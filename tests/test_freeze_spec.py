@@ -374,6 +374,17 @@ def test_spec_applies_the_trim_and_ships_the_licences():
     assert 'Path(DISTPATH) / APP_NAME / "licenses"' in spec
 
 
+def test_spec_writes_the_third_party_notices_from_the_trimmed_build():
+    # The notices name what the build ships, so they are written after the
+    # trim and before COLLECT and BUNDLE take the TOCs (#152).
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    trim, notices, collect = spec.index("gui.datas = [e for e"), spec.index("write_notices("), spec.index("COLLECT(")
+    assert trim < notices < collect
+    assert 'gui.datas.append((f"licenses/{NOTICES_FILE}"' in spec
+    assert "shutil.copyfile(notices, licenses_dir / NOTICES_FILE)" in spec
+    assert _bundle_data().NOTICES_FILE not in _bundle_data().LICENSE_FILES
+
+
 def test_qt_notices_script_keeps_the_bundled_modules(tmp_path):
     sys.path.insert(0, str(ROOT))
     try:

@@ -10,9 +10,10 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
 from bundle_data import (  # noqa: E402
-    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, QT_EXCLUDED_MODULES, info_plist, project_version,
-    qt_toc_entry_dropped,
+    DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, NOTICES_FILE, QT_EXCLUDED_MODULES, info_plist,
+    project_version, qt_toc_entry_dropped,
 )
+from bundle_notices import write_notices  # noqa: E402
 
 APP_NAME = "tokitty" if sys.platform.startswith("linux") else "Tokitty"
 datas = [(str(ROOT / "tokitty" / name), str(Path("tokitty") / Path(name).parent)) for name in DATA_FILES]
@@ -77,6 +78,16 @@ if QT_TRIM:
     gui.binaries = [e for e in gui.binaries if not qt_toc_entry_dropped(e)]
     gui.datas = [e for e in gui.datas if not qt_toc_entry_dropped(e)]
 
+# The third-party notices (#152) come from what is left after the trim, so
+# they name only what this build ships.
+notices = write_notices(
+    Path(workpath) / NOTICES_FILE,
+    [a.pure + a.binaries + a.datas + a.scripts for a in (gui, hook)],
+    own_dirs=[ROOT, workpath],
+)
+if sys.platform == "darwin":
+    gui.datas.append((f"licenses/{NOTICES_FILE}", str(notices), "DATA"))
+
 gui_exe = EXE(
     PYZ(gui.pure),
     gui.scripts,
@@ -106,6 +117,7 @@ if sys.platform != "darwin":
     licenses_dir.mkdir(parents=True, exist_ok=True)
     for name in LICENSE_FILES:
         shutil.copyfile(ROOT / "freeze" / "licenses" / name, licenses_dir / name)
+    shutil.copyfile(notices, licenses_dir / NOTICES_FILE)
 
 if sys.platform == "darwin":
     app = BUNDLE(

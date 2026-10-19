@@ -78,6 +78,10 @@ LGPL_SOURCE_PACKAGES = {"PySide6": "py", "shiboken6": "py"}
 
 LICENSE_FILES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt")
 
+# Written into the licenses folder at build time by freeze/bundle_notices.py
+# (#152), from what the build collected, so it is not in freeze/licenses/.
+NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
+
 
 def qt_toc_entry_dropped(entry) -> bool:
     """qt_entry_dropped for a PyInstaller TOC entry (dest, src, typecode).
