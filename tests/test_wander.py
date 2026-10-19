@@ -569,6 +569,10 @@ def test_a_curious_trip_has_two_to_four_stops_on_the_real_track(home):
 class _Rng(random.Random):
     """A seeded Random whose next random() calls return `values` first."""
 
+    def __new__(cls, values=()):
+        # Before 3.11 Random.__new__ seeds from its first argument.
+        return super().__new__(cls)
+
     def __init__(self, values=()):
         super().__init__(0)
         self.values = list(values)
