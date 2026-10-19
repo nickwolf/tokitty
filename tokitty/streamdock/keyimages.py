@@ -6,8 +6,9 @@ and so bump its revision, many times a second.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
+from tokitty import theme as T
 from tokitty.pose import ACTIVITY_SPRITE_PLACEHOLDERS
 from tokitty.streamdock import render
 from tokitty.streamdock.model import KeySpec
@@ -22,8 +23,10 @@ def _sprite(state: str) -> str:
     return ACTIVITY_SPRITE_PLACEHOLDERS.get(state, IDLE_SPRITE)
 
 
-def spec_image(spec: KeySpec, palette_fn: Callable[[int], Dict[str, str]]) -> str:
-    """The data URL for `spec`. `palette_fn` maps an account index to a sprite palette."""
+def spec_image(spec: KeySpec, palette_fn: Callable[[int], Dict[str, str]],
+               bars: Optional[T.BarStyle] = None) -> str:
+    """The data URL for `spec`. `palette_fn` maps an account index to a sprite
+    palette; `bars` is the theme's bar style, the default when None."""
     kind = spec.kind
     if kind in ("slot", "overflow") and spec.ref is not None:
         palette = palette_fn(spec.ref.account_index)
@@ -32,7 +35,7 @@ def spec_image(spec: KeySpec, palette_fn: Callable[[int], Dict[str, str]]) -> st
         title = NO_TAB if spec.focus in NO_TAB_STATUSES else spec.title
         return render.session_key(_sprite(spec.state), 0, palette, title, accent=spec.pending)
     if kind == "usage":
-        return render.usage_key(spec.session_pct, spec.weekly_pct, spec.warn)
+        return render.usage_key(spec.session_pct, spec.weekly_pct, spec.warn, bars or T.BarStyle())
     if kind == "interrupt":
         return render.status_key("Esc")
     if kind == "new":

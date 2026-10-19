@@ -124,6 +124,7 @@ class DeckStarter:
         list_running_distros_fn: Callable[[], List[str]],
         *,
         palette_fn: Callable[[int], Dict[str, str]],
+        bars_fn: Optional[Callable[[], Any]] = None,
         after: Callable[[int, Callable[[], None]], Any],
         cancel: Callable[[Any], None],
         deadline_s: float,
@@ -136,6 +137,7 @@ class DeckStarter:
         self._units = units
         self._list_running = list_running_distros_fn
         self._palette_fn = palette_fn
+        self._bars_fn = bars_fn
         self._open_in_window = open_in_window
         self._cls = runtime_cls
         self._after = after
@@ -167,6 +169,7 @@ class DeckStarter:
                 list(settings.streamdock_presets),
                 account_inputs(self._units),
                 palette_fn=self._palette_fn,
+                bars_fn=self._bars_fn,
                 open_in_window=self._open_in_window,
                 watcher_factory=make_watcher_factory(self._units, self._list_running),
                 list_running_distros_fn=self._list_running,

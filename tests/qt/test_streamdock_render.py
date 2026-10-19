@@ -7,11 +7,13 @@ import http.client
 import json
 import queue
 import threading
+from dataclasses import replace
 
 import pytest
 from PySide6.QtGui import QFont, QFontInfo, QFontMetricsF, QImage
 
 from tokitty import sprites
+from tokitty import theme as T
 from tokitty.streamdock import render
 from tokitty.streamdock.model import KeySpec, PlanBox
 from tokitty.streamdock.server import DeckServer
@@ -125,6 +127,29 @@ def test_usage_bar_colours_follow_display_bar_color():
     # Bar rows sit at y=25 (session) and y=54 (weekly); sample just inside the fill.
     assert px(img, 9, 22) == (0x4c, 0xaf, 0x6b)
     assert px(img, 9, 51) == (0xe0, 0x52, 0x52)
+
+
+def test_usage_bars_follow_the_theme_colours_and_thresholds():
+    bars = T.apply_preset(T.Theme(), "colour_blind").bars
+    img = decode(render.usage_key(10, 90, False, bars))
+    assert px(img, 9, 22) == (0x56, 0xb4, 0xe9)
+    assert px(img, 9, 51) == (0xd5, 0x5e, 0x00)
+    # 30% is mid once mid_at drops to 25, where the default ramp keeps it low.
+    early = decode(render.usage_key(30, 0, False, replace(bars, mid_at=25)))
+    assert px(early, 9, 22) == (0xe6, 0x9f, 0x00)
+    assert render.usage_key(30, 0, False, bars) != render.usage_key(30, 0, False, replace(bars, mid_at=25))
+
+
+def test_usage_bar_notches_are_one_background_pixel_at_each_threshold():
+    bars = T.BarStyle(notches=True)
+    img = decode(render.usage_key(90, 30, False, bars))
+    for y in (22, 51):  # the session bar is full there, the weekly bar is track
+        for at in (50, 80):
+            x = 7 + round((render.SIZE - 14) * at / 100)
+            assert px(img, x, y) == render.BG
+            assert px(img, x - 1, y) != render.BG and px(img, x + 1, y) != render.BG
+    plain = decode(render.usage_key(90, 30, False))
+    assert px(plain, 7 + 25, 22) == (0xe0, 0x52, 0x52)
 
 
 def test_usage_key_clamps_out_of_range():

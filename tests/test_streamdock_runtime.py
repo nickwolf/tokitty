@@ -237,6 +237,36 @@ def test_unchanged_plan_is_not_republished(h):
     assert h.rt._box.get().revision == rev
 
 
+def test_a_bar_style_change_republishes_the_plan(tmp_path):
+    style = ["calm"]
+    h = Harness(tmp_path, bars_fn=lambda: style[0])
+    slots(h, 1)
+    rev = h.rt._box.get().revision
+    h.tick()
+    assert h.rt._box.get().revision == rev
+    style[0] = "notched"
+    h.tick()
+    snap = h.rt._box.get()
+    assert snap.revision != rev and "k0" in snap.plan
+    assert h.rt._bars == "notched"
+
+
+def test_a_failing_bar_style_source_keeps_the_last_style(tmp_path):
+    style = ["calm"]
+
+    def bars():
+        if style[0] is None:
+            raise RuntimeError("gone")
+        return style[0]
+
+    h = Harness(tmp_path, bars_fn=bars)
+    slots(h, 1)
+    rev = h.rt._box.get().revision
+    style[0] = None
+    h.tick()
+    assert h.rt._box.get().revision == rev and h.rt._bars == "calm"
+
+
 def test_focus_result_and_press_apply_in_arrival_order(h):
     h.key("k0", "slot", 0)
     h.key("k1", "slot", 1)

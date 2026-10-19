@@ -458,6 +458,13 @@ def test_revision_bumps_only_on_change():
     assert m.revision == rev + 2
 
 
+def test_restyle_bumps_the_revision_with_the_same_plan():
+    m = setup(["slot", "usage:0"], [sv("a", 1)], usage={0: (1, 2, False)})
+    rev, plan = m.revision, m.render_plan()
+    m.restyle()
+    assert m.revision == rev + 1 and m.render_plan() == plan
+
+
 def test_unknown_role_and_equal_inputs_equal_specs():
     a = setup(["slot"], [sv("a", 1)]).render_plan()
     b = setup(["slot"], [sv("a", 1)]).render_plan()

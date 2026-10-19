@@ -1,6 +1,7 @@
 import pytest
 
 from tokitty import sprites
+from tokitty import theme as T
 from tokitty.streamdock import keyimages, render
 from tokitty.streamdock.model import KeySpec, SessionRef
 
@@ -62,6 +63,13 @@ def test_overflow_shows_count_and_alert_accent():
     assert img(spec) == render.session_key("working", 0, palette(0), "+4", accent=True)
     calm = KeySpec("overflow", ref=REF, state="working", count=4)
     assert img(calm) != img(spec)
+
+
+def test_usage_key_draws_with_the_theme_bars():
+    spec = KeySpec("usage", account=0, session_pct=40, weekly_pct=70, warn=False)
+    bars = T.BarStyle(notches=True, low="#4a90e2")
+    assert keyimages.spec_image(spec, palette, bars) == render.usage_key(40, 70, False, bars)
+    assert img(spec) == render.usage_key(40, 70, False, T.BarStyle())
 
 
 def test_interrupt_and_new_and_status_use_status_key():
