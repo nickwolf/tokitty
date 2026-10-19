@@ -337,6 +337,18 @@ def test_every_pattern_in_the_strip_is_named(make_world):
     assert dlg.strip_labels["tabby_white"].text() == "tabby white"
 
 
+def test_the_pattern_strip_wraps_inside_the_dialog(make_world):
+    dlg = editor(make_world(1))
+    dlg.show()  # laid out only once shown; closed after, so it can't sit under later tests' pointer
+    try:
+        for pattern, cell in dlg.strip.items():
+            assert cell.mapTo(dlg, cell.rect().topRight()).x() < dlg.width(), pattern
+        first, last = (dlg.strip[p] for p in (next(iter(dlg.strip)), list(dlg.strip)[-1]))
+        assert first.mapTo(dlg, first.rect().topLeft()).y() < last.mapTo(dlg, last.rect().topLeft()).y()
+    finally:
+        dlg.close()
+
+
 def test_preview_pattern_pick_repaints_the_preview_only(make_world):
     world = make_world(1)
     dlg = editor(world)

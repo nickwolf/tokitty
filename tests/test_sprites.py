@@ -260,6 +260,67 @@ def test_silhouette_patterns_present_and_covered():
     assert van["o"] == "white" and van["x"] == "coat" and van["y"] == "coat"
 
 
+# ---- piebald patterns (#211) -------------------------------------------------
+
+def _every_frame():
+    from tokitty.sprites import MOVES, SPOT_VARIANTS, TRANSITIONS, move_name, spot_state, transition_name
+
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    for name in names:
+        for grid in get_frames(name):
+            yield name, grid
+
+
+def test_every_drawn_cell_carries_a_piebald_class():
+    # A bare region char draws coat in every piebald pattern, even where the
+    # look is white, so every o/O/s/c/x/u cell a frame shows must be folded.
+    bare = set(sprites.PIEBALD_BASES) | {sprites.DIM_CHARS[ch] for ch in sprites.PIEBALD_BASES}
+    for name, grid in _every_frame():
+        cells = [(r, c, ch) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch in bare]
+        assert not cells, (name, cells[:5])
+
+
+def test_piebald_chars_draw_as_their_region_unless_the_pattern_whitens_them():
+    for colorway in COLORWAYS:
+        for pattern in PATTERNS:
+            palette = resolve_palette(colorway, pattern)
+            bit = sprites.PATTERN_PIEBALD.get(pattern, 0)
+            for ch, (base, bits) in sprites.PIEBALD_CHARS.items():
+                want = BASE_PALETTE["w"] if bits & bit else palette[base]
+                assert palette[ch] == want, (colorway, pattern, base, bits)
+
+
+def test_no_two_patterns_draw_the_same_cat():
+    # #211: tuxedo and bicolor once rendered identically.
+    looks = {}
+    for pattern in PATTERNS:
+        palette = resolve_palette("black", pattern)
+        cat = tuple(palette.get(ch) for row in SITTING_TEMPLATE for ch in row)
+        looks.setdefault(cat, []).append(pattern)
+    assert all(len(names) == 1 for names in looks.values()), list(looks.values())
+
+
+def test_a_coat_override_reaches_the_piebald_chars():
+    from tokitty import piebald
+
+    palette = resolve_palette("orange", "tuxedo")
+    palette["o"] = "#123456"
+    sprites.derive_tones(palette, "tuxedo")
+    for ch, (base, bits) in sprites.PIEBALD_CHARS.items():
+        if base == "o":
+            assert palette[ch] == (BASE_PALETTE["w"] if bits & piebald.TUXEDO else "#123456")
+
+
+def test_piebald_chars_and_their_twins_collide_with_nothing():
+    piebald_chars = set(sprites.PIEBALD_CHARS)
+    twins = set(sprites.DIM_CHARS.values()) | set(sprites.GLOW_CHARS.values())
+    plain = set(BASE_PALETTE) | set(REGION_CHARS) | {"p", sprites.LID_CHAR, sprites.GLOW_CHAR}
+    assert len(twins) == len(sprites.DIM_CHARS) + len(sprites.GLOW_CHARS)
+    assert not piebald_chars & twins and not piebald_chars & plain and not twins & plain
+    assert not {ch for ch in sprites._MARKER_CHARS if ord(ch) > 127} & (piebald_chars | twins)
+
+
 # ---- animation timing and tracks (#125) -------------------------------------
 
 def _frames(*chars, ms=800):
