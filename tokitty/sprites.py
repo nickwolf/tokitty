@@ -810,14 +810,20 @@ INTERESTED_ANIMATION = Animation(_INTERESTED_TEMPLATE, (
 ))
 
 
-def _sink_head(template: List[str], neck_row: int = 13, width: int = 21) -> List[str]:
+def _sink_head(template: List[str], neck_row: int = 13, width: int = 21, keep: str = "") -> List[str]:
     """The head (rows above neck_row, columns below width) dropped one row
     onto the chest, the sleeping cat's exhale. The columns to the right (the
-    tail tip, the Zs) stay where they are."""
+    tail tip, the Zs) stay where they are, and so do cells holding a `keep`
+    marker (a tail pose that reaches into the head's columns)."""
     rows = [list(r) for r in template]
     for r in range(neck_row, 0, -1):
-        rows[r][:width] = rows[r - 1][:width]
-    rows[0][:width] = ["."] * width
+        for c in range(width):
+            if template[r][c] not in keep:
+                above = template[r - 1][c]
+                rows[r][c] = "." if above in keep else above
+    for c in range(width):
+        if template[0][c] not in keep:
+            rows[0][c] = "."
     return ["".join(r) for r in rows]
 
 
@@ -841,7 +847,9 @@ _SLEEP_TEMPLATE, (_SLEEP_SHUT, _SLEEP_OPEN, _SLEEP_LOOK_L, _SLEEP_LOOK_R) = _pos
     _SLEEP_TEMPLATE, [_SIT_EYES_LINE, _SLEEP_PEEK, _SLEEP_PEEK_LEFT, _SLEEP_PEEK_RIGHT])
 _SLEEP_TEMPLATE, (_Z_BIG, _Z_NONE, _Z_DOT, _Z_SMALL) = _pose_cells(
     _SLEEP_TEMPLATE, [_ZZZ_BIG, {}, _ZZZ_DOT, _ZZZ_SMALL])
-_SLEEP_EXHALE_TEMPLATE = _sink_head(_SLEEP_TEMPLATE)
+_SLEEP_EXHALE_TEMPLATE = _sink_head(_SLEEP_TEMPLATE, keep="".join(
+    {ch for pose in (_SLEEP_TAIL_NEUTRAL, _SLEEP_TAIL_IN, _SLEEP_TAIL_OUT, _SLEEP_TAIL_UP, _SLEEP_TAIL_HIGH)
+     for ch in pose}))
 
 SLEEPING_ANIMATION = Animation(_SLEEP_TEMPLATE, (
     Track("eyes", (
@@ -1297,7 +1305,7 @@ STIRRING_ANIMATION = Animation(_ST_TMPL, (
     )),
     Track("head", (
         Frame({}, (2000, 4000)),
-        Frame({}, (1200, 2500), template=_lift_head(_ST_TMPL)),
+        Frame({}, (1200, 2500), template=_lift_head(_ST_TMPL, top=2)),
     )),
     Track("tail", (
         Frame(_ST_B, (300, 700)),

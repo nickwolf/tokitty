@@ -518,6 +518,40 @@ def test_every_tail_stays_joined_to_the_cat():
             assert joined == tail, (name, i, sorted(tail - joined))
 
 
+def test_a_template_override_keeps_every_other_tracks_pose():
+    # A frame that swaps the template (a breath, a nod, a lifted head) may move
+    # another track's pose with the head, but never drop cells of it: each pose
+    # still changes as many cells as it does on the base template. Working's
+    # screen light stays with the screen, so a lean hides part of a band.
+    from tokitty.sprites import (
+        MOVES, SPOT_VARIANTS, TRANSITIONS, move_name, spot_state, transition_name,
+    )
+
+    def changed(a, b):
+        return sum(x != y for ra, rb in zip(a, b) for x, y in zip(ra, rb))
+
+    allowed = {("working", "lean", "glow")}
+    names = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [move_name(m) for m in MOVES] + [transition_name(*pair) for pair in TRANSITIONS])
+    for name in names:
+        tracks = get_animation(name).tracks
+        for t, track in enumerate(tracks):
+            for f, frame in enumerate(track.frames):
+                if frame.template is None:
+                    continue
+                for o, other in enumerate(tracks):
+                    if o == t or (name, track.name, other.name) in allowed:
+                        continue
+                    if any(g.template is not None for g in other.frames):
+                        continue
+                    for j in range(1, len(other.frames)):
+                        base, over = [0] * len(tracks), [0] * len(tracks)
+                        over[t] = f
+                        expected = changed(compose(name, base), compose(name, base[:o] + [j] + base[o + 1:]))
+                        got = changed(compose(name, over), compose(name, over[:o] + [j] + over[o + 1:]))
+                        assert got == expected, (name, track.name, f, other.name, j)
+
+
 def _placed(grid, offset):
     """The drawn cells of a grid, moved by the frame's offset."""
     dx, dy = offset
