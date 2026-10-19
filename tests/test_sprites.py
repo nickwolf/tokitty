@@ -103,7 +103,9 @@ def test_placeholders_appear_exactly_once_per_template():
 
 
 def test_pattern_region_is_used():
-    joined = "".join(SITTING_TEMPLATE + ALERT_TEMPLATE + FLOPPED_TEMPLATE)
+    from tokitty.sprites import piebald_base
+
+    joined = "".join(map(piebald_base, "".join(SITTING_TEMPLATE + ALERT_TEMPLATE + FLOPPED_TEMPLATE)))
     assert "c" in joined, "templates must use the patch region so coats can differ"
 
 
@@ -190,9 +192,11 @@ def test_new_regions_present_and_covered():
     for name, pat in PATTERNS.items():
         assert set(pat.keys()) == set(REGION_CHARS), name
     # the new chars actually appear in the base template art
+    from tokitty.sprites import piebald_base
+
     for name, template in (("sitting", SITTING_TEMPLATE), ("alert", ALERT_TEMPLATE),
                            ("flopped", FLOPPED_TEMPLATE)):
-        joined = "".join(template)
+        joined = "".join(map(piebald_base, "".join(template)))
         for ch in ("m", "x", "y", "u"):
             assert ch in joined, (name, ch)
 
@@ -698,7 +702,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "d2eb62e23f1f1e2dd7d7c7aebae6a42f30df9b74a577359671adf5e33ff8b1fb"
+    assert digest == "60dd0dd8cfc641d7cd4693af25ba1cd224321cdb73eb267c8fad862ff617324b"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():

@@ -184,4 +184,4 @@ def _effective_palette(colorway: str, pattern: str, tail: str,
         palette["o"] = coat_base
     if coat_shade is not None:
         palette["O"] = coat_shade
-    return sprites.derive_tones(palette)
+    return sprites.derive_tones(palette, pattern)
