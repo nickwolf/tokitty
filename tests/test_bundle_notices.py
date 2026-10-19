@@ -14,6 +14,10 @@ try:
 finally:
     sys.path.pop(0)
 
+# dpkg file lists hold POSIX paths, which realpath turns into C:\ ones on
+# Windows. The spec only reads dpkg on Linux.
+posix_dpkg = pytest.mark.skipif(sys.platform == "win32", reason="dpkg is Linux only")
+
 
 def _touch(path: Path, text: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +55,7 @@ def make_dist(site: Path, name: str, version: str = "1.0", licence_files=("LICEN
     _touch(info / "RECORD", "\n".join(record) + "\n")
 
 
+@posix_dpkg
 def test_dpkg_owner_strips_the_arch_and_tries_both_usrmerge_spellings(tmp_path):
     dpkg = make_dpkg(tmp_path, {"libssl3:amd64": ["/usr/lib/x86_64-linux-gnu/libssl.so.3"], "zlib1g": ["/lib/x86_64-linux-gnu/libz.so.1"]}, {})
     assert dpkg.owner("/lib/x86_64-linux-gnu/libssl.so.3") == "libssl3"
@@ -118,6 +123,7 @@ def _ci_layout(tmp_path):
     return prefix, site, repo, work, files, dists, dpkg
 
 
+@posix_dpkg
 def test_entries_are_put_down_to_where_they_came_from(tmp_path):
     prefix, site, repo, work, files, dists, dpkg = _ci_layout(tmp_path)
     entries = [
@@ -142,6 +148,7 @@ def test_entries_are_put_down_to_where_they_came_from(tmp_path):
     assert unattributed == [("libmystery.so.1", str(files["stray"]))]
 
 
+@posix_dpkg
 def test_a_python_that_dpkg_owns_is_the_packages(tmp_path):
     # A local build on the distribution's own Python: dpkg owns libpython,
     # which also sits under sys.base_prefix (/usr), and its copyright file
@@ -222,6 +229,7 @@ def test_the_repo_carries_license_rst_for_the_python_the_release_builds_with():
         assert f"\n{component}\n" in text, component
 
 
+@posix_dpkg
 def test_the_notice_lists_each_library_and_skips_what_qt_notice_covers(tmp_path):
     prefix, site, repo, work, files, dists, dpkg = _ci_layout(tmp_path)
     entries = [
@@ -247,6 +255,7 @@ def test_the_notice_lists_each_library_and_skips_what_qt_notice_covers(tmp_path)
     assert "apt-get source" in text
 
 
+@posix_dpkg
 def test_libraries_from_one_copyright_file_share_a_block(tmp_path):
     a = _touch(tmp_path / "lib" / "libxcb-shape.so.0")
     b = _touch(tmp_path / "lib" / "libxcb-xkb.so.1")
