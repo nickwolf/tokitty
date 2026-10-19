@@ -337,13 +337,59 @@ def test_every_pattern_in_the_strip_is_named(make_world):
     assert dlg.strip_labels["tabby_white"].text() == "tabby white"
 
 
-def test_preview_pattern_pick_repaints_the_preview_only(make_world):
+def pick(dlg, pattern):
+    dlg.pattern_pick.set(pattern)
+    dlg._pick_pattern(pattern)
+
+
+def stored_pattern(world, pane=0):
+    return load_customization(world.state_dir).get(f"k{pane}", world.store[f"k{pane}"]).pattern
+
+
+def test_preview_pattern_pick_repaints_the_preview_and_writes_nothing_yet(make_world):
     world = make_world(1)
     dlg = editor(world)
     assert dlg.pattern_pick.get() == world.widget.panes[0]._pattern
-    dlg.pattern_pick.set("van")
-    dlg._pick_pattern("van")
+    pick(dlg, "van")
     assert dlg.pattern == "van"
     assert dlg.preview.image == dlg.kit.sprite_preview(
         colorways.palette_from_tones(dlg.draft, "van", dlg.tail), cell=dlg.preview._cell).image
-    assert world.widget.panes[0]._pattern != "van"  # the pane keeps its own
+    assert world.widget.panes[0]._pattern != "van"  # not until Save
+
+
+def test_save_new_also_puts_the_picked_pattern_on_the_pane(make_world):
+    world = make_world(2)
+    window = SettingsWindow.open(world.host, 1)
+    dlg = editor(world, pane=1)
+    pick(dlg, "van")
+    dlg.save_button.click()
+    assert dlg.result() == 1
+    assert world.widget.panes[1]._colorway == "custom-1" and world.widget.panes[1]._pattern == "van"
+    assert stored_pattern(world, 1) == "van"
+    assert world.widget.panes[1].palette == sprites.resolve_palette("custom-1", "van", "plain")
+    assert window.tabs["look"].pattern.get() == "van"
+    assert world.widget.panes[0]._pattern == "tabby"
+
+
+def test_save_edit_puts_the_picked_pattern_on_this_pane_only(make_world):
+    world = make_world(2)
+    cid = add(world)
+    select(world, cid, 0)
+    select(world, cid, 1)
+    dlg = editor(world, cid, pane=0)
+    pick(dlg, "socks")
+    dlg.save_button.click()
+    assert dlg.result() == 1
+    assert world.widget.panes[0]._pattern == "socks" and stored_pattern(world, 0) == "socks"
+    assert world.widget.panes[1]._pattern == "tabby"  # the other cat in it keeps its own
+    assert stored(world, 0) == cid
+
+
+def test_cancel_after_a_pattern_pick_keeps_the_panes_pattern(make_world):
+    world = make_world(1)
+    dlg = editor(world)
+    pick(dlg, "van")
+    dlg.cancel_button.click()
+    assert dlg.result() == 0
+    assert world.widget.panes[0]._pattern == "tabby"
+    assert stored_pattern(world) == "tabby"
