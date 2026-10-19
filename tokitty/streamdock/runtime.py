@@ -101,6 +101,7 @@ class StreamdockRuntime:
         accounts: List[AccountInput],
         *,
         palette_fn: Callable[[int], Dict[str, str]],
+        bars_fn: Optional[Callable[[], Any]] = None,
         open_in_window: Optional[Callable[[PendingRequest, str], None]] = None,
         image_fn: Optional[Callable[[KeySpec], str]] = None,
         server_factory: Callable[..., Any] = _default_server,
@@ -134,6 +135,11 @@ class StreamdockRuntime:
         self._io_thread: Optional[threading.Thread] = None
         self._run_io = run_io or self._io_jobs.put
 
+        # The theme's bar style for the usage keys, read on every tick and kept
+        # here so the server threads draw with the one the plan was published for.
+        self._bars_fn = bars_fn or (lambda: None)
+        self._bars: Any = None
+
         self._model = DeckModel()
         self._box = PlanBox()
         self._inbound: "queue.Queue[Any]" = queue.Queue()
@@ -142,7 +148,7 @@ class StreamdockRuntime:
                 # Imported here because the renderer needs PySide6, and this
                 # module must import without it.
                 from tokitty.streamdock.keyimages import spec_image
-                return spec_image(spec, palette_fn)
+                return spec_image(spec, palette_fn, self._bars)
         self._server = server_factory(port, token, self._box, self._inbound, image_fn=image_fn, meta_fn=self._meta)
         self._watchers: Dict[int, Any] = {a.index: watcher_factory(a) for a in accounts}
         self._worker: Any = None
@@ -248,9 +254,22 @@ class StreamdockRuntime:
         )
         for action in actions:
             self._run_action(action, now)
+        self._restyle()
         if self._model.revision != self._published_rev:
             self._published_rev = self._model.revision
             self._box.publish(self._published_rev, self._model.render_plan())
+
+    def _restyle(self) -> None:
+        """Pick up a theme change. The plan alone would not move, so the model
+        is told to bump its revision and the deck fetches every key again."""
+        try:
+            bars = self._bars_fn()
+        except Exception as exc:
+            _log(f"bars: {exc}")
+            return
+        if bars != self._bars:
+            self._bars = bars
+            self._model.restyle()
 
     def pending_nonces(self) -> set:
         """Nonces of the requests seen live at the last tick, for the in-window views."""

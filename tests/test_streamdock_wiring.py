@@ -133,7 +133,15 @@ def test_starter_starts_runtime():
     assert "watcher_factory" in kw
     assert kw["list_running_distros_fn"] is list
     assert kw["hidden_accounts"] == ["w"]
+    assert kw["bars_fn"] is None
     assert not clock.queue
+
+
+def test_starter_hands_the_bar_style_source_to_the_runtime():
+    bars_fn = lambda: None  # noqa: E731
+    d, clock = starter(settings(), bars_fn=bars_fn)
+    d.begin()
+    assert FakeRuntime.kwargs[4]["bars_fn"] is bars_fn
 
 
 def test_starter_non_retryable_error_fails_at_once(capsys):

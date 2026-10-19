@@ -24,7 +24,8 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPen, QPolygonF
 
 from tokitty import sprites
-from tokitty.display import AMBER, GREEN, RED, bar_color
+from tokitty import theme as T
+from tokitty.display import AMBER, GREEN, RED
 from tokitty.sprite_raster import raster_frame
 
 SIZE = 64
@@ -209,26 +210,33 @@ def session_key(sprite_state: str, frame_index: int, palette: Dict[str, str], ti
 
 
 @lru_cache(maxsize=_CACHE)
-def _usage_key(session_pct: int, weekly_pct: int, warn: bool) -> str:
+def _usage_key(session_pct: int, weekly_pct: int, warn: bool, bars: T.BarStyle) -> str:
     canvas = _Canvas()
+    theme = T.Theme(bars=bars)
+    bar_w = SIZE - 14
     for i, (label, pct) in enumerate((("5h", session_pct), ("wk", weekly_pct))):
         top = 5 + i * 29
         canvas.text(7, top, label, 9, DIM, "lt")
         canvas.text(SIZE - 7, top, f"{pct}%", 12, FG, "rt")
         bar_y = top + 15
         canvas.rect(7, bar_y, SIZE - 8, bar_y + 5, TRACK)
-        fill_w = round((SIZE - 14) * pct / 100)
+        fill_w = round(bar_w * pct / 100)
         if fill_w > 0:
-            canvas.rect(7, bar_y, 7 + fill_w - 1, bar_y + 5, _rgb(bar_color(pct)))
+            canvas.rect(7, bar_y, 7 + fill_w - 1, bar_y + 5, _rgb(T.bar_fill(theme, pct, None)))
+        # The window's notch rule at the key's scale: one pixel in the background colour.
+        for x in T.notch_xs(bars, T.Rect(7, bar_y, bar_w, 6)):
+            canvas.rect(x, bar_y, x, bar_y + 5, BG)
     if warn:
         canvas.border(_rgb(RED))
     return canvas.finish()
 
 
-def usage_key(session_pct: float, weekly_pct: float, warn: bool = False) -> str:
-    """Session and weekly bars with numbers, coloured like the window's bars."""
+def usage_key(session_pct: float, weekly_pct: float, warn: bool = False,
+              bars: T.BarStyle = T.BarStyle()) -> str:
+    """Session and weekly bars with numbers, coloured and notched like the
+    window's bars by the theme's `bars`."""
     clamp = lambda v: max(0, min(100, int(round(v))))  # noqa: E731
-    return _usage_key(clamp(session_pct), clamp(weekly_pct), bool(warn))
+    return _usage_key(clamp(session_pct), clamp(weekly_pct), bool(warn), bars)
 
 
 @lru_cache(maxsize=_CACHE)

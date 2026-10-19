@@ -280,6 +280,10 @@ class DeckModel:
                     self._focus[ref] = UNVERIFIED
         self._refresh()
 
+    def restyle(self) -> None:
+        """The keys' look changed outside the plan, so publish it again."""
+        self._revision += 1
+
     # outputs
 
     @property

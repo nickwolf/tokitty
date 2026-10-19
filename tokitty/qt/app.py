@@ -487,6 +487,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         deck = DeckStarter(
             settings, units, distro_probe.get_running,
             palette_fn=lambda i: units[i]["pane"].palette,
+            # Read every tick, so a theme change redraws the usage keys.
+            bars_fn=lambda: widget.theme.bars,
             open_in_window=deck_views.open, after=deck_after, cancel=deck_cancel,
             deadline_s=update_controller.ACK_TIMEOUT + BIND_MARGIN_S,
         )
