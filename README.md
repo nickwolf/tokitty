@@ -233,7 +233,7 @@ A cat's look is two independent axes: a **colorway** (its tone palette) times a 
   <img src="docs/media/looks-grid.png" alt="Six colorways down, all eleven patterns across" width="760">
 </p>
 
-Colorways run top to bottom in the order listed above, patterns left to right.
+The grid shows the first six colorways listed above, top to bottom, and the patterns left to right in the order listed.
 
 **Randomize** in Settings ▸ Look rolls a fresh colorway and pattern for that pane and saves it, and **Surprise me** (a toggle in Settings ▸ General, off by default) re-rolls every pane on each launch. Both only roll from the built-in colorways and patterns. A fresh install rolls one random look on first launch and keeps it.
 
