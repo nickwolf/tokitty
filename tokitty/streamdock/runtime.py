@@ -111,6 +111,7 @@ class StreamdockRuntime:
         touch_enabled_fn: Callable[[Any], None] = pending_mod.touch_enabled,
         clear_enabled_fn: Callable[[Any], None] = pending_mod.clear_enabled,
         monotonic_fn: Callable[[], float] = time.monotonic,
+        wall_fn: Callable[[], float] = time.time,
         list_running_distros_fn: Callable[[], List[str]] = list_running_distros,
         run_io: Optional[Callable[[Callable[[], None]], None]] = None,
         hidden_accounts: Optional[List[str]] = None,
@@ -124,6 +125,7 @@ class StreamdockRuntime:
         self._touch_enabled = touch_enabled_fn
         self._clear_enabled = clear_enabled_fn
         self._monotonic = monotonic_fn
+        self._wall = wall_fn
         self._worker_factory = worker_factory
         self._list_running = list_running_distros_fn
         # Marker touches and clears go over \\wsl.localhost and can stall, so by
@@ -242,6 +244,7 @@ class StreamdockRuntime:
             [req for req in self._pending if req.account_index not in hidden],
             usage_by_account,
             titles=dict(self._titles),
+            now=self._wall(),
         )
         for action in actions:
             self._run_action(action, now)

@@ -30,14 +30,15 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from tokitty import sprites
 from tokitty.qt.menu import render_menu
 from tokitty.settings import update_settings
 from tokitty.tray_icon import tray_raster
 
 
-def _tray_qicon(colorway: str, pattern: str) -> QIcon:
+def _tray_qicon(colorway: str, pattern: str, tail: str = "plain") -> QIcon:
     """The shared tray sprite, centred on a transparent square."""
-    width, height, raw = tray_raster(colorway, pattern)
+    width, height, raw = tray_raster(colorway, pattern, tail)
     sprite = QImage(raw, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
     side = max(width, height)
     canvas = QImage(side, side, QImage.Format.Format_RGBA8888)
@@ -50,7 +51,7 @@ def _tray_qicon(colorway: str, pattern: str) -> QIcon:
 
 class QtTray:
     def __init__(self, menu_provider: Callable[[], List], state_dir,
-                 colorway: str = "orange", pattern: str = "tabby", *,
+                 colorway: str = "orange", pattern: str = "tabby", tail: str = "plain", *,
                  on_action_done: Optional[Callable[[], None]] = None,
                  icon_factory=None, tray_available=None, platform: str = sys.platform):
         self._menu_provider = menu_provider
@@ -59,12 +60,14 @@ class QtTray:
         self._icon_factory = icon_factory or QSystemTrayIcon
         self._platform = platform
         self._qicon: Optional[QIcon] = None
+        self._look: Optional[tuple] = None
         self._icon = None
         self._menu = None
         self._sync: Optional[Callable[[], None]] = None
         try:
             check = tray_available or QSystemTrayIcon.isSystemTrayAvailable
-            self._qicon = _tray_qicon(colorway, pattern)
+            self._qicon = _tray_qicon(colorway, pattern, tail)
+            self._look = (colorway, pattern, tail, sprites.custom_colorway_generation())
             self.available = bool(check())
         except Exception:
             self._qicon = None
@@ -126,6 +129,26 @@ class QtTray:
         except Exception:
             # A tray that fails to refresh must never take the app down.
             pass
+
+    def set_look(self, colorway: str, pattern: str, tail: str = "plain") -> None:
+        """Repaint the icon for a new look (pane 0's). Cheap when nothing
+        changed, including a custom colorway's tones: the sprites registry
+        generation is part of the key. A no-op when the icon failed to build."""
+        if self._qicon is None:
+            return
+        look = (colorway, pattern, tail, sprites.custom_colorway_generation())
+        if look == self._look:
+            return
+        try:
+            qicon = _tray_qicon(colorway, pattern, tail)
+        except Exception:
+            return
+        self._qicon, self._look = qicon, look
+        if self._icon is not None:
+            try:
+                self._icon.setIcon(qicon)
+            except Exception:
+                pass
 
     def notify(self, title: str, message: str) -> bool:
         """Show a tray message. True means submitted to Qt, not seen."""

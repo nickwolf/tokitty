@@ -99,6 +99,8 @@ def build(kind, tmp_path, monkeypatch, *, panes=2, with_accounts=True, startup=N
         return "boom" if topic == "bad" else None
 
     monkeypatch.setattr(app_controls, "random_look", fake_random)
+    # The original seams predate personalities and leave them alone.
+    monkeypatch.setattr(app_controls, "random_personality", lambda: "balanced")
     monkeypatch.setattr(app_controls, "ntfy_send_test", fake_send)
     monkeypatch.setattr(old_seams, "random_look", fake_random)
     monkeypatch.setattr(old_seams, "ntfy_send_test", fake_send)
@@ -433,3 +435,111 @@ def test_seams_leave_out_the_backend():
     assert "autostart_backend" in fields
     stub = {name: None for name in fields}
     assert "autostart_backend" not in app_controls.Controls(**stub).seams()
+
+
+def test_tail_saves_validates_and_restyles(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(1, "tail", "ringed_shade")
+    assert world.store["k1"].tail == "ringed_shade"
+    assert load_customization(world.state_dir)["k1"].tail == "ringed_shade"
+    assert ("apply", 1, world.store["k1"]) in world.log
+    seams.on_customization_changed(1, "tail", "nope")
+    seams.on_customization_changed(1, "tail", None)
+    assert world.store["k1"].tail == "ringed_shade"
+
+
+def test_randomize_and_reset_keep_the_tail(tmp_path, monkeypatch):
+    # Reset to preset clears the custom colours only; like colorway and
+    # pattern, the tail is a look choice it leaves alone.
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(0, "tail", "ringed")
+    seams.on_customization_changed(0, "coat_base", "#112233")
+    seams.on_randomize(0)
+    assert world.store["k0"].tail == "ringed"
+    seams.on_customization_changed(0, "reset", None)
+    assert world.store["k0"].tail == "ringed"
+    assert world.store["k0"].overrides == {}
+
+
+def test_pane_name_returns_the_stored_label_and_the_harness_tag(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.units[1]["tag_kind"] = "codex"
+    seams = world.seams
+    assert seams.pane_name(0) == ("", None)
+    seams.on_customization_changed(1, "label", "sys")
+    # The stored label, not the "codex·sys" the pane shows.
+    assert seams.pane_name(1) == ("sys", "codex")
+    assert world.units[1]["pane"]._label == "Cat 1"
+    seams.on_customization_changed(1, "label", "")
+    assert seams.pane_name(1) == ("", "codex")
+
+
+def _set(world, field, value):
+    world.seams.on_customization_changed(0, field, value)
+    return world.store["k0"].overrides
+
+
+def test_setting_a_bar_with_legacy_bar_fill_expands_it(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={"bar_fill": "#aaaaaa", "card_bg": "#010101"})
+    assert _set(world, "session_bar", "#112233") == {
+        "card_bg": "#010101", "session_bar": "#112233", "weekly_bar": "#aaaaaa"}
+    assert "bar_fill" not in load_customization(world.state_dir)["k0"].overrides
+
+
+def test_setting_weekly_with_legacy_bar_fill_keeps_the_session_look(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={"bar_fill": "#aaaaaa"})
+    assert _set(world, "weekly_bar", "#445566") == {"weekly_bar": "#445566", "session_bar": "#aaaaaa"}
+
+
+def test_setting_a_bar_without_legacy_touches_only_that_key(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    assert _set(world, "session_bar", "#112233") == {"session_bar": "#112233"}
+    assert _set(world, "weekly_bar", "#445566") == {"session_bar": "#112233", "weekly_bar": "#445566"}
+    assert _set(world, "session_bar", "") == {"session_bar": "#112233", "weekly_bar": "#445566"}
+
+
+def test_reset_clears_every_bar_override(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    world.store["k0"] = Customization(overrides={
+        "bar_fill": "#aaaaaa", "session_bar": "#111111", "weekly_bar": "#222222"})
+    assert _set(world, "reset", None) == {}
+
+
+def test_personality_saves_and_validates(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(1, "personality", "lazy")
+    assert world.store["k1"].personality == "lazy"
+    assert load_customization(world.state_dir)["k1"].personality == "lazy"
+    assert world.store["k0"].personality == "balanced"
+    assert ("apply", 1, world.store["k1"]) in world.log
+    seams.on_customization_changed(1, "personality", "nope")
+    seams.on_customization_changed(1, "personality", None)
+    assert world.store["k1"].personality == "lazy"
+
+
+def test_randomize_picks_a_personality_and_reset_keeps_it(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    picks = iter(["curious", "lazy"])
+    monkeypatch.setattr(app_controls, "random_personality", lambda: next(picks))
+    world.seams.on_randomize(0)
+    assert world.store["k0"].personality == "curious"
+    world.seams.on_randomize(0)
+    assert world.store["k0"].personality == "lazy"
+    world.seams.on_customization_changed(0, "reset", None)
+    assert world.store["k0"].personality == "lazy"
+
+
+def test_random_personality_is_seedable():
+    import random
+
+    from tokitty.behaviour import PERSONALITIES
+    from tokitty.randomize import random_personality
+
+    seen = {random_personality(random.Random(s)) for s in range(40)}
+    assert seen == set(PERSONALITIES)
+    assert random_personality(random.Random(3)) == random_personality(random.Random(3))

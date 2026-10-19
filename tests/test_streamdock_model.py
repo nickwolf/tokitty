@@ -20,8 +20,8 @@ from tokitty.streamdock.model import (
 from tokitty.streamdock.pending import PendingRequest
 
 
-def sv(sid, first_seen, state="idle", tool=""):
-    return SessionView(sid, state, tool, first_seen, first_seen)
+def sv(sid, first_seen, state="idle", tool="", since=None):
+    return SessionView(sid, state, tool, first_seen, first_seen, since)
 
 
 def req(sid, nonce="n1", started=1.0, acct=0, always_rule=None):
@@ -112,6 +112,37 @@ def test_overflow_alert_and_pending_first():
     m = setup(["slot"] * 2, [sv("a", 1), sv("b", 2), sv("c", 3)], [req("c")])
     spec = m.render_plan()["k1"]
     assert spec.kind == "overflow" and spec.alert and spec.ref == ref("c") and spec.pending
+
+
+def test_key_state_escalates_with_wall_clock_and_bumps_revision():
+    views = [sv("a", 1, "permission", since=100.0)]
+    m = setup(["slot"], views)
+    assert m.render_plan()["k0"].state == "permission"
+
+    def step(now):
+        before = m.revision
+        m.update({0: views}, [], {}, now=now)
+        return m.render_plan()["k0"].state, m.revision - before
+
+    assert step(129.9) == ("permission", 0)
+    assert step(130.0) == ("permission_urgent", 1)
+    assert step(200.0) == ("permission_urgent", 0)
+    assert step(280.0) == ("permission_frantic", 1)
+
+
+def test_key_state_unchanged_without_now_and_for_questions():
+    m = setup(["slot"], [sv("a", 1, "permission", since=100.0)])
+    assert m.render_plan()["k0"].state == "permission"
+    m.update({0: [sv("a", 1, "question", since=100.0)]}, [], {}, now=9999.0)
+    assert m.render_plan()["k0"].state == "question"
+
+
+def test_overflow_key_escalates():
+    views = [sv("a", 1), sv("b", 2, "permission", since=100.0), sv("c", 3)]
+    m = setup(["slot"] * 2, views)
+    m.update({0: views}, [req("b")], {}, now=300.0)
+    spec = m.render_plan()["k1"]
+    assert spec.kind == "overflow" and spec.ref == ref("b") and spec.state == "permission_frantic"
 
 
 def test_overflow_session_keeps_index_when_keys_disappear():

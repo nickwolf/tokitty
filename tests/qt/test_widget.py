@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,9 +20,13 @@ pytestmark = pytest.mark.qt
 ROOT = Path(__file__).resolve().parents[2]
 
 
+# No wander headroom, so a card's pixels sit where these tests look for them.
+STILL = T.CatStyle(wander=False)
+
+
 def make(qapp, count=1, theme=None, homes=None):
     customs = [Customization(cat_home=(homes[i] if homes else "inside")) for i in range(count)]
-    widget = TokittyQtWidget(theme or T.Theme(), customs, count)
+    widget = TokittyQtWidget(theme or T.Theme(cat=STILL), customs, count)
     widget.anim.stop()
     return widget
 
@@ -142,14 +147,14 @@ def test_cat_cache_key_uses_a_hashable_palette(qapp):
 # ---- card -----------------------------------------------------------------
 
 def test_zero_percent_card_still_paints_alpha_one(qapp):
-    widget = make(qapp, theme=T.Theme(card=T.CardStyle(opacity=0)))
+    widget = make(qapp, theme=T.Theme(card=T.CardStyle(opacity=0), cat=STILL))
     image = widget.grab().toImage()
     assert image.pixelColor(150, 5).alpha() == 1
 
 
 def test_accented_pane_is_opaque_beside_a_translucent_one(qapp):
     # two panes fill one column, so stack: pane 1 sits below pane 0
-    widget = make(qapp, 2, theme=T.Theme(card=T.CardStyle(opacity=50)))
+    widget = make(qapp, 2, theme=T.Theme(card=T.CardStyle(opacity=50), cat=STILL))
     render(widget.panes[0], "permission", accent=True)
     render(widget.panes[1])
     image = widget.grab().toImage()
@@ -215,18 +220,21 @@ def test_make_font_is_the_one_font_seam(qapp):
     from PySide6.QtGui import QFont
 
     class Probe(TokittyQtWidget):
-        def _make_font(self, points, bold):
+        def _make_font(self, points, weight):
             font = QFont("Aileron")
             font.setPixelSize(points)
-            font.setBold(bold)
+            font.setWeight(weight)
             return font
 
     widget = Probe(T.Theme(), [Customization()], 1)
     widget.anim.stop()
-    label, model, text = widget._font_set()
+    label, model, text, label_semi, model_semi = widget._font_set()
     assert (label.pixelSize(), model.pixelSize(), text.pixelSize()) == (
         T.FONT_SIZE_LABEL, T.FONT_SIZE_MODEL, T.FONT_SIZE_TEXT)
-    assert (label.bold(), model.bold(), text.bold()) == (True, True, False)
+    assert (label_semi.pixelSize(), model_semi.pixelSize()) == (T.FONT_SIZE_LABEL, T.FONT_SIZE_MODEL)
+    assert [f.weight() for f in (label, model, text, label_semi, model_semi)] == [
+        QFont.Weight.Bold, QFont.Weight.Bold, QFont.Weight.Normal,
+        QFont.Weight.DemiBold, QFont.Weight.DemiBold]
 
 
 def test_status_and_account_label_go_through_text(qapp):
@@ -276,10 +284,10 @@ def test_tags_sit_on_the_cards_outer_side(qapp):
 def test_set_theme_changes_the_card_alpha(qapp):
     widget = make(qapp)
     assert widget.grab().toImage().pixelColor(150, 5).alpha() == 255
-    widget.set_theme(T.Theme(card=T.CardStyle(opacity=50)))
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=50), cat=STILL))
     assert widget.theme.card.opacity == 50
     assert abs(widget.grab().toImage().pixelColor(150, 5).alpha() - T.card_alpha(50)) <= 1
-    widget.set_theme(T.Theme(card=T.CardStyle(opacity=0)))
+    widget.set_theme(T.Theme(card=T.CardStyle(opacity=0), cat=STILL))
     assert widget.grab().toImage().pixelColor(150, 5).alpha() == 1
 
 
@@ -296,13 +304,13 @@ def test_set_theme_drops_cached_layouts_and_images(qapp):
 def test_set_theme_keeps_the_window_matching_its_layout(qapp):
     widget = make(qapp, 2, homes=["on_top", "inside"])
     widget.set_theme(T.Theme(bars=T.BarStyle(layout="full_width")))
-    expected = T.layout_window(widget.homes)
+    expected = T.layout_window(widget.homes, wander=True)
     assert (widget.width(), widget.height()) == expected.size
     # homes that changed under the new customizations are picked up too
     widget.panes[0].set_customization(Customization(cat_home="inside"))
     widget.set_theme(T.Theme())
     assert widget.homes == ["inside", "inside"]
-    assert (widget.width(), widget.height()) == T.layout_window(["inside", "inside"]).size
+    assert (widget.width(), widget.height()) == T.layout_window(["inside", "inside"], wander=True).size
 
 
 def test_pane_anchor_is_the_window_position_plus_origin_plus_16(qapp):
@@ -327,3 +335,176 @@ def test_closing_the_widget_quits_the_application(qapp):
     qapp.exec()
     net.stop()
     assert time.monotonic() - start < 1.5
+
+
+# ---- card design (#139) ----------------------------------------------------
+
+class _TextLog(TokittyQtWidget):
+    def __init__(self, *args, **kw):
+        self.log = []
+        super().__init__(*args, **kw)
+
+    def _text(self, p, color, rect, flags, text, halo=False):
+        self.log.append((text, color.name(), (rect.x(), rect.y(), rect.width(), rect.height()),
+                         int(flags), halo))
+        super()._text(p, color, rect, flags, text, halo)
+
+
+def _logged(theme, label="work", status="open Claude Code", render_models=False):
+    widget = _TextLog(replace(theme, cat=STILL), [Customization(label=label)], 1)
+    widget.anim.stop()
+    pane = widget.panes[0]
+    if render_models:
+        from tokitty.usage_display import UsageRow, UsageView
+        pane.render_usage("working", UsageView(
+            rows=(UsageRow("Opus 4", "$12.40", 62.0), UsageRow("Sonnet 4", "$6.10", 31.0)),
+            status_text=status, ramp_pct=None))
+    else:
+        pane.render("working", 42, 67, "6:10 PM", "Mon", "", None, status, False)
+    widget.grab()
+    return widget
+
+
+def test_refined_limits_text_follows_the_layout(qapp):
+    widget = _logged(T.REFINED)
+    lay = T.layout_card(widget.theme, "limits", "inside")
+    seen = {t: (color, rect) for t, color, rect, _f, _h in widget.log}
+    assert {"Session", "Week", "42%", "67%", "resets 6:10 PM", "resets Mon", "work"} <= set(seen)
+    assert "SESSION" not in seen
+    r = lay["session_label"]
+    assert seen["Session"] == (T.REFINED.text.foreground, (r.x, r.y, r.w, r.h))
+    r = lay["session_percent"]
+    assert seen["42%"] == (T.REFINED.text.foreground, (r.x, r.y, r.w, r.h))
+    assert seen["resets 6:10 PM"][0] == T.REFINED.text.dim
+    assert seen["work"][0] == T.REFINED.text.dim
+
+
+def test_refined_status_is_one_elided_line_clear_of_the_account_label(qapp):
+    long = "a very long status line that cannot possibly fit in the stats column"
+    widget = _logged(T.REFINED, status=long)
+    status = next(e for e in widget.log if e[0] != "work" and e[0].startswith("a very"))
+    assert status[0] != long and status[0].endswith("…")
+    label = next(e for e in widget.log if e[0] == "work")
+    status_right = status[2][0] + status[2][2]
+    assert status_right <= label[2][0] + label[2][2] - 6  # the label's text starts after it
+    assert not (status[3] & int(Qt.TextFlag.TextWordWrap))
+    short = _logged(T.REFINED, status="idle")
+    assert any(e[0] == "idle" for e in short.log)
+    no_label = _logged(T.REFINED, label="", status=long)
+    wide = next(e for e in no_label.log if e[0].startswith("a very"))
+    assert wide[2][2] == T.layout_card(T.REFINED, "limits", "inside")["status"].w
+
+
+def test_refined_models_rows(qapp):
+    widget = _logged(T.REFINED, render_models=True)
+    names = {t: rect for t, _c, rect, _f, _h in widget.log}
+    lay = T.layout_card(widget.theme, "models", "inside")
+    r = lay["model_name_1"]
+    assert names["Sonnet 4"] == (r.x, r.y, r.w, r.h)
+    r = lay["model_value_1"]
+    assert names["$6.10"] == (r.x, r.y, r.w, r.h)
+
+
+def test_classic_keeps_its_upper_case_labels_and_inline_percent(qapp):
+    widget = _logged(T.CLASSIC)
+    texts = [t for t, *_ in widget.log]
+    assert "SESSION" in texts and "WEEK" in texts and "42%" in texts
+    assert "Session" not in texts
+    assert any(t.startswith("· ") for t in texts)
+
+
+def test_changing_the_design_repaints_the_cached_card(qapp):
+    widget = make(qapp, theme=T.Theme(cat=STILL))
+    render(widget.panes[0])
+    pane, style = widget.panes[0], widget._style_for(0, widget.panes[0])
+    layout = widget._layout_for(pane._view_mode, "inside")
+    widget._font_set()
+    before = widget._card_signature(pane, style, layout, 0, 0, 1.0)
+    widget.theme = replace(widget.theme, card=replace(widget.theme.card, design="classic"))
+    after = widget._card_signature(pane, style, layout, 0, 0, 1.0)
+    assert before != after
+
+
+# ---- per-bar colour overrides (#156) ----------------------------------------
+
+def _bar_px(widget, layout, name, pct):
+    r = layout[name]
+    return widget.grab().toImage().pixelColor(r.x + int(r.w * pct / 200), r.y + r.h // 2).name()
+
+
+def _overridden(design, overrides):
+    theme = replace(T.Theme(cat=STILL), card=replace(T.Theme().card, design=design))
+    widget = TokittyQtWidget(theme, [Customization(overrides=overrides)], 1)
+    widget.anim.stop()
+    return widget
+
+
+@pytest.mark.parametrize("design", ["classic", "refined"])
+@pytest.mark.parametrize("overrides,session,weekly", [
+    ({}, None, None),
+    ({"bar_fill": "#aa0000"}, "#aa0000", "#aa0000"),
+    ({"session_bar": "#00aa00"}, "#00aa00", None),
+    ({"weekly_bar": "#0000aa"}, None, "#0000aa"),
+    ({"bar_fill": "#aa0000", "weekly_bar": "#0000aa"}, "#aa0000", "#0000aa"),
+])
+def test_bar_overrides_colour_each_bar_and_the_model_rows(qapp, design, overrides, session, weekly):
+    from tokitty.usage_display import UsageRow, UsageView
+
+    widget = _overridden(design, overrides)
+    layout = widget._layout_for("limits", "inside")
+    ramp = lambda pct: T.bar_fill(widget.theme, pct, None)  # noqa: E731
+    render(widget.panes[0], session=42, weekly=67)
+    assert _bar_px(widget, layout, "session_bar", 42) == (session or ramp(42))
+    assert _bar_px(widget, layout, "weekly_bar", 67) == (weekly or ramp(67))
+
+    widget.panes[0].render_usage("working", UsageView(
+        rows=(UsageRow("Opus", "$1.20", 60.0),), status_text="note", ramp_pct=30.0))
+    models = widget._layout_for("models", "inside")
+    assert _bar_px(widget, models, "model_bar_0", 60) == (weekly or ramp(30.0))
+
+
+def test_the_card_repaints_when_either_bar_override_changes(qapp):
+    widget = make(qapp)
+    render(widget.panes[0])
+    pane = widget.panes[0]
+    layout = widget._layout_for(pane._view_mode, "inside")
+    widget._font_set()
+
+    def signature():
+        return widget._card_signature(pane, widget._style_for(0, pane), layout, 0, 0, 1.0)
+
+    base = signature()
+    pane.set_appearance(session_bar="#111111")
+    with_session = signature()
+    pane.set_appearance(weekly_bar="#222222")
+    with_both = signature()
+    assert len({base, with_session, with_both}) == 3
+
+
+# ---- the bars the watching cat reads (#135) ------------------------------------
+
+@pytest.mark.parametrize("home", ["inside", "inside_right", "on_top"])
+@pytest.mark.parametrize("layout", ["beside_cat", "full_width"])
+def test_each_pane_is_told_where_its_bars_are(qapp, home, layout):
+    theme = T.Theme(cat=STILL, bars=T.BarStyle(layout=layout))
+    widget = make(qapp, theme=theme, homes=[home])
+    expected = T.layout_card(theme, "limits", home)
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"])
+    if home == "on_top" and layout == "full_width":
+        assert expected["session_bar"].w == T.FULL_W
+
+
+def test_the_bars_are_told_again_when_the_theme_or_the_home_changes(qapp):
+    widget = make(qapp, 2, homes=["on_top", "inside"])
+    old = widget.panes[0]._bar_rects
+    theme = T.Theme(cat=STILL, bars=T.BarStyle(layout="full_width", height=10))
+    widget.set_theme(theme)
+    expected = T.layout_card(theme, "limits", "on_top")
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"]) != old
+    widget.rebuild_layout(["inside", "inside"])
+    expected = T.layout_card(theme, "limits", "inside")
+    assert widget.panes[0]._bar_rects == (expected["session_bar"], expected["weekly_bar"])
+    # a theme change that leaves the window alone
+    widget.set_theme(replace(theme, bars=T.BarStyle(height=6)))
+    expected = T.layout_card(widget.theme, "limits", "inside")
+    assert widget.panes[1]._bar_rects == (expected["session_bar"], expected["weekly_bar"])

@@ -1,4 +1,5 @@
 """run_qt end to end under the offscreen platform."""
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -29,6 +30,23 @@ def run_for(qapp, ms):
 
     QTimer.singleShot(ms, qapp.quit)
     return run_qt()
+
+
+def run_until(qapp, done, ceiling_ms=20000):
+    """Run the app until done() is true, checked every 20 ms, then quit. The
+    ceiling only stops a broken test from hanging; a slow CI runner gets all
+    of it, where a fixed window could end before the first tick (#165)."""
+    from tokitty.qt.app import run_qt
+
+    deadline = time.monotonic() + ceiling_ms / 1000
+    check = QTimer()
+    check.setInterval(20)
+    check.timeout.connect(lambda: (done() or time.monotonic() > deadline) and qapp.quit())
+    check.start()
+    try:
+        return run_qt()
+    finally:
+        check.stop()
 
 
 def test_debug_state_launch_builds_one_pane_and_writes_only_the_lock(qapp, state_dir, monkeypatch):
@@ -111,7 +129,7 @@ def test_normal_launch_renders_a_published_result_and_stops_the_workers(
     monkeypatch.setattr("tokitty.usage_notes.write_usage_file", lambda *a: notes.append(a))
     monkeypatch.setattr("tokitty.usage_notes.remove_usage_file", lambda *a: None)
 
-    assert run_for(qapp, 1500) == 0
+    assert run_until(qapp, lambda: renders) == 0
 
     assert renders, "the tick never rendered"
     assert renders[0]["session_pct"] == 40.0
@@ -757,7 +775,10 @@ def test_the_view_factory_is_the_qt_one(qapp, state_dir, monkeypatch, fake_deck)
 def test_the_tick_drives_the_deck_and_syncs_the_views(qapp, state_dir, monkeypatch, fake_deck):
     save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
     fake_deck.runtime = FakeDeckRuntime(fake_deck.log)
-    assert run_for(qapp, 1500) == 0
+    def both_seen():
+        return {e[0] for e in settled(fake_deck.log, "deck.tick", "views.sync")} == {"deck.tick", "views.sync"}
+
+    assert run_until(qapp, both_seen) == 0
     ticks = settled(fake_deck.log, "deck.tick", "views.sync")
     assert ("deck.tick",) in ticks and ("views.sync",) in ticks
 
@@ -766,9 +787,7 @@ def test_a_failing_deck_tick_is_reported_and_the_loop_goes_on(
         qapp, state_dir, monkeypatch, fake_deck, capsys):
     save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
     fake_deck.runtime = FakeDeckRuntime(fake_deck.log, fail=True)
-    # Setup counts against the window (the quit timer starts first), so leave
-    # room for two 500 ms ticks after a slow start on a CI runner.
-    assert run_for(qapp, 3000) == 0
+    assert run_until(qapp, lambda: len(settled(fake_deck.log, "deck.tick")) >= 2) == 0
     assert "streamdock: tick: tick boom" in capsys.readouterr().err
     assert len(settled(fake_deck.log, "deck.tick")) >= 2
 

@@ -43,6 +43,7 @@ from PySide6.QtGui import QFont, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tokitty import sprites  # noqa: E402
+from tokitty.wander import home_pose  # noqa: E402
 from tokitty import theme as T  # noqa: E402
 from tokitty.customize import Customization  # noqa: E402
 from tokitty.qt.widget import TokittyQtWidget  # noqa: E402
@@ -53,10 +54,15 @@ Rect = Tuple[int, int, int, int]  # x0, y0, x1, y1 in device pixels, x1/y1 exclu
 MASK_PAD = 2        # logical px added around each text rect; the halo reaches 1
 MASK_COLOR = b"\xff\x00\xff\xff"
 
-LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models")
+LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models",
+           "classic", "classic_models")
 # Layouts whose text sits on a translucent card: Intel and AMD round it differently.
 TRANSLUCENT_LAYOUTS = frozenset({"low_opacity"})
-COATS = [(c, p) for c in sprites.COLORWAYS for p in sprites.PATTERNS]
+# One colorway across every pattern: the patterns are what route tones to the
+# body regions, while a colorway only swaps the tones, which
+# tests/test_sprites.py checks for every colorway. A row per colorway grew the
+# 2x sheets to ~375 MB each and ran WSL out of memory at 14 colorways (#156).
+COATS = [("orange", p) for p in sprites.PATTERNS]
 
 
 # ---- images -----------------------------------------------------------------
@@ -142,8 +148,9 @@ def apply_mask(img: Img, rects: Sequence[Rect]) -> bytes:
     return bytes(data)
 
 
-def compare(actual: Img, ref: Img, rects: Sequence[Rect] = ()) -> Optional[Diff]:
-    """None when the two match outside `rects`, else where they differ."""
+def compare(actual: Img, ref: Img, rects: Sequence[Rect] = (), tolerance: int = 0) -> Optional[Diff]:
+    """None when the two match outside `rects`, else where they differ. A pixel
+    whose every channel is within `tolerance` of the reference counts as equal."""
     if (actual.w, actual.h) != (ref.w, ref.h):
         return Diff(0, None, [], [], f"size {actual.w}x{actual.h} against reference {ref.w}x{ref.h}")
     a, b = apply_mask(actual, rects), apply_mask(ref, rects)
@@ -158,10 +165,12 @@ def compare(actual: Img, ref: Img, rects: Sequence[Rect] = ()) -> Optional[Diff]
             continue
         for x in range(actual.w):
             pa, pb = ra[x * 4:x * 4 + 4], rb[x * 4:x * 4 + 4]
-            if pa != pb:
+            if pa != pb and (not tolerance or max(abs(i - j) for i, j in zip(pa, pb)) > tolerance):
                 points.append((x, y))
                 if len(first) < 5:
                     first.append((x, y, pa, pb))
+    if not points:
+        return None
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     return Diff(len(points), (min(xs), min(ys), max(xs), max(ys)), first, points)
 
@@ -212,12 +221,15 @@ class RecordingWidget(TokittyQtWidget):
         # card paint leaves it that way until a text sets its colour.
         if text:
             mapped = p.transform().mapRect(p.boundingRect(rect, int(flags), text))
+            # The card is drawn into its own image; map back to the window.
+            mapped.translate(*self._card_origin)
             self.text_rects.append(mapped)
             self.text_log.append((text, mapped, p.fontMetrics().lineSpacing()))
 
     def grab_img(self) -> Img:
         self.text_rects.clear()
         self.text_log.clear()
+        self._cards.clear()  # a cached card would paint no text to record
         return qimage_to_img(self.grab().toImage())
 
     def mask_rects(self) -> List[Rect]:
@@ -233,10 +245,12 @@ class PixelWidget(RecordingWidget):
     """RecordingWidget with the bundled Aileron instead of the platform font,
     so Linux and Windows rasterize alike."""
 
-    def _make_font(self, points: int, bold: bool) -> QFont:
+    def _make_font(self, points: int, weight: QFont.Weight) -> QFont:
         font = QFont(key_render.register_font())
         font.setPixelSize(round(points * 96 / 72))
-        font.setBold(bold)
+        # Aileron ships only Regular, so Qt synthesizes any heavier face; ask
+        # for bold or regular outright so semibold renders the same everywhere.
+        font.setBold(weight >= QFont.Weight.DemiBold)
         font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
         font.setStyleStrategy(QFont.StyleStrategy.NoSubpixelAntialias)
         return font
@@ -259,12 +273,19 @@ def _crop(image: Img, x: int, y: int, w: int, h: int) -> bytes:
 def cat_sheet(state: str) -> Rendered:
     """Every coat as a row, the state's frames as columns, on a transparent
     ground. The cat is drawn by the widget itself (on_top, so nothing else
-    is under it) and cropped from a grab."""
-    widget = PixelWidget(T.Theme(), [Customization(cat_home="on_top")], 1)
+    is under it, and no shadow) and cropped from a grab."""
+    widget = PixelWidget(T.Theme(cat=T.CatStyle(shadow=False, wander=False)), [Customization(cat_home="on_top")], 1)
     try:
         widget.anim.stop()
         pane = widget.panes[0]
+        # Drawn on top but played as the plain state: content and sleeping
+        # would otherwise play their on_top variants (pinned by the art hash).
+        pane.set_spot("inside")
         dpr = widget.devicePixelRatioF()
+        # The widget places the cat by its pose, now inside; draw it on top.
+        on_top = home_pose("on_top")
+        ox, oy = widget.window_layout.pane_origins[0]
+        widget.cat_origin = lambda _i, offset=(0, 0): widget._origin_of(ox, oy, on_top, offset, dpr)
         frames = sprites.get_frames(state)
         cell = T.cell_size(dpr)
         w, h = len(frames[0][0]) * cell, len(frames[0]) * cell
@@ -293,7 +314,7 @@ def cat_sheet(state: str) -> Rendered:
 def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
     """One widget layout with fixed inputs, rendered but not yet grabbed. Tags
     stay empty: a tag chip would paint into the on_top cat's rect."""
-    theme = T.Theme()
+    theme = T.Theme(cat=T.CatStyle(wander=False))  # the references are the card without headroom
     home = "inside"
     if name == "halo":
         theme = replace(theme, text=replace(theme.text, halo="on"))
@@ -304,12 +325,14 @@ def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
         home = "inside_right"
     elif name == "cat_top":
         home = "on_top"
+    elif name in ("classic", "classic_models"):
+        theme = replace(T.CLASSIC, cat=theme.cat)  # the look before #139, pinned
     elif name not in ("default", "models"):
         raise KeyError(name)
     widget = cls(theme, [Customization(cat_home=home, label="work")], 1)
     widget.anim.stop()
     pane = widget.panes[0]
-    if name == "models":
+    if name in ("models", "classic_models"):
         view = UsageView(
             rows=(UsageRow("Opus 4", "$12.40", 62.0), UsageRow("Sonnet 4", "$6.10", 31.0),
                   UsageRow("Haiku", "$1.60", 8.0)),
@@ -434,7 +457,7 @@ def dump(outdir: Path, dpr: int, wanted: Sequence[str]) -> None:
     import PySide6
 
     app = QApplication.instance() or QApplication([])
-    probe = PixelWidget(T.Theme(), [Customization()], 1)
+    probe = PixelWidget(T.Theme(cat=T.CatStyle(wander=False)), [Customization()], 1)
     actual = probe.devicePixelRatioF()
     destroy(probe)
     if actual != dpr:

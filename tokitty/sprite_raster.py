@@ -8,9 +8,11 @@ duplicated here (identical to render_sheet._hex_to_rgb).
 """
 from __future__ import annotations
 
+import functools
 from typing import Dict, List, Tuple
 
 
+@functools.lru_cache(maxsize=None)
 def _hex_to_rgb(color: str) -> bytes:
     return bytes(int(color[i:i + 2], 16) for i in (1, 3, 5))
 
@@ -36,15 +38,16 @@ def raster_rgba(frame: List[str], palette: Dict[str, str], scale: int) -> Tuple[
     width = len(frame[0]) * scale
     height = len(frame) * scale
     out = bytearray()
+    cells: Dict[str, bytes] = {}  # one run of `scale` pixels per distinct char
     for row in frame:
         line = bytearray()
         for ch in row:
-            color = palette.get(ch, "")
-            if color:
-                px = _hex_to_rgb(color) + b"\xff"
-            else:
-                px = b"\x00\x00\x00\x00"
-            line += px * scale
+            run = cells.get(ch)
+            if run is None:
+                color = palette.get(ch, "")
+                px = _hex_to_rgb(color) + b"\xff" if color else b"\x00\x00\x00\x00"
+                run = cells[ch] = px * scale
+            line += run
         for _ in range(scale):
             out += line
     return width, height, bytes(out)

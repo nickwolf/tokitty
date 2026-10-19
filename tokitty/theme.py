@@ -2,9 +2,10 @@
 
 One global theme per user, stored in theme.json next to settings.json and
 customization.json (see paths.py). Per-account looks (coat, card_bg,
-bar_fill, cat_home) stay in customization.json. Every default equals what
-the widget has always drawn; the colours are literals here, not imported from
-a GUI module, because this module must not need a toolkit.
+bar_fill, cat_home) stay in customization.json. The colours are literals
+here, not imported from a GUI module, because this module must not need a
+toolkit. The default look is "refined" (#139); "classic" is what the widget
+drew before and stays available as a preset.
 
 Imports are limited to the standard library and tokitty.sprites (also GUI-free) so the module loads on every
 CI OS with tkinter and PySide6 absent. A test enforces that.
@@ -63,19 +64,20 @@ _HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 @dataclass(frozen=True)
 class CardStyle:
-    background: str = "#1c1c22"
+    design: str = "refined"     # "refined" | "classic": the arrangement of the card's text
+    background: str = "#1b1b21"
     opacity: int = 100          # percent, 0..100 in steps of 10
-    radius: int = 0             # 0..16
-    border_width: int = 0       # 0..3
-    border_color: str = "#333340"
+    radius: int = 10            # 0..16
+    border_width: int = 1       # 0..3
+    border_color: str = "#2e2e38"
 
 
 @dataclass(frozen=True)
 class BarStyle:
     layout: str = "beside_cat"  # "beside_cat" | "full_width"
-    shape: str = "flat"         # "flat" | "rounded"
-    height: int = 8             # 4..10
-    track: str = "#333340"
+    shape: str = "rounded"      # "flat" | "rounded"
+    height: int = 6             # 4..10
+    track: str = "#2c2c35"
     low: str = "#4caf6b"
     mid: str = "#e0a838"
     high: str = "#e05252"
@@ -86,11 +88,18 @@ class BarStyle:
 
 @dataclass(frozen=True)
 class TextStyle:
-    foreground: str = "#f0f0f0"
-    dim: str = "#8a8a92"
+    foreground: str = "#ececf1"
+    dim: str = "#8e8e98"
     show: FrozenSet[str] = frozenset(TEXT_ELEMENTS)
     halo: str = "off"           # "off" | "auto" | "on"
     halo_below: int = 60        # "auto" turns the halo on below this opacity
+
+
+@dataclass(frozen=True)
+class CatStyle:
+    shadow: bool = True         # the ground shadow under the cat
+    wander: bool = True         # the cat now and then strolls along the card's top edge (#22)
+    time_of_day: bool = True    # the cat naps more at night and roams more in the morning (#138)
 
 
 @dataclass(frozen=True)
@@ -98,6 +107,48 @@ class Theme:
     card: CardStyle = field(default_factory=CardStyle)
     bars: BarStyle = field(default_factory=BarStyle)
     text: TextStyle = field(default_factory=TextStyle)
+    cat: CatStyle = field(default_factory=CatStyle)
+
+
+# --- looks ------------------------------------------------------------------
+
+DESIGNS = ("refined", "classic")
+
+# What the widget drew before #139, exactly.
+CLASSIC = Theme(
+    card=CardStyle(design="classic", background="#1c1c22", radius=0, border_width=0,
+                   border_color="#333340"),
+    bars=BarStyle(shape="flat", height=8, track="#333340"),
+    text=TextStyle(foreground="#f0f0f0", dim="#8a8a92"),
+)
+REFINED = Theme()
+
+# The fields a look owns. Everything else (opacity, bar layout and thresholds,
+# what text shows, the halo, the cat) is the user's own and no look touches it.
+LOOK_FIELDS = {
+    "card": ("design", "background", "radius", "border_width", "border_color"),
+    "bars": ("shape", "height", "track", "low", "mid", "high", "neutral"),
+    "text": ("foreground", "dim"),
+}
+
+
+def design_preset(design: str) -> Theme:
+    """The preset theme for a design name; raises ValueError for another."""
+    if design == "refined":
+        return REFINED
+    if design == "classic":
+        return CLASSIC
+    raise ValueError(f"unknown design {design!r}")
+
+
+def apply_design(theme: Theme, design: str) -> Theme:
+    """`theme` with the look fields of the named design, keeping the rest."""
+    preset = design_preset(design)
+    parts = {}
+    for section, keys in LOOK_FIELDS.items():
+        old, new = getattr(theme, section), getattr(preset, section)
+        parts[section] = replace(old, **{k: getattr(new, k) for k in keys})
+    return replace(theme, **parts)
 
 
 # --- pure helpers ---------------------------------------------------------
@@ -159,6 +210,10 @@ def _enum(value, allowed, default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
 
 
+def _bool(value, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
+
+
 def _section(raw, key: str) -> dict:
     sub = raw.get(key)
     return sub if isinstance(sub, dict) else {}
@@ -189,10 +244,14 @@ class _Picker:
     def enum(self, key: str, allowed, default: str) -> str:
         return self._pick(key, default, lambda v, d: _enum(v, allowed, d))
 
+    def bool(self, key: str, default: bool) -> bool:
+        return self._pick(key, default, _bool)
+
 
 def _clean_card(raw: dict, d: CardStyle, bad: Optional[set] = None) -> CardStyle:
     pick = _Picker(raw, "card", set() if bad is None else bad)
     return CardStyle(
+        design=pick.enum("design", DESIGNS, d.design),
         background=pick.hex("background", d.background),
         opacity=pick.int("opacity", 0, 100, d.opacity, step=10),
         radius=pick.int("radius", 0, 16, d.radius),
@@ -243,16 +302,26 @@ def _clean_text(raw: dict, d: TextStyle, bad: Optional[set] = None) -> TextStyle
     )
 
 
+def _clean_cat(raw: dict, d: CatStyle, bad: Optional[set] = None) -> CatStyle:
+    pick = _Picker(raw, "cat", set() if bad is None else bad)
+    return CatStyle(
+        shadow=pick.bool("shadow", d.shadow),
+        wander=pick.bool("wander", d.wander),
+        time_of_day=pick.bool("time_of_day", d.time_of_day),
+    )
+
+
 def _validate(raw, fallback: Theme) -> Tuple[Theme, set]:
     data = raw if isinstance(raw, dict) else {}
     bad: set = set()
-    for name in ("card", "bars", "text"):
+    for name in ("card", "bars", "text", "cat"):
         if name in data and not isinstance(data[name], dict):
             bad.add(name)
     theme = Theme(
         card=_clean_card(_section(data, "card"), fallback.card, bad),
         bars=_clean_bars(_section(data, "bars"), fallback.bars, bad),
         text=_clean_text(_section(data, "text"), fallback.text, bad),
+        cat=_clean_cat(_section(data, "cat"), fallback.cat, bad),
     )
     return theme, bad
 
@@ -303,7 +372,36 @@ def load_theme(state_dir) -> Theme:
         return _default_theme(state_dir)
     if not isinstance(data, dict):
         return _default_theme(state_dir)
+    if "design" not in _section(data, "card"):
+        data = _migrate_to_refined(data)
     return theme_from_dict(data, Theme())
+
+
+def _same(saved, classic) -> bool:
+    """A saved value equals the classic one (hex colours compare without case)."""
+    if type(saved) is not type(classic):
+        return False
+    if isinstance(saved, str):
+        return saved.lower() == classic.lower()
+    return saved == classic
+
+
+def _migrate_to_refined(data: dict) -> dict:
+    """A theme.json with no card.design was written before #139. A look field
+    still at its classic value (or absent) moves to the refined one; a field
+    the user changed keeps its saved value. The file itself is not rewritten."""
+    out = dict(data)
+    for section, keys in LOOK_FIELDS.items():
+        raw = data.get(section)
+        if section in data and not isinstance(raw, dict):
+            continue  # reported as a bad section by the validator, not repaired here
+        raw = dict(raw or {})
+        classic, refined = getattr(CLASSIC, section), getattr(REFINED, section)
+        for key in keys:
+            if key not in raw or _same(raw[key], getattr(classic, key)):
+                raw[key] = getattr(refined, key)
+        out[section] = raw
+    return out
 
 
 def theme_to_dict(theme: Theme) -> dict:
@@ -343,6 +441,14 @@ MODEL_STATUS_GAP = 10       # last bar bottom to the status line
 PERCENT_W = 40              # nominal width of the "42%" run
 VALUE_W = 60                # nominal width of a per-model value
 ACCOUNT_LABEL_RECT = (194, 4, 100, SMALL_H)  # right edge at 294, as in the original Tk ui.py
+# The refined design (#139). Rows are taller and breathe more; see _layout_refined.
+R_ROW_H = 16                # label row: "Session" left, "42%" right
+R_BAR_DY = 19               # label row top to bar top
+R_RESET_GAP = 3             # bar bottom to the reset line
+R_ROW_STEP = 18             # reset line top to the next row
+R_MODEL_NAME_STEP = 17      # model row top to its bar
+R_MODEL_GAP = 9             # bar bottom to the next model row
+R_ROW_RIGHT = CARD_WIDTH - 10   # right edge of the account label, as in the Tk card
 # inside_right: how far the stats block moves left so its left edge sits
 # where its old right gap was (CARD_WIDTH - STATS_X - STATS_W = 10).
 STATS_SHIFT_RIGHT = STATS_X - (CARD_WIDTH - STATS_X - STATS_W)
@@ -421,7 +527,9 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
     if not wide:
         rects["cat_area"] = Rect(*CAT_AREA)
 
-    if view == "limits":
+    if theme.card.design == "refined":
+        _layout_refined(rects, lines, view, x, w, show, bar_h)
+    elif view == "limits":
         y = FIRST_ROW_Y
         for name in ("session", "weekly"):
             if "section_labels" in show:
@@ -453,10 +561,11 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
         # y is one row gap below the last bar; status sits MODEL_STATUS_GAP below it
         y += MODEL_STATUS_GAP - MODEL_ROW_GAP
 
-    if "status" in show:
-        rects["status"] = Rect(x, y, w, SMALL_H)
-    if "account_label" in show:
-        rects["account_label"] = Rect(*ACCOUNT_LABEL_RECT)
+    if theme.card.design != "refined":
+        if "status" in show:
+            rects["status"] = Rect(x, y, w, SMALL_H)
+        if "account_label" in show:
+            rects["account_label"] = Rect(*ACCOUNT_LABEL_RECT)
     if pane_spot == "inside_right":
         # Swap the two columns as blocks: nothing inside the stats block is
         # mirrored, so values stay right of their names.
@@ -464,6 +573,52 @@ def layout_card(theme: Theme, view: str, pane_spot: str) -> CardLayout:
         lines = {name: rect.moved(-STATS_SHIFT_RIGHT) for name, rect in lines.items()}
         rects["cat_area"] = Rect(CARD_WIDTH - CAT_AREA[0] - CAT_AREA[2], *CAT_AREA[1:])
     return CardLayout("full_width" if wide else "beside_cat", rects, lines)
+
+
+def _layout_refined(rects: dict, lines: dict, view: str, x: int, w: int,
+                    show: FrozenSet[str], bar_h: int) -> None:
+    """The refined card's rows, added to `rects` and `lines`.
+
+    Limits: a label row (section name left, percent right), the bar, then the
+    reset line. Models: name and value on one row, then the bar. The status
+    line and the account label share the row below the last bar; the status
+    rect spans the column and the account label is drawn over its right end,
+    so the painter elides the status to fit. lines[name] is the whole limits
+    row, label row top to reset line bottom, and overlaps its leaves by design.
+    """
+    y = FIRST_ROW_Y
+    if view == "limits":
+        for name in ("session", "weekly"):
+            top = y
+            labels, percent = "section_labels" in show, "percent" in show
+            if labels or percent:
+                if labels:
+                    rects[f"{name}_label"] = Rect(x, y, w - PERCENT_W if percent else w, R_ROW_H)
+                if percent:
+                    rects[f"{name}_percent"] = Rect(x + w - PERCENT_W, y, PERCENT_W, R_ROW_H)
+                y += R_BAR_DY
+            rects[f"{name}_bar"] = Rect(x, y, w, bar_h)
+            y += bar_h + R_RESET_GAP
+            if "reset" in show:
+                rects[f"{name}_reset"] = Rect(x, y, w, SMALL_H)
+                lines[name] = Rect(x, top, w, y + SMALL_H - top)
+                y += R_ROW_STEP
+            else:
+                lines[name] = Rect(x, top, w, y - R_RESET_GAP - top)
+    else:
+        for i in range(3):
+            if "model_rows" in show:
+                rects[f"model_name_{i}"] = Rect(x, y, w - VALUE_W, SMALL_H)
+                rects[f"model_value_{i}"] = Rect(x + w - VALUE_W, y, VALUE_W, SMALL_H)
+                y += R_MODEL_NAME_STEP
+            rects[f"model_bar_{i}"] = Rect(x, y, w, bar_h)
+            y += bar_h + R_MODEL_GAP
+    # A tall bar in the models view would push the row past the card.
+    y = min(y, CARD_HEIGHT - SMALL_H)
+    if "status" in show:
+        rects["status"] = Rect(x, y, w, SMALL_H)
+    if "account_label" in show:
+        rects["account_label"] = Rect(x, y, R_ROW_RIGHT - x, SMALL_H)
 
 
 # --- cat spots ------------------------------------------------------------
@@ -495,9 +650,6 @@ _PLACEMENTS = {
     "inside_right": Placement((CARD_WIDTH - 8 - SPRITE_W, 12), True),
     "on_top": Placement((8, -SPRITE_H), False),
 }
-
-# The cat scratches the near edge of the stats column from inside the card.
-SCRATCH_SPOTS = frozenset({"inside", "inside_right"})
 
 
 def placement(spot: str) -> Placement:
@@ -561,6 +713,11 @@ class WindowLayout:
     pane_origins: Tuple[Tuple[int, int], ...]
 
 
+# Rows an on_top cat can hop above its resting place, kept clear of the
+# window's top edge.
+HOP_HEADROOM = 3 * sprites.SCALE
+
+
 def _round_up4(value: int) -> int:
     return -(-value // 4) * 4
 
@@ -576,7 +733,7 @@ def layout_window(homes: Sequence[str], wander: bool = False) -> WindowLayout:
     used = set()
     for i, home in enumerate(homes):
         used |= {home} | (_outside_reachable(i, count) if wander else set())
-    top = _round_up4(SPRITE_H) if "on_top" in used else 0
+    top = _round_up4(SPRITE_H) + HOP_HEADROOM if "on_top" in used else 0
     margins = (0, top, 0, 0)  # no spot reaches past the sides or below the card
     origins = tuple(
         ((i % cols) * CARD_WIDTH, top + (i // cols) * CARD_HEIGHT)
@@ -612,7 +769,8 @@ class PaneStyle:
     foreground: str
     dim: str
     opacity: int
-    bar_fill_override: Optional[str]
+    session_bar_override: Optional[str]
+    weekly_bar_override: Optional[str]  # also the per-model rows
     palette: Mapping[str, str]
     home: str
 
@@ -635,7 +793,8 @@ def resolve_pane_style(theme: Theme, customization, has_accent: bool,
         foreground=foreground,
         dim=theme.text.dim,
         opacity=opacity,
-        bar_fill_override=overrides.get("bar_fill"),
+        session_bar_override=overrides.get("session_bar") or overrides.get("bar_fill"),
+        weekly_bar_override=overrides.get("weekly_bar") or overrides.get("bar_fill"),
         palette=effective_palette(customization),
         home=resolve_home(customization.cat_home, pane_index, pane_count),
     )

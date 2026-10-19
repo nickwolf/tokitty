@@ -4,11 +4,21 @@ Lives in the same per-user state dir as position.json and accounts.json
 (see paths.py). customization.json is optional: absent or unparseable
 => {}, and callers fall back to the default Customization() per account.
 
+The "colorway" field is a built-in name or a custom id ("custom-<N>") from
+colorways.json. A well-formed custom id is kept even before that file is
+installed into sprites (or after its colorway was deleted: the palette then
+falls back to orange), so load order never rewrites it on the next save.
+
 Override keys are a closed set:
-  - "coat_base"  -> sprite char "o" (coat fill)
-  - "coat_shade" -> sprite char "O" (coat shading)
+  - "coat_base"  -> sprite char "o" (coat fill); retired, see migration.py
+  - "coat_shade" -> sprite char "O" (coat shading); retired, see migration.py
   - "card_bg"    -> consumed by the UI, not the sprite palette
-  - "bar_fill"   -> consumed by the UI, not the sprite palette
+  - "session_bar" -> the session bar colour; consumed by the UI
+  - "weekly_bar"  -> the weekly bar and per-model rows colour; consumed by the UI
+  - "bar_fill"   -> legacy: both of the above when they are unset. Still read,
+                    never rewritten on load; the UI drops it on the first edit
+                    of either bar (see app_controls).
+Unset bar colours follow the usage ramp.
 "cat_home" is the cat's resting spot (one of theme.SPOTS), default "inside".
 All override values must be "#rrggbb"; unknown keys and invalid hex
 values are silently dropped on load so a hand-edited file degrades
@@ -16,21 +26,24 @@ gracefully instead of crashing the poller/UI.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from tokitty import sprites
+from tokitty.behaviour import PERSONALITIES
 from tokitty.theme import SPOTS
 
 CUSTOMIZATION_FILENAME = "customization.json"
 
 SINGLE_KEY = "default"
 
-_OVERRIDE_KEYS = frozenset({"coat_base", "coat_shade", "card_bg", "bar_fill"})
+_OVERRIDE_KEYS = frozenset(
+    {"coat_base", "coat_shade", "card_bg", "bar_fill", "session_bar", "weekly_bar"})
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
 
 
@@ -41,6 +54,8 @@ class Customization:
     overrides: Dict[str, str] = field(default_factory=dict)
     label: str = ""
     cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
+    tail: str = "plain"  # a sprites.TAIL_STYLES name
+    personality: str = "balanced"  # a behaviour.PERSONALITIES name
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -62,7 +77,8 @@ def _resolve_colorway_pattern(entry: dict) -> "tuple[str, str]":
     orange+tabby default."""
     colorway = entry.get("colorway")
     pattern = entry.get("pattern")
-    if not (isinstance(colorway, str) and colorway in sprites.COLORWAYS):
+    if not (isinstance(colorway, str)
+            and (colorway in sprites.COLORWAYS or sprites.is_custom_id(colorway))):
         colorway = None
     if not (isinstance(pattern, str) and pattern in sprites.PATTERNS):
         pattern = None
@@ -97,12 +113,20 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         cat_home = entry.get("cat_home")
         if not (isinstance(cat_home, str) and cat_home in SPOTS):
             cat_home = "inside"
+        tail = entry.get("tail")
+        if not (isinstance(tail, str) and tail in sprites.TAIL_STYLES):
+            tail = "plain"
+        personality = entry.get("personality")
+        if not (isinstance(personality, str) and personality in PERSONALITIES):
+            personality = "balanced"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
             overrides=_clean_overrides(entry.get("overrides")),
             label=label,
             cat_home=cat_home,
+            tail=tail,
+            personality=personality,
         )
     return result
 
@@ -141,9 +165,23 @@ def rename_account(state_dir: Path, slug: str, label: str) -> None:
 
 
 def effective_palette(custom: Customization) -> Dict[str, str]:
-    palette = dict(sprites.resolve_palette(custom.colorway, custom.pattern))
-    if "coat_base" in custom.overrides:
-        palette["o"] = custom.overrides["coat_base"]
-    if "coat_shade" in custom.overrides:
-        palette["O"] = custom.overrides["coat_shade"]
-    return palette
+    """The sprite palette for a customization. Pure in the coat axes, the
+    two coat overrides and the custom-colorway table (its generation is part
+    of the cache key), so it is computed once per distinct set of them; each
+    call returns a fresh dict the caller may mutate."""
+    return dict(_effective_palette(
+        custom.colorway, custom.pattern, custom.tail,
+        custom.overrides.get("coat_base"), custom.overrides.get("coat_shade"),
+        sprites.custom_colorway_generation()))
+
+
+@functools.lru_cache(maxsize=None)
+def _effective_palette(colorway: str, pattern: str, tail: str,
+                       coat_base: Optional[str], coat_shade: Optional[str],
+                       generation: int = 0) -> Dict[str, str]:
+    palette = sprites.resolve_palette(colorway, pattern, tail)
+    if coat_base is not None:
+        palette["o"] = coat_base
+    if coat_shade is not None:
+        palette["O"] = coat_shade
+    return sprites.derive_tones(palette)

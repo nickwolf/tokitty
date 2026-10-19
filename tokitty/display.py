@@ -7,6 +7,7 @@ Windows C runtime, and Windows is Tokitty's primary target platform.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -32,6 +33,36 @@ def format_countdown(seconds_left: float) -> str:
     if minutes:
         return f"{minutes}m {seconds:02d}s"
     return f"{seconds}s"
+
+
+def format_time_left(seconds_left: float) -> str:
+    """The two coarsest units of a wait, for the hover popup: "2d 3h",
+    "2h 14m", "45m", "30s". Truncates, so it never promises more time than
+    there is."""
+    seconds_left = max(int(seconds_left), 0)
+    days, remainder = divmod(seconds_left, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
+
+
+_COUNTDOWN = re.compile(r"\d+[hms]( |$)")
+
+
+def reset_phrase(reset_text: str) -> str:
+    """The refined card's reset line: "resets 6:10 PM", "resets in 2h 14m 05s"
+    for a capped countdown, and nothing when the reset is unknown."""
+    if not reset_text or reset_text == "\u2014":
+        return ""
+    if _COUNTDOWN.match(reset_text):
+        return "resets in " + reset_text
+    return "resets " + reset_text
 
 
 def format_reset_time(dt: datetime) -> str:
@@ -65,15 +96,17 @@ def resolve_status_text(
     credits_text: Optional[str],
     projection_text: Optional[str],
     stale_text: Optional[str] = None,
+    handoff_text: Optional[str] = None,
 ) -> str:
     """Pick what the single shared status line shows. An error hint always
-    wins, then the observation age, then credits, then the burn projection.
+    wins, then the observation age, then the handoff hint, then credits, then
+    the burn projection.
 
     Age outranks both of the lines below it because they describe the same
     numbers it is qualifying: a projection computed from a snapshot hours
     old is the most confidently wrong thing the pane can say.
     """
-    return hint_text or stale_text or credits_text or projection_text or ""
+    return hint_text or stale_text or handoff_text or credits_text or projection_text or ""
 
 
 # How old a snapshot has to be before the pane says so. A Claude poll

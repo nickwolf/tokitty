@@ -15,6 +15,10 @@ from tokitty.wsl_probe import list_running_distros
 
 FAST_INTERVAL_S = 1.0
 SLOW_INTERVAL_S = 20.0
+# While a WSL session is active, a "running" probe is trusted this long (each probe
+# spawns wsl.exe, ~1.8% of a core at 1 s). Trade-off: up to this long after a manual
+# `wsl --terminate`/`--shutdown`, a read can start the distro again.
+RUNNING_TRUST_S = 5.0
 
 SessionsDirArg = Union[None, str, Path, Callable[[], Optional[Union[str, Path]]]]
 DistroNameArg = Union[None, str, Callable[[], Optional[str]]]
@@ -62,6 +66,9 @@ class ActivityWatcher:
         fast_interval: float = FAST_INTERVAL_S,
         slow_interval: float = SLOW_INTERVAL_S,
         sleep_fn: Optional[Callable[[float], bool]] = None,
+        running_trust_s: float = RUNNING_TRUST_S,
+        monotonic_fn: Optional[Callable[[], float]] = None,
+        name: Optional[str] = None,
     ):
         import time
 
@@ -76,6 +83,11 @@ class ActivityWatcher:
         self._fast_interval = fast_interval
         self._slow_interval = slow_interval
         self._idle_cap: Optional[float] = None
+        self._running_trust_s = running_trust_s
+        self._monotonic_fn = monotonic_fn or time.monotonic
+        self._name = name
+        # (distro, monotonic time) of the last probe that found it running, else None.
+        self._running_seen: Optional[tuple] = None
 
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
@@ -85,7 +97,7 @@ class ActivityWatcher:
         self._sleep_fn = sleep_fn or self._stop_event.wait
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True, name=self._name)
         self._thread.start()
 
     def stop(self) -> None:
@@ -124,6 +136,15 @@ class ActivityWatcher:
             self._latest = view
             self._sessions = sessions or []
 
+    def _trust_running(self, distro_name: str) -> bool:
+        seen = self._running_seen
+        if seen is None or seen[0] != distro_name:
+            return False
+        latest = self.get_latest()
+        if latest is None or latest.state == "idle":
+            return False
+        return self._monotonic_fn() - seen[1] < self._running_trust_s
+
     def _tick_once(self) -> None:
         now = self._time_fn()
         sessions_dir = self._resolve(self._sessions_dir)
@@ -133,15 +154,19 @@ class ActivityWatcher:
 
         distro_name = self._resolve(self._distro_name)
         if distro_name is not None:
-            # Cached for this tick only: one running-distros probe per
-            # loop iteration, never per-file.
-            running = self._list_running_distros_fn()
-            if distro_name not in running:
-                # WSL-respectful: never touch the \\wsl.localhost path for
-                # a stopped distro -- that silently boots it and defeats
-                # WSL's idle auto-shutdown.
-                self._publish(ActivityView(state="idle"))
-                return
+            # One running-distros probe per loop iteration, never per-file,
+            # and skipped while active and recently seen running.
+            if not self._trust_running(distro_name):
+                running = self._list_running_distros_fn()
+                if distro_name in running:
+                    self._running_seen = (distro_name, self._monotonic_fn())
+                else:
+                    self._running_seen = None
+                    # WSL-respectful: never touch the \\wsl.localhost path for
+                    # a stopped distro -- that silently boots it and defeats
+                    # WSL's idle auto-shutdown.
+                    self._publish(ActivityView(state="idle"))
+                    return
 
         records: Dict[str, dict] = {}
         for path in self._list_files_fn(sessions_dir):

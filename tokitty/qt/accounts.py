@@ -191,6 +191,7 @@ class AccountsManager(QWidget):
                     target=_run_retry_off_thread,
                     args=(self.state_dir, on_done),
                     daemon=True,
+                    name="hook-retry",
                 ).start()
             except Exception as exc:
                 _complete_operation(state_key, operation, exc)

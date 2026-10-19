@@ -119,3 +119,15 @@ def test_a_margin_change_keeps_the_card_in_place():
     a = position.place((400, 300), (300, 128), (0, 0, 0, 0), AREA)
     b = position.place((400, 300), (300, 128), (112, 0, 0, 0), AREA)
     assert (b[0] + 112, b[1]) == a
+
+
+def test_the_headroom_change_keeps_a_saved_on_top_card_in_place():
+    from tokitty import theme as T
+
+    old_top = T.SPRITE_H  # the margin before HOP_HEADROOM
+    new_top = T.layout_window(["on_top"]).margins[1]
+    assert new_top == old_top + T.HOP_HEADROOM
+    # position.json holds the first card, so the window follows the margin
+    old = position.place((400, 300), (300, 128), (0, old_top, 0, 0), AREA)
+    new = position.place((400, 300), (300, 128), (0, new_top, 0, 0), AREA)
+    assert (old[0], old[1] + old_top) == (new[0], new[1] + new_top) == (400, 300)

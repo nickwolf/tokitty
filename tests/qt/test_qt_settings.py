@@ -5,12 +5,13 @@ import threading
 import time
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from tokitty import theme as T
-from tokitty.customize import Customization, load_customization
+from tokitty import sprites, theme as T
+from tokitty.customize import Customization, effective_palette, load_customization
 from tokitty.qt import settings as qs
 from tokitty.qt.settings import SettingsWindow
 from tokitty.settings import load_settings
@@ -122,6 +123,67 @@ def test_surprise_toggle_writes_the_setting_and_notifies(make_world):
     assert len(calls) == 1
 
 
+def _write_accounts(world):
+    import json
+
+    (world.state_dir / "accounts.json").write_text(json.dumps({"accounts": [
+        {"name": "alice-work", "config_dir": str(world.state_dir / "alice-dir")},
+        {"name": "zed-codex", "config_dir": str(world.state_dir / "zed-dir"),
+         "provider": "codex"}]}))
+
+
+def test_copy_diagnostics_button_sits_below_the_toggles(make_world):
+    world = make_world()
+    general = open_window(world).tabs["general"]
+    button = general.diagnostics_button
+    assert button.text() == "Copy diagnostics"
+    assert general.diagnostics_hint.text() == qs.DIAGNOSTICS_HINT
+    assert general.frame.isAncestorOf(button)
+    assert button.mapTo(general.frame, QPoint(0, 0)).y() > \
+        general.toggles["aot"].mapTo(general.frame, QPoint(0, 0)).y()
+
+
+def test_copy_diagnostics_puts_a_clean_report_on_the_clipboard(make_world, monkeypatch):
+    from tokitty import accounts_rows
+    from tokitty.hooks_install import HookStatus
+
+    world = make_world(customs=[Customization(label="Nick's laptop"), Customization()])
+    _write_accounts(world)
+    (world.state_dir / "customization.json").write_text(
+        '{"alice-work": {"label": "Nick\'s laptop"}}')
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir",
+                        lambda *a, **k: HookStatus("installed", "alice-work detail"))
+    copied = []
+    monkeypatch.setattr(qs, "_copy_text", copied.append)
+    general = open_window(world).tabs["general"]
+
+    general.diagnostics_button.click()
+    assert general.diagnostics_hint.text() == "Collecting…"
+    assert spin_events(lambda: general.diagnostics_hint.text() == "Copied")
+
+    assert len(copied) == 1
+    report = copied[0]
+    assert report.splitlines()[0].startswith("tokitty: ")
+    assert "accounts: 2 (claude 1, codex 1)" in report
+    assert "1. claude: installed" in report and "2. codex: installed" in report
+    assert "screens: " in report and "qt: " in report
+    for leaked in ("alice", "zed-codex", "Nick's laptop", str(world.state_dir)):
+        assert leaked not in report
+    # a refresh puts the hint back
+    world.host.notify_state_changed()
+    assert general.diagnostics_hint.text() == qs.DIAGNOSTICS_HINT
+
+
+def test_copy_diagnostics_reports_a_clipboard_failure(make_world, monkeypatch):
+    def boom(_text):
+        raise RuntimeError("no clipboard")
+
+    monkeypatch.setattr(qs, "_copy_text", boom)
+    general = open_window(make_world()).tabs["general"]
+    general.diagnostics_button.click()
+    assert spin_events(lambda: "Could not copy" in general.diagnostics_hint.text())
+
+
 def test_general_has_no_transparency_row_and_hides_missing_seams(make_world):
     world = make_world()
     window = open_window(world)
@@ -227,12 +289,178 @@ def test_look_name_entry_writes_the_label(make_world):
     assert look.pane_picker.get() == "Work"
 
 
+# ---- name field in a mixed window and its save triggers ----------------------
+
+def mixed(make_world, **kw):
+    return make_world(2, tag_kinds=["claude", "codex"], **kw)
+
+
+def committed(world, key="k0"):
+    return load_customization(world.state_dir).get(key, Customization()).label
+
+
+def test_mixed_window_name_field_shows_only_the_users_part(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    assert world.widget.panes[0]._label == "claude\u00b7work"
+    assert look.name_entry.text() == "work"
+    assert look.name_hint.text() == "claude\u00b7"
+    assert not look.name_hint.isHidden()
+    window.set_pane(1)
+    assert look.name_entry.text() == ""
+    assert look.name_hint.text() == "codex\u00b7"
+
+
+def test_mixed_window_name_saves_without_doubling_the_prefix(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    look.name_entry.setText("sys")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "sys"
+    assert world.widget.panes[0]._label == "claude\u00b7sys"
+    assert look.name_entry.text() == "sys"
+    look.name_entry.setText("claude\u00b7again")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "again"
+    # Only the pane's own tag is stripped.
+    look.name_entry.setText("codex\u00b7x")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "codex\u00b7x"
+
+
+def test_a_doubled_stored_label_heals_when_committed(make_world):
+    world = mixed(make_world, customs=[Customization(label="claude\u00b7sys"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    assert look.name_entry.text() == "claude\u00b7sys"
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == "sys"
+    assert look.name_entry.text() == "sys"
+    assert world.widget.panes[0]._label == "claude\u00b7sys"
+
+
+def test_blank_name_in_a_mixed_window_shows_the_bare_harness(make_world):
+    world = mixed(make_world, customs=[Customization(label="work"), Customization()])
+    window = open_window(world)
+    look = window.tabs["look"]
+    look.name_entry.setText("")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == ""
+    assert world.widget.panes[0]._label == "claude"
+    look.name_entry.setText("claude\u00b7")
+    look.name_entry.editingFinished.emit()
+    assert world.store["k0"].label == ""
+
+
+def test_single_harness_window_hides_the_hint(make_world):
+    world = make_world(1)
+    window = open_window(world)
+    assert window.tabs["look"].name_hint.isHidden()
+
+
+def test_an_unchanged_name_is_not_written_twice(make_world):
+    world = mixed(make_world)
+    window = open_window(world)
+    look = window.tabs["look"]
+    calls = counted(world)
+    look.name_entry.setText("sys")
+    look.name_entry.editingFinished.emit()
+    look.commit()
+    window.close()
+    assert len(calls) == 1
+
+
+def focused_look(world):
+    window = open_window(world)
+    window.select_tab("look")
+    window.show()
+    window.activateWindow()
+    QApplication.processEvents()
+    look = window.tabs["look"]
+    look.name_entry.setFocus()
+    QApplication.processEvents()
+    assert look.name_entry.hasFocus()
+    look.name_entry.setText("typed")
+    return window, look
+
+
+def assert_saved_to_first_cat(world):
+    assert committed(world, "k0") == "typed"
+    assert world.store["k0"].label == "typed"
+    assert committed(world, "k1") == ""
+    assert world.store["k1"].label == ""
+
+
+def test_clicking_a_blank_area_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    QTest.mouseClick(look.frame, Qt.MouseButton.LeftButton, pos=QPoint(2, 2))
+    assert not look.name_entry.hasFocus()
+    assert_saved_to_first_cat(world)
+
+
+def test_clicking_outside_the_scroll_area_saves_the_name(make_world):
+    # The rail and footer are not in the scroll area, which takes click focus
+    # itself; only the window's own click focus covers them.
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    QTest.mouseClick(window.rail, Qt.MouseButton.LeftButton, pos=QPoint(2, 2))
+    assert not look.name_entry.hasFocus()
+    assert_saved_to_first_cat(world)
+
+
+def test_clicking_a_rail_tab_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    strip = window.rail.strips["usage"]
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton)
+    assert window.current == "usage"
+    assert_saved_to_first_cat(world)
+
+
+def test_switching_cats_saves_the_name_and_shows_the_new_cats(make_world):
+    world = mixed(make_world, customs=[Customization(), Customization(label="other")])
+    window, look = focused_look(world)
+
+    menu = look.pane_picker.menu
+    QTest.mouseClick(look.pane_picker, Qt.MouseButton.LeftButton)
+    # The press alone moves focus off the entry and saves.
+    assert not look.name_entry.hasFocus()
+    assert committed(world, "k0") == "typed"
+    menu.actions()[1].trigger()
+    menu.close()
+    assert window.pane_index == 1
+    assert committed(world, "k0") == "typed"
+    assert look.name_entry.text() == "other"
+    assert world.store["k1"].label == "other"
+    assert look.name_hint.text() == "codex\u00b7"
+
+
+def test_picking_a_cat_without_a_click_still_saves_the_name(make_world):
+    world = mixed(make_world, customs=[Customization(), Customization(label="other")])
+    window, look = focused_look(world)
+    look.pane_picker.menu.actions()[1].trigger()
+    assert committed(world, "k0") == "typed"
+    assert look.name_entry.text() == "other"
+    assert world.store["k1"].label == "other"
+
+
+def test_closing_the_window_saves_the_name(make_world):
+    world = mixed(make_world)
+    window, look = focused_look(world)
+    window.close()
+    assert_saved_to_first_cat(world)
+
+
 def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_world, monkeypatch):
     world = make_world(1)
     window = open_window(world)
     look = window.tabs["look"]
     assert look.color_rows["card_bg"].value.text() == T.CardStyle.background.upper()
-    assert look.color_rows["bar_fill"].value.text() == "AUTOMATIC"
+    assert look.color_rows["session_bar"].value.text() == "AUTOMATIC"
+    assert look.color_rows["weekly_bar"].value.text() == "AUTOMATIC"
     asked = []
 
     def get_color(initial, parent, title):
@@ -240,36 +468,38 @@ def test_look_color_rows_use_the_dialog_and_report_the_effective_colors(make_wor
         return QColor("#112233")
 
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(get_color))
-    look.color_rows["coat_base"].button.click()
-    look.color_rows["bar_fill"].button.click()
+    assert list(look.color_rows) == ["card_bg", "session_bar", "weekly_bar"]  # coat rows retired (#156)
+    look.color_rows["session_bar"].button.click()
+    look.color_rows["weekly_bar"].button.click()
     look.color_rows["card_bg"].button.click()
 
-    assert [a[2] for a in asked] == ["Coat", "Bar fill", "Card background"]
+    assert [a[2] for a in asked] == ["Session bar", "Weekly bar", "Card background"]
     assert all(a[1] is window for a in asked)
-    assert world.store["k0"].overrides == {"coat_base": "#112233", "bar_fill": "#112233",
-                                           "card_bg": "#112233"}
-    assert look.color_rows["bar_fill"].value.text() == "#112233".upper()
+    assert world.store["k0"].overrides == {
+        "session_bar": "#112233", "weekly_bar": "#112233", "card_bg": "#112233"}
+    assert look.color_rows["session_bar"].value.text() == "#112233".upper()
+    assert look.color_rows["weekly_bar"].value.text() == "#112233".upper()
     assert world.host.pane_color(0, "card_bg") == "#112233"
-    assert world.host.pane_color(0, "coat_base") == "#112233"
-    assert world.widget.panes[0].palette["o"] == "#112233"
 
     look.reset_button.click()
     assert world.store["k0"].overrides == {}
-    assert look.color_rows["bar_fill"].value.text() == "AUTOMATIC"
+    assert look.color_rows["session_bar"].value.text() == "AUTOMATIC"
+    assert look.color_rows["weekly_bar"].value.text() == "AUTOMATIC"
 
 
 def test_a_cancelled_color_dialog_writes_nothing(make_world, monkeypatch):
     world = make_world(1)
     window = open_window(world)
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor()))
-    window.tabs["look"].color_rows["coat_base"].button.click()
+    window.tabs["look"].color_rows["session_bar"].button.click()
     assert world.store["k0"].overrides == {}
 
 
 def test_card_background_reports_the_theme_color_when_unset(make_world):
     world = make_world(1, theme=T.Theme(card=T.CardStyle(background="#223344")))
     assert world.host.pane_color(0, "card_bg") == "#223344"
-    assert world.host.pane_color(0, "bar_fill") is None
+    assert world.host.pane_color(0, "session_bar") is None
+    assert world.host.pane_color(0, "weekly_bar") is None
 
 
 @pytest.mark.parametrize("count,first_row", [(1, {0}), (2, {0}), (4, {0}), (5, {0, 1})])
@@ -325,7 +555,7 @@ def test_a_colour_change_after_cat_sits_keeps_the_home(make_world, monkeypatch):
     look = window.tabs["look"]
     look.cat_sits.items["on_top"].click()
     monkeypatch.setattr(qs.QColorDialog, "getColor", staticmethod(lambda *a: QColor("#445566")))
-    look.color_rows["coat_shade"].button.click()
+    look.color_rows["session_bar"].button.click()
     look.colorway.menu.actions()[1].trigger()
     assert world.widget.panes[0].customization.cat_home == "on_top"
     assert world.store["k0"].cat_home == "on_top"
@@ -477,6 +707,7 @@ def test_card_background_border_and_radius_reach_the_pixels(make_world, monkeypa
     assert saved_theme(world).card.border_width == 2
     assert saved_theme(world).card.border_color == "#102030"
 
+    theme_tab.controls[("card", "radius")].setValue(0)
     assert card_pixel(world, 0, 0).alpha() == 255
     theme_tab.controls[("card", "radius")].setValue(16)
     assert saved_theme(world).card.radius == 16
@@ -560,7 +791,7 @@ def test_a_refused_value_is_not_saved_and_the_old_one_stays(make_world):
     theme_tab = open_window(world).tabs["theme"]
     assert theme_tab._edit("card", "opacity", 55) is False  # not a multiple of 10
     assert theme_tab._edit("card", "background", "red") is False
-    assert world.widget.theme == T.Theme()
+    assert world.widget.theme == T.Theme(cat=T.CatStyle(wander=False))  # make_world's theme
     assert not (world.state_dir / T.THEME_FILENAME).exists()
     assert theme_tab._edit("card", "opacity", 60) is True
     assert saved_theme(world).card.opacity == 60
@@ -574,7 +805,38 @@ def test_reset_theme_writes_the_defaults(make_world):
     assert saved_theme(world) == T.Theme()
     assert world.widget.theme == T.Theme()
     assert theme_tab.opacity.get() == "100"
+    assert theme_tab.controls[("card", "radius")].get() == T.Theme().card.radius
+    assert theme_tab.design.get() == "refined"
+
+
+def test_card_style_switches_the_look_and_keeps_the_rest(make_world):
+    mine = T.Theme(card=T.CardStyle(opacity=60, radius=3),
+                   bars=T.BarStyle(layout="full_width", mid_at=30),
+                   text=T.TextStyle(halo="on"), cat=T.CatStyle(wander=False))
+    world = make_world(1, theme=mine)
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.design.get() == "refined"
+    theme_tab.design.items["classic"].click()
+    saved = saved_theme(world)
+    assert saved == T.apply_design(mine, "classic")
+    assert saved.card.design == "classic" and saved.card.radius == 0
+    assert (saved.card.opacity, saved.bars.layout, saved.bars.mid_at, saved.text.halo) == (
+        60, "full_width", 30, "on")
+    assert world.widget.theme == saved
+    assert theme_tab.design.get() == "classic"
     assert theme_tab.controls[("card", "radius")].get() == 0
+    assert theme_tab.shape.get() == "flat"
+    theme_tab.design.items["refined"].click()
+    assert saved_theme(world).card.design == "refined"
+    assert theme_tab.design.get() == "refined" and theme_tab.shape.get() == "rounded"
+
+
+def test_card_style_follows_a_theme_changed_elsewhere(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    world.host.set_theme(T.apply_design(world.host.theme(), "classic"))
+    theme_tab.refresh()
+    assert theme_tab.design.get() == "classic"
 
 
 def test_a_theme_change_keeps_the_window_matching_its_layout(make_world):
@@ -651,3 +913,85 @@ def test_the_event_loop_survives_closing_settings_with_the_widget_shown(make_wor
     qapp.exec()
     net.stop()
     assert state["reached"]
+
+
+def test_look_has_a_tail_dropdown_that_writes_through(make_world):
+    world = make_world(2)
+    window = open_window(world, 1)
+    look = window.tabs["look"]
+    assert look.tail.choices() == list(sprites.TAIL_STYLES)
+    assert look.tail.get() == "plain"
+    look.tail.menu.actions()[look.tail.choices().index("ringed")].trigger()
+    assert world.store["k1"].tail == "ringed"
+    assert world.store["k0"].tail == "plain"
+    assert load_customization(world.state_dir)["k1"].tail == "ringed"
+    assert world.widget.panes[1]._tail == "ringed"
+    assert world.widget.panes[1].palette == effective_palette(world.store["k1"])
+    assert look.tail.get() == "ringed"
+
+
+def test_look_has_a_personality_dropdown_that_writes_through(make_world):
+    from tokitty.behaviour import PERSONALITIES
+
+    world = make_world(2)
+    window = open_window(world, 1)
+    look = window.tabs["look"]
+    assert look.personality.choices() == list(PERSONALITIES)
+    assert look.personality.get() == "balanced"
+    look.personality.menu.actions()[look.personality.choices().index("curious")].trigger()
+    assert world.store["k1"].personality == "curious"
+    assert world.store["k0"].personality == "balanced"
+    assert load_customization(world.state_dir)["k1"].personality == "curious"
+    assert world.widget.panes[1]._personality == "curious"
+    assert look.personality.get() == "curious"
+
+
+def test_cat_shadow_toggle_writes_the_theme(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.shadow_toggle.get() is True
+    theme_tab.shadow_toggle._clicked()
+    assert saved_theme(world).cat.shadow is False
+    assert world.widget.theme.cat.shadow is False
+    theme_tab.shadow_toggle._clicked()
+    assert saved_theme(world).cat.shadow is True
+
+
+def test_cat_shadow_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(shadow=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.shadow_toggle.get() is False
+
+
+def test_cat_wander_toggle_writes_the_theme_and_resizes_the_window(make_world):
+    world = make_world(1, theme=T.Theme())  # wander is on by default
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.wander_toggle.get() is True and world.widget.window_layout.margins[1] == 116
+    theme_tab.wander_toggle._clicked()
+    assert saved_theme(world).cat.wander is False
+    assert world.widget.theme.cat.wander is False and world.widget.window_layout.margins[1] == 0
+    theme_tab.wander_toggle._clicked()
+    assert saved_theme(world).cat.wander is True and world.widget.window_layout.margins[1] == 116
+
+
+def test_cat_wander_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(wander=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.wander_toggle.get() is False
+
+
+def test_cat_time_of_day_toggle_writes_the_theme(make_world):
+    world = make_world(1, theme=T.Theme())  # follows the clock by default
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.time_of_day_toggle.get() is True
+    theme_tab.time_of_day_toggle._clicked()
+    assert saved_theme(world).cat.time_of_day is False
+    assert world.widget.theme.cat.time_of_day is False
+    theme_tab.time_of_day_toggle._clicked()
+    assert saved_theme(world).cat.time_of_day is True and world.widget.theme.cat.time_of_day is True
+
+
+def test_cat_time_of_day_toggle_reflects_the_theme_after_a_refresh(make_world):
+    world = make_world(1, theme=T.Theme(cat=T.CatStyle(time_of_day=False)))
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.time_of_day_toggle.get() is False

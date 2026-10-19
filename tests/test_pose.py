@@ -2,7 +2,7 @@
 working/thinking/done-hop > idle (exactly v1 behavior)."""
 
 from tokitty.activity import ActivityView
-from tokitty.pose import ACTIVITY_SPRITE_PLACEHOLDERS, resolve_pose
+from tokitty.pose import ACTIVITY_SPRITE_PLACEHOLDERS, prompt_state, resolve_pose
 
 
 def test_idle_activity_is_exactly_v1_behavior():
@@ -68,3 +68,43 @@ def test_permission_beats_capped_wake_states():
         result = resolve_pose(capped_state, ActivityView(state="permission"))
         assert result["sprite_state"] == ACTIVITY_SPRITE_PLACEHOLDERS["permission"]
         assert result["accent"] is True
+
+
+def test_question_beats_capped_wake_and_working_with_the_accent():
+    for v1_state in ("content", "flopped", "stirring", "waking"):
+        result = resolve_pose(v1_state, ActivityView(state="question"))
+        assert result["sprite_state"] == "question" == ACTIVITY_SPRITE_PLACEHOLDERS["question"]
+        assert result["tool_label"] == ""
+        assert result["accent"] is True
+
+
+def test_prompt_state_thresholds():
+    assert prompt_state("permission", 100.0, 100.0 + 29.9) == "permission"
+    assert prompt_state("permission", 100.0, 100.0 + 30.0) == "permission_urgent"
+    assert prompt_state("permission", 100.0, 100.0 + 179.9) == "permission_urgent"
+    assert prompt_state("permission", 100.0, 100.0 + 180.0) == "permission_frantic"
+
+
+def test_prompt_state_question_never_escalates():
+    assert prompt_state("question", 100.0, 100.0 + 1000.0) == "question"
+
+
+def test_prompt_state_without_clock_is_unchanged():
+    assert prompt_state("permission", None, 500.0) == "permission"
+    assert prompt_state("permission", 100.0, None) == "permission"
+    assert prompt_state("working", 100.0, 500.0) == "working"
+
+
+def test_resolve_pose_escalates_permission():
+    view = ActivityView(state="permission", since=100.0)
+    assert resolve_pose("content", view, 110.0)["sprite_state"] == "permission"
+    urgent = resolve_pose("content", view, 130.0)
+    assert urgent == {"sprite_state": "permission_urgent", "tool_label": "", "accent": True}
+    frantic = resolve_pose("content", view, 280.0)
+    assert frantic == {"sprite_state": "permission_frantic", "tool_label": "", "accent": True}
+    assert resolve_pose("content", view)["sprite_state"] == "permission"
+
+
+def test_resolve_pose_question_does_not_escalate():
+    view = ActivityView(state="question", since=100.0)
+    assert resolve_pose("content", view, 1000.0)["sprite_state"] == "question"

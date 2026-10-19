@@ -18,6 +18,7 @@ from pathlib import Path
 from tokitty.app_core import (
     UI_REFRESH_MS,
     Discovery,
+    apply_handoff,
     build_units,
     make_onboarder,
     make_usage_state,
@@ -46,7 +47,10 @@ def apply_customization(pane, custom) -> None:
         palette=effective_palette(custom),
         card_bg=custom.overrides.get("card_bg", ""),
         bar_fill=custom.overrides.get("bar_fill", ""),
-        colorway=custom.colorway, pattern=custom.pattern,
+        session_bar=custom.overrides.get("session_bar", ""),
+        weekly_bar=custom.overrides.get("weekly_bar", ""),
+        colorway=custom.colorway, pattern=custom.pattern, tail=custom.tail,
+        personality=custom.personality,
     )
 
 
@@ -164,6 +168,9 @@ def run_walkthrough(state_dir, credentials_cache, distro_probe) -> bool:
 
 
 def run_qt(after_update_token=None, apply_update=False) -> int:
+    from tokitty.diagnostics import install_stderr_tee
+
+    install_stderr_tee()  # first, so Copy diagnostics sees everything printed
     try:
         import PySide6  # noqa: F401
     except ImportError:
@@ -319,12 +326,14 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
     customization_store = load_customization(state_dir)
 
+    from tokitty import colorways
     from tokitty.migration import (
         CUSTOMIZATION_MIGRATION_KEY,
         LEGACY_ACCOUNT_LABELS_MIGRATION_KEY,
         mark_customization_migration_complete,
         migrate_default_customization,
         migrate_legacy_account_labels,
+        run_coat_overrides_migration,
     )
 
     customization_store = migrate_default_customization(state_dir, accounts, customization_store)
@@ -333,6 +342,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     save_customization(state_dir, customization_store)
     mark_customization_migration_complete(state_dir, CUSTOMIZATION_MIGRATION_KEY)
     mark_customization_migration_complete(state_dir, LEGACY_ACCOUNT_LABELS_MIGRATION_KEY)
+    # Coat overrides become custom colorways (#156), then the colorways reach
+    # sprites before any pane, tray icon or preview resolves a palette.
+    customization_store = run_coat_overrides_migration(state_dir, customization_store)
+    colorways.install(state_dir)
 
     notifier = Notifier(state_dir)
     units: list = []
@@ -392,9 +405,16 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         # After the randomizing, so the icon wears pane 0's final colours.
         pane0 = widget.panes[0]
         tray = QtTray(lambda: menu_model(0), state_dir,
-                      colorway=pane0._colorway, pattern=pane0._pattern,
+                      colorway=pane0._colorway, pattern=pane0._pattern, tail=pane0._tail,
                       on_action_done=host.notify_state_changed)
-        host.tray_refresh = tray.refresh
+
+        def refresh_tray() -> None:
+            # The icon wears pane 0's look, which a colorway edit can change.
+            first = widget.panes[0]
+            tray.set_look(first._colorway, first._pattern, first._tail)
+            tray.refresh()
+
+        host.tray_refresh = refresh_tray
         # stop() schedules deleteLater, which Qt never processes once the loop
         # has ended; the finally's stop is the backstop for a failed launch.
         app.aboutToQuit.connect(tray.stop)
@@ -521,12 +541,18 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 # Deferred: the box is modal and must not hold up the tick.
                 QTimer.singleShot(0, lambda warnings=hook_warnings: show_warnings(warnings))
             now = datetime.now(timezone.utc)
-            for unit in units:
-                update = step_unit(
+            stepped = [
+                (unit, step_unit(
                     unit, usage_state=usage_state, notifier=notifier,
                     customization_store=customization_store, notes_removed=notes_removed,
                     onboard=maybe_onboard, now=now,
-                )
+                    time_of_day=widget.theme.cat.time_of_day,
+                    wander=widget.theme.cat.wander,
+                ))
+                for unit in units
+            ]
+            # Hints compare every account, so they need the whole first pass.
+            for (unit, _), update in zip(stepped, apply_handoff(stepped)):
                 if update is not None:
                     getattr(unit["pane"], "render" if update.kind == "limits" else "render_usage")(
                         **update.kwargs
