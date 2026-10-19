@@ -26,6 +26,18 @@ from tokitty.mood import (
         (90.0, 0, "panicked", "5h"),
         (99.9, 0, "panicked", "5h"),
         (10, 60, "interested", "7d"),
+        # The weekly bar has its own, later top: alert from 85, panicked from 97.
+        (0, 84.9, "interested", "7d"),
+        (0, 85.0, "alert", "7d"),
+        (0, 92.0, "alert", "7d"),
+        (0, 96.9, "alert", "7d"),
+        (0, 97.0, "panicked", "7d"),
+        # The worse mood wins, and the bar behind it drives.
+        (60, 80, "interested", "7d"),
+        (76, 80, "alert", "5h"),
+        (80, 92, "alert", "7d"),
+        (91, 92, "panicked", "5h"),
+        (30, 30, "content", "5h"),
     ],
 )
 def test_compute_mood_thresholds(session_pct, weekly_pct, expected_mood, expected_tag):

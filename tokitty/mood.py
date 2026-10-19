@@ -14,22 +14,41 @@ MOOD_THRESHOLDS: List[Tuple[float, str]] = [
     (90.0, "alert"),
     (100.0, "panicked"),
 ]
+# The weekly bar climbs for days, so it only reaches alert and panicked
+# closer to the cap; at the session thresholds a weekly bar at 92% kept the
+# cat panicked for most of a week.
+WEEKLY_MOOD_THRESHOLDS: List[Tuple[float, str]] = [
+    (25.0, "sleeping"),
+    (50.0, "content"),
+    (85.0, "interested"),
+    (97.0, "alert"),
+    (100.0, "panicked"),
+]
+_MOOD_RANK = {mood: rank for rank, (_, mood) in enumerate(MOOD_THRESHOLDS)}
+
+
+def _ladder_mood(percent: float, thresholds: List[Tuple[float, str]]) -> str:
+    for threshold, mood in thresholds:
+        if percent < threshold:
+            return mood
+    return "panicked"
 
 
 def compute_mood(session_pct: float, weekly_pct: float) -> Tuple[str, str]:
     """Return (mood_key, driving_tag) from the steady-state mood ladder.
 
-    driving_tag is "5h" if the session percent is the larger (or equal)
-    of the two, else "7d". Only meaningful when neither limit is capped
-    -- callers should check select_binding_capped_limit() first (Task 9).
+    Each bar has its own ladder (the weekly one is later at the top) and the
+    cat shows the worse of the two moods. driving_tag is the bar behind that
+    mood: "5h" or "7d", and on equal moods the fuller bar, the session bar
+    on a tie. Only meaningful when neither limit is capped -- callers should
+    check select_binding_capped_limit() first (Task 9).
     """
-    driving_tag = "5h" if session_pct >= weekly_pct else "7d"
-    percent = max(session_pct, weekly_pct)
-
-    for threshold, mood in MOOD_THRESHOLDS:
-        if percent < threshold:
-            return mood, driving_tag
-    return "panicked", driving_tag
+    session = _ladder_mood(session_pct, MOOD_THRESHOLDS)
+    weekly = _ladder_mood(weekly_pct, WEEKLY_MOOD_THRESHOLDS)
+    if _MOOD_RANK[weekly] > _MOOD_RANK[session] or (
+            weekly == session and weekly_pct > session_pct):
+        return weekly, "7d"
+    return session, "5h"
 
 
 BLOCKED_SEVERITIES = {"exceeded", "blocked", "rate_limited", "over_limit"}
