@@ -135,9 +135,10 @@ def migrate_coat_overrides(
 ) -> Tuple[Dict[str, Customization], Dict[str, Dict[str, str]]]:
     """Compute the retirement of the per-account coat_base/coat_shade
     overrides (#156): each entry that has either gets a custom colorway built
-    from its colorway's built-in tones with coat := coat_base and
-    shade := coat_shade where set; the entry then points at that colorway and
-    loses those two overrides (card_bg and bar_fill stay). Returns
+    from its colorway's built-in tones, with each override in the tone its
+    pattern draws o (coat_base) or O (coat_shade) with; the entry then points
+    at that colorway and loses the overrides that moved (card_bg and bar_fill
+    stay, and so does one with no tone to move into). Returns
     (customization store, colorways store); both are the inputs unchanged
     when COAT_OVERRIDES_MIGRATION_KEY is already set. Entries that end up
     with identical tones share one colorway, and an identical custom already
@@ -156,18 +157,35 @@ def migrate_coat_overrides(
             continue
         source = custom.colorway if custom.colorway in sprites.COLORWAYS else "orange"
         tones = dict(sprites.COLORWAYS[source])
-        if base is not None:
-            tones["coat"] = base
-        if shade is not None:
-            tones["shade"] = shade
+        overrides = dict(custom.overrides)
+        pattern = sprites.PATTERNS[custom.pattern]
+        claimed = set()
+        for override, char, other, other_char in (("coat_base", "o", "coat_shade", "O"),
+                                                  ("coat_shade", "O", "coat_base", "o")):
+            value, tone = overrides.get(override), pattern[char]
+            # The override painted only o/O, so it moves into the tone the
+            # pattern draws that char with, unless that would repaint the other
+            # one too (colorpoint draws both with light). Van's white body is
+            # not a tone. What cannot move stays an override, which still renders.
+            shared = pattern[other_char] == tone and other not in custom.overrides
+            if value is not None and tone in sprites.TONE_KEYS and tone not in claimed and not shared:
+                tones[tone] = value
+                claimed.add(tone)
+                del overrides[override]
+        if not claimed:
+            continue
         tones = {k: v.lower() for k, v in tones.items()}
         cid = colorways_mod.find_by_tones(colorways, tones)
         if cid is None:
-            cid = colorways_mod.next_id(colorways)
+            cid = colorways_mod.next_id(colorways, taken=_colorway_ids(store))
             colorways[cid] = {"name": _migrated_name(source, colorways), **tones}
-        overrides = {k: v for k, v in custom.overrides.items() if k not in ("coat_base", "coat_shade")}
         store[key] = replace(custom, colorway=cid, overrides=overrides)
     return store, colorways
+
+
+def _colorway_ids(store: Dict[str, Customization]) -> set:
+    """Every colorway id a customization entry points at, dangling ones too."""
+    return {custom.colorway for custom in store.values()}
 
 
 def _migrated_name(source: str, colorways: Dict[str, Dict[str, str]]) -> str:

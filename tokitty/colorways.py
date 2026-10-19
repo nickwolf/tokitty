@@ -24,7 +24,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from tokitty import sprites
 from tokitty.customize import _HEX_RE, load_customization, save_customization
@@ -136,9 +136,10 @@ def save_colorways(state_dir: Path, store: Store) -> None:
     os.replace(tmp_path, path)
 
 
-def next_id(store: Store) -> str:
-    """The lowest unused positive N, as "custom-<N>"."""
-    taken = {_id_number(cid) for cid in store}
+def next_id(store: Store, taken: Iterable[str] = ()) -> str:
+    """The lowest positive N unused by the store and by `taken` (the ids
+    customization entries point at, which may dangle), as "custom-<N>"."""
+    taken = {_id_number(cid) for cid in [*store, *taken] if sprites.is_custom_id(cid)}
     n = 1
     while n in taken:
         n += 1
@@ -164,7 +165,7 @@ def add_colorway(state_dir: Path, name: str, tones: Dict[str, str]) -> str:
     clean = _clean_tones(tones)
     if clean is None:
         raise ValueError("Every tone must be a #rrggbb colour.")
-    cid = next_id(store)
+    cid = next_id(store, taken=[c.colorway for c in load_customization(state_dir).values()])
     store[cid] = {"name": name.strip(), **clean}
     save_colorways(state_dir, store)
     return cid
