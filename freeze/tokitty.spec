@@ -11,7 +11,7 @@ ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT / "freeze"))
 from bundle_data import (  # noqa: E402
     DATA_FILES, LGPL_SOURCE_PACKAGES, LICENSE_FILES, NOTICES_FILE, QT_EXCLUDED_MODULES, info_plist,
-    project_version, qt_toc_entry_dropped,
+    project_version, qt_toc_entry_dropped, ucrt_entry_dropped,
 )
 from bundle_notices import write_notices  # noqa: E402
 
@@ -77,6 +77,10 @@ hook = Analysis(
 if QT_TRIM:
     gui.binaries = [e for e in gui.binaries if not qt_toc_entry_dropped(e)]
     gui.datas = [e for e in gui.datas if not qt_toc_entry_dropped(e)]
+
+if sys.platform == "win32":
+    for a in (gui, hook):
+        a.binaries = [e for e in a.binaries if not ucrt_entry_dropped(e)]
 
 # The third-party notices (#152) come from what is left after the trim, so
 # they name only what this build ships.

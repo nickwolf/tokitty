@@ -7,6 +7,7 @@ not only inside the archive. Paths are relative to tokitty/ and keep their
 folders in the bundle.
 """
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -81,6 +82,18 @@ LICENSE_FILES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt")
 # Written into the licenses folder at build time by freeze/bundle_notices.py
 # (#152), from what the build collected, so it is not in freeze/licenses/.
 NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
+
+
+# The Universal CRT: ucrtbase.dll and its api-ms-win-* forwarders. Windows 10
+# and later ship it, and Python 3.13 needs Windows 10, but PyInstaller copies
+# it from whatever folder on PATH has a copy (on the CI runner, a JDK's bin)
+# (#152).
+_UCRT = re.compile(r"(ucrtbase|api-ms-win-[a-z0-9-]+)\.dll", re.I)
+
+
+def ucrt_entry_dropped(entry) -> bool:
+    """Whether a TOC entry is a Universal CRT library at the top of the bundle."""
+    return entry[2] == "BINARY" and _UCRT.fullmatch(entry[0]) is not None
 
 
 def qt_toc_entry_dropped(entry) -> bool:
