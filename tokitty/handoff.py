@@ -24,9 +24,10 @@ ROOM_WEEKLY_BELOW = 70.0
 
 @dataclass(frozen=True)
 class Standing:
-    """One account's place in the comparison. `confirmed` is False when the
-    numbers cannot be trusted (a dimmed display), so the unit counts as
-    neither near cap nor roomy."""
+    """One account's place in the comparison. `label` is the user's name for
+    the account, often blank; `kind` is its provider ("Claude", "Codex").
+    `confirmed` is False when the numbers cannot be trusted (a dimmed
+    display), so the unit counts as neither near cap nor roomy."""
 
     key: str
     label: str
@@ -34,6 +35,7 @@ class Standing:
     weekly_pct: float
     capped: bool
     confirmed: bool = True
+    kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,16 @@ def _stays_near(s: Standing) -> bool:
 
 def _has_room(s: Standing) -> bool:
     return not s.capped and s.session_pct < ROOM_SESSION_BELOW and s.weekly_pct < ROOM_WEEKLY_BELOW
+
+
+def _name_for(roomy: Standing, near: Standing) -> str:
+    """How the near-cap cat names the roomy account: its label, else its
+    provider when that differs, else just "another account"."""
+    if roomy.label:
+        return roomy.label
+    if roomy.kind and roomy.kind != near.kind:
+        return roomy.kind
+    return "Another account"
 
 
 def handoff_hints(
@@ -79,6 +91,6 @@ def handoff_hints(
         return {}, flags
     # min() keeps the first of equals, so a tie goes to the earlier account.
     best = min(roomy, key=lambda s: s.session_pct)
-    hints = {s.key: Hint("near", f"{best.label} has room") for s in near}
+    hints = {s.key: Hint("near", f"{_name_for(best, s)} has room") for s in near}
     hints.update({s.key: Hint("room") for s in roomy})
     return hints, flags

@@ -12,8 +12,8 @@ from tokitty.burn import BurnTracker
 NOW = datetime(2030, 1, 2, 9, 0, tzinfo=timezone.utc)
 
 
-def _s(key, session=10.0, weekly=10.0, capped=False, confirmed=True, label=None):
-    return Standing(key, label or key, session, weekly, capped, confirmed)
+def _s(key, session=10.0, weekly=10.0, capped=False, confirmed=True, label=None, kind="Claude"):
+    return Standing(key, key if label is None else label, session, weekly, capped, confirmed, kind)
 
 
 
@@ -77,6 +77,13 @@ def test_near_and_roomy_get_hints():
 def test_cross_provider_label():
     hints, _ = _hints([_s("claude", 95, label="Claude"), _s("codex", 5, label="Codex")])
     assert hints["claude"].text == "Codex has room"
+
+
+def test_unlabelled_account_is_named_by_provider_only_when_it_differs():
+    hints, _ = _hints([_s("a", 95, label=""), _s("b", 5, label="")])
+    assert hints["a"].text == "Another account has room"
+    hints, _ = _hints([_s("a", 95, label=""), _s("b", 5, label="", kind="Codex")])
+    assert hints["a"].text == "Codex has room"
 
 
 def test_several_roomy_picks_lowest_session_then_first():
@@ -192,7 +199,7 @@ def _step(unit, view="limits", store=None):
 def test_standing_for_a_healthy_unit():
     unit = _unit("a", _poll(snapshot=_snap(40, 20)))
     _step(unit)
-    assert unit["handoff_standing"] == Standing("a", "Claude", 40.0, 20.0, False, True)
+    assert unit["handoff_standing"] == Standing("a", "", 40.0, 20.0, False, True, kind="Claude")
     assert unit["handoff_ladder"] == "content"
 
 
