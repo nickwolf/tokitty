@@ -142,6 +142,7 @@ class TokittyQtWidget(QWidget):
         self.setFixedSize(*self.window_layout.size)
 
         self._layouts: Dict[Tuple[str, str], T.CardLayout] = {}
+        self._push_bar_rects()
         # Keyed by the frame grid's identity (sprites keeps the grids alive
         # for the process), so repeated frames share one image.
         self._images: Dict[tuple, QImage] = {}
@@ -200,6 +201,7 @@ class TokittyQtWidget(QWidget):
         count = len(self.panes)
         for i, (pane, home) in enumerate(zip(self.panes, self.homes)):
             pane.set_spot(home, self._roams(pane.customization, i, count))
+        self._push_bar_rects()
         dx = self.window_layout.margins[0] - old.margins[0]
         dy = self.window_layout.margins[1] - old.margins[1]
         if dx or dy:
@@ -230,6 +232,7 @@ class TokittyQtWidget(QWidget):
             # The wander setting can change who roams without moving the window.
             for i, pane in enumerate(self.panes):
                 pane.set_spot(pane.spot, self._roams(pane.customization, i, count))
+            self._push_bar_rects()
         self.update()
 
     def pane_anchor(self, index: int) -> Tuple[int, int]:
@@ -269,6 +272,14 @@ class TokittyQtWidget(QWidget):
         py = T.placement(pose.spot).origin[1]
         return (T.snap(ox + pose.x + dx * sprites.SCALE, dpr),
                 T.snap(oy + py + dy * sprites.SCALE, dpr))
+
+    def _push_bar_rects(self) -> None:
+        """Tell each pane where its bars are, for the cat that watches them.
+        Straight from layout_card: this runs only when layouts change, and
+        must not refill the cache set_theme just emptied."""
+        for pane, home in zip(self.panes, self.homes):
+            layout = T.layout_card(self.theme, "limits", home)
+            pane.set_bar_rects(layout["session_bar"], layout["weekly_bar"])
 
     def _layout_for(self, view: str, home: str) -> T.CardLayout:
         key = (view, home)

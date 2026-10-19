@@ -1,10 +1,12 @@
 import random
+from dataclasses import replace
 
 import pytest
 
 from tokitty import sprites, theme
 from tokitty.wander import (
-    HOME_WAIT_MS, STRIDE_PX, Pose, Roam, Wanderer, home_pose, stops_from,
+    BAR_EVENT_TTL_MS, BAT_COOLDOWN_MS, HOME_WAIT_MS, PERCH_HEAD_PX, STOP_REST_MS, STRIDE_PX,
+    WATCH_SETTLE_MS, Pose, Roam, Wanderer, home_pose, stops_from,
 )
 
 
@@ -560,3 +562,519 @@ def test_a_curious_trip_has_two_to_four_stops_on_the_real_track(home):
         assert w.stops[-1] == w.home.x
         seen.add(len(w.stops) - 1)
     assert seen == {2, 3, 4}
+
+
+# ---- the cat's own bars (#135) ------------------------------------------------
+
+class _Rng(random.Random):
+    """A seeded Random whose next random() calls return `values` first."""
+
+    def __init__(self, values=()):
+        super().__init__(0)
+        self.values = list(values)
+        self.draws = 0
+
+    def random(self):
+        self.draws += 1
+        return self.values.pop(0) if self.values else super().random()
+
+
+BARS = Drives(bat=1.0, pounce=1.0, watch=1.0)
+QUIET = Drives(trip=0.0, stay=1.0, bat=1.0, pounce=1.0, watch=1.0)  # rests on, never walks
+
+
+def _bars(home="inside", state="content", d=QUIET, rng=None, roams=True):
+    roam = _driven(home, state, roams=roams, d=d)
+    if rng is not None:
+        roam.wanderer.rng = rng
+    return roam
+
+
+def test_a_bar_tick_up_plays_a_bat_at_once_and_a_fresh_rest_follows():
+    roam = _bars()
+    roam.set_bar_events((1, 0), 1_000)
+    assert roam.player.target == "move:bat" and roam.wanderer.move == "bat"
+    assert roam.wanderer.last_bat == 1_000
+    shown = _run(roam, 30_000, now=1_000)
+    assert _moves(shown) == ["bat"]
+    w = roam.wanderer
+    assert w.move is None and not w.away and w.due is not None and w.due > 1_000
+    assert roam.player.target == "content"
+
+
+
+def test_a_bat_waits_for_the_transition_into_the_calm_state():
+    roam = _bars(state="alert")
+    roam.set_bar_events((1, 0), 1_000)
+    roam.set_state("interested", 2_000)
+    assert roam.player.in_transition and roam.wanderer.move is None
+    assert roam.wanderer.moved_until is not None
+    # the transition plays out; the next render starts the bat
+    _run(roam, 10_000, now=2_000)
+    roam.set_state("interested", 10_000)
+    assert roam.wanderer.move == "bat"
+
+def test_the_same_count_again_is_not_a_new_event():
+    roam = _bars()
+    roam.set_bar_events((1, 0), 1_000)
+    _run(roam, 20_000, now=1_000)
+    roam.set_bar_events((1, 0), 20_000)
+    roam.set_state("content", 20_500)
+    assert roam.wanderer.move is None and roam.wanderer.moved_until is None
+
+
+def test_a_busy_cat_keeps_the_event_until_it_is_calm_again():
+    roam = _bars()
+    roam.set_state("working", 500)
+    roam.set_bar_events((1, 0), 1_000)
+    assert roam.wanderer.move is None and roam.wanderer.moved_until == 1_000 + BAR_EVENT_TTL_MS
+    roam.set_state("working", 2_000)
+    assert roam.wanderer.move is None
+    roam.set_state("content", 3_000)
+    assert roam.wanderer.move == "bat" and roam.wanderer.moved_until is None
+
+
+def test_a_pending_event_expires_silently_after_ten_minutes():
+    roam = _bars()
+    roam.set_state("working", 500)
+    roam.set_bar_events((1, 0), 1_000)
+    deadline = 1_000 + BAR_EVENT_TTL_MS
+    roam.set_state("content", deadline)
+    assert roam.wanderer.move is None and roam.wanderer.moved_until is None
+    assert roam.wanderer.last_bat is None
+    roam = _bars()
+    roam.set_state("working", 500)
+    roam.set_bar_events((1, 0), 1_000)
+    roam.set_state("content", deadline - 1)
+    assert roam.wanderer.move == "bat"
+
+
+def test_an_event_waits_out_a_trip_and_plays_back_home():
+    roam = _bars(d=replace(BARS, trip=1.0))
+    now = roam.wanderer.due
+    roam.tick(now)
+    while not roam.wanderer.away:
+        now = roam.next_due()
+        roam.tick(now)
+    roam.set_bar_events((1, 0), now)
+    assert roam.wanderer.move != "bat" and roam.wanderer.moved_until is not None
+    while roam.wanderer.away:
+        roam.set_state("content", now)
+        now = roam.next_due()
+        roam.tick(now)
+    assert roam.wanderer.moved_until is not None
+    roam.set_state("content", now)
+    assert roam.wanderer.move == "bat"
+
+
+def test_a_napping_cat_keeps_the_event_and_a_woken_one_plays_it():
+    roam = _bars(d=Drives(trip=0.0, nap=1.0, bat=1.0, pace=0.5))
+    now = _nap(roam)
+    w = roam.wanderer
+    roam.set_bar_events((1, 0), now)
+    assert w.nap_until is not None and w.move is None and w.moved_until is not None
+    roam.set_state("content", now + 1_000)
+    assert w.move is None
+    while w.nap_until is not None:
+        now = roam.next_due()
+        roam.tick(now)
+    roam.set_state("content", now)
+    assert w.move == "bat"
+
+
+def test_a_bat_waits_out_its_cooldown_and_the_event_stays_pending():
+    roam = _bars()
+    roam.set_bar_events((1, 0), 1_000)
+    _run(roam, 20_000, now=1_000)
+    roam.set_bar_events((2, 0), 21_000)
+    assert roam.wanderer.move is None and roam.wanderer.moved_until is not None
+    roam.set_state("content", 1_000 + BAT_COOLDOWN_MS - 1)
+    assert roam.wanderer.move is None
+    roam.set_state("content", 1_000 + BAT_COOLDOWN_MS)
+    assert roam.wanderer.move == "bat"
+
+
+def test_a_failed_chance_spends_the_event_and_starts_no_cooldown():
+    rng = _Rng([0.9, 0.1])
+    roam = _bars(d=replace(QUIET, bat=0.5), rng=rng)
+    roam.set_bar_events((1, 0), 1_000)
+    assert roam.wanderer.move is None and roam.wanderer.moved_until is None
+    assert roam.wanderer.last_bat is None
+    roam.set_bar_events((2, 0), 2_000)
+    assert roam.wanderer.move == "bat" and roam.wanderer.last_bat == 2_000
+
+
+def test_a_certain_chance_draws_nothing_and_a_zero_one_leaves_the_event_pending():
+    rng = _Rng()
+    roam = _bars(rng=rng)
+    roam.set_bar_events((1, 0), 1_000)
+    assert roam.wanderer.move == "bat" and rng.draws == 0
+    roam = _bars(d=replace(QUIET, bat=0.0, pounce=0.0), rng=_Rng())
+    roam.set_bar_events((1, 1), 1_000)
+    roam.set_state("content", 5_000)
+    w = roam.wanderer
+    assert w.move is None and w.moved_until and w.reset_until and w.rng.draws == 0
+    roam.set_drives(QUIET, 6_000)
+    roam.set_state("content", 7_000)
+    assert w.move == "pounce"
+
+
+def test_a_pounce_wins_over_a_bat_which_waits_for_the_next_calm_moment():
+    roam = _bars()
+    roam.set_bar_events((1, 1), 1_000)
+    w = roam.wanderer
+    assert w.move == "pounce" and w.reset_until is None and w.moved_until is not None
+    assert w.last_bat is None
+    _run(roam, 20_000, now=1_000)
+    roam.set_state("content", 20_500)
+    assert w.move == "bat"
+
+
+def test_a_pounce_has_no_cooldown_and_a_failed_chance_spends_it():
+    roam = _bars(d=replace(QUIET, pounce=0.5), rng=_Rng([0.9]))
+    roam.set_bar_events((0, 1), 1_000)
+    assert roam.wanderer.move is None and roam.wanderer.reset_until is None
+
+
+@pytest.mark.parametrize("state, expected", [
+    ("content", ["sit_up", "bat_down", "lie_down"]),
+    ("interested", ["bat_down"]),
+])
+def test_a_bat_on_the_top_edge_reaches_down_and_the_loaf_comes_back(state, expected):
+    roam = _bars("on_top", state, rng=_Rng([0.0]))      # 0.0: the plain bat_down
+    roam.set_bar_events((1, 0), 1_000)
+    assert _moves(_run(roam, 30_000, now=1_000)) == expected
+    assert roam.pose == home_pose("on_top")
+
+
+@pytest.mark.parametrize("state, expected", [
+    ("content", ["sit_up", "bat_down_roll"]),          # the roll ends in the loaf
+    ("interested", ["bat_down_roll", "sit_up"]),       # a sitting cat sits up after
+])
+def test_a_bat_that_rolls_ends_lying_down_and_a_sitting_state_sits_up(state, expected):
+    roam = _bars("on_top", state, rng=_Rng([0.99]))
+    roam.set_bar_events((1, 0), 1_000)
+    assert _moves(_run(roam, 30_000, now=1_000)) == expected
+
+
+def test_a_cat_that_cannot_roam_still_bats_at_home():
+    roam = _bars(roams=False)
+    roam.set_bar_events((1, 0), 1_000)
+    assert roam.wanderer.move == "bat"
+
+
+def test_a_change_of_home_carries_the_pending_events_and_the_cooldown():
+    roam = _bars()
+    roam.set_bar_events((1, 0), 1_000)
+    _run(roam, 20_000, now=1_000)
+    roam.set_state("working", 20_100)
+    roam.set_bar_events((2, 1), 21_000)
+    before = roam.wanderer
+    roam.set_home("inside_right", True, 22_000)
+    w = roam.wanderer
+    assert w is not before
+    assert (w.bar_seen, w.last_bat) == ([2, 1], 1_000)
+    assert (w.moved_until, w.reset_until) == (before.moved_until, before.reset_until)
+    assert w.drives == QUIET
+    roam.set_bar_events((2, 1), 23_000)
+    assert w.moved_until == before.moved_until
+
+
+# -- watching the bar
+
+FILL = 142.0   # the head over a stop, not between two
+
+
+def _stop_for(fill, home="inside"):
+    x0 = home_pose(home).x
+    head = PERCH_HEAD_PX if not home_pose(home).mirrored else theme.SPRITE_W - PERCH_HEAD_PX
+    return min(stops_from(x0), key=lambda x: abs(x - (fill - head)))
+
+
+def _watcher(home="inside", fill=FILL, d=QUIET, state="content", rng=None, roams=True):
+    roam = _bars(home, state, d, rng, roams)
+    roam.set_watch(fill, 0)
+    return roam
+
+
+def _alert(roam, now=0):
+    roam.set_state("alert", now)
+    return roam.wanderer
+
+
+def test_the_head_constant_is_the_middle_of_the_perch_heads_pixels():
+    grid = sprites.get_frames("alert@on_top")[0]
+    head = grid[:13]                                    # the rows above the body
+    cols = [c for row in head for c, ch in enumerate(row) if ch != "." and c < 22]
+    # the bang beside the head is ignored; what is left is the head's span
+    assert (min(cols) + max(cols) + 1) / 2 * sprites.SCALE == PERCH_HEAD_PX
+    assert any(row[PERCH_HEAD_PX // sprites.SCALE] != "." for row in head[2:])
+    assert len(grid[0]) * sprites.SCALE == theme.SPRITE_W
+
+
+def test_an_alert_settles_before_the_cat_decides_and_a_render_does_not_restart_the_wait():
+    roam = _watcher()
+    w = _alert(roam, 100)
+    assert w.due == 100 + WATCH_SETTLE_MS and not w.away
+    for t in range(600, 20_000, 500):
+        roam.set_state("alert", t)
+    assert w.due == 100 + WATCH_SETTLE_MS and w.rest_until == w.due
+    assert roam.next_due() <= w.due
+
+
+def test_any_other_state_cancels_the_settle():
+    roam = _watcher()
+    w = _alert(roam)
+    roam.set_state("content", 5_000)
+    assert w.rest_until != WATCH_SETTLE_MS and w.watch_drawn is False
+    assert w.rest_until >= 5_000 + HOME_WAIT_MS[0]
+
+
+def test_after_the_settle_the_cat_goes_to_the_stop_over_the_fill_end_and_sits_there():
+    roam = _watcher()
+    w = _alert(roam)
+    shown = _run(roam, WATCH_SETTLE_MS + 60_000, now=0)
+    moves = _moves(shown)
+    assert moves[0] == "jump_up" and "walk_start" in moves and moves[-1] == "walk_stop"
+    target = _stop_for(FILL)
+    assert roam.pose == Pose("on_top", target, False)
+    assert roam.player.target == "alert@on_top" and w.move is None and w.due is None
+    assert w.watching and w.at_stop and w.stops == [target, w.home.x]
+    # it stays for as long as the alert lasts, however it is re-rendered
+    for t in range(100_000, 130_000, 500):
+        roam.set_state("alert", t)
+        roam.set_watch(FILL, t)
+    assert roam.pose.x == target and w.move is None and roam.next_due() is not None
+
+
+def test_the_cat_arrives_facing_the_way_it_does_at_home():
+    roam = _watcher("inside_right", fill=40.0)
+    _alert(roam)
+    _run(roam, WATCH_SETTLE_MS + 60_000)
+    assert roam.pose.spot == "on_top" and roam.pose.mirrored is True
+    assert roam.pose.x == _stop_for(40.0, "inside_right")
+
+
+def test_a_watch_stop_over_home_is_just_the_jump_up():
+    x0 = home_pose("inside").x
+    roam = _watcher(fill=x0 + PERCH_HEAD_PX)
+    _alert(roam)
+    moves = _moves(_run(roam, WATCH_SETTLE_MS + 30_000))
+    assert moves == ["jump_up"]
+    assert roam.pose == Pose("on_top", x0, False) and roam.player.target == "alert@on_top"
+
+
+def test_a_cat_whose_home_is_on_the_edge_only_walks():
+    roam = _watcher("on_top", fill=FILL)
+    _alert(roam)
+    moves = _moves(_run(roam, WATCH_SETTLE_MS + 60_000))
+    assert "jump_up" not in moves and moves[0] == "walk_start"
+    assert roam.pose.x == _stop_for(FILL, "on_top") and roam.player.target == "alert@on_top"
+
+
+def test_a_cat_on_the_edge_at_the_fill_end_does_not_move():
+    x0 = home_pose("on_top").x
+    roam = _watcher("on_top", fill=x0 + PERCH_HEAD_PX)
+    _alert(roam)
+    assert _moves(_run(roam, WATCH_SETTLE_MS + 30_000)) == []
+    assert roam.pose == home_pose("on_top") and roam.player.target == "alert@on_top"
+
+
+def test_a_failed_chance_leaves_the_cat_home_for_the_whole_alert():
+    rng = _Rng([0.9])
+    roam = _watcher(d=replace(QUIET, watch=0.5), rng=rng)
+    w = _alert(roam)
+    assert _moves(_run(roam, WATCH_SETTLE_MS + 5 * HOUR // 10)) == []
+    assert roam.pose == home_pose("inside") and w.watch_drawn and w.due is None
+    roam.set_state("alert", 10 * HOUR)
+    roam.set_watch(FILL, 10 * HOUR)
+    assert w.due is None and rng.draws == 1
+    # the next alert gets a new draw
+    roam.set_state("content", 11 * HOUR)
+    roam.set_state("alert", 11 * HOUR + 1)
+    assert w.due == 11 * HOUR + 1 + WATCH_SETTLE_MS
+
+
+@pytest.mark.parametrize("what", ["no roaming", "no drive", "no bar"])
+def test_without_a_way_to_watch_alert_stays_at_home_as_before(what):
+    roam = _watcher(roams=what != "no roaming", d=QUIET if what != "no drive" else Drives(),
+                    fill=None if what == "no bar" else FILL)
+    w = _alert(roam)
+    assert w.due is None and w.rest_until is None
+    assert _moves(_run(roam, HOUR)) == []
+    assert roam.pose == home_pose("inside")
+
+
+def test_a_bar_that_goes_off_show_during_the_settle_cancels_it():
+    roam = _watcher()
+    w = _alert(roam)
+    roam.set_watch(None, 5_000)
+    assert w.due is None
+    roam.set_watch(FILL, 8_000)
+    assert w.due == 8_000 + WATCH_SETTLE_MS
+
+
+def _on_watch(home="inside", fill=FILL, state="alert"):
+    roam = _watcher(home, fill)
+    _alert(roam)
+    _run(roam, WATCH_SETTLE_MS + 60_000)
+    assert roam.wanderer.watching and roam.wanderer.at_stop
+    return roam
+
+
+def test_a_moving_fill_end_sends_a_resting_cat_to_the_new_stop_and_a_small_move_does_not():
+    roam = _on_watch()
+    start = roam.pose.x
+    now = WATCH_SETTLE_MS + 60_000
+    roam.set_watch(FILL + 1.0, now)                       # the same stop
+    assert roam.wanderer.move is None and roam.pose.x == start
+    new = 300.0
+    roam.set_watch(new, now)
+    assert roam.wanderer.move is not None
+    _run(roam, now + 60_000, now=now)
+    assert roam.pose.x == _stop_for(new) != start and roam.wanderer.at_stop
+    assert roam.player.target == "alert@on_top"
+    # and back, the other way
+    roam.set_watch(20.0, now + 60_000)
+    _run(roam, now + 120_000, now=now + 60_000)
+    assert roam.pose.x == _stop_for(20.0)
+
+
+def test_a_fill_end_that_leaves_the_view_keeps_the_cat_where_it_is():
+    roam = _on_watch()
+    x = roam.pose.x
+    roam.set_watch(None, 100_000)
+    assert roam.pose.x == x and roam.wanderer.move is None and roam.wanderer.watching
+
+
+def _trip_to_a_walk(heading_right):
+    """A content cat out on the edge, mid-walk in the wanted direction."""
+    for seed in range(40):
+        roam = _driven(seed=seed, d=replace(BARS, trip=1.0))
+        roam.set_watch(FILL, 0)
+        now = roam.next_due()
+        while True:
+            roam.tick(now)
+            w = roam.wanderer
+            if w.move == "walk" and w.pose.mirrored != heading_right and 60 < w.pose.x < 300:
+                return roam, now
+            if not w.away and now > 3 * HOUR:
+                break
+            now = roam.next_due()
+    raise AssertionError("no such walk")
+
+
+@pytest.mark.parametrize("heading_right", [True, False])
+def test_an_alert_mid_walk_turns_a_cat_that_is_heading_the_wrong_way(heading_right):
+    roam, now = _trip_to_a_walk(heading_right)
+    x = roam.pose.x
+    # a bar end behind the cat
+    fill = 10.0 if heading_right else 400.0
+    roam.set_watch(fill, now)
+    w = _alert(roam, now)
+    assert w.watching and w.stops[0] == _stop_for(fill) and w.move == "walk"
+    shown = _run(roam, now + 120_000, now=now)
+    moves = _moves(shown)
+    assert moves[0] == "walk" and moves[1:3] == ["walk_stop", "walk_start"]
+    assert roam.pose.x == _stop_for(fill) and roam.player.target == "alert@on_top"
+    assert (_stop_for(fill) < x) == heading_right   # it was walking away from it
+    assert roam.pose.mirrored is False
+
+
+def test_an_alert_mid_trip_draws_at_once_and_a_failed_chance_sends_the_cat_home():
+    roam, now = _trip_to_a_walk(True)
+    roam.wanderer.rng = _Rng([0.9])
+    roam.set_drives(replace(BARS, trip=1.0, watch=0.5), now)
+    w = _alert(roam, now)
+    assert w.watch_drawn and not w.watching
+    assert not w.away and roam.pose == home_pose("inside")
+
+
+def test_an_alert_to_a_cat_loafing_at_a_stop_sits_it_up_and_sends_it():
+    for seed in range(40):
+        roam = _driven(seed=seed, d=replace(BARS, trip=1.0))
+        roam.set_watch(FILL, 0)
+        now = roam.next_due()
+        while True:
+            roam.tick(now)
+            w = roam.wanderer
+            if w.at_stop and w.lying and w.move is None:
+                break
+            now = roam.next_due()
+            if now > 3 * HOUR:
+                break
+        else:
+            continue
+        if not (w.at_stop and w.lying):
+            continue
+        _alert(roam, now)
+        assert w.watching and w.move == "sit_up"
+        _run(roam, now + 120_000, now=now)
+        assert roam.pose.x == _stop_for(FILL) and roam.player.target == "alert@on_top"
+        return
+    raise AssertionError("no loafing stop found")
+
+
+def test_an_alert_while_the_cat_is_jumping_down_goes_home_as_before():
+    roam = _bars(d=replace(BARS, trip=1.0))
+    roam.set_watch(FILL, 0)
+    now = roam.next_due()
+    while roam.wanderer.move != "jump_down":
+        roam.tick(now)
+        now = roam.next_due()
+    w = _alert(roam, now)
+    assert not w.watching and not w.away and roam.pose == home_pose("inside")
+
+
+@pytest.mark.parametrize("calm", ["content", "interested"])
+def test_a_calm_state_ends_the_watch_with_a_stop_rest_and_a_walk_home(calm):
+    roam = _on_watch()
+    now = WATCH_SETTLE_MS + 60_000
+    roam.set_state(calm, now)
+    w = roam.wanderer
+    assert not w.watching and w.watch_drawn is False
+    if calm == "interested":
+        assert STOP_REST_MS[0] <= w.rest_until - now <= STOP_REST_MS[1]
+    moves = _moves(_run(roam, now + HOUR, now=now))
+    assert moves[-1] == "jump_down" and "walk_start" in moves
+    assert roam.pose == home_pose("inside") and not w.away
+
+
+def test_sleeping_ends_the_watch_where_the_cat_sits_and_it_lies_down_there():
+    roam = _on_watch()
+    now = WATCH_SETTLE_MS + 60_000
+    x = roam.pose.x
+    roam.set_state("sleeping", now)
+    moves = _moves(_run(roam, now + HOUR, now=now))
+    assert moves == ["lie_down"] and roam.pose.x == x and roam.pose.spot == "on_top"
+    assert roam.player.target == "sleeping@on_top"
+
+
+@pytest.mark.parametrize("state", ["panicked", "tired", "working", "permission"])
+def test_any_other_state_snaps_the_cat_home(state):
+    roam = _on_watch()
+    roam.set_state(state, WATCH_SETTLE_MS + 70_000)
+    w = roam.wanderer
+    assert roam.pose == home_pose("inside") and not w.away and not w.watching
+    assert w.move is None and w.due is None
+
+
+def test_a_change_of_home_while_watching_plans_again_from_the_alert():
+    roam = _on_watch()
+    now = WATCH_SETTLE_MS + 70_000
+    roam.set_home("inside_right", True, now)
+    w = roam.wanderer
+    assert not w.watching and not w.away and w.state == "alert" and w.due is None
+    roam.set_watch(FILL, now + 500)
+    assert w.due == now + 500 + WATCH_SETTLE_MS
+    _run(roam, now + WATCH_SETTLE_MS + 60_000, now=now)
+    assert roam.pose.spot == "on_top" and roam.pose.mirrored is True
+    assert roam.pose.x == _stop_for(FILL, "inside_right")
+
+
+def test_the_default_drives_leave_an_alert_exactly_where_it_was():
+    assert Drives().watch == 0.0
+    roam = _driven(state="alert", d=Drives())
+    roam.set_watch(FILL, 0)
+    assert roam.wanderer.due is None
+    assert _moves(_run(roam, HOUR)) == []

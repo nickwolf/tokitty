@@ -9,7 +9,7 @@ import pytest
 from tokitty.accounts import Account
 from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
-from tokitty.api import UsageSnapshot
+from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.behaviour import drives
 from tokitty.app_core import PaneUpdate, _limits_hover_for, build_units, make_onboarder, step_unit
 from tokitty.burn import PACE_CAPS, PACE_UNKNOWN, PACE_WONT_CAP, BurnTracker, Pace
@@ -145,6 +145,7 @@ def test_step_unit_limits_ok(events):
         "tool_label": "",
         "accent": False,
         "drives": drives(None),
+        "bar_events": (0, 0),
     })
     assert [e[0] for e in events] == ["onboard", "note_write"]
     assert events[0][1:] == (poll, None)
@@ -207,6 +208,7 @@ def test_step_unit_stale_token_without_history(events):
         "tool_label": "",
         "accent": False,
         "drives": drives(None),
+        "bar_events": (0, 0),
     })
     assert unit["last_good"] is None
     assert unit["burn"].samples == []
@@ -496,7 +498,7 @@ def test_step_unit_without_wander_never_plays(events, view):
     unit = _unit(poll=_poll(snapshot=_snapshot()), breakdown=_breakdown())
     update = _step(unit, events, usage_state=_usage_state(view=view), time_of_day=True,
                    tz=_MEXICO, wander=False)
-    assert update.kwargs["drives"] == replace(drives(3), play=0.0)
+    assert update.kwargs["drives"] == replace(drives(3), play=0.0, bat=0.0, pounce=0.0)
 
 
 def test_step_unit_drives_follow_the_stores_personality(events):
@@ -513,6 +515,116 @@ def test_step_unit_drives_follow_the_stores_personality(events):
     unit = _unit(poll=_poll(snapshot=_snapshot()))
     assert _step(unit, events, time_of_day=True, tz=timezone.utc).kwargs["drives"] == drives(NOW.hour)
 
+
+# ---- the cat's own bars (#135) ---------------------------------------------------
+
+def _bars(unit, events, session, resets=RESETS, *, capped=False, view="limits", status="ok", **extra):
+    """Step `unit` against a poll showing `session` percent, and return its bar_events."""
+    limits = [LimitInfo(kind="session", percent=100.0, severity="exceeded", resets_at=resets,
+                        is_active=True)] if capped else []
+    snapshot = UsageSnapshot(session_pct=session, session_resets_at=resets, weekly_pct=20.0,
+                             weekly_resets_at=WEEKLY_RESETS, limits=limits, fetched_at=NOW)
+    unit["poller"] = _Worker(_poll(status=status, snapshot=snapshot))
+    update = _step(unit, events, usage_state=_usage_state(view=view), **extra)
+    return update.kwargs.get("bar_events"), unit["bars_seen"]
+
+
+def test_the_first_fresh_poll_only_records(events):
+    unit = _unit()
+    assert _bars(unit, events, 40.0)[0] == (0, 0)
+    assert unit["bars_seen"]["pct"] == 40
+
+
+def test_a_session_percent_going_up_is_a_move(events):
+    unit = _unit()
+    _bars(unit, events, 40.0)
+    assert _bars(unit, events, 41.0)[0] == (1, 0)
+    # the same poll on the next tick, and a fall, are not
+    assert _bars(unit, events, 41.0)[0] == (1, 0)
+    assert _bars(unit, events, 39.0)[0] == (1, 0)
+    assert _bars(unit, events, 42.0)[0] == (2, 0)
+
+
+def test_a_move_is_a_change_of_the_whole_percent_as_the_card_shows_it(events):
+    unit = _unit()
+    _bars(unit, events, 40.2)
+    assert _bars(unit, events, 40.4)[0] == (0, 0)           # both read 40
+    assert _bars(unit, events, 40.6)[0] == (1, 0)           # reads 41
+    assert _bars(unit, events, 41.4)[0] == (1, 0)           # still 41
+
+
+def test_a_weekly_only_move_is_ignored(events):
+    unit = _unit(poll=_poll(snapshot=_snapshot(session_pct=40.0, weekly_pct=20.0)))
+    assert _step(unit, events).kwargs["bar_events"] == (0, 0)
+    unit["poller"] = _Worker(_poll(snapshot=_snapshot(session_pct=40.0, weekly_pct=30.0)))
+    assert _step(unit, events).kwargs["bar_events"] == (0, 0)
+
+
+def test_a_stale_or_failed_poll_is_not_looked_at(events):
+    unit = _unit()
+    _bars(unit, events, 40.0)
+    _bars(unit, events, 60.0, status="stale_token")
+    assert unit["bars_seen"]["pct"] == 40
+    assert _bars(unit, events, 40.0, status="api_error")[0] == (0, 0)
+
+
+def test_the_models_view_keeps_the_baseline_and_emits_nothing(events):
+    unit = _unit(breakdown=_breakdown())
+    _bars(unit, events, 40.0)
+    update_args, seen = _bars(unit, events, 50.0, view="models")
+    assert update_args is None and seen["pct"] == 50
+    # back in the limits view that earlier tick-up does not fire
+    assert _bars(unit, events, 50.0)[0] == (0, 0)
+    assert _bars(unit, events, 51.0)[0] == (1, 0)
+
+
+LATER = RESETS + timedelta(hours=5)
+
+
+def test_a_rolled_over_window_with_a_drop_is_a_reset_not_a_move(events):
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
+
+
+def test_a_reset_needs_the_window_more_than_an_hour_on_and_a_drop(events):
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    assert _bars(unit, events, 3.0, RESETS + timedelta(hours=1))[0] == (0, 0)   # exactly an hour
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    assert _bars(unit, events, 90.0, LATER)[0] == (1, 0)                         # up, not a reset
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    assert _bars(unit, events, 3.0, RESETS)[0] == (0, 0)                         # same window
+
+
+def test_a_window_that_capped_does_not_pound_the_reset(events):
+    unit = _unit()
+    _bars(unit, events, 100.0, capped=True)
+    assert _bars(unit, events, 2.0, LATER)[0] == (0, 0)
+    assert unit["bars_seen"]["capped"] is False
+    # an uncapped window after it can reset again
+    assert _bars(unit, events, 1.0, LATER + timedelta(hours=5))[0] == (0, 1)
+
+
+def test_a_reset_compares_with_the_last_resets_at_that_was_known(events):
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    _bars(unit, events, 80.0, None)
+    assert unit["bars_seen"]["resets_at"] == RESETS
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
+
+
+
+def test_a_drop_seen_while_resets_at_was_missing_still_counts(events):
+    # an idle window can poll back at 0% with no resets_at; the reset shows
+    # once the next window has one
+    unit = _unit()
+    _bars(unit, events, 80.0)
+    assert _bars(unit, events, 0.0, None)[0] == (0, 0)
+    assert _bars(unit, events, 1.0, LATER)[0] == (0, 1)
 
 # ---- limits hover ------------------------------------------------------------
 
