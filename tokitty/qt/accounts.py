@@ -292,8 +292,13 @@ class AccountsManager(QWidget):
         if entry is not None:
             entry.setFocus()
 
-    def _on_close(self) -> None:
-        self.close()
+    def keyPressEvent(self, event) -> None:
+        # Escape goes through close() like the Close button and the title
+        # bar, so closeEvent runs _release and the closed callbacks fire.
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:
         self._release()
@@ -338,6 +343,9 @@ class AccountsManager(QWidget):
         # Add is hidden on the virtual-row path (see _refresh_rows): there is
         # nothing to add to on macOS when the only account is the Keychain.
         self._build_harness_picker()
+        column.addSpacing(14)
+        self.close_button = kit.button("Close", "secondary", self.close, compact=True)
+        column.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignRight)
         self._refresh_rows()
 
     def _build_harness_picker(self) -> None:

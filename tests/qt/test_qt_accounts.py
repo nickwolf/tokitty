@@ -248,6 +248,37 @@ def test_closing_fires_the_closed_callbacks_once_and_forgets_the_window(make_wor
     assert open_manager(world) is not manager
 
 
+def test_the_close_button_sits_below_the_restart_notice_and_closes_once(
+        make_world, retries, dialogs):
+    world = make_world(1)
+    manager = open_manager(world)
+    fired = []
+    manager.closed.append(lambda: fired.append(1))
+    assert buttons(manager, "Close") == [manager.close_button]
+    column = manager.layout()
+    assert column.indexOf(manager.close_button) == column.count() - 1
+    assert column.indexOf(manager.restart_notice) < column.indexOf(manager.close_button)
+    manager.close_button.click()
+    assert not manager.isVisible() and fired == [1]
+    assert qa.current() is None and manager not in world.host._windows
+    manager.close()
+    assert fired == [1]
+
+
+def test_escape_closes_once_through_the_same_path(make_world, retries, dialogs):
+    from PySide6.QtTest import QTest
+
+    world = make_world(1)
+    manager = open_manager(world)
+    fired = []
+    manager.closed.append(lambda: fired.append(1))
+    QTest.keyClick(manager, Qt.Key.Key_Escape)
+    assert not manager.isVisible() and fired == [1]
+    assert qa.current() is None and manager not in world.host._windows
+    manager.close()
+    assert fired == [1]
+
+
 # ---- rename and remove ---------------------------------------------------------
 
 def test_rename_goes_through_the_dialog_and_saves_the_label(make_world, retries, dialogs):
