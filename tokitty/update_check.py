@@ -12,7 +12,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from tokitty.updater import (
     Release,
@@ -23,7 +23,7 @@ from tokitty.updater import (
     load_update_state,
     mutate_update_state,
     platform_target,
-    select_latest,
+    select_releases,
 )
 
 FIRST_CHECK_DELAY = timedelta(seconds=60)
@@ -35,12 +35,14 @@ RETRY_INTERVAL = timedelta(hours=1)
 @dataclass(frozen=True)
 class CheckResult:
     """`release` is the newest stable release (None if there is none) and
-    `newer` whether it is ahead of the running version. `error` is set, and
-    nothing else, when the check failed."""
+    `newer` whether it is ahead of the running version. `history` is every
+    stable release, highest version first, so `release` is its first entry.
+    `error` is set, and nothing else, when the check failed."""
 
     release: Optional[Release] = None
     newer: bool = False
     error: Optional[str] = None
+    history: Tuple[Release, ...] = ()
 
 
 def _utcnow() -> datetime:
@@ -73,6 +75,7 @@ class UpdateChecker:
         self._result: Optional[CheckResult] = None
         # Read by the tray's thread for the menu label, so plain state.
         self._latest: Optional[Release] = None
+        self._history: Optional[Tuple[Release, ...]] = None
         self._available_tag: Optional[str] = None
         # GUI thread only.
         self._waiters: List[Callable[[CheckResult], None]] = []
@@ -102,6 +105,18 @@ class UpdateChecker:
         """The newest release the last successful check found, or None."""
         with self._lock:
             return self._latest
+
+    @property
+    def release_history(self) -> Optional[Tuple[Release, ...]]:
+        """Every stable release the last successful check found, highest
+        version first, or None before a check has succeeded."""
+        with self._lock:
+            return self._history
+
+    @property
+    def enabled(self) -> bool:
+        """Whether the daily check is switched on."""
+        return bool(self._enabled())
 
     @property
     def update_available(self) -> bool:
@@ -143,8 +158,10 @@ class UpdateChecker:
 
     def _worker(self) -> None:
         try:
-            release = select_latest(self._fetch(), self._target)
-            result = CheckResult(release, release is not None and is_newer(release.tag, self._running.version))
+            history = tuple(select_releases(self._fetch(), self._target))
+            release = history[0] if history else None
+            newer = release is not None and is_newer(release.tag, self._running.version)
+            result = CheckResult(release, newer, history=history)
         except UpdateCheckError as exc:
             result = CheckResult(error=str(exc))
         except Exception as exc:
@@ -173,6 +190,7 @@ class UpdateChecker:
             release = result.release if result.newer else None
             with self._lock:
                 self._latest = result.release
+                self._history = result.history
                 self._available_tag = release.tag if release else None
             if release is not None and release.tag != self._announced:
                 self._announced = release.tag

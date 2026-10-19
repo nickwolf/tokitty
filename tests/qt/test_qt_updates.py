@@ -31,13 +31,18 @@ class FakeChecker:
     instances = []
 
     def __init__(self, state_dir, running, *, enabled, on_available):
-        self.enabled, self.on_available = enabled, on_available
+        self.enabled_fn, self.on_available = enabled, on_available
         self.label = None
         self.latest_release = None
+        self.release_history = None
         self.update_available = False
         self.ticks = 0
         self.waiters = []
         FakeChecker.instances.append(self)
+
+    @property
+    def enabled(self):
+        return self.enabled_fn()
 
     def menu_label(self):
         return self.label
@@ -195,7 +200,7 @@ def test_the_updates_tab_has_the_rows_and_the_toggle_writes_settings(
         seen["before"] = load_settings(state_dir).update_check
         updates.update_toggle._clicked()
         seen["after"] = load_settings(state_dir).update_check
-        seen["shadow"] = fakes.checker().enabled()
+        seen["shadow"] = fakes.checker().enabled_fn()
         window.close()
         QTimer.singleShot(0, qapp.quit)
 

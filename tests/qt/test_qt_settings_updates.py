@@ -7,17 +7,24 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QCloseEvent
 
 from tokitty.qt import settings as qs
+from tokitty.qt import settings_updates as qsu
 from tokitty.qt.settings import SettingsWindow
 from tokitty.update_check import CheckResult
 from tokitty.update_controller import UpdateResult
-from tokitty.update_flow import NO_NOTES, NOTES_CAP, SHORTENED, UpdateActions
+from tokitty.update_flow import MORE_ON_GITHUB, NO_NOTES, NOTES_CAP, RELEASES_URL, SHORTENED, UpdateActions
 from tokitty.updater import Release, RunningVersion
 
 pytestmark = pytest.mark.qt
 
 BODY = "## Fixed\n\n- the **thing**\n\n[docs](https://example.test/docs)"
 RELEASE = Release("v0.3.0", "https://example.test/notes", "https://example.test/a", 10,
-                  "https://example.test/s", body=BODY)
+                  "https://example.test/s", body=BODY, published="2026-10-19")
+HISTORY = (
+    Release("v0.4.0", "https://example.test/v0.4.0", None, None, None, body="- four", published="2026-10-20"),
+    RELEASE,
+    Release("v0.2.0", "https://example.test/v0.2.0", None, None, None, body="- two", published="2026-10-12"),
+    Release("v0.1.0", "https://example.test/v0.1.0", None, None, None, published="2026-10-01"),
+)
 
 
 class FakeController:
@@ -39,19 +46,22 @@ class FakeController:
 
 
 class FakeChecker:
-    def __init__(self, latest=None, available=False):
+    def __init__(self, latest=None, available=False, history=None):
         self.latest_release, self.update_available, self.waiting = latest, available, []
+        self.release_history, self.enabled = history, False
 
     def check_now(self, on_result):
         self.waiting.append(on_result)
 
 
 class Setup:
-    def __init__(self, world, release=RELEASE, controller=None, available=True):
+    def __init__(self, world, release=RELEASE, controller=None, available=True, history=None):
         self.world = world
         self.urls, self.offers = [], []
         self.controller = controller or FakeController()
-        self.checker = FakeChecker(release if available else None, available)
+        if history is None:
+            history = (release,) if available and release is not None else ()
+        self.checker = FakeChecker(release if available else None, available, history)
         self.actions = UpdateActions(
             self.checker, self.controller,
             defer=lambda fn: fn(), error=lambda *a: None, info=lambda *a: None,
@@ -99,7 +109,7 @@ def test_an_available_release_shows_headline_rendered_notes_and_install(setup):
     assert "Fixed" in plain and "the thing" in plain and "**" not in plain
     assert "View on GitHub" in plain
     assert tab.button_labels() == ["Install"]
-    assert tab.notes.toMarkdown().rstrip().endswith("[View on GitHub](https://example.test/notes)")
+    assert "[View on GitHub](https://example.test/notes)" in tab.notes.toMarkdown()
 
 
 def test_links_in_the_notes_open_through_open_url(setup):
@@ -121,6 +131,80 @@ def test_a_long_body_is_truncated_with_a_notice(setup):
     _, tab = setup(release=Release("v0.3.0", "https://example.test/notes", None, None, None, body=body)).tab()
     plain = tab.notes.toPlainText()
     assert len(plain) < NOTES_CAP + 500 and SHORTENED in plain
+
+
+def blocks(tab):
+    block, found = tab.notes.document().begin(), []
+    while block.isValid():
+        found.append(block)
+        block = block.next()
+    return found
+
+
+def headings(tab):
+    """The release heading lines: the blocks that open in the tag's size."""
+    return [b.text() for b in blocks(tab) if b.begin().fragment().charFormat().fontPointSize() == qsu.TAG_POINT_SIZE]
+
+
+def test_the_history_lists_each_release_under_its_heading_newest_first(setup):
+    _, tab = setup(release=HISTORY[0], history=HISTORY).tab()
+    assert headings(tab) == [
+        "v0.4.0   New   2026-10-20",
+        "v0.3.0   New   2026-10-19",
+        "v0.2.0   Installed   2026-10-12",
+        "v0.1.0  2026-10-01",
+    ]
+    markdown = tab.notes.toMarkdown()
+    for release in HISTORY:
+        assert f"[View on GitHub]({release.html_url})" in markdown
+    assert markdown.rstrip().endswith(f"[{MORE_ON_GITHUB}]({RELEASES_URL})")
+    assert NO_NOTES in tab.notes.toPlainText()
+    assert tab.button_labels() == ["Install"]
+
+
+def test_a_heading_in_a_release_body_stays_its_own_heading(setup):
+    _, tab = setup().tab()
+    fixed = [b for b in blocks(tab) if b.text() == "Fixed"]
+    assert len(fixed) == 1 and fixed[0].blockFormat().headingLevel() == 2
+    assert headings(tab)[0] == "v0.3.0   New   2026-10-19"
+
+
+def test_the_history_shows_while_up_to_date_with_no_install(setup):
+    made = setup(available=False, history=HISTORY[2:])
+    made.controller.running = RunningVersion("v0.2.0", True)
+    window, tab = made.tab()
+    assert tab.headline.text() == "Tokitty v0.2.0 is the latest version."
+    assert tab.notes.isVisibleTo(window) and not tab.row_holder.isVisibleTo(window)
+    assert headings(tab)[0] == "v0.2.0   Installed   2026-10-12"
+
+
+def test_the_more_link_opens_the_releases_page(setup):
+    made = setup(history=HISTORY)
+    _, tab = made.tab()
+    tab.notes.anchorClicked.emit(QUrl(RELEASES_URL))
+    assert made.urls == [RELEASES_URL]
+
+
+def test_a_refresh_with_the_same_history_keeps_the_scroll_position(setup):
+    made = setup(release=HISTORY[0], history=HISTORY * 5)
+    window, tab = made.tab()
+    window.resize(600, 400)
+    bar = tab.notes.verticalScrollBar()
+    assert bar.value() == 0 and bar.maximum() > 0
+    bar.setValue(bar.maximum())
+    tab.refresh()
+    assert bar.value() == bar.maximum()
+
+
+def test_a_quiet_check_fills_the_history_when_the_tab_opens(setup):
+    made = setup(available=False, history=None)
+    made.checker.release_history, made.checker.enabled = None, True
+    window, tab = made.tab()
+    assert len(made.checker.waiting) == 1 and tab.headline.text() == "Checking…"
+    assert not tab.notes.isVisibleTo(window)
+    made.checker.release_history = HISTORY[2:]
+    made.checker.waiting[0](CheckResult(HISTORY[2], False, history=HISTORY[2:]))
+    assert tab.notes.isVisibleTo(window) and headings(tab)[0].startswith("v0.2.0")
 
 
 def test_up_to_date_checking_and_error_headlines(setup):

@@ -26,6 +26,7 @@ from tokitty.updater import (
     running_version,
     save_update_state,
     select_latest,
+    select_releases,
 )
 
 TARGET = "linux-x86_64"
@@ -204,6 +205,40 @@ def test_select_latest_none_when_nothing_qualifies():
     assert select_latest([], TARGET) is None
     assert select_latest({"message": "nope"}, TARGET) is None
     assert select_latest([_release("v1.0.0", draft=True)], TARGET) is None
+
+
+def test_select_releases_lists_every_stable_release_highest_first():
+    releases = [
+        _release("v0.9.9"),
+        _release("v1.0.0", draft=True),
+        _release("v0.10.0"),
+        _release("v0.10.1", prerelease=True),
+        _release("nightly"),
+        "not a release",
+        _release("v0.2.1"),
+    ]
+    assert [r.tag for r in select_releases(releases, TARGET)] == ["v0.10.0", "v0.9.9", "v0.2.1"]
+    assert select_releases(releases, TARGET)[0] == select_latest(releases, TARGET)
+
+
+def test_select_releases_reads_each_release_like_select_latest():
+    got = select_releases([_release("v0.3.0"), _release("v0.2.0", assets=False)], TARGET)
+    assert got[0].installable_from_app and got[1].asset_url is None
+
+
+def test_select_releases_empty_when_nothing_qualifies():
+    assert select_releases([], TARGET) == []
+    assert select_releases({"message": "nope"}, TARGET) == []
+
+
+def test_the_published_date_is_the_day_of_published_at():
+    def published(value):
+        return select_latest([{**_release("v0.3.0"), "published_at": value}], TARGET).published
+
+    assert published("2026-10-19T14:41:12Z") == "2026-10-19"
+    for bad in (None, 5, "", "yesterday", "2026-13-01T00:00:00Z"):
+        assert published(bad) is None
+    assert select_latest([_release("v0.3.0")], TARGET).published is None
 
 
 def test_is_newer():

@@ -1,5 +1,5 @@
-"""The Qt Settings window's Updates tab: the daily-check controls, the newest
-release's notes and the install progress (#155). The counterpart of
+"""The Qt Settings window's Updates tab: the daily-check controls, the recent
+releases' notes (#171) and the install progress (#155). The counterpart of
 settings_accounts.
 
 What to say and which buttons to offer is update_flow's (UpdateStatus and
@@ -11,17 +11,26 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QColor, QTextCursor
+from PySide6.QtGui import QColor, QFont, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QPushButton, QTextBrowser, QWidget
 
 from tokitty.app_version import version_text
 from tokitty.qt.kit import clear_layout, hbox, text, vbox
 from tokitty.qt.settings import _Tab, _hrow
-from tokitty.settings_style import BLUE, FG_COLOR, FONT_BODY, FONT_SMALL, LOG_BG, MUTED
-from tokitty.update_flow import Buttons, UpdateFlow, notes_markdown
+from tokitty.settings_style import (
+    _PILL_COLORS, BLUE, FG_COLOR, FONT_BODY, FONT_SMALL, LOG_BG, MUTED,
+)
+from tokitty.update_flow import (
+    INSTALLED, MORE_ON_GITHUB, NEW, RELEASES_URL, Buttons, HistoryEntry, UpdateFlow, notes_markdown,
+)
 from tokitty.updater import Release
 
 NOTES_MIN_HEIGHT = 160
+HEADING_GAP = 18
+# Above the Markdown import's h2, the largest heading GitHub's generated
+# release notes use, so those sit under the release's own heading.
+TAG_POINT_SIZE = 16
+BADGE_TONES = {NEW: "warn", INSTALLED: "good"}
 
 
 class _Renderer:
@@ -57,6 +66,55 @@ def _recolor_links(document) -> None:
         block = block.next()
 
 
+def _write_history(browser: QTextBrowser, entries: List[HistoryEntry]) -> None:
+    """Each release under a heading of its tag, badge and date, then its
+    notes, then the link to the rest."""
+    browser.clear()
+    document = browser.document()
+    cursor = QTextCursor(document)
+    for index, entry in enumerate(entries):
+        if index:
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+        heading = cursor.block().blockNumber()
+        # Inserted Markdown merges its first block into the cursor's, losing
+        # that block's format. So the first block is the tag line, a plain
+        # paragraph (a tag is only digits and dots), styled afterwards.
+        cursor.insertMarkdown(f"{entry.release.tag}\n\n{notes_markdown(entry.release)}")
+        _style_heading(document.findBlockByNumber(heading), entry, top=HEADING_GAP if index else 0)
+    if entries:
+        cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+        cursor.insertMarkdown(f"[{MORE_ON_GITHUB}]({RELEASES_URL})")
+    _recolor_links(document)
+    browser.moveCursor(QTextCursor.MoveOperation.Start)
+
+
+def _style_heading(block, entry: HistoryEntry, *, top: int) -> None:
+    cursor = QTextCursor(block)
+    spacing = block.blockFormat()
+    spacing.setTopMargin(top)
+    cursor.setBlockFormat(spacing)
+    cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+    tag = QTextCharFormat()
+    tag.setFontWeight(QFont.Weight.Bold)
+    tag.setFontPointSize(TAG_POINT_SIZE)
+    cursor.mergeCharFormat(tag)
+    cursor.clearSelection()
+    if entry.badge:
+        fg, bg = _PILL_COLORS[BADGE_TONES[entry.badge]]
+        badge = QTextCharFormat()
+        badge.setFontWeight(QFont.Weight.Bold)
+        badge.setFontPointSize(FONT_SMALL[1])
+        badge.setForeground(QColor(fg))
+        badge.setBackground(QColor(bg))
+        cursor.insertText("  ", QTextCharFormat())
+        cursor.insertText(f" {entry.badge} ", badge)
+    if entry.release.published:
+        date = QTextCharFormat()
+        date.setForeground(QColor(MUTED))
+        date.setFontPointSize(FONT_SMALL[1])
+        cursor.insertText(f"  {entry.release.published}", date)
+
+
 class UpdatesTab(_Tab):
     # The notes take whatever height the window has.
     fills = True
@@ -65,6 +123,7 @@ class UpdatesTab(_Tab):
         kit, host = self.kit, self.host
         self._flow: Optional[UpdateFlow] = None
         self._release: Optional[Release] = None
+        self._entries: List[HistoryEntry] = []
         kit.page_header(self.frame, "Updates", "Stay on the newest tokitty.")
         card = self.card()
         self.update_toggle = None
@@ -86,7 +145,7 @@ class UpdatesTab(_Tab):
 
         self.detail = QWidget()
         column = vbox(self.detail)
-        kit.section_header(self.frame, "Latest release", top=10)
+        kit.section_header(self.frame, "Release notes", top=10)
         kit.add(self.frame, self.detail, 1)
         self.headline = text("", font=FONT_BODY)
         self.headline.setWordWrap(True)
@@ -144,7 +203,15 @@ class UpdatesTab(_Tab):
             actions.ensure_release()
         status = actions.status()
         self.headline.setText(status.headline)
+        self._sync_notes(status.entries)
         self._sync_flow(status.release)
+
+    def _sync_notes(self, entries: List[HistoryEntry]) -> None:
+        self.notes.setVisible(bool(entries))
+        # Rewriting the same list would throw away the scroll position.
+        if entries != self._entries:
+            self._entries = entries
+            _write_history(self.notes, entries)
 
     def _sync_flow(self, release: Optional[Release]) -> None:
         flow = self._flow
@@ -152,13 +219,11 @@ class UpdatesTab(_Tab):
             return
         self._drop_flow()
         visible = release is not None
-        for widget in (self.notes, self.note, self.row_holder):
+        for widget in (self.note, self.row_holder):
             widget.setVisible(visible)
         if release is None:
             return
         self._release = release
-        self.notes.setMarkdown(notes_markdown(release))
-        _recolor_links(self.notes.document())
         self._flow = self.host.update_actions.new_flow(release, _Renderer(self))
 
     def _drop_flow(self) -> None:

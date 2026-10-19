@@ -192,6 +192,36 @@ def test_a_release_that_is_not_newer_shows_no_label_but_is_recorded(tmp_path):
     assert load_update_state(tmp_path).latest_tag == "v0.2.0"
 
 
+def test_a_check_keeps_every_stable_release_highest_first(tmp_path):
+    draft = {**listing("v0.4.0")[0], "draft": True}
+    checker, _, _ = make(tmp_path, fetch=lambda: listing("v0.2.0") + listing("v0.3.0") + [draft])
+    assert checker.release_history is None
+    results = []
+    checker.check_now(results.append)
+    settle(checker)
+    assert [r.tag for r in checker.release_history] == ["v0.3.0", "v0.2.0"]
+    assert results[0].history == checker.release_history and results[0].release is checker.release_history[0]
+
+
+def test_a_failed_check_keeps_the_history_it_had(tmp_path):
+    fetch = Fetch()
+    checker, _, _ = make(tmp_path, fetch=fetch)
+    checker.check_now(lambda _r: None)
+    settle(checker)
+    fetch.error = UpdateCheckError("offline")
+    checker.check_now(lambda _r: None)
+    settle(checker)
+    assert [r.tag for r in checker.release_history] == ["v0.3.0"]
+
+
+def test_enabled_reads_the_setting(tmp_path):
+    on = {"value": True}
+    checker, _, _ = make(tmp_path, enabled=lambda: on["value"])
+    assert checker.enabled is True
+    on["value"] = False
+    assert checker.enabled is False
+
+
 def test_a_newer_tag_from_an_earlier_run_shows_straight_away(tmp_path):
     save_update_state(tmp_path, UpdateState(last_checked=T0.isoformat(), latest_tag="v0.3.0"))
     checker, _, fetch = make(tmp_path)

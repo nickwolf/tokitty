@@ -2,7 +2,8 @@
 
 `UpdateFlow` is what the tab does with a release: which choices it gets, what
 each outcome shows, when the window may not close. `UpdateStatus` is what the
-tab says about the check. `UpdateActions` is what the "Update to vX.Y.Z…" and
+tab says about the check, and `history_entries` which release notes it lists
+(#171). `UpdateActions` is what the "Update to vX.Y.Z…" and
 "Check for updates" items do. The Qt renderer draws them and adds nothing, so
 the user-facing rules live once. The install itself is `UpdateController`'s.
 """
@@ -13,12 +14,18 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
 from tokitty.update_check import CheckResult
-from tokitty.updater import REPO, Release
+from tokitty.updater import REPO, Release, is_newer, parse_version
 
 RELEASES_URL = f"https://github.com/{REPO}/releases"
 NOTES_CAP = 20_000
 NO_NOTES = "No release notes for this release."
 SHORTENED = "The release notes were shortened."
+# How many releases the tab lists when few are newer. Ten covers the 11 days
+# from v0.3.0 to v0.8.0 and keeps the list a short scroll.
+HISTORY_MIN = 10
+NEW = "New"
+INSTALLED = "Installed"
+MORE_ON_GITHUB = "More on GitHub"
 
 Buttons = List[Tuple[str, Callable[[], None]]]
 
@@ -39,17 +46,53 @@ def notes_markdown(release: Release) -> str:
     return f"{body}\n\n{link}"
 
 
+def release_badge(release: Release, running: str) -> Optional[str]:
+    """NEW for a release ahead of the running version, INSTALLED for the
+    running one, and None for older ones or a running version that isn't a
+    release tag."""
+    if is_newer(release.tag, running):
+        return NEW
+    version = parse_version(release.tag)
+    if version is not None and version == parse_version(running):
+        return INSTALLED
+    return None
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    release: Release
+    badge: Optional[str]
+
+
+def history_entries(history, running: str) -> List[HistoryEntry]:
+    """The releases the tab lists, highest version first: HISTORY_MIN of them,
+    or more when more are ahead of the running version, so the notes of every
+    release an install skips are there along with the running one's."""
+    count = HISTORY_MIN
+    for index, release in enumerate(history):
+        if not is_newer(release.tag, running):
+            break
+        count = max(count, index + 2)
+    return [HistoryEntry(release, release_badge(release, running)) for release in history[:count]]
+
+
 @dataclass(frozen=True)
 class UpdateStatus:
     """What the tab says about the check. `release` is set only while a newer
     one is known; `pending` is a newer tag remembered from an earlier run with
-    no release behind it yet."""
+    no release behind it yet. `history` is every stable release the last
+    successful check found, or None before one has."""
 
     running: str
     release: Optional[Release] = None
     checking: bool = False
     error: Optional[str] = None
     pending: bool = False
+    history: Optional[Tuple[Release, ...]] = None
+
+    @property
+    def entries(self) -> List[HistoryEntry]:
+        return history_entries(self.history or (), self.running)
 
     @property
     def headline(self) -> str:
@@ -167,6 +210,8 @@ class UpdateActions:
         self._changed = changed
         self.open_url = open_url
         self._checking = False
+        # Whether the check in flight reports its result in a box.
+        self._loud = False
         self._last_error: Optional[str] = None
 
     def status(self) -> UpdateStatus:
@@ -178,16 +223,25 @@ class UpdateActions:
             checking=self._checking,
             error=self._last_error,
             pending=available and release is None,
+            history=self._checker.release_history,
         )
 
     def new_flow(self, release: Release, render) -> UpdateFlow:
         return UpdateFlow(release, self._controller, render)
 
     def ensure_release(self) -> None:
-        """A tag remembered from an earlier run has no release to show yet:
-        check once, and not again after a failure (Check now retries)."""
-        if self.status().pending and not self._checking and self._last_error is None:
+        """What the tab asks for when it opens. A tag remembered from an
+        earlier run has no release to show yet, and the release notes need a
+        check this run: check once, and not again after a failure (Check now
+        retries). A check only for the notes is quiet, and only runs while
+        automatic checks are on."""
+        if self._checking or self._last_error is not None:
+            return
+        status = self.status()
+        if status.pending:
             self.check_now()
+        elif status.history is None and self._checker.enabled:
+            self.check_now(quiet=True)
 
     def install(self) -> None:
         """The "Update to vX.Y.Z…" item. With no release in hand (the tag came
@@ -198,7 +252,11 @@ class UpdateActions:
         else:
             self.check_now()
 
-    def check_now(self) -> None:
+    def check_now(self, *, quiet: bool = False) -> None:
+        """A quiet check only updates the tab. A loud one asked for while a
+        quiet one runs joins it and still gets its box."""
+        if not quiet:
+            self._loud = True
         if self._checking:
             return
         self._checking = True
@@ -207,9 +265,10 @@ class UpdateActions:
         self._changed()
 
     def _on_result(self, result: CheckResult) -> None:
+        loud, self._loud = self._loud, False
         self._checking = False
         self._last_error = result.error
-        self._defer(lambda: self.present(result))
+        self._defer(lambda: self.present(result) if loud else self._changed())
 
     def present(self, result: CheckResult) -> None:
         if result.error:
