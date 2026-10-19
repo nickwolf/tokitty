@@ -17,7 +17,7 @@ import PySide6
 from PySide6.QtCore import Qt, qVersion
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QColorDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
+    QColorDialog, QFileDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
 )
 
 from tokitty.qt import macos
@@ -73,6 +73,9 @@ _TEXT_NAMES = (
 )
 
 OPACITY_HINT = "You'll need to right-click where the widget is to get back here"
+
+PRESET_LABELS = (("glass", "Glass"), ("minimal", "Minimal"), ("colour_blind", "Colour-blind safe"))
+THEME_FILE_FILTER = "Theme files (*.json);;All files (*)"
 
 
 DIAGNOSTICS_HINT = "For bug reports. Names, paths and tokens are left out."
@@ -724,7 +727,35 @@ class ThemeTab(_Tab):
         self.controls: Dict[Tuple[str, str], object] = {}  # (section, key) -> control with set()
         self.show_toggles: Dict[str, object] = {}
 
-        kit.section_header(self.frame, "Card", top=0)
+        kit.section_header(self.frame, "Presets", "Each sets only its own options, so they combine",
+                           top=0)
+        preset_row, preset_layout = _hrow()
+        preset_layout.setSpacing(6)
+        self.preset_buttons = {}
+        for name, caption in PRESET_LABELS:
+            button = kit.button(caption, "secondary", compact=True,
+                                command=lambda n=name: self.write(
+                                    lambda: self.host.set_theme(T.apply_preset(self.host.theme(), n))))
+            preset_layout.addWidget(button)
+            self.preset_buttons[name] = button
+        preset_layout.addStretch(1)
+        self.add(preset_row)
+        share_row, share_layout = _hrow()
+        share_layout.setSpacing(6)
+        share_row.setContentsMargins(0, 6, 0, 0)
+        self.import_button = kit.button("Import…", "secondary", self._import, compact=True)
+        self.export_button = kit.button("Export…", "secondary", self._export, compact=True)
+        share_layout.addWidget(self.import_button)
+        share_layout.addWidget(self.export_button)
+        share_layout.addStretch(1)
+        self.add(share_row)
+        self.share_hint = text("", color=DIM_COLOR, font=FONT_SMALL)
+        self.share_hint.setWordWrap(True)
+        self.share_hint.setContentsMargins(0, 4, 0, 0)
+        self.share_hint.setVisible(False)
+        self.add(self.share_hint)
+
+        kit.section_header(self.frame, "Card", top=14)
         self.design = kit.segmented(
             [("refined", "Refined"), ("classic", "Classic")],
             on_change=lambda v: self.write(
@@ -766,6 +797,11 @@ class ThemeTab(_Tab):
             self._color("bars", key, caption)
         self._number("bars", "mid_at", "Mid from", 0, 100, suffix="%")
         self._number("bars", "high_at", "High from", 0, 100, suffix="%")
+        self.notches_toggle = kit.toggle(
+            "Notches at Mid from and High from", compact=True,
+            on_change=lambda on: self._edit("bars", "notches", on))
+        self.notches_toggle.setContentsMargins(12, 4, 12, 4)
+        kit.add(self.card(), self.notches_toggle)
 
         kit.section_header(self.frame, "Text", top=14)
         self._color("text", "foreground", "Text")
@@ -843,6 +879,41 @@ class ThemeTab(_Tab):
         # Sorted, as theme_to_dict writes it.
         self._edit("text", "show", sorted(shown))
 
+    # -- sharing -----------------------------------------------------------
+
+    def _say(self, message: str, color: str) -> None:
+        self.share_hint.setText(message)
+        set_text_color(self.share_hint, color)
+        self.share_hint.setVisible(True)
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self.owner, "Import theme", "", THEME_FILE_FILTER)
+        if not path:
+            return
+        try:
+            theme, bad = T.import_theme(path, self.host.theme())
+        except T.ThemeFileError as exc:
+            self._say(str(exc), BAD)
+            return
+        self.write(lambda: self.host.set_theme(theme))
+        if bad:
+            self._say("Imported. These were not valid and use the default: "
+                      + ", ".join(sorted(bad)), WARN)
+        else:
+            self._say("Imported", GOOD)
+
+    def _export(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self.owner, "Export theme", "tokitty-theme.json",
+                                              THEME_FILE_FILTER)
+        if not path:
+            return
+        try:
+            T.export_theme(path, self.host.theme())
+        except OSError as exc:
+            self._say(f"Could not save the theme: {exc}", BAD)
+            return
+        self._say("Exported. The cat settings stay out of the file.", GOOD)
+
     # -- edits -------------------------------------------------------------
 
     def _edit(self, section: str, key: str, value) -> bool:
@@ -883,6 +954,7 @@ class ThemeTab(_Tab):
         self.shadow_toggle.set(theme.cat.shadow)
         self.wander_toggle.set(theme.cat.wander)
         self.time_of_day_toggle.set(theme.cat.time_of_day)
+        self.notches_toggle.set(theme.bars.notches)
         for holder in self.entries.values():
             self.kit.set_entry_error(holder, False)
 

@@ -216,6 +216,53 @@ def test_models_view_paints_rows(qapp):
     assert image.pixelColor(bar.right - 2, bar.y + 2).name() == T.BarStyle.track
 
 
+def _near(color, hex_color: str) -> bool:
+    """Within one level per channel: a translucent card's premultiplied pixel
+    comes back one off from the colour it was painted with."""
+    want = (int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16))
+    return all(abs(a - b) <= 1 for a, b in zip((color.red(), color.green(), color.blue()), want))
+
+
+def _notched(**card):
+    theme = T.Theme(cat=STILL)
+    return replace(theme, card=replace(theme.card, **card),
+                   bars=replace(theme.bars, notches=True))
+
+
+@pytest.mark.parametrize("opacity", [100, 40])
+def test_notches_cut_both_limit_bars_down_to_the_card(qapp, opacity):
+    theme = _notched(opacity=opacity)
+    widget = make(qapp, theme=theme)
+    render(widget.panes[0], session=30, weekly=92)
+    image = widget.grab().toImage()
+    layout = T.layout_card(theme, "limits", "inside")
+    for name in ("session_bar", "weekly_bar"):
+        bar = layout[name]
+        y = bar.y + bar.h // 2
+        for x in T.notch_xs(theme.bars, bar):
+            cut = image.pixelColor(x, y)
+            assert _near(cut, theme.card.background), (name, x)
+            assert abs(cut.alpha() - T.card_alpha(opacity)) <= 1, (name, x)
+            assert not _near(image.pixelColor(x - 1, y), theme.card.background), (name, x)
+    # the weekly bar is filled past both notches, so its fill shows either side of them
+    weekly = layout["weekly_bar"]
+    fill = T.bar_fill(theme, 92, None)
+    assert _near(image.pixelColor(T.notch_xs(theme.bars, weekly)[1] + 1, weekly.y + weekly.h // 2), fill)
+
+
+def test_the_models_view_has_no_notches(qapp):
+    from tokitty.usage_display import UsageRow, UsageView
+
+    theme = _notched()
+    widget = make(qapp, theme=theme)
+    view = UsageView(rows=(UsageRow("Opus", "$1.20", 90.0),), status_text="note", ramp_pct=None)
+    widget.panes[0].render_usage("working", view)
+    image = widget.grab().toImage()
+    bar = T.layout_card(theme, "models", "inside")["model_bar_0"]
+    for x in T.notch_xs(theme.bars, bar):
+        assert image.pixelColor(x, bar.y + bar.h // 2).name() == T.BarStyle.neutral
+
+
 def test_make_font_is_the_one_font_seam(qapp):
     from PySide6.QtGui import QFont
 

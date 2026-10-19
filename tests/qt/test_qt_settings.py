@@ -1,8 +1,11 @@
 """The Qt Settings window: General, Look, Theme and Usage over a real widget,
 QtHost and Controls. Dialogs are patched, never shown. Pixel samples are on
 card and bar areas only: offscreen Qt on Windows draws no glyphs."""
+import json
 import threading
 import time
+
+from dataclasses import replace
 
 import pytest
 from PySide6.QtCore import QPoint, Qt, QTimer
@@ -837,6 +840,73 @@ def test_card_style_follows_a_theme_changed_elsewhere(make_world):
     world.host.set_theme(T.apply_design(world.host.theme(), "classic"))
     theme_tab.refresh()
     assert theme_tab.design.get() == "classic"
+
+
+def test_presets_stack_and_leave_the_cat_alone(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    before = world.host.theme()
+    theme_tab.preset_buttons["glass"].click()
+    theme_tab.preset_buttons["colour_blind"].click()
+    expected = T.apply_preset(T.apply_preset(before, "glass"), "colour_blind")
+    assert saved_theme(world) == expected
+    assert world.widget.theme == expected and expected.cat == before.cat
+    assert theme_tab.opacity.get() == "40" and theme_tab.halo.get() == "on"
+    assert theme_tab.notches_toggle.get() is True
+    theme_tab.preset_buttons["minimal"].click()
+    assert theme_tab.show_toggles["section_labels"].get() is False
+    assert saved_theme(world).card.opacity == 40  # minimal kept glass's opacity
+
+
+def test_the_notches_toggle_saves(make_world):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    assert theme_tab.notches_toggle.get() is False
+    theme_tab.notches_toggle._clicked()
+    assert saved_theme(world).bars.notches is True
+
+
+def test_export_then_import_through_the_tab(make_world, tmp_path, monkeypatch):
+    shared = T.apply_preset(T.Theme(card=T.CardStyle(radius=3)), "colour_blind")
+    world = make_world(1, theme=shared)
+    theme_tab = open_window(world).tabs["theme"]
+    path = tmp_path / "look.json"
+    monkeypatch.setattr(qs.QFileDialog, "getSaveFileName", lambda *a: (str(path), ""))
+    theme_tab.export_button.click()
+    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"card", "bars", "text"}
+    assert not theme_tab.share_hint.isHidden()
+
+    world.host.set_theme(T.Theme(cat=T.CatStyle(shadow=False, wander=False)))
+    monkeypatch.setattr(qs.QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
+    theme_tab.import_button.click()
+    assert saved_theme(world) == replace(shared, cat=T.CatStyle(shadow=False, wander=False))
+    assert theme_tab.share_hint.text() == "Imported"
+    assert theme_tab.controls[("card", "radius")].get() == 3
+
+
+def test_import_names_the_fields_it_could_not_use(make_world, tmp_path, monkeypatch):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    path = tmp_path / "look.json"
+    path.write_text(json.dumps({"card": {"design": "refined", "radius": 99}}), encoding="utf-8")
+    monkeypatch.setattr(qs.QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
+    theme_tab.import_button.click()
+    assert "card.radius" in theme_tab.share_hint.text()
+    assert saved_theme(world).card.radius == T.CardStyle.radius
+
+
+def test_import_of_a_bad_file_changes_nothing(make_world, tmp_path, monkeypatch):
+    world = make_world(1)
+    theme_tab = open_window(world).tabs["theme"]
+    path = tmp_path / "junk.json"
+    path.write_text("not json", encoding="utf-8")
+    monkeypatch.setattr(qs.QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
+    theme_tab.import_button.click()
+    assert theme_tab.share_hint.text() == "Could not read that file"
+    assert not (world.state_dir / T.THEME_FILENAME).exists()
+    monkeypatch.setattr(qs.QFileDialog, "getOpenFileName", lambda *a: ("", ""))
+    theme_tab.import_button.click()  # cancelled: no change, no crash
+    assert not (world.state_dir / T.THEME_FILENAME).exists()
 
 
 def test_a_theme_change_keeps_the_window_matching_its_layout(make_world):
