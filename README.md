@@ -343,4 +343,4 @@ Planned work is grouped into [milestones](https://github.com/nickwolf/tokitty/mi
 
 MIT, see [LICENSE](LICENSE).
 
-The release builds also include Qt and PySide6 (LGPL-3.0). Their licence files are in the `licenses` folder beside the executable on Windows and Linux, and in `Tokitty.app/Contents/Resources/licenses` on macOS. Qt, PySide6 and shiboken6 ship as separate files you can replace, and `Qt-NOTICE.txt` in that folder explains how.
+The release builds also include Qt and PySide6 (LGPL-3.0). Their licence files are in the `licenses` folder beside the executable on Windows and Linux, and in `Tokitty.app/Contents/Resources/licenses` on macOS. Qt, PySide6 and shiboken6 ship as separate files you can replace, and `Qt-NOTICE.txt` in that folder explains how. `THIRD-PARTY-NOTICES.txt` beside it covers the rest of the build: Python, PyInstaller's bootloader and run-time hooks, comtypes on Windows, and on Linux the system libraries the archive carries, each with its licence text. The build writes it from what it actually collected, so it differs by platform.

@@ -26,7 +26,7 @@ def _load_module():
 va = _load_module()
 
 REQUIRED_SOURCE = ("PySide6/__init__.py", "shiboken6/__init__.py")
-LICENCES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt")
+LICENCES = ("LICENSE", "LGPL-3.0.txt", "GPL-3.0.txt", "Qt-NOTICE.txt", "THIRD-PARTY-NOTICES.txt")
 FONT_FILES = ("tokitty/streamdock/fonts/Aileron-Regular.ttf", "tokitty/streamdock/fonts/NOTICE.txt")
 
 
@@ -52,6 +52,8 @@ def make_linux_bundle(root: Path, qt_version: str = "6.12.0") -> Path:
         _touch(internal / rel)
     for name in va.LINUX_XCB_LIBS:
         _touch(internal / name)
+    listing = "".join(f"    {name}\n" for name in va.LINUX_XCB_LIBS)
+    _touch(licenses / "THIRD-PARTY-NOTICES.txt", f"Third-party notices\n\nlibxcb\n  Libraries and extension modules:\n{listing}")
     return root
 
 
@@ -78,6 +80,26 @@ def test_a_missing_licence_file_fails(tmp_path, linux, name):
     result = run_contents(app)
     assert not result["ok"]
     assert name in " ".join(result["detail"]["problems"])
+
+
+def test_the_third_party_notices_must_name_each_library_in_internal(tmp_path, linux):
+    # A library the generator missed would ship without its notice (#152).
+    app = make_linux_bundle(tmp_path)
+    _touch(app / "_internal" / "libssl.so.3")
+    result = run_contents(app)
+    assert not result["ok"]
+    assert "libssl.so.3" in " ".join(result["detail"]["problems"])
+    notices = app / "licenses" / "THIRD-PARTY-NOTICES.txt"
+    notices.write_text(notices.read_text(encoding="utf-8") + "    libssl.so.3\n", encoding="utf-8")
+    assert run_contents(app)["ok"]
+
+
+def test_a_name_in_the_notice_prose_does_not_count_as_listed(tmp_path, linux):
+    app = make_linux_bundle(tmp_path)
+    _touch(app / "_internal" / "libssl.so.3")
+    notices = app / "licenses" / "THIRD-PARTY-NOTICES.txt"
+    notices.write_text(notices.read_text(encoding="utf-8") + "OpenSSL, as in libssl.so.3\n", encoding="utf-8")
+    assert not run_contents(app)["ok"]
 
 
 def test_the_notice_must_name_the_reported_qt_version(tmp_path, linux):
@@ -119,6 +141,8 @@ def test_a_dropped_name_outside_pyside6_is_not_the_trims_business(tmp_path, linu
     app = make_linux_bundle(tmp_path)
     _touch(app / "_internal" / "tokitty" / "tls" / "generic.py")
     _touch(app / "_internal" / "libQt6Network.so.6")
+    notices = app / "licenses" / "THIRD-PARTY-NOTICES.txt"
+    notices.write_text(notices.read_text(encoding="utf-8") + "    libQt6Network.so.6\n", encoding="utf-8")
     assert run_contents(app)["ok"]
 
 

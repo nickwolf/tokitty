@@ -374,6 +374,17 @@ def test_spec_applies_the_trim_and_ships_the_licences():
     assert 'Path(DISTPATH) / APP_NAME / "licenses"' in spec
 
 
+def test_spec_writes_the_third_party_notices_from_the_trimmed_build():
+    # The notices name what the build ships, so they are written after the
+    # trim and before COLLECT and BUNDLE take the TOCs (#152).
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    trim, notices, collect = spec.index("gui.datas = [e for e"), spec.index("write_notices("), spec.index("COLLECT(")
+    assert trim < notices < collect
+    assert 'gui.datas.append((f"licenses/{NOTICES_FILE}"' in spec
+    assert "shutil.copyfile(notices, licenses_dir / NOTICES_FILE)" in spec
+    assert _bundle_data().NOTICES_FILE not in _bundle_data().LICENSE_FILES
+
+
 def test_qt_notices_script_keeps_the_bundled_modules(tmp_path):
     sys.path.insert(0, str(ROOT))
     try:
@@ -433,3 +444,24 @@ def test_the_spec_excludes_every_other_toolkit_and_no_tokitty_build_toolkits():
         assert f'"{name}"' in spec.split("GUI_EXCLUDES = [", 1)[1].split("]", 1)[0]
     assert "TOKITTY_BUILD_TOOLKITS" not in spec
     assert "TOKITTY_BUILD_ID" in spec
+
+
+@pytest.mark.parametrize("dest", ["ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll",
+                                  "API-MS-WIN-CORE-SYNCH-L1-2-0.DLL"])
+def test_ucrt_entry_dropped_takes_the_universal_crt(dest):
+    assert _bundle_data().ucrt_entry_dropped((dest, "C:/jdk/bin/" + dest, "BINARY"))
+
+
+@pytest.mark.parametrize("entry", [
+    ("vcruntime140.dll", "C:/py/vcruntime140.dll", "BINARY"),
+    ("PySide6/api-ms-win-crt-runtime-l1-1-0.dll", "x", "BINARY"),
+    ("ucrtbase.dll", "x", "DATA"),
+    ("ucrtbased.dll", "x", "BINARY"),
+])
+def test_ucrt_entry_dropped_keeps_everything_else(entry):
+    assert not _bundle_data().ucrt_entry_dropped(entry)
+
+
+def test_spec_drops_the_universal_crt_on_windows():
+    spec = (ROOT / "freeze" / "tokitty.spec").read_text(encoding="utf-8")
+    assert "ucrt_entry_dropped(e)" in spec
