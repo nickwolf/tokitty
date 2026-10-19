@@ -84,6 +84,7 @@ class BarStyle:
     neutral: str = "#5a7fa8"
     mid_at: int = 50
     high_at: int = 80
+    notches: bool = False       # a cut at mid_at and high_at, a cue that needs no colour (#131)
 
 
 @dataclass(frozen=True)
@@ -123,8 +124,9 @@ CLASSIC = Theme(
 )
 REFINED = Theme()
 
-# The fields a look owns. Everything else (opacity, bar layout and thresholds,
-# what text shows, the halo, the cat) is the user's own and no look touches it.
+# The fields a look owns. Everything else (opacity, bar layout, thresholds and
+# notches, what text shows, the halo, the cat) is the user's own and no design
+# touches it, though a preset may.
 LOOK_FIELDS = {
     "card": ("design", "background", "radius", "border_width", "border_color"),
     "bars": ("shape", "height", "track", "low", "mid", "high", "neutral"),
@@ -149,6 +151,27 @@ def apply_design(theme: Theme, design: str) -> Theme:
         old, new = getattr(theme, section), getattr(preset, section)
         parts[section] = replace(old, **{k: getattr(new, k) for k in keys})
     return replace(theme, **parts)
+
+
+# Presets (#132) for the Theme tab. Unlike a design, a preset changes only the
+# fields it names and keeps the rest, so presets stack. None touches the cat.
+PRESETS = ("glass", "minimal", "colour_blind")
+
+
+def apply_preset(theme: Theme, name: str) -> Theme:
+    """`theme` with the named preset's fields; raises ValueError for another name."""
+    if name == "glass":
+        return replace(theme, card=replace(theme.card, opacity=40),
+                       text=replace(theme.text, halo="on"))
+    if name == "minimal":
+        return replace(theme, bars=replace(theme.bars, shape="rounded"),
+                       text=replace(theme.text, show=theme.text.show - {"section_labels"}))
+    if name == "colour_blind":
+        # Okabe-Ito sky blue, orange and vermillion, which differ in lightness
+        # as well as hue, plus the notches as a cue that needs no colour.
+        return replace(theme, bars=replace(theme.bars, low="#56b4e9", mid="#e69f00",
+                                           high="#d55e00", notches=True))
+    raise ValueError(f"unknown preset {name!r}")
 
 
 # --- pure helpers ---------------------------------------------------------
@@ -184,6 +207,15 @@ def bar_fill(theme: Theme, ramp_pct: Optional[float], override: Optional[str]) -
     if ramp_pct >= theme.bars.mid_at:
         return theme.bars.mid
     return theme.bars.low
+
+
+def notch_xs(bars: BarStyle, rect: Rect) -> Tuple[int, ...]:
+    """Card x of each threshold notch on a limits bar, empty with notches off.
+    A threshold at 0 or 100 gets none: it would sit on the bar's end."""
+    if not bars.notches:
+        return ()
+    return tuple(rect.x + round(rect.w * at / 100)
+                 for at in (bars.mid_at, bars.high_at) if 0 < at < 100)
 
 
 # --- validation -----------------------------------------------------------
@@ -274,6 +306,7 @@ def _clean_bars(raw: dict, d: BarStyle, bad: Optional[set] = None) -> BarStyle:
         neutral=pick.hex("neutral", d.neutral),
         mid_at=pick.int("mid_at", 0, 100, d.mid_at),
         high_at=pick.int("high_at", 0, 100, d.high_at),
+        notches=pick.bool("notches", d.notches),
     )
     if bars.mid_at >= bars.high_at:
         bad.update(("bars.mid_at", "bars.high_at"))
@@ -411,12 +444,47 @@ def theme_to_dict(theme: Theme) -> dict:
     return payload
 
 
-def save_theme(state_dir, theme: Theme) -> None:
-    path = Path(state_dir) / THEME_FILENAME
-    payload = theme_to_dict(theme)
+def _write_json(path: Path, payload: dict) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def save_theme(state_dir, theme: Theme) -> None:
+    _write_json(Path(state_dir) / THEME_FILENAME, theme_to_dict(theme))
+
+
+# --- sharing --------------------------------------------------------------
+
+# What a shared theme file carries (#132). The cat section stays the user's.
+SHARED_SECTIONS = ("card", "bars", "text")
+
+
+class ThemeFileError(ValueError):
+    """A file that cannot be read as a theme. The message is for the user."""
+
+
+def import_theme(path, current: Theme) -> Tuple[Theme, Set[str]]:
+    """A shared theme file's card, bars and text, with `current`'s cat. A field
+    the file gets wrong takes the default and is named in the returned set; a
+    file from before #139 is migrated as load_theme would."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ThemeFileError("Could not read that file") from exc
+    if not isinstance(data, dict) or not any(name in data for name in SHARED_SECTIONS):
+        raise ThemeFileError("That file is not a Tokitty theme")
+    data = {name: data[name] for name in SHARED_SECTIONS if name in data}
+    if "design" not in _section(data, "card"):
+        data = _migrate_to_refined(data)
+    theme, bad = _validate(data, Theme())
+    return replace(theme, cat=current.cat), bad
+
+
+def export_theme(path, theme: Theme) -> None:
+    """Write the shareable part of `theme` (no cat section) to `path`."""
+    payload = theme_to_dict(theme)
+    _write_json(Path(path), {name: payload[name] for name in SHARED_SECTIONS})
 
 
 # --- card layout ----------------------------------------------------------

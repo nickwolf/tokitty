@@ -119,8 +119,8 @@ class ColorwayEditor(QDialog):
         self.preview: SpritePreview = kit.sprite_preview(
             self._palette(self.pattern), cell=PREVIEW_CELL)
         card_col.addWidget(self.preview, 1, Qt.AlignmentFlag.AlignCenter)
-        # Preview only: which pattern the big cat wears here. The pane's own
-        # pattern is chosen on the Look tab.
+        # Which pattern the big cat wears here. Save also puts it on this pane
+        # (#212); Cancel leaves the pane's pattern alone.
         self.pattern_pick = kit.dropdown(list(sprites.PATTERNS), on_change=self._pick_pattern)
         self.pattern_pick.set(self.pattern)
         pick_row = QWidget()
@@ -225,6 +225,8 @@ class ColorwayEditor(QDialog):
         host.on_colorways_changed()  # the new id must be registered before it is chosen
         if new_id is not None:
             host.on_customization_changed(self.pane_index, "colorway", new_id)
+        if self.pattern != host.panes[self.pane_index]._pattern:
+            host.on_customization_changed(self.pane_index, "pattern", self.pattern)
         host.notify_state_changed()
         self.accept()
 

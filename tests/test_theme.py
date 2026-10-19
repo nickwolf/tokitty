@@ -996,3 +996,114 @@ def test_refined_full_width_and_inside_right():
     assert wide["account_label"].right == CARD_WIDTH - 10
     right = layout_card(T.REFINED, "limits", "inside_right")
     assert right["session_bar"].x == 10 and right["cat_area"].x == 180
+
+
+# ---- presets, notches and shared files (#131, #132) ------------------------
+
+def _mine():
+    return Theme(card=CardStyle(opacity=70, background="#102030"),
+                 bars=BarStyle(shape="flat", mid_at=30, high_at=60, low="#00ff00"),
+                 text=TextStyle(show=frozenset({"percent", "section_labels", "reset"})),
+                 cat=T.CatStyle(shadow=False, wander=False, time_of_day=False))
+
+
+def test_each_preset_changes_only_its_own_fields():
+    mine = _mine()
+    glass = T.apply_preset(mine, "glass")
+    assert glass == replace(mine, card=replace(mine.card, opacity=40),
+                            text=replace(mine.text, halo="on"))
+    minimal = T.apply_preset(mine, "minimal")
+    assert minimal == replace(mine, bars=replace(mine.bars, shape="rounded"),
+                              text=replace(mine.text, show=frozenset({"percent", "reset"})))
+    safe = T.apply_preset(mine, "colour_blind")
+    assert safe == replace(mine, bars=replace(mine.bars, low="#56b4e9", mid="#e69f00",
+                                              high="#d55e00", notches=True))
+    with pytest.raises(ValueError):
+        T.apply_preset(mine, "nope")
+
+
+def test_presets_stack_and_keep_the_cat():
+    mine = _mine()
+    both = T.apply_preset(T.apply_preset(mine, "glass"), "colour_blind")
+    assert both == T.apply_preset(T.apply_preset(mine, "colour_blind"), "glass")
+    assert both.card.opacity == 40 and both.bars.notches and both.bars.low == "#56b4e9"
+    for name in T.PRESETS:
+        assert T.apply_preset(mine, name).cat == mine.cat
+
+
+def test_every_preset_survives_a_save_and_load(tmp_path):
+    for name in T.PRESETS:
+        preset = T.apply_preset(Theme(), name)
+        assert rejected_fields(T.theme_to_dict(preset), Theme()) == set(), name
+        save_theme(tmp_path, preset)
+        assert load_theme(tmp_path) == preset, name
+
+
+def test_a_design_switch_keeps_the_notches():
+    notched = replace(Theme(), bars=replace(Theme().bars, notches=True))
+    assert T.apply_design(notched, "classic").bars.notches is True
+
+
+def test_notches_are_validated_like_any_bool(tmp_path):
+    assert theme_from_dict({"bars": {"notches": True}}, Theme()).bars.notches is True
+    assert rejected_fields({"bars": {"notches": 1}}, Theme()) == {"bars.notches"}
+    assert Theme().bars.notches is False
+
+
+def test_notch_positions():
+    rect = T.Rect(132, 30, 158, 6)
+    on = replace(BarStyle(), notches=True)
+    assert T.notch_xs(BarStyle(), rect) == ()
+    assert T.notch_xs(on, rect) == (132 + 79, 132 + 126)  # 50% and 80% of 158, rounded
+    assert T.notch_xs(replace(on, mid_at=0, high_at=100), rect) == ()
+
+
+def test_export_then_import_round_trips_the_look_and_keeps_my_cat(tmp_path):
+    shared = T.apply_preset(T.apply_design(_mine(), "classic"), "colour_blind")
+    path = tmp_path / "look.json"
+    T.export_theme(path, shared)
+    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"card", "bars", "text"}
+    mine = Theme(cat=T.CatStyle(shadow=True, wander=False, time_of_day=True))
+    theme, bad = T.import_theme(path, mine)
+    assert bad == set()
+    assert theme == replace(shared, cat=mine.cat)
+
+
+def test_import_replaces_the_look_and_reports_bad_fields(tmp_path):
+    path = tmp_path / "look.json"
+    path.write_text(json.dumps({
+        "card": {"design": "refined", "opacity": 55, "radius": 4},
+        "bars": {"low": "green"},
+        "cat": {"wander": True},
+    }), encoding="utf-8")
+    mine = _mine()
+    theme, bad = T.import_theme(path, mine)
+    assert bad == {"card.opacity", "bars.low"}
+    assert theme.card.opacity == Theme().card.opacity and theme.card.radius == 4
+    assert theme.bars == Theme().bars  # nothing of mine survives in a replaced section
+    assert theme.text == Theme().text
+    assert theme.cat == mine.cat
+
+
+def test_import_migrates_a_file_from_before_the_refined_card(tmp_path):
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({"card": {"background": T.CLASSIC.card.background, "opacity": 60}}),
+                    encoding="utf-8")
+    theme, bad = T.import_theme(path, Theme())
+    assert bad == set()
+    assert theme.card.design == "refined" and theme.card.background == T.REFINED.card.background
+    assert theme.card.opacity == 60
+
+
+@pytest.mark.parametrize("content", ["", "not json", "[]", "42", json.dumps({"cat": {}}),
+                                     json.dumps({"something": 1})])
+def test_import_refuses_what_is_not_a_theme(tmp_path, content):
+    path = tmp_path / "x.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(T.ThemeFileError):
+        T.import_theme(path, Theme())
+
+
+def test_import_of_a_missing_file_is_a_theme_file_error(tmp_path):
+    with pytest.raises(T.ThemeFileError):
+        T.import_theme(tmp_path / "gone.json", Theme())
