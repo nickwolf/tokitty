@@ -546,15 +546,13 @@ def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None])
     return maybe_onboard
 
 
-def _handoff_standing(unit: dict, latest: PollResult, display: dict, custom) -> Standing:
-    """This unit's place in the handoff comparison. Capped means the numbers
-    on screen came from a binding capped limit; a dimmed display is not trusted."""
-    from_poll = latest.status == "ok" and latest.snapshot is not None
-    snapshot = latest.snapshot if from_poll else (unit["last_good"].snapshot if unit["last_good"] else None)
-    capped = snapshot is not None and select_binding_capped_limit(snapshot.limits) is not None
-    label = (custom.label.strip() if custom is not None else "") or unit["provider"].kind.capitalize()
+def _handoff_standing(unit: dict, shown, display: dict, custom) -> Standing:
+    """This unit's place in the handoff comparison. Capped means the snapshot
+    on screen has a binding capped limit; a dimmed display is not trusted."""
+    capped = shown is not None and select_binding_capped_limit(shown.limits) is not None
+    label = custom.label.strip() if custom is not None else ""
     return Standing(unit["key"], label, display["session_pct"], display["weekly_pct"], capped,
-                    confirmed=not display["dimmed"])
+                    confirmed=not display["dimmed"], kind=unit["provider"].kind.capitalize())
 
 
 # A session window that rolled over this far ahead without capping is a reset.
@@ -628,16 +626,16 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     else:
         # The handoff comparison (#129) needs the ladder state and the cap as
         # they were before activity poses overwrite display["state"].
+        shown = latest.snapshot if latest.status == "ok" and latest.snapshot is not None else (
+            unit["last_good"].snapshot if unit["last_good"] is not None else None)
         unit["handoff_ladder"] = display["state"]
-        unit["handoff_standing"] = _handoff_standing(unit, latest, display, custom)
+        unit["handoff_standing"] = _handoff_standing(unit, shown, display, custom)
         pose = resolve_pose(display["state"], activity, now.timestamp())
         display["state"] = pose["sprite_state"]
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]
         display["drives"] = cat_drives
         display["bar_events"] = bar_events
-        shown = latest.snapshot if latest.status == "ok" and latest.snapshot is not None else (
-            unit["last_good"].snapshot if unit["last_good"] is not None else None)
         display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
