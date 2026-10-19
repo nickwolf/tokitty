@@ -6,7 +6,7 @@ without a GUI toolkit.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
@@ -29,10 +29,29 @@ WINDOW_LABELS = {"24h": "24h", "7d": "7d"}
 
 
 @dataclass(frozen=True)
+class RowDetail:
+    """What the hover popup says about one row: the exact numbers behind it,
+    whichever readout the card shows. For the folded row, the sums."""
+    label: str                  # "Other" for the folded row
+    model_count: int            # models summed into the row; above 1 only for "Other"
+    cost_usd: Optional[float]   # None when no model in the row has a price
+    cost_is_partial: bool       # some, but not all, of the row's models are unpriced
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int     # the 5 minute and 1 hour writes together
+    total_tokens: int
+    share_pct: float            # of the rows' total in the card's readout
+
+
+@dataclass(frozen=True)
 class UsageRow:
     label: str
     value_text: str
     bar_pct: float
+    # Hover only: left out of equality so a changed cache count alone does not
+    # repaint the card, which never draws it.
+    detail: Optional[RowDetail] = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -43,6 +62,8 @@ class UsageView:
     # the red-at-80% ramp means "close to a cap", and share-of-total has
     # no cap to be close to.
     ramp_pct: Optional[float]
+    # "7d", "24h" or the month's name: the window the hover popup names.
+    window_text: str = field(default="", compare=False)
 
 
 def window_label(window: str, window_start: datetime) -> str:
@@ -79,20 +100,15 @@ def _value_text(model: ModelUsage, readout: str) -> str:
     return format_money(model.cost_usd)
 
 
-def fold(models: Sequence[ModelUsage], readout: str) -> List[Tuple[str, float, str]]:
-    """(label, value, value_text) per displayed row, tail folded.
-
-    Folding happens BEFORE any share is computed. Computing shares first
-    and folding after would let a combined "other" exceed the largest
-    single model and clamp at over 100%.
-    """
+def _fold_groups(models: Sequence[ModelUsage], readout: str) -> List[Tuple[str, float, str, Tuple[ModelUsage, ...]]]:
+    """(label, value, value_text, models in the row) per displayed row."""
     ordered = sorted(models, key=lambda m: -_value(m, readout))
     if len(ordered) <= ROW_SLOTS:
-        return [(display_name(m.model), _value(m, readout), _value_text(m, readout)) for m in ordered]
+        return [(display_name(m.model), _value(m, readout), _value_text(m, readout), (m,)) for m in ordered]
 
     head = ordered[: ROW_SLOTS - 1]
     tail = ordered[ROW_SLOTS - 1 :]
-    rows = [(display_name(m.model), _value(m, readout), _value_text(m, readout)) for m in head]
+    rows = [(display_name(m.model), _value(m, readout), _value_text(m, readout), (m,)) for m in head]
 
     tail_value = sum(_value(m, readout) for m in tail)
     if readout == "tokens":
@@ -101,8 +117,54 @@ def fold(models: Sequence[ModelUsage], readout: str) -> List[Tuple[str, float, s
         tail_text = "--"
     else:
         tail_text = format_money(tail_value)
-    rows.append((f"other ({len(tail)})", tail_value, tail_text))
+    rows.append((f"other ({len(tail)})", tail_value, tail_text, tuple(tail)))
     return rows
+
+
+def fold(models: Sequence[ModelUsage], readout: str) -> List[Tuple[str, float, str]]:
+    """(label, value, value_text) per displayed row, tail folded.
+
+    Folding happens BEFORE any share is computed. Computing shares first
+    and folding after would let a combined "other" exceed the largest
+    single model and clamp at over 100%.
+    """
+    return [(label, value, text) for label, value, text, _ in _fold_groups(models, readout)]
+
+
+def _detail(label: str, group: Sequence[ModelUsage], value: float, denominator: float) -> RowDetail:
+    priced = [m.cost_usd for m in group if m.cost_usd is not None]
+    return RowDetail(
+        label=label if len(group) == 1 else "Other",
+        model_count=len(group),
+        cost_usd=sum(priced) if priced else None,
+        cost_is_partial=bool(priced) and len(priced) < len(group),
+        input_tokens=sum(m.input_tokens for m in group),
+        output_tokens=sum(m.output_tokens for m in group),
+        cache_read_tokens=sum(m.cache_read_tokens for m in group),
+        cache_write_tokens=sum(m.cache_write_5m_tokens + m.cache_write_1h_tokens for m in group),
+        total_tokens=sum(m.total_tokens for m in group),
+        share_pct=(value / denominator * 100.0) if denominator else 0.0,
+    )
+
+
+def hover_text(detail: RowDetail, window_text: str) -> str:
+    """The models popup for one row. Both readouts, whichever the card shows."""
+    if detail.model_count > 1:
+        inner = f"{detail.model_count} models, {window_text}" if window_text else f"{detail.model_count} models"
+    else:
+        inner = window_text
+    title = f"{detail.label} ({inner})" if inner else detail.label
+    if detail.cost_usd is None:
+        cost = "--"
+    else:
+        cost = (">= " if detail.cost_is_partial else "") + format_money(detail.cost_usd)
+    return "\n".join((
+        title,
+        f"{cost} \u00b7 {format_tokens(detail.total_tokens)} tokens \u00b7 {detail.share_pct:.0f}% of total",
+        f"in {format_tokens(detail.input_tokens)} \u00b7 out {format_tokens(detail.output_tokens)}",
+        f"cache read {format_tokens(detail.cache_read_tokens)} \u00b7 "
+        f"cache write {format_tokens(detail.cache_write_tokens)}",
+    ))
 
 
 def prices_are_stale(breakdown: UsageBreakdown) -> bool:
@@ -159,7 +221,8 @@ def build_view(
     if breakdown is None:
         return UsageView(rows=(), status_text="reading usage…", ramp_pct=None)
 
-    rows_data = fold(breakdown.models, readout)
+    groups = _fold_groups(breakdown.models, readout)
+    rows_data = [(label, value, text) for label, value, text, _ in groups]
 
     # A dollar budget is meaningless against a token count, and a budget
     # percentage computed from a total that is missing an unpriced model
@@ -178,11 +241,13 @@ def build_view(
         total_pct = breakdown.total_cost_usd / budget * 100.0
     else:
         denominator = sum(value for _, value, _ in rows_data)
+    share_base = sum(value for _, value, _ in rows_data)
 
     rows = []
-    for label, value, value_text in rows_data:
+    for label, value, value_text, group in groups:
         pct = (value / denominator * 100.0) if denominator else 0.0
-        rows.append(UsageRow(label=label, value_text=value_text, bar_pct=pct))
+        rows.append(UsageRow(label=label, value_text=value_text, bar_pct=pct,
+                             detail=_detail(label, group, value, share_base)))
 
     return UsageView(
         rows=tuple(rows),
@@ -190,6 +255,7 @@ def build_view(
             breakdown, readout, budget if budget_applies else None, total_pct
         ),
         ramp_pct=total_pct if budget_applies else None,
+        window_text=window_label(breakdown.window, breakdown.window_start),
     )
 
 

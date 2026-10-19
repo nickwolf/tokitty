@@ -18,6 +18,9 @@ from tokitty.activity import ActivityView
 # resolution logic below).
 ACTIVITY_SPRITE_PLACEHOLDERS = {
     "permission": "permission",
+    "permission_urgent": "permission_urgent",
+    "permission_frantic": "permission_frantic",
+    "question": "question",
     "working": "working",
     "thinking": "thinking",
     "done_hop": "done_hop",
@@ -27,21 +30,42 @@ ACTIVITY_SPRITE_PLACEHOLDERS = {
 # -- these outrank an activity-derived pose, per spec.
 _CAPPED_WAKE_STATES = frozenset({"activate", "flopped", "stirring", "waking"})
 
+# A prompt waiting on the user: a tool to allow, or a question to answer.
+_PROMPT_STATES = frozenset({"permission", "question"})
+
 _ACTIVITY_POSE_STATES = frozenset({"working", "thinking", "done_hop"})
 
+# An unanswered permission prompt gets impatient. Questions never escalate.
+URGENT_AFTER_S = 30.0
+FRANTIC_AFTER_S = 180.0
 
-def resolve_pose(v1_state: str, activity: Optional[ActivityView]) -> dict:
+
+def prompt_state(state: str, since: Optional[float], now: Optional[float]) -> str:
+    """Escalate "permission" by how long the prompt has waited (wall-clock
+    seconds). Any other state, or a missing since/now, passes through."""
+    if state != "permission" or since is None or now is None:
+        return state
+    waited = now - since
+    if waited >= FRANTIC_AFTER_S:
+        return "permission_frantic"
+    if waited >= URGENT_AFTER_S:
+        return "permission_urgent"
+    return state
+
+
+def resolve_pose(v1_state: str, activity: Optional[ActivityView], now: Optional[float] = None) -> dict:
     """Return {"sprite_state": str, "tool_label": str, "accent": bool}.
 
     `v1_state` is whatever tokitty.__main__._display_state_for already
     computed (a mood, a capped substate, "activate", or "confused").
     `activity` is the latest ActivityView from the watcher, or None if no
     watcher is running / nothing resolved yet -- treated the same as an
-    idle ActivityView.
+    idle ActivityView. `now` is wall-clock seconds; with it an old
+    permission prompt escalates (see prompt_state).
     """
-    if activity is not None and activity.state == "permission":
+    if activity is not None and activity.state in _PROMPT_STATES:
         return {
-            "sprite_state": ACTIVITY_SPRITE_PLACEHOLDERS["permission"],
+            "sprite_state": ACTIVITY_SPRITE_PLACEHOLDERS[prompt_state(activity.state, activity.since, now)],
             "tool_label": "",
             "accent": True,
         }

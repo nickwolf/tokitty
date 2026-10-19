@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import sys
 import threading
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
 from tokitty.accounts import Account
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
-from tokitty.burn import BurnTracker
+from tokitty.behaviour import drives
+from tokitty.burn import PACE_UNKNOWN, BurnTracker, Pace
 from tokitty.credentials import CredentialLoader
 from tokitty.customize import SINGLE_KEY, Customization, save_customization
 from tokitty.display import (
@@ -28,7 +29,9 @@ from tokitty.display import (
     format_reset_day,
     format_reset_time,
 )
+from tokitty.handoff import Hint, Standing, handoff_hints
 from tokitty.hooks_install import retry_pending_hook_op
+from tokitty.hover import LimitHover, LimitsHover
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.poller import PollResult, Poller
 from tokitty.pose import resolve_pose
@@ -192,7 +195,7 @@ def _display_state_for(result: PollResult, previous: Optional[PollResult], now: 
     }
 
 
-def _usage_render_args(unit, latest, breakdown, activity, usage_state) -> dict:
+def _usage_render_args(unit, latest, breakdown, activity, usage_state, now: Optional[float] = None) -> dict:
     """Arguments for Pane.render_usage.
 
     Deliberately ignores every FAILED poll result: a non-subscriber must
@@ -213,7 +216,7 @@ def _usage_render_args(unit, latest, breakdown, activity, usage_state) -> dict:
             state = capped.substate
             driving_tag = capped.driving_tag
 
-    pose = resolve_pose(state, activity)
+    pose = resolve_pose(state, activity, now)
     budget = budget_for(
         Settings(usage_budgets=usage_state["budgets"]), unit["key"], usage_state["window"]
     )
@@ -248,6 +251,28 @@ def _projection_text_for(tracker: BurnTracker, display: dict, now: datetime) -> 
     if projection is None:
         return None
     return format_projection(projection.kind, projection.caps_at)
+
+
+def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: datetime) -> Optional[LimitsHover]:
+    """The raw numbers behind the limits popup, or None when no snapshot was
+    ever read. The pace is left out whenever the numbers are dimmed or old,
+    for the same reason the status line's projection is."""
+    if snapshot is None:
+        return None
+    binding = select_binding_capped_limit(snapshot.limits)
+    trusted = not display.get("dimmed") and not display.get("stale_text")
+
+    def row(title: str, kind: str, pct: float, resets_at) -> LimitHover:
+        return LimitHover(
+            title=title, kind=kind, pct=pct, resets_at=resets_at,
+            capped=binding is not None and (binding.kind == "session") == (kind == "session"),
+            pace=tracker.pace(kind, now) if trusted else Pace(PACE_UNKNOWN),
+        )
+
+    return LimitsHover(
+        session=row("Session", "session", snapshot.session_pct, snapshot.session_resets_at),
+        weekly=row("Week", "weekly", snapshot.weekly_pct, snapshot.weekly_resets_at),
+    )
 
 
 def _seed_from_account(account: Optional[Account]) -> Tuple[Optional[str], Optional[str]]:
@@ -353,6 +378,48 @@ class PaneUpdate:
     kwargs: dict
 
 
+# The only resting ladder states a perk up may lift to "interested".
+_PERK_UP_FROM = frozenset({"sleeping", "content"})
+
+
+def apply_hint(update: PaneUpdate, hint: Optional[Hint], ladder_state: str) -> PaneUpdate:
+    """The update with `hint` applied; `ladder_state` is the mood or capped
+    state before activity poses were resolved. Models-view updates and a
+    missing hint pass through."""
+    if hint is None or update.kind != "limits":
+        return update
+    kwargs = update.kwargs
+    if hint.kind == "near":
+        changes = {"handoff_text": hint.text}
+        # Only an alert cat droops. Panicked, capped, wake, prompt and
+        # activity poses are left alone.
+        if kwargs["state"] == "alert":
+            changes["state"] = "tired"
+        return PaneUpdate("limits", {**kwargs, **changes})
+    # A perk up only lifts a cat that is resting on its own ladder state: an
+    # activity or prompt pose, a capped state or a dimmed look stays as it is.
+    if not kwargs["dimmed"] and kwargs["state"] == ladder_state and ladder_state in _PERK_UP_FROM:
+        return replace(update, kwargs={**kwargs, "state": "interested"})
+    return update
+
+
+def apply_handoff(stepped: List[Tuple[dict, Optional[PaneUpdate]]]) -> List[Optional[PaneUpdate]]:
+    """Second pass of the tick: compare every stepped unit's standing, carry
+    each unit's near-cap flag in unit["handoff_near"] and return the updates
+    with their hints applied, in order. Units without a standing (models view,
+    no result yet) are neither near cap nor roomy."""
+    standings = [u["handoff_standing"] for u, update in stepped if update is not None and u["handoff_standing"]]
+    flags = {u["key"]: u.get("handoff_near", False) for u, _ in stepped}
+    hints, flags = handoff_hints(standings, flags)
+    out = []
+    for unit, update in stepped:
+        unit["handoff_near"] = flags.get(unit["key"], False)
+        if update is not None:
+            update = apply_hint(update, hints.get(unit["key"]), unit.get("handoff_ladder", ""))
+        out.append(update)
+    return out
+
+
 def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentials,
                 distro_probe, usage_state: dict) -> List[dict]:
     """One unit per account (one default unit with no accounts), without a pane.
@@ -381,13 +448,14 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
         provider = providers[index]
         tag_kind = provider_tag_kind(provider, providers)
         cred_loader = CredentialLoader()
-        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader))
+        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader),
+                        name=f"poller-{index}")
         sessions_dir, distro_name = provider.resolve_activity_sessions(
             config_dir, credentials=wsl_credentials
         )
         watcher = ActivityWatcher(
             sessions_dir, ActivityTracker(), distro_name=distro_name,
-            list_running_distros_fn=distro_probe.get_running,
+            list_running_distros_fn=distro_probe.get_running, name=f"activity-{index}",
         )
         ledger = provider.resolve_ledger(config_dir, credentials=wsl_credentials)
         usage_watcher = UsageWatcher(
@@ -396,6 +464,7 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
             window=lambda: usage_state["window"],
             list_running_distros_fn=distro_probe.get_running,
             scanner_factory=ledger.make_scanner if ledger else None,
+            name=f"usage-{index}",
         )
 
         key = customization_key(account)
@@ -477,13 +546,63 @@ def make_onboarder(state_dir, usage_state: dict, on_changed: Callable[[], None])
     return maybe_onboard
 
 
+def _handoff_standing(unit: dict, latest: PollResult, display: dict, custom) -> Standing:
+    """This unit's place in the handoff comparison. Capped means the numbers
+    on screen came from a binding capped limit; a dimmed display is not trusted."""
+    from_poll = latest.status == "ok" and latest.snapshot is not None
+    snapshot = latest.snapshot if from_poll else (unit["last_good"].snapshot if unit["last_good"] else None)
+    capped = snapshot is not None and select_binding_capped_limit(snapshot.limits) is not None
+    label = (custom.label.strip() if custom is not None else "") or unit["provider"].kind.capitalize()
+    return Standing(unit["key"], label, display["session_pct"], display["weekly_pct"], capped,
+                    confirmed=not display["dimmed"])
+
+
+# A session window that rolled over this far ahead without capping is a reset.
+RESET_GAP = timedelta(hours=1)
+
+
+def _note_bars(unit: dict, latest: PollResult, display: dict, count: bool) -> Tuple[int, int]:
+    """Fold a fresh poll into unit["bars_seen"] and return its (moved, reset)
+    counters (#135). Moved: the session bar's whole percent went up. Reset:
+    the window rolled over without capping (a capped one plays activate), so
+    resets_at is over an hour on and the percent dropped. Without `count`
+    (the models view, which shows no bars) only the baseline moves, so an old
+    tick-up cannot fire when the limits come back."""
+    # window_pct and capped belong to the last poll that had a resets_at: an
+    # idle window can come back without one, and the drop must still count
+    # when the next window's resets_at shows up.
+    seen = unit.setdefault("bars_seen", {"pct": None, "resets_at": None, "window_pct": None,
+                                         "capped": False, "moved": 0, "reset": 0})
+    if latest.status != "ok" or latest.snapshot is None or display["dimmed"]:
+        return seen["moved"], seen["reset"]
+    snapshot = latest.snapshot
+    pct = round(snapshot.session_pct)
+    resets_at = snapshot.session_resets_at
+    if count and seen["pct"] is not None:
+        if (resets_at is not None and seen["resets_at"] is not None and not seen["capped"]
+                and resets_at - seen["resets_at"] > RESET_GAP and pct < seen["window_pct"]):
+            seen["reset"] += 1
+        elif pct > seen["pct"]:
+            seen["moved"] += 1
+    seen["pct"] = pct
+    if resets_at is not None:
+        seen["resets_at"] = resets_at
+        seen["window_pct"] = pct
+        seen["capped"] = select_binding_capped_limit(snapshot.limits) is not None
+    return seen["moved"], seen["reset"]
+
+
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
-              notes_removed: set, onboard: Callable, now: datetime) -> Optional[PaneUpdate]:
+              notes_removed: set, onboard: Callable, now: datetime,
+              time_of_day: bool = False, tz=None, wander: bool = True) -> Optional[PaneUpdate]:
     """One tick for one unit: read the workers, run the side effects, update the
     unit's bookkeeping and say what to draw. None means there is no poll result
-    yet, so the pane stays as it is."""
+    yet, so the pane stays as it is. With `time_of_day` the cat's drives follow
+    the hour of `now` in `tz` (None is local time). Without `wander` the cat
+    holds still apart from naps, so it never plays, bats or pounces (#124, #135)."""
     latest = unit["poller"].get_latest()
     breakdown = unit["usage"].get_latest()
+    unit["handoff_standing"] = None
     onboard(unit, latest, breakdown)
 
     publish_usage_notes(unit, latest, usage_state["notes"], notes_removed)
@@ -497,13 +616,29 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     display["projection_text"] = _projection_text_for(unit["burn"], display, now)
     activity = unit["watcher"].get_latest()
 
+    custom = customization_store.get(unit["key"])
+    cat_drives = drives(now.astimezone(tz).hour if time_of_day else None,
+                        custom.personality if custom else "balanced")
+    if not wander:
+        cat_drives = replace(cat_drives, play=0.0, bat=0.0, pounce=0.0)
+    bar_events = _note_bars(unit, latest, display, usage_state["view"] != "models")
     if usage_state["view"] == "models":
-        update = PaneUpdate("models", _usage_render_args(unit, latest, breakdown, activity, usage_state))
+        args = _usage_render_args(unit, latest, breakdown, activity, usage_state, now.timestamp())
+        update = PaneUpdate("models", {**args, "drives": cat_drives})
     else:
-        pose = resolve_pose(display["state"], activity)
+        # The handoff comparison (#129) needs the ladder state and the cap as
+        # they were before activity poses overwrite display["state"].
+        unit["handoff_ladder"] = display["state"]
+        unit["handoff_standing"] = _handoff_standing(unit, latest, display, custom)
+        pose = resolve_pose(display["state"], activity, now.timestamp())
         display["state"] = pose["sprite_state"]
         display["tool_label"] = pose["tool_label"]
         display["accent"] = pose["accent"]
+        display["drives"] = cat_drives
+        display["bar_events"] = bar_events
+        shown = latest.snapshot if latest.status == "ok" and latest.snapshot is not None else (
+            unit["last_good"].snapshot if unit["last_good"] is not None else None)
+        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
     return update
@@ -535,7 +670,7 @@ class Discovery:
 
     def start(self) -> None:
         # A bound method, so the thread's target is named run_discovery.
-        threading.Thread(target=self.run_discovery, daemon=True).start()
+        threading.Thread(target=self.run_discovery, daemon=True, name="discovery").start()
 
     def take_hook_warnings(self) -> list:
         """The warnings found so far, each handed out once."""

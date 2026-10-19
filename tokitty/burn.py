@@ -57,6 +57,19 @@ class Projection:
     caps_at: datetime
 
 
+# Pace verdicts for one limit (see BurnTracker.pace).
+PACE_UNKNOWN = "unknown"      # warming up, capped, no reset time, or numbers too old to judge
+PACE_WONT_CAP = "wont_cap"    # the burn rate does not reach 100% before the reset
+PACE_CAPS = "caps"            # the burn rate reaches 100% before the reset
+
+
+@dataclass(frozen=True)
+class Pace:
+    """One limit's burn verdict. caps_at is set only for PACE_CAPS."""
+    status: str
+    caps_at: Optional[datetime] = None
+
+
 def _pct(sample: Sample, kind: str) -> float:
     return sample.session_pct if kind == "session" else sample.weekly_pct
 
@@ -109,8 +122,7 @@ class BurnTracker:
         time -- so a projection decays even when polls stop succeeding
         and add() is no longer being called.
         """
-        cutoff = now - timedelta(seconds=self._window_seconds)
-        recent = [s for s in self._samples if s.fetched_at >= cutoff]
+        recent = self._recent(now)
         if len(recent) < MIN_SAMPLES:
             return None
 
@@ -127,10 +139,29 @@ class BurnTracker:
             return None
         return min(candidates, key=lambda projection: projection.caps_at)
 
+    def _recent(self, now: datetime) -> List[Sample]:
+        cutoff = now - timedelta(seconds=self._window_seconds)
+        return [s for s in self._samples if s.fetched_at >= cutoff]
+
+    def pace(self, kind: str, now: datetime) -> Pace:
+        """The burn verdict for one limit, telling "not enough data yet"
+        apart from "will not cap before the reset", which project() cannot:
+        both are None there."""
+        recent = self._recent(now)
+        if len(recent) < MIN_SAMPLES or recent[-1].capped:
+            return Pace(PACE_UNKNOWN)
+        return self._pace_kind(kind, recent, recent[-1], now)
+
     def _project_kind(self, kind: str, recent: List[Sample], newest: Sample, now: datetime) -> Optional[Projection]:
+        pace = self._pace_kind(kind, recent, newest, now)
+        if pace.status != PACE_CAPS:
+            return None
+        return Projection(kind=kind, caps_at=pace.caps_at)
+
+    def _pace_kind(self, kind: str, recent: List[Sample], newest: Sample, now: datetime) -> Pace:
         resets_at = _reset(newest, kind)
         if resets_at is None:
-            return None
+            return Pace(PACE_UNKNOWN)
 
         # Walk back only through samples from the SAME window. A changed
         # resets_at means this limit reset, and measuring across that
@@ -143,17 +174,19 @@ class BurnTracker:
 
         elapsed = (newest.fetched_at - oldest.fetched_at).total_seconds()
         if elapsed < MIN_SPAN_SECONDS:
-            return None
+            return Pace(PACE_UNKNOWN)
 
         rate = (_pct(newest, kind) - _pct(oldest, kind)) / elapsed
         if rate <= 0:
-            return None
+            return Pace(PACE_WONT_CAP)
 
         remaining = 100.0 - _pct(newest, kind)
         if remaining <= 0:
-            return None
+            return Pace(PACE_UNKNOWN)
 
         caps_at = newest.fetched_at + timedelta(seconds=remaining / rate)
-        if caps_at >= resets_at or caps_at <= now:
-            return None
-        return Projection(kind=kind, caps_at=caps_at)
+        if caps_at >= resets_at:
+            return Pace(PACE_WONT_CAP)
+        if caps_at <= now:
+            return Pace(PACE_UNKNOWN)
+        return Pace(PACE_CAPS, caps_at)

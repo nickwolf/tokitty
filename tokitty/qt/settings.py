@@ -13,16 +13,18 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+import PySide6
+from PySide6.QtCore import Qt, qVersion
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QColorDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
 )
 
 from tokitty.qt import macos
-from tokitty import sprites, theme as T
+from tokitty import diagnostics, sprites, theme as T
 from tokitty.app_version import version_text
-from tokitty.display import bar_color
+from tokitty.behaviour import PERSONALITIES
+from tokitty.display import PROVIDER_SEPARATOR, bar_color
 from tokitty.qt.kit import Kit, SpritePreview, hbox, set_text_color, text, vbox
 from tokitty.qt.poller import QtPoller
 from tokitty.settings_style import (
@@ -53,10 +55,9 @@ _BUDGET_HINTS = {"24h": "last 24 hours", "7d": "last 7 days", "month": "this mon
 
 # (caption, customization field)
 _COLOR_ROWS = (
-    ("Coat", "coat_base"),
-    ("Shade", "coat_shade"),
     ("Card background", "card_bg"),
-    ("Bar fill", "bar_fill"),
+    ("Session bar", "session_bar"),
+    ("Weekly bar", "weekly_bar"),
 )
 
 CAT_SPOT_LABELS = (("inside", "Left"), ("inside_right", "Right"), ("on_top", "On top"))
@@ -72,6 +73,20 @@ _TEXT_NAMES = (
 )
 
 OPACITY_HINT = "You'll need to right-click where the widget is to get back here"
+
+
+DIAGNOSTICS_HINT = "For bug reports. Names, paths and tokens are left out."
+
+
+def _copy_text(value: str) -> None:
+    """Put text on the system clipboard. The one clipboard write; tests patch it."""
+    QGuiApplication.clipboard().setText(value)
+
+
+def _screen_facts() -> List[Tuple[int, int, float]]:
+    """(width, height, pixel ratio) per screen: no names, models or serials."""
+    return [(s.geometry().width(), s.geometry().height(), s.devicePixelRatio())
+            for s in QGuiApplication.screens()]
 
 
 def _hrow() -> Tuple[QWidget, QHBoxLayout]:
@@ -136,6 +151,10 @@ class _Tab:
     def refresh(self) -> None:
         pass
 
+    def commit(self) -> None:
+        """Save any edit still sitting in an entry. Called before the pane or
+        tab changes and when the window closes."""
+
     def close(self) -> None:
         """The window is going away: cancel any poll this tab scheduled."""
 
@@ -189,6 +208,61 @@ class GeneralTab(_Tab):
         if host.on_toggle_surprise is not None and host.surprise_me is not None:
             add("surprise", "Surprise me", "New random cat look at every launch",
                 lambda _v: self.write(host.on_toggle_surprise))
+        self._build_diagnostics()
+
+    def _build_diagnostics(self) -> None:
+        self.mailbox = Mailbox()
+        self._pending = False
+        self._screens: List[Tuple[int, int, float]] = []
+        self.poller = QtPoller(self.owner, self.mailbox, self._on_report,
+                               lambda: self._pending)
+        row, layout = _hrow()
+        row.setContentsMargins(0, 10, 0, 0)
+        self.diagnostics_button = self.kit.button(
+            "Copy diagnostics", "secondary", self._copy_diagnostics, compact=True)
+        layout.addWidget(self.diagnostics_button)
+        layout.addSpacing(10)
+        self.diagnostics_hint = text(DIAGNOSTICS_HINT, color=MUTED, font=FONT_SMALL)
+        layout.addWidget(self.diagnostics_hint, 1)
+        self.add(row)
+
+    def _set_diagnostics_hint(self, message: str, color: str = MUTED) -> None:
+        self.diagnostics_hint.setText(message)
+        set_text_color(self.diagnostics_hint, color)
+
+    def _copy_diagnostics(self) -> None:
+        if self._pending:
+            return
+        self._pending = True
+        self._screens = _screen_facts()  # Qt objects stay on the GUI thread
+        self._set_diagnostics_hint("Collecting…")
+        state_dir = self.host.state_dir
+        probe = getattr(self.host, "running_distros", None)
+
+        def running(name: str) -> bool:
+            return name.casefold() in {d.casefold() for d in probe()}
+
+        run_worker(self.mailbox, "diagnostics",
+                   lambda: diagnostics.read_state(state_dir, running if probe else None))
+        self.poller.start()
+
+    def _on_report(self, _tag: str, ok: bool, value) -> None:
+        self._pending = False
+        if not ok:
+            self._set_diagnostics_hint("Could not collect diagnostics.", WARN)
+            return
+        report = diagnostics.build_report(
+            facts=value, screens=self._screens, qt_version=qVersion(),
+            pyside_version=PySide6.__version__, stderr_lines=diagnostics.stderr_tail())
+        try:
+            _copy_text(report)
+        except Exception:
+            self._set_diagnostics_hint("Could not copy to the clipboard.", WARN)
+            return
+        self._set_diagnostics_hint("Copied")
+
+    def close(self) -> None:
+        self.poller.cancel()
 
     def _tray_available(self) -> bool:
         available = self.host.tray_available
@@ -204,6 +278,8 @@ class GeneralTab(_Tab):
                             ("surprise", host.surprise_me)):
             if key in self.toggles and getter is not None:
                 self.toggles[key].set(getter())
+        if not self._pending:
+            self._set_diagnostics_hint(DIAGNOSTICS_HINT)
 
 
 class LookTab(_Tab):
@@ -234,18 +310,53 @@ class LookTab(_Tab):
         caption = text("Name", color=MUTED, font=FONT_SMALL)
         caption.setContentsMargins(0, 0, 0, 4)
         left_col.addWidget(caption)
+        name_row, name_layout = _hrow()
+        # The harness tag the pane adds in a mixed window; not part of the name.
+        self.name_hint = text("", color=MUTED)
+        name_layout.addWidget(self.name_hint)
         holder, self.name_entry = kit.entry()
         holder.setContentsMargins(0, 0, 0, 0)
-        left_col.addWidget(holder)
+        name_layout.addWidget(holder, 1)
+        left_col.addWidget(name_row)
+        self._name_index: Optional[int] = None
         left_col.addSpacing(8)
         self.name_entry.editingFinished.connect(self._save_name)
 
         choices, choice_row = _hrow()
-        self.colorway = self._choice(choice_row, "Colorway", list(sprites.COLORWAYS),
-                                     lambda i, name: host.on_customization_changed(i, "colorway", name))
+        self.colorway = self._choice(
+            choice_row, "Colorway", list(sprites.COLORWAYS),
+            lambda i, label: host.on_customization_changed(i, "colorway", self._colorway_ids.get(label, label)))
         self.pattern = self._choice(choice_row, "Pattern", list(sprites.PATTERNS),
                                     lambda i, name: host.on_customization_changed(i, "pattern", name))
+        self.tail = self._choice(choice_row, "Tail", list(sprites.TAIL_STYLES),
+                                 lambda i, name: host.on_customization_changed(i, "tail", name))
         left_col.addWidget(choices)
+        # The dropdown shows names; the pane stores ids. Rebuilt by refresh().
+        self._colorway_ids: Dict[str, str] = {}
+        make_row, make_layout = _hrow()
+        make_row.setContentsMargins(0, 6, 0, 0)
+        self.new_colorway_button = kit.button("New…", "secondary", lambda: self._edit_colorway(False),
+                                              compact=True)
+        self.edit_colorway_button = kit.button("Edit…", "secondary", lambda: self._edit_colorway(True),
+                                               compact=True)
+        make_layout.addWidget(self.new_colorway_button)
+        make_layout.addSpacing(6)
+        make_layout.addWidget(self.edit_colorway_button)
+        make_layout.addSpacing(8)
+        # Shown while a built-in is selected, so a greyed-out Edit… reads as
+        # intended rather than broken.
+        self.builtin_hint = text("Built-in colorways can't be changed.\nNew… starts from this one.",
+                                 color=MUTED, font=FONT_SMALL)
+        make_layout.addWidget(self.builtin_hint)
+        make_layout.addStretch(1)
+        left_col.addWidget(make_row)
+        left_col.addSpacing(8)
+
+        personality_row, personality_layout = _hrow()
+        self.personality = self._choice(
+            personality_layout, "Personality", list(PERSONALITIES),
+            lambda i, name: host.on_customization_changed(i, "personality", name))
+        left_col.addWidget(personality_row)
         left_col.addSpacing(8)
 
         sits = text("Cat sits", color=MUTED, font=FONT_SMALL)
@@ -256,7 +367,7 @@ class LookTab(_Tab):
                 lambda: host.on_customization_changed(self.owner.pane_index, "cat_home", spot)))
         left_col.addWidget(self.cat_sits)
 
-        kit.section_header(self.frame, "Custom colors", "Overrides the preset", top=14)
+        kit.section_header(self.frame, "Card colors", "Override the theme for this cat", top=14)
         self.color_rows: Dict[str, ColorRow] = {}
         for label, field in _COLOR_ROWS:
             self.color_rows[field] = self.color_row(
@@ -285,6 +396,37 @@ class LookTab(_Tab):
         row_layout.addSpacing(6)
         return dropdown
 
+    def _edit_colorway(self, edit: bool) -> None:
+        """Open the colorway editor for this pane: Edit on its custom colorway,
+        else New. The dialog writes through the host and refreshes this tab."""
+        from tokitty.qt.colorway_editor import ColorwayEditor
+
+        index = self.owner.pane_index
+        cid = self._custom_id(index) if edit else None
+        if edit and cid is None:
+            return
+        ColorwayEditor(self.owner, self.host, index, cid).exec()
+
+    def _custom_id(self, index: int) -> Optional[str]:
+        """The pane's colorway id when it is a stored custom one, else None."""
+        cid = self.host.panes[index]._colorway
+        return cid if sprites.is_custom_id(cid) and cid in self.host.colorway_store() else None
+
+    def _refresh_colorways(self, current: str) -> None:
+        """Refill the colorway dropdown (built-ins, then each custom by name)
+        and show `current`; a dangling id shows as orange."""
+        store = self.host.colorway_store()
+        ids = {name: name for name in sprites.COLORWAYS}
+        for cid in sprites.colorway_names():
+            if cid in store:
+                ids[store[cid]["name"]] = cid
+        self._colorway_ids = ids
+        labels = list(ids)
+        if self.colorway.choices() != labels:
+            self.colorway.set_choices(labels)
+        label = next((name for name, cid in ids.items() if cid == current), "orange")
+        self.colorway.set(label)
+
     def _build_preview(self) -> QFrame:
         frame = self.kit.surface()
         frame.setFixedSize(132, 116)
@@ -305,15 +447,20 @@ class LookTab(_Tab):
 
     def _save_name(self) -> None:
         index = self.owner.pane_index
-        pane = self.host.panes[index]
+        raw, kind = self.host.pane_name(index)
         new = self.name_entry.text().strip()
-        if new == (pane._label or ""):
-            return
-        self.write(lambda: self.host.on_customization_changed(index, "label", new))
-        # The write may have resolved the typed name (blank back to the
-        # default); show what the pane now carries even though the entry
-        # still has focus.
-        self.name_entry.setText(self.host.panes[index]._label or "")
+        prefix = f"{kind}{PROVIDER_SEPARATOR}" if kind else ""
+        if prefix and new.startswith(prefix):
+            new = new[len(prefix):].strip()
+        if new != raw:
+            self.write(lambda: self.host.on_customization_changed(index, "label", new))
+        # Show what is stored even though the entry still has focus.
+        self.name_entry.setText(self.host.pane_name(index)[0])
+
+    def commit(self) -> None:
+        # Before the first refresh the entry is empty, not edited.
+        if self._name_index is not None and self.name_entry.text().strip() != self.host.pane_name(self.owner.pane_index)[0]:
+            self._save_name()
 
     def refresh(self) -> None:
         owner, host = self.owner, self.host
@@ -322,10 +469,22 @@ class LookTab(_Tab):
         names = owner.pane_names()
         self.pane_picker.set_choices(names)
         self.pane_picker.set(names[index])
-        if not self.name_entry.hasFocus():
-            self.name_entry.setText(pane._label or "")
-        self.colorway.set(pane._colorway)
+        raw, kind = host.pane_name(index)
+        self.name_hint.setText(f"{kind}{PROVIDER_SEPARATOR}" if kind else "")
+        self.name_hint.setVisible(bool(kind))
+        # A pane switch always refills; an ordinary refresh must not clobber typing.
+        if index != self._name_index or not self.name_entry.hasFocus():
+            self.name_entry.setText(raw)
+        self._name_index = index
+        self._refresh_colorways(pane._colorway)
+        editable = self._custom_id(index) is not None
+        self.edit_colorway_button.setEnabled(editable)
+        self.builtin_hint.setVisible(not editable)
+        self.edit_colorway_button.setCursor(
+            Qt.CursorShape.PointingHandCursor if editable else Qt.CursorShape.ArrowCursor)
         self.pattern.set(pane._pattern)
+        self.tail.set(pane._tail)
+        self.personality.set(pane._personality)
         for _caption, field in _COLOR_ROWS:
             self.color_rows[field].set(host.pane_color(index, field))
         count = len(host.panes)
@@ -566,6 +725,15 @@ class ThemeTab(_Tab):
         self.show_toggles: Dict[str, object] = {}
 
         kit.section_header(self.frame, "Card", top=0)
+        self.design = kit.segmented(
+            [("refined", "Refined"), ("classic", "Classic")],
+            on_change=lambda v: self.write(
+                lambda: self.host.set_theme(T.apply_design(self.host.theme(), v))))
+        self.add(self.design)
+        hint = text("Card style sets the card, bar and text colours below; the other settings stay.",
+                    color=DIM_COLOR, font=FONT_SMALL)
+        hint.setContentsMargins(0, 4, 0, 6)
+        self.add(hint)
         self.opacity = kit.segmented(
             [(str(n), "Invisible" if n == 0 else f"{n}%") for n in range(0, 101, 10)],
             on_change=lambda v: self._edit("card", "opacity", int(v)), compact=True)
@@ -610,6 +778,21 @@ class ThemeTab(_Tab):
             toggle.setContentsMargins(12, 4, 12, 4)
             kit.add(card, toggle)
             self.show_toggles[element] = toggle
+        kit.section_header(self.frame, "Cat", top=10)
+        self.shadow_toggle = kit.toggle(
+            "Cat shadow", compact=True, on_change=lambda on: self._edit("cat", "shadow", on))
+        self.shadow_toggle.setContentsMargins(12, 4, 12, 4)
+        self.wander_toggle = kit.toggle(
+            "Cat wanders", compact=True, on_change=lambda on: self._edit("cat", "wander", on))
+        self.wander_toggle.setContentsMargins(12, 4, 12, 4)
+        self.time_of_day_toggle = kit.toggle(
+            "Follows the clock", compact=True,
+            on_change=lambda on: self._edit("cat", "time_of_day", on))
+        self.time_of_day_toggle.setContentsMargins(12, 4, 12, 4)
+        card = self.card()
+        kit.add(card, self.shadow_toggle)
+        kit.add(card, self.wander_toggle)
+        kit.add(card, self.time_of_day_toggle)
         kit.section_header(self.frame, "Outline", "Helps text over a see-through card", top=10)
         self.halo = kit.segmented([("off", "Off"), ("auto", "Auto"), ("on", "On")],
                                   on_change=lambda v: self._edit("text", "halo", v))
@@ -683,6 +866,7 @@ class ThemeTab(_Tab):
 
     def refresh(self) -> None:
         theme = self.host.theme()
+        self.design.set(theme.card.design)
         self.opacity.set(str(theme.card.opacity))
         self.opacity_hint.setVisible(theme.card.opacity == 0)
         self.layout_choice.set(theme.bars.layout)
@@ -696,6 +880,9 @@ class ThemeTab(_Tab):
                 control.set(value)
         for element, toggle in self.show_toggles.items():
             toggle.set(element in theme.text.show)
+        self.shadow_toggle.set(theme.cat.shadow)
+        self.wander_toggle.set(theme.cat.wander)
+        self.time_of_day_toggle.set(theme.cat.time_of_day)
         for holder in self.entries.values():
             self.kit.set_entry_error(holder, False)
 
@@ -757,6 +944,9 @@ class SettingsWindow(QWidget):
         self._names: List[str] = []
         self._closed = False
         self.kit.style_window(self)
+        # A press on a NoFocus child (dropdown, rail, blank frame) then takes
+        # focus off an entry, so its editingFinished fires before the click acts.
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setWindowTitle("Tokitty: Settings")
         self.setMinimumSize(BASE_WIDTH, BASE_HEIGHT)
         # Parentless, so it follows the widget's Always in front itself.
@@ -823,7 +1013,12 @@ class SettingsWindow(QWidget):
 
     # -- shell ---------------------------------------------------------------
 
+    def _commit(self) -> None:
+        for tab in self.tabs.values():
+            tab.commit()
+
     def _show(self, key: str) -> None:
+        self._commit()
         self.current = key
         self.rail.paint(key)
         for tab_key, tab in self.tabs.items():
@@ -854,6 +1049,7 @@ class SettingsWindow(QWidget):
             self.set_pane(names.index(name))
 
     def set_pane(self, index: int) -> None:
+        self._commit()
         self.pane_index = self._clamp(index)
         self.refresh()
 
@@ -883,6 +1079,7 @@ class SettingsWindow(QWidget):
         if any(tab.close_blocked() for tab in self.tabs.values()):
             event.ignore()
             return
+        self._commit()
         self._release()
         super().closeEvent(event)
 

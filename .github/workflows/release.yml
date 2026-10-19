@@ -281,6 +281,15 @@ jobs:
             python freeze/verify_update.py "${args[@]}"
           fi
 
+      # Cached so release builds don't add to the shipped release's download
+      # counts, which are how we tell whether anyone else runs tokitty.
+      - name: Restore the shipped release
+        id: legacy-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/legacy
+          key: legacy-${{ env.LEGACY_TAG }}-${{ matrix.target }}
+
       - name: Verify update from a shipped release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -291,7 +300,9 @@ jobs:
             ext=zip
           fi
           name="tokitty-$LEGACY_TAG-${{ matrix.target }}.$ext"
-          gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/legacy"
+          if [ "${{ steps.legacy-cache.outputs.cache-hit }}" != "true" ]; then
+            gh release download "$LEGACY_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/legacy"
+          fi
           args=(--old-archive "$RUNNER_TEMP/legacy/$name" --old-tag "$LEGACY_TAG" --new-archive "$NEW_ARCHIVE" --new-sums "$NEW_SUMS" --tag "$UPDATE_TAG" --only apply_update,no_ack_rollback --work "$RUNNER_TEMP/vu-legacy" --report "$RUNNER_TEMP/update-report-legacy.json")
           if [ "$REHEARSAL" = "true" ]; then
             args+=(--rehearsal)

@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+from tokitty import colorways as colorways_mod
+from tokitty import sprites
 from tokitty.accounts import Account, IDENTITY_PREFIX
-from tokitty.customize import Customization, SINGLE_KEY
+from tokitty.customize import Customization, SINGLE_KEY, save_customization
 
 MIGRATION_STATE_FILENAME = "migration_state.json"
 CUSTOMIZATION_MIGRATION_KEY = "customization_default_key_v1"
 LEGACY_ACCOUNT_LABELS_MIGRATION_KEY = "legacy_account_labels_v1"
+COAT_OVERRIDES_MIGRATION_KEY = "coat_overrides_to_colorway_v1"
 
 
 def load_migration_state(state_dir: Path) -> Dict[str, bool]:
@@ -96,6 +100,7 @@ def migrate_legacy_account_labels(
                     pattern=current.pattern,
                     overrides=dict(current.overrides),
                     label=account.name,
+                    tail=current.tail,
                 )
     return store
 
@@ -121,4 +126,74 @@ def absorb_implicit_default(
     default_entry = store.get(SINGLE_KEY)
     if default_entry is not None and new_slug not in store:
         store[new_slug] = default_entry
+    return store
+
+
+def migrate_coat_overrides(
+    state_dir: Path,
+    customization_store: Dict[str, Customization],
+) -> Tuple[Dict[str, Customization], Dict[str, Dict[str, str]]]:
+    """Compute the retirement of the per-account coat_base/coat_shade
+    overrides (#156): each entry that has either gets a custom colorway built
+    from its colorway's built-in tones with coat := coat_base and
+    shade := coat_shade where set; the entry then points at that colorway and
+    loses those two overrides (card_bg and bar_fill stay). Returns
+    (customization store, colorways store); both are the inputs unchanged
+    when COAT_OVERRIDES_MIGRATION_KEY is already set. Entries that end up
+    with identical tones share one colorway, and an identical custom already
+    in colorways.json is reused, so a rerun after a crash between the writes
+    adds nothing. A source colorway that is not a built-in is treated as
+    orange. Never marks itself; see run_coat_overrides_migration."""
+    colorways = colorways_mod.load_colorways(state_dir)
+    if load_migration_state(state_dir).get(COAT_OVERRIDES_MIGRATION_KEY):
+        return customization_store, colorways
+
+    store = dict(customization_store)
+    for key, custom in customization_store.items():
+        base = custom.overrides.get("coat_base")
+        shade = custom.overrides.get("coat_shade")
+        if base is None and shade is None:
+            continue
+        source = custom.colorway if custom.colorway in sprites.COLORWAYS else "orange"
+        tones = dict(sprites.COLORWAYS[source])
+        if base is not None:
+            tones["coat"] = base
+        if shade is not None:
+            tones["shade"] = shade
+        tones = {k: v.lower() for k, v in tones.items()}
+        cid = colorways_mod.find_by_tones(colorways, tones)
+        if cid is None:
+            cid = colorways_mod.next_id(colorways)
+            colorways[cid] = {"name": _migrated_name(source, colorways), **tones}
+        overrides = {k: v for k, v in custom.overrides.items() if k not in ("coat_base", "coat_shade")}
+        store[key] = replace(custom, colorway=cid, overrides=overrides)
+    return store, colorways
+
+
+def _migrated_name(source: str, colorways: Dict[str, Dict[str, str]]) -> str:
+    taken = {entry["name"].casefold() for entry in colorways.values()}
+    base = f"{source.title()} custom"
+    name, n = base, 1
+    while name.casefold() in taken:
+        n += 1
+        name = f"{base} {n}"
+    return name
+
+
+def run_coat_overrides_migration(
+    state_dir: Path,
+    customization_store: Dict[str, Customization],
+) -> Dict[str, Customization]:
+    """Compute and persist the coat-override migration, in the order that
+    survives a crash: colorways.json, then customization.json, then the
+    migration key. Returns the store to use from here on."""
+    state_dir = Path(state_dir)
+    if load_migration_state(state_dir).get(COAT_OVERRIDES_MIGRATION_KEY):
+        return customization_store
+    store, colorways = migrate_coat_overrides(state_dir, customization_store)
+    if colorways != colorways_mod.load_colorways(state_dir):
+        colorways_mod.save_colorways(state_dir, colorways)
+    if store != customization_store:
+        save_customization(state_dir, store)
+    mark_customization_migration_complete(state_dir, COAT_OVERRIDES_MIGRATION_KEY)
     return store
