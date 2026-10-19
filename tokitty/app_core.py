@@ -391,9 +391,9 @@ def apply_hint(update: PaneUpdate, hint: Optional[Hint], ladder_state: str) -> P
     kwargs = update.kwargs
     if hint.kind == "near":
         changes = {"handoff_text": hint.text}
-        # Only an alert cat droops, and only once the art exists. Panicked,
-        # capped, wake, prompt and activity poses are left alone.
-        if kwargs["state"] == "alert" and "tired" in sprites.ANIMATIONS:
+        # Only an alert cat droops. Panicked, capped, wake, prompt and
+        # activity poses are left alone.
+        if kwargs["state"] == "alert":
             changes["state"] = "tired"
         return PaneUpdate("limits", {**kwargs, **changes})
     # A perk up only lifts a cat that is resting on its own ladder state: an

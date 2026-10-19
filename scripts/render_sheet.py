@@ -179,6 +179,8 @@ def scene_frame(frame: List[str], offset: Tuple[int, int], rest: List[str], spot
                            scale, bytes(shadow.COLOR), alpha)
     dx, dy = offset
     ox = place.origin[0] // CELL + (-dx if place.mirrored else dx) - crop_x
+    if place.mirrored:  # a grid wider than the cat extends to its left (sprites.grid_size)
+        ox -= len(frame[0]) - theme.SPRITE_W // CELL
     oy = place.origin[1] // CELL + dy - crop_y
     for r, row in enumerate(frame):
         for c, ch in enumerate(row):

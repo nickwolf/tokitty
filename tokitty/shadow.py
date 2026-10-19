@@ -62,8 +62,16 @@ def shadow_for(rest_grid: Sequence[str], grid: Sequence[str], offset: Tuple[int,
     cat whose spot is `home`, in card coordinates. `rest_grid` is the animation's
     frame 0, which fixes the footprint and where the floor is. `x` is the
     sprite's left edge in card px where it is not at `home`'s own. None when
-    the grid has no body."""
-    feet_row, rest_feet = ground_row(grid), ground_row(rest_grid)
+    the grid has no body. A move's grid can be bigger than the cat to hold its
+    props (sprites.grid_size); only the cat's own columns count, and nothing
+    below where it stands at rest, so the props (knock_off's falling glass,
+    the mouse running off) cast nothing."""
+    cols = theme.SPRITE_W // SCALE
+    rest_grid = [row[:cols] for row in rest_grid]
+    rest_feet = ground_row(rest_grid)
+    if rest_feet is not None:
+        grid = [row[:cols] for row in grid[:rest_feet + 1]]
+    feet_row = ground_row(grid)
     foot = footprint(rest_grid)
     if feet_row is None or rest_feet is None or foot is None:
         return None
@@ -71,6 +79,12 @@ def shadow_for(rest_grid: Sequence[str], grid: Sequence[str], offset: Tuple[int,
     if x is not None:
         origin_x = x
     dx, dy = offset
+    if home == "on_top":
+        # A paw dangling over the edge (bat_down) is no more feet than a
+        # draped tail: rows below the edge two cells wide or less don't count.
+        edge_row = -origin_y // SCALE - 1 - dy
+        while feet_row > edge_row and sum(ch not in NON_BODY for ch in grid[feet_row]) <= 2:
+            feet_row -= 1
     feet_y = origin_y + (feet_row + 1) * SCALE + dy * SCALE
     if home == "on_top":
         floor = theme.placement("inside").origin[1] + theme.SPRITE_H

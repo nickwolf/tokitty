@@ -389,7 +389,7 @@ def test_spot_gif_and_variant_resolution(tmp_path, monkeypatch):
 
     monkeypatch.setitem(sprites.SPOT_VARIANTS, ("content", "on_top"), sprites.single_track(
         sprites.SITTING_TEMPLATE, [sprites.Frame({"A": "n"}), sprites.Frame({"A": "z"})]))
-    assert resolve_states(["content", "alert"], "on_top") == ["content@on_top", "alert"]
+    assert resolve_states(["content", "panicked"], "on_top") == ["content@on_top", "panicked"]
     assert resolve_states(["content"], None) == ["content"]
     paths = write_gifs(tmp_path, ["content@on_top"], scale=2, seconds=1.6, spot="on_top")
     assert [p.name for p in paths] == ["content-at-on_top.gif"]

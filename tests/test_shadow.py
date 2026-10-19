@@ -108,6 +108,17 @@ def test_on_top_cat_rests_on_the_top_edge_and_drops_to_the_floor():
     assert air.y == 116 - S and len(air.cells[0]) < len(down.cells[0])
 
 
+def test_a_paw_hanging_over_the_top_edge_is_not_the_ground():
+    # bat_down: lying on the edge with a forepaw dangling over the card
+    rest = sprites.get_frames("move:bat_down")[0]
+    hang = sprites._HANG_SWIPE
+    s = shadow_for(rest, hang, sprites._HANG_DROP, "on_top", False)
+    assert s.y == -S and max(s.cells[0]) == CORE_ALPHA
+    # a whole body below the edge still falls to the floor (jump_down)
+    fall = shadow_for(rest, sprites._JUMP_FALL, (0, 4), "on_top", False)
+    assert fall.y == 116 - S
+
+
 def test_floor_is_where_the_rest_frame_stands():
     rest = _grid("..ooo", "..ooo")
     shifted = [r for r in rest[1:]] + ["." * 28]  # on screen, one row higher
@@ -135,3 +146,16 @@ def test_x_overrides_the_spots_own_left_edge():
     at_home = shadow_for(g, g, (0, 0), "on_top", False)
     moved = shadow_for(g, g, (0, 0), "on_top", False, x=theme.placement("on_top").origin[0] + 3 * S)
     assert moved.x - at_home.x == 3 * S and moved.y == at_home.y and moved.cells == at_home.cells
+
+
+def test_props_cast_nothing_and_never_drag_the_shadow_down():
+    # the falling glass, the running mouse and the wand's string are not the cat
+    for move, spot in (("knock_off", "on_top"), ("mouse", "inside"), ("wand", "inside")):
+        frames = sprites.MOVES[move].tracks[0].frames
+        grids = sprites.get_frames(sprites.move_name(move))
+        rest = shadow_for(grids[0], grids[0], frames[0].offset, spot, False)
+        assert rest is not None, move
+        for i, (grid, frame) in enumerate(zip(grids, frames)):
+            s = shadow_for(grids[0], grid, frame.offset, spot, False)
+            if s is not None:
+                assert s.y <= rest.y, (move, i)

@@ -33,12 +33,39 @@ STOP_REST_MS = (20_000, 60_000)   # at each stop along the edge
 NAP_MS = (180_000, 600_000)       # a nap at home
 MIN_LEG = 2                       # strides between one stop and the next
 STALL_MS = 5_000                  # later than this, a step starts now instead
-# What play plays, by where the cat is: the upright scratches need the stats
-# or the card's side beside it, so on the top edge only the stretch fits.
-PLAY_MOVES = {"inside": ("scratch", "scratch_stats", "scratch_edge"),
-              "inside_right": ("scratch", "scratch_stats", "scratch_edge"),
-              "on_top": ("scratch",)}
+# What play plays, by where the cat is. The rolls and the yarn need the floor
+# inside the card, so they are not played on the top edge; knock_off needs
+# the top edge to push the glass off; the upright scratches need the stats or
+# the card's side beside the cat, so on the top edge only the stretch fits.
+_FLOOR_PLAY = ("scratch", "scratch_stats", "scratch_edge", "roll", "tail_catch",
+               "tail_catch_roll", "fly", "yarn", "mouse", "wand")
+PLAY_MOVES = {"inside": _FLOOR_PLAY,
+              "inside_right": _FLOOR_PLAY,
+              "on_top": ("scratch", "tail_catch", "fly", "knock_off", "mouse",
+                         "wand")}
+# Moves only a first-row card can play: the wand's string comes down from
+# above the card, which only a first-row pane has clear.
+FIRST_ROW_MOVES = frozenset({"wand"})
 STOP_SCRATCH = 1 / 3              # chance of a scratch at a stop, while play > 0
+# The bat a bar ticking up plays (#135), by where the cat is: on the edge
+# it reaches down over it, and one time in five rolls home instead of walking.
+BAT_MOVES = {"inside": (("bat", 1),), "inside_right": (("bat", 1),),
+             "on_top": (("bat_down", 4), ("bat_down_roll", 1))}
+
+
+def bat_move(spot: str, rng: random.Random) -> str:
+    """The weighted bat for a spot; a lone entry is taken without drawing."""
+    options = BAT_MOVES[spot]
+    if len(options) == 1:
+        return options[0][0]
+    pick = rng.random() * sum(w for _, w in options)
+    for name, w in options:
+        pick -= w
+        if pick < 0:
+            return name
+    return options[-1][0]
+
+
 
 
 @dataclass(frozen=True)
@@ -66,7 +93,7 @@ def stops_from(x: int) -> List[int]:
 
 def _lies(state: str, spot: str) -> bool:
     """Whether the state is drawn lying down in that spot (the loaf)."""
-    return sprites.spot_state(state, spot) != state
+    return (state, spot) in sprites.LYING_VARIANTS
 
 
 class Wanderer:
@@ -180,7 +207,9 @@ class Wanderer:
         elif choice == "nap":
             self.nap_until = at + self._span(NAP_MS)
         elif choice == "play":
-            self.play = self.rng.choice(PLAY_MOVES[self.pose.spot])
+            moves = [m for m in PLAY_MOVES[self.pose.spot]
+                     if self.roams or m not in FIRST_ROW_MOVES]
+            self.play = self.rng.choice(moves)
 
     def _span(self, span) -> int:
         return int(self.rng.randint(*span) * self.drives.pace)
@@ -252,7 +281,7 @@ class Wanderer:
               and self.rng.random() < STOP_SCRATCH):
             self.play = "scratch"
         self.walking = move in ("walk_start", "walk")
-        self.lying = move == "lie_down"
+        self.lying = move in sprites.LYING_MOVES
         self.pose = pose
         self.move = None
 
