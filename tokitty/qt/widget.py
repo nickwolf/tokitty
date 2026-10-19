@@ -36,6 +36,7 @@ MODEL_NAME_MAX = 14       # ui.render_usage's fit_tag limit
 CAT_CANVAS_SIZE = 112     # ui.CAT_CANVAS_SIZE
 CAT_CANVAS_DY = 4         # the sprite sits 4 px below its canvas origin (placement "inside")
 TAG_INSET = 6
+NOTCH_W = 1               # logical px of each threshold notch (#131)
 HALO_COLOR = QColor(0, 0, 0, 200)
 # Card text sits this far in from its layout rect, the inset the original Tk
 # label drew with, kept so the card looks as it always has. Measured on
@@ -681,6 +682,19 @@ class TokittyQtWidget(QWidget):
                 p.drawRect(area)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
+    def _notches(self, p: QPainter, rect: T.Rect, style: T.PaneStyle) -> None:
+        """Cut each threshold notch through the bar down to the card, so it
+        shows the card's own colour and alpha whatever the bar's colour."""
+        xs = T.notch_xs(self.theme.bars, rect)
+        if not xs:
+            return
+        color = QColor(style.background)
+        color.setAlpha(T.card_alpha(style.opacity))
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        for x in xs:
+            p.fillRect(QRectF(x, rect.y, NOTCH_W, rect.h), color)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
     def _paint_limits(self, p, pane, layout, style, label_fg, dim, halo) -> None:
         if self.theme.card.design == "refined":
             return self._paint_limits_refined(p, pane, layout, style, label_fg, dim, halo)
@@ -696,6 +710,7 @@ class TokittyQtWidget(QWidget):
                            halo and T.halo_applies("section_labels"))
             self._bar(p, layout[f"{name}_bar"], pct,
                       T.bar_fill(self.theme, pct, _bar_override(style, name)))
+            self._notches(p, layout[f"{name}_bar"], style)
             p.setFont(text_font)
             reset_box = _text_rect(layout[f"{name}_reset"]) if f"{name}_reset" in layout else None
             if f"{name}_percent" in layout:
@@ -729,6 +744,7 @@ class TokittyQtWidget(QWidget):
                            f"{pct:.0f}%", halo and T.halo_applies("percent"))
             self._bar(p, layout[f"{name}_bar"], pct,
                       T.bar_fill(self.theme, pct, _bar_override(style, name)))
+            self._notches(p, layout[f"{name}_bar"], style)
             phrase = reset_phrase(reset)
             if f"{name}_reset" in layout and phrase:
                 p.setFont(text_font)

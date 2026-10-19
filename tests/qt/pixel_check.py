@@ -55,7 +55,7 @@ MASK_PAD = 2        # logical px added around each text rect; the halo reaches 1
 MASK_COLOR = b"\xff\x00\xff\xff"
 
 LAYOUTS = ("default", "halo", "low_opacity", "cat_right", "cat_top", "models",
-           "classic", "classic_models")
+           "classic", "classic_models", "notches")
 # Layouts whose text sits on a translucent card: Intel and AMD round it differently.
 TRANSLUCENT_LAYOUTS = frozenset({"low_opacity"})
 # One colorway across every pattern: the patterns are what route tones to the
@@ -325,6 +325,8 @@ def layout_widget(name: str, cls=PixelWidget) -> RecordingWidget:
         home = "inside_right"
     elif name == "cat_top":
         home = "on_top"
+    elif name == "notches":
+        theme = T.apply_preset(theme, "colour_blind")  # #131: its colours and notches
     elif name in ("classic", "classic_models"):
         theme = replace(T.CLASSIC, cat=theme.cat)  # the look before #139, pinned
     elif name not in ("default", "models"):
