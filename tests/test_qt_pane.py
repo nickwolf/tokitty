@@ -546,10 +546,11 @@ def test_the_mask_place_holds_every_offset_of_the_playing_move():
     clock = Clock(0)
     pane = _pane(clock, roams=True)
     _content(pane)
-    assert pane.mask_place == (pane.pose, ((0, 0),)) or (0, 0) in pane.mask_place[1]
+    assert pane.mask_place[:2] == (pane.pose, ((0, 0),)) or (0, 0) in pane.mask_place[1]
     assert _walk_until(pane, clock, _moving)
-    pose, offsets = pane.mask_place
+    pose, offsets, size = pane.mask_place
     assert pose == pane.pose and offsets == sprites.offsets(pane.playing)
+    assert size == (28, 26)
     assert any(o != (0, 0) for o in offsets)
 
 

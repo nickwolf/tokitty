@@ -164,6 +164,19 @@ def test_an_on_top_cat_walks_the_edge_without_jumping():
     assert roam.pose == home_pose("on_top") and shown[-1][0] == "content@on_top"
 
 
+def test_an_alert_cat_on_the_edge_sits_and_never_lies_down():
+    # alert@on_top is drawn sitting, so having a variant there is no reason to lie down
+    assert sprites.spot_state("alert", "on_top") == "alert@on_top"
+    roam = _roam("on_top")
+    roam.set_state("alert", 0, transition=False)
+    shown = _run(roam, 10 * 60_000)
+    assert _moves(shown) == [] and not roam.wanderer.lying
+    assert shown[-1][0] == "alert@on_top"
+    # calm again, it lies back down into the loaf instead of cutting to it
+    roam.set_state("content", 10 * 60_000)
+    assert _moves(_run(roam, 11 * 60_000, now=10 * 60_000))[:1] == ["lie_down"]
+
+
 def test_an_interested_cat_sits_at_its_stops():
     roam, shown, _ = _trip(state="interested", seed=1)
     moves = _moves(shown)
@@ -431,7 +444,7 @@ def test_pace_scales_the_rest():
 
 # ---- play: scratching (#124) ---------------------------------------------------
 
-from tokitty.wander import PLAY_MOVES  # noqa: E402
+from tokitty.wander import PLAY_MOVES, bat_move  # noqa: E402
 
 PLAY = Drives(trip=0.0, play=1.0)
 
@@ -441,23 +454,35 @@ def test_play_scratches_and_the_cat_ends_where_it_started(home):
     roam = _driven(home, d=PLAY)
     start = _drawn(roam)
     shown = _run(roam, 2 * HOUR)
-    played = [m for m in _moves(shown) if m.startswith("scratch")]
+    played = [m for m in _moves(shown) if m in PLAY_MOVES[home]]
     assert played and set(played) <= set(PLAY_MOVES[home])
     assert roam.pose == home_pose(home)
     assert _drawn(roam) == start
 
 
-def test_an_inside_cat_plays_every_scratch_and_on_top_only_the_stretch():
-    inside = _moves(_run(_driven("inside", d=PLAY), 6 * HOUR))
-    assert {"scratch", "scratch_stats", "scratch_edge"} <= set(inside)
-    on_top = _moves(_run(_driven("on_top", d=PLAY), 6 * HOUR))
-    assert set(on_top) == {"sit_up", "scratch", "lie_down"}
+@pytest.mark.parametrize("home", ["inside", "inside_right", "on_top"])
+def test_a_cat_plays_every_move_of_its_spot_and_no_other(home):
+    played = set(_moves(_run(_driven(home, d=PLAY), 12 * HOUR)))
+    assert set(PLAY_MOVES[home]) <= played
+    assert played <= set(PLAY_MOVES[home]) | {"sit_up", "lie_down"}
 
 
-def test_a_loafing_cat_sits_up_to_scratch_and_lies_down_after():
+def test_a_loafing_cat_sits_up_to_scratch_and_lies_down_after(monkeypatch):
+    monkeypatch.setitem(PLAY_MOVES, "on_top", ("scratch",))
     moves = _moves(_run(_driven("on_top", d=PLAY), HOUR))
     i = moves.index("scratch")
     assert moves[i - 1:i + 2] == ["sit_up", "scratch", "lie_down"]
+
+
+def test_a_move_that_ends_lying_down_needs_no_lie_down_after(monkeypatch):
+    # bat_down_roll rolls home into the loaf: a loafing cat stays down, and an
+    # interested one (drawn sitting on the edge) sits up from it
+    monkeypatch.setitem(PLAY_MOVES, "on_top", ("bat_down_roll",))
+    content = _moves(_run(_driven("on_top", d=PLAY), HOUR))
+    assert "bat_down_roll" in content and "lie_down" not in content
+    interested = _moves(_run(_driven("on_top", state="interested", d=PLAY), HOUR))
+    i = interested.index("bat_down_roll")
+    assert interested[i + 1] == "sit_up"
 
 
 def test_scratch_stats_heads_for_the_stats_on_either_side():
@@ -474,6 +499,24 @@ def test_a_cat_that_cannot_roam_plays_in_place():
     shown = _run(roam, 2 * HOUR)
     assert all(pose == home_pose("inside") for _, pose, _, _ in shown)
     assert any(m.startswith("scratch") for m in _moves(shown))
+
+
+def test_only_a_first_row_cat_plays_the_wand():
+    shut = set(_moves(_run(_driven(roams=False, d=PLAY), 12 * HOUR)))
+    assert shut and "wand" not in shut
+    first = set(_moves(_run(_driven(roams=True, d=PLAY), 12 * HOUR)))
+    assert "wand" in first
+
+
+def test_the_bat_is_weighted_by_spot_and_a_lone_one_draws_nothing():
+    for spot in ("inside", "inside_right"):
+        rng = random.Random(3)
+        state = rng.getstate()
+        assert bat_move(spot, rng) == "bat" and rng.getstate() == state
+    rng = random.Random(7)
+    picks = [bat_move("on_top", rng) for _ in range(2000)]
+    assert set(picks) == {"bat_down", "bat_down_roll"}
+    assert 0.15 < picks.count("bat_down_roll") / len(picks) < 0.25
 
 
 def _stop_scratches(play, seeds=range(6)):

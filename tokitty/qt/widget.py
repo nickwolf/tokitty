@@ -254,13 +254,18 @@ class TokittyQtWidget(QWidget):
         move in cells; a mirrored cat moves the other way in x."""
         dpr = self.devicePixelRatioF()
         ox, oy = self.window_layout.pane_origins[index]
-        return self._origin_of(ox, oy, self.panes[index].pose, offset, dpr)
+        pane = self.panes[index]
+        return self._origin_of(ox, oy, pane.pose, offset, dpr, len(pane.grid()[0]))
 
     @staticmethod
-    def _origin_of(ox: int, oy: int, pose: Pose, offset: Tuple[int, int], dpr: float):
+    def _origin_of(ox: int, oy: int, pose: Pose, offset: Tuple[int, int], dpr: float,
+                   cols: int = T.SPRITE_W // sprites.SCALE):
+        """A grid wider than the cat (a move's props, see sprites.grid_size)
+        has the cat in its left columns; mirrored, those end up on the right,
+        so the image starts that much further left and the cat stays put."""
         dx, dy = offset
         if pose.mirrored:
-            dx = -dx
+            dx = -dx - (cols - T.SPRITE_W // sprites.SCALE)
         py = T.placement(pose.spot).origin[1]
         return (T.snap(ox + pose.x + dx * sprites.SCALE, dpr),
                 T.snap(oy + py + dy * sprites.SCALE, dpr))
@@ -1123,13 +1128,13 @@ class TokittyQtWidget(QWidget):
         cut off by the mask, which clips painting on Windows."""
         dpr = self.devicePixelRatioF()
         rects = []
-        for i, (pose, offsets) in enumerate(self._current_mask_places()):
+        for i, (pose, offsets, (cols, rows)) in enumerate(self._current_mask_places()):
             ox, oy = self.window_layout.pane_origins[i]
-            corners = [self._origin_of(ox, oy, pose, o, dpr) for o in offsets]
+            corners = [self._origin_of(ox, oy, pose, o, dpr, cols) for o in offsets]
             x0, y0 = min(c[0] for c in corners), min(c[1] for c in corners)
             x1, y1 = max(c[0] for c in corners), max(c[1] for c in corners)
-            rects.append(T.Rect(round(x0), round(y0), round(x1 - x0) + T.SPRITE_W,
-                                round(y1 - y0) + T.SPRITE_H))
+            rects.append(T.Rect(round(x0), round(y0), round(x1 - x0) + cols * sprites.SCALE,
+                                round(y1 - y0) + rows * sprites.SCALE))
         return rects
 
     def _current_mask_places(self) -> tuple:

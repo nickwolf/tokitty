@@ -439,3 +439,26 @@ def test_the_shadow_passes_the_pose_on(qapp, monkeypatch):
     wanderer.pose = replace(wanderer.pose, x=wanderer.pose.x + 4 * sprites.SCALE)
     second = widget._shadow_placed(0, widget.panes[0])
     assert second[0].x() - first[0].x() == 4 * sprites.SCALE
+
+
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_a_wide_grid_reaches_left_of_a_mirrored_cat_and_the_cat_stays_put(qapp, mirrored):
+    pose = Pose("inside_right" if mirrored else "inside", 40, mirrored)
+    cat = T.SPRITE_W // sprites.SCALE
+    narrow = TokittyQtWidget._origin_of(10, 20, pose, (2, -1), 1.0, cat)
+    wide = TokittyQtWidget._origin_of(10, 20, pose, (2, -1), 1.0, 73)
+    assert wide[1] == narrow[1]
+    assert narrow[0] - wide[0] == ((73 - cat) * sprites.SCALE if mirrored else 0)
+
+
+@pytest.mark.parametrize("home", ["inside", "inside_right"])
+def test_the_click_rect_of_a_wide_move_is_as_wide_as_its_grid(qapp, home):
+    clock = Clock()
+    widget = make(home, clock=clock)
+    state = sprites.move_name("mouse")
+    widget.panes[0].render(state, 0, 0, "", "", "", None, None, False)
+    widget.anim.stop()
+    cols, _ = sprites.grid_size(state)
+    xs = [o[0] for o in sprites.offsets(state)]
+    assert cols == 73
+    assert widget.cat_rects()[0].w == (cols + max(xs) - min(xs)) * sprites.SCALE

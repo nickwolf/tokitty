@@ -31,6 +31,7 @@ the old linear frame list did.
 from __future__ import annotations
 
 import functools
+import math
 import random
 import re
 from dataclasses import dataclass
@@ -1075,6 +1076,50 @@ WAKING_ANIMATION = Animation(_WK_TMPL, (
     )),
 ))
 
+# tired (#129): the alert cat worn out, its account near its cap while
+# another has room. Heavy lids over the eyes, both ears sagging out to the
+# sides, a slow tail, now and then a yawn, and every so often it nods off,
+# the head sinking a row with the eyes shut, and jerks awake wide-eyed.
+_TIRED_EYES_HEAVY = {**_ALERT_EYES_LINE, (8, 10): "e", (8, 16): "e"}
+_TIRED_EARS_SAG = {(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
+                   (0, 18): ".", (1, 18): ".", (1, 19): "x", (2, 20): "x"}
+_TIRED_EAR_LIFT = {(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
+                   (0, 18): "x", (1, 18): "x"}
+
+_TI_TMPL, (_TI_T_NEUTRAL, _TI_T_IN, _TI_T_OUT, _TI_T_UP, _TI_T_HIGH), \
+    (_TI_HEAVY, _TI_SHUT, _TI_OPEN, _TI_YAWN) = _alert_base(
+        [{**_TIRED_EYES_HEAVY, **_MOUTH_SHUT}, {**_ALERT_EYES_LINE, **_MOUTH_SHUT},
+         {**_ALERT_EYES_OPEN, **_MOUTH_SHUT}, {**_ALERT_EYES_ARCH, **_YAWN_MOUTH}])
+_TI_TMPL, (_TI_EARS_SAG, _TI_EAR_LIFT) = _pose_cells(
+    _TI_TMPL, [_TIRED_EARS_SAG, _TIRED_EAR_LIFT])
+_TI_TMPL = [row.replace("A", "n") for row in _TI_TMPL]
+_TI_NOD = _sink_head(_TI_TMPL)
+
+TIRED_ANIMATION = Animation(_TI_TMPL, (
+    # The nod lives here: it moves the eyes, so it shares their track.
+    Track("eyes", (
+        Frame(_TI_HEAVY, (2500, 5000)),
+        Frame(_TI_SHUT, 300),
+        Frame(_TI_HEAVY, (2000, 4000)),
+        Frame(_TI_YAWN, 1100),
+        Frame(_TI_HEAVY, (3000, 6000)),
+        Frame(_TI_SHUT, 600),
+        Frame(_TI_SHUT, 900, template=_TI_NOD),
+        Frame(_TI_OPEN, 350),
+        Frame(_TI_HEAVY, (1500, 3000)),
+    )),
+    Track("ears", (
+        Frame(_TI_EARS_SAG, (6000, 12000)),
+        Frame(_TI_EAR_LIFT, 250),
+    )),
+    Track("tail", (
+        Frame(_TI_T_NEUTRAL, (3500, 7000)),
+        Frame(_TI_T_OUT, 400),
+        Frame(_TI_T_UP, (1200, 2000)),
+        Frame(_TI_T_OUT, 400),
+    )),
+))
+
 # activate: yellow sparkles burst out from the cat in rings and fade.
 _SPARK_INNER = [(4, 4), (11, 3), (19, 4), (2, 22), (9, 23), (24, 23)]
 _SPARK_OUTER = [(1, 1), (10, 0), (21, 1), (0, 25), (8, 26), (25, 25)]
@@ -1611,6 +1656,7 @@ ANIMATIONS: Dict[str, Animation] = {
     "content": CONTENT_ANIMATION,
     "interested": INTERESTED_ANIMATION,
     "alert": ALERT_ANIMATION,
+    "tired": TIRED_ANIMATION,
     "panicked": PANICKED_ANIMATION,
     "confused": CONFUSED_ANIMATION,
     "waking": WAKING_ANIMATION,
@@ -1808,6 +1854,15 @@ def offsets(state: str) -> Tuple[Tuple[int, int], ...]:
     return tuple(sorted(found))
 
 
+def grid_size(state: str) -> Tuple[int, int]:
+    """The animation's grid in cells, (columns, rows): 28 x 26 but for a move
+    whose props reach past the cat (knock_off's glass, mouse's mouse), which
+    draws the cat in the grid's top-left corner. Mirrored, the extra columns
+    reach to the cat's left instead, and the cat stays where it was."""
+    template = get_animation(state).template
+    return len(template[0]), len(template)
+
+
 def compose_offset(state: str, positions: Sequence[int]) -> Tuple[int, int]:
     """Where the sprite is moved, in cells, with every track at the given
     frame position: the offset of the one track that moves it, else (0, 0)."""
@@ -2003,6 +2058,89 @@ LOAF_SLEEPING_ANIMATION = Animation(_LF_TMPL, (
 
 SPOT_VARIANTS[("content", "on_top")] = LOAF_CONTENT_ANIMATION
 SPOT_VARIANTS[("sleeping", "on_top")] = LOAF_SLEEPING_ANIMATION
+
+
+# alert on the card's top edge (#127, #135's watch): the alert cat sitting on
+# the edge with its head bowed over the bars below, eyes a row low, and its
+# tail hanging down over the front of the card like the loaf's. The body sits
+# _PERCH_DROP rows higher under the head, and the whole sprite is drawn that
+# much lower, so the paws still rest on the edge.
+_PERCH_DROP = 3
+
+
+def _perch_template() -> List[str]:
+    head = ALERT_TEMPLATE[:13]
+    body = [row.replace("y", ".").replace("Y", ".") for row in ALERT_TEMPLATE[14:]]
+    blank = ["." * 28]
+    rows = [list(row) for row in blank * (14 - _PERCH_DROP) + body + blank * _PERCH_DROP]
+    for r, line in enumerate(head):
+        for c, ch in enumerate(line):
+            if ch != ".":
+                rows[r][c] = ch
+    return ["".join(row) for row in rows]
+
+
+def _perch_tail(tip: str) -> Dict[Tuple[int, int], str]:
+    tips = {"left": ((23, 20, 21), (24, 19, 20), (25, 19, 19)),
+            "mid": ((23, 21, 22), (24, 21, 22), (25, 21, 21)),
+            "right": ((23, 22, 23), (24, 22, 23), (25, 23, 23))}
+    return _tail((19, 20, 21), (20, 21, 22), (21, 21, 22), (22, 21, 22), *tips[tip])
+
+
+_PERCH_EYES_DOWN = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 10): "e", (8, 16): "e"}
+_PERCH_EYES_DOWN_R = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 11): "e", (8, 17): "e"}
+_PERCH_EYES_DOWN_L = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 9): "e", (8, 15): "e"}
+_PERCH_EYES_SHUT = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o",
+                    **_cells(LID_CHAR, (8, 9, 11), (8, 15, 17))}
+
+_PC_TMPL, (_PC_TAIL_MID, _PC_TAIL_LEFT, _PC_TAIL_RIGHT) = _pose_cells(
+    _perch_template(), [_perch_tail("mid"), _perch_tail("left"), _perch_tail("right")])
+_PC_TMPL, (_PC_DOWN, _PC_DOWN_R, _PC_DOWN_L, _PC_SHUT) = _pose_cells(
+    _PC_TMPL, [_PERCH_EYES_DOWN, _PERCH_EYES_DOWN_R, _PERCH_EYES_DOWN_L, _PERCH_EYES_SHUT])
+_PC_TMPL, (_PC_BANG_NONE, _PC_BANG_LOW, _PC_BANG_HIGH, _PC_BANG_MID) = _pose_cells(
+    _PC_TMPL, [{}, _BANG_LOW, _BANG_HIGH, _BANG_MID])
+_PC_TMPL, (_PC_EAR_REST, _PC_EAR_FLICK) = _pose_cells(
+    _PC_TMPL, [_ALERT_EAR_REST, _ALERT_EAR_FLICK])
+_PC_TMPL = [row.replace("A", "n") for row in _PC_TMPL]
+
+ALERT_PERCH_ANIMATION = Animation(_PC_TMPL, (
+    Track("eyes", (
+        Frame(_PC_DOWN, (2000, 4500)),
+        Frame(_PC_SHUT, 120),
+        Frame(_PC_DOWN, (1500, 3000)),
+        Frame(_PC_DOWN_R, (700, 1400)),
+        Frame(_PC_DOWN, (1500, 3500)),
+        Frame(_PC_DOWN_L, (500, 900)),
+    )),
+    Track("bang", (
+        Frame(_PC_BANG_MID, (1200, 2000)),
+        Frame(_PC_BANG_NONE, (1500, 3000)),
+        Frame(_PC_BANG_LOW, 80),
+        Frame(_PC_BANG_HIGH, 100),
+    )),
+    # The tip twitches the way alert's flicks, not the loaf's lazy swing.
+    Track("tail", (
+        Frame(_PC_TAIL_MID, (1000, 2200)),
+        Frame(_PC_TAIL_RIGHT, 90),
+        Frame(_PC_TAIL_MID, 80),
+        Frame(_PC_TAIL_RIGHT, 90),
+        Frame(_PC_TAIL_MID, (600, 1200)),
+        Frame(_PC_TAIL_LEFT, 110),
+    )),
+    Track("ears", (
+        Frame(_PC_EAR_REST, (4000, 9000)),
+        Frame(_PC_EAR_FLICK, 90),
+        Frame(_PC_EAR_REST, 110),
+        Frame(_PC_EAR_FLICK, 90),
+    )),
+    Track("perch", (Frame({}, 1000, offset=(0, _PERCH_DROP)),), None),
+))
+SPOT_VARIANTS[("alert", "on_top")] = ALERT_PERCH_ANIMATION
+# The variants drawn lying down, which the wanderer reaches with lie_down and
+# leaves with sit_up. Every other variant is drawn sitting.
+LYING_VARIANTS = frozenset({("content", "on_top"), ("sleeping", "on_top")})
+# The moves that end lying in the loaf rather than sitting up as they began.
+LYING_MOVES = frozenset({"lie_down", "bat_down_roll"})
 
 # jump_up / jump_down: the jumps between the card (inside) and its top edge
 # (on_top), 29 rows apart. jump_up wiggles like done_hop, launches with its
@@ -2573,14 +2711,17 @@ _SCRATCH_UP_STRIPES = ((11, 13), (11, 14), (13, 14), (13, 15), (15, 15), (15, 16
                        (17, 16), (17, 17))
 
 
-def _scratch_upright(near: int = 0, far: int = 0) -> List[str]:
+def _scratch_upright(near: int = 0, far: int = 0,
+                     paws: Optional[Sequence[Tuple[int, int, str]]] = None) -> List[str]:
     """Up on the hind legs facing left, forepaws on the grid's left edge: the
     near paw at rows 11-12 and the far one at 14-15, each dragged `near` /
-    `far` rows down with claw marks above it."""
+    `far` rows down with claw marks above it. `paws` instead puts the far
+    and then the near paw's top-left cell at (row, col), drawn behind the
+    head ("o" near, "O" far), with no claw marks; a paw left out is not drawn."""
     rows = [["."] * 28 for _ in range(26)]
 
-    def put(r: int, c: int, ch: str) -> None:
-        if 0 <= r < 26 and 0 <= c < 28:
+    def put(r: int, c: int, ch: str, behind: bool = False) -> None:
+        if 0 <= r < 26 and 0 <= c < 28 and not (behind and rows[r][c] != "."):
             rows[r][c] = ch
 
     for i, (r, c) in enumerate(_SCRATCH_UP_TAIL):
@@ -2607,14 +2748,19 @@ def _scratch_upright(near: int = 0, far: int = 0) -> List[str]:
             if _WALK_STAND[r][c] != ".":
                 put(r - 3, 31 - c, _WALK_STAND[r][c])
     # forelegs out to the edge, the far (shaded) one under the near one
-    for shoulder_r, shoulder_c, paw_r, ch in ((15, 10, 14 + far, "O"), (13, 9, 11 + near, "o")):
-        for c in range(2, shoulder_c + 1):
-            r = round(paw_r + (shoulder_r - paw_r) * (c - 2) / (shoulder_c - 2))
-            put(r, c, ch)
-            put(r + 1, c, ch)
+    behind = paws is not None
+    if paws is None:
+        paws = ((14 + far, 0, "O"), (11 + near, 0, "o"))
+    for (shoulder_r, shoulder_c), (paw_r, paw_c, ch) in zip(((15, 10), (13, 9)), paws):
+        for c in range(paw_c + 2, shoulder_c + 1):
+            r = round(paw_r + (shoulder_r - paw_r) * (c - paw_c - 2) / (shoulder_c - paw_c - 2))
+            put(r, c, ch, behind)
+            put(r + 1, c, ch, behind)
         for r in (paw_r, paw_r + 1):
-            put(r, 0, "m")
-            put(r, 1, "m")
+            put(r, paw_c, "m")
+            put(r, paw_c + 1, "m")
+    if behind:
+        return ["".join(row) for row in rows]
     for r in range(11, 11 + near, 2):
         put(r, 0, "B")
     for r in range(14, 14 + far, 2):
@@ -2662,6 +2808,1313 @@ def _upright_scratch(toward_stats: bool) -> Animation:
 
 MOVES["scratch_stats"] = _upright_scratch(toward_stats=True)
 MOVES["scratch_edge"] = _upright_scratch(toward_stats=False)
+
+
+# bat (#127, #135): a bar ticked up, so the cat steps over to the stats as
+# for scratch_stats, rears up and swats the session bar's end twice (it sits
+# at rows 5-6 of the cat's grid in either card design), then walks back. The
+# swatting paw is drawn by hand: cocked up by the ear, flung out level with
+# the bar beside the face, pulled back to the chin in between. Facing left.
+def _bat_arm(paw: Tuple[int, int], arm: Sequence[Tuple[int, int]]) -> Dict[Tuple[int, int], str]:
+    r, c = paw
+    return {**{cell: "o" for cell in arm}, (r, c): "m", (r, c + 1): "m", (r + 1, c): "m",
+            (r + 1, c + 1): "m"}
+
+
+_BAT_COCK = _bat_arm((0, 3), ((2, 3), (2, 4), (3, 4)))
+_BAT_SWAT = _bat_arm((5, 0), ((5, 2), (6, 2), (6, 3), (7, 2), (7, 3), (8, 2), (8, 3), (9, 3),
+                              (9, 4), (10, 4), (10, 5), (10, 6), (10, 7), (11, 5), (11, 6)))
+_BAT_CHIN = _bat_arm((9, 2), ((10, 4), (10, 5), (10, 6), (10, 7), (11, 5), (11, 6)))
+
+
+def _bat_upright(arm: Dict[Tuple[int, int], str]) -> List[str]:
+    """Up on the hind legs facing left, the far foreleg hidden behind the
+    body and the near one at `arm`."""
+    return _overlay(_scratch_upright(paws=()), arm)
+
+
+def _bat() -> Animation:
+    at = (3, 0)
+    steps = (("contact", "up"), ("pass", "sway"), ("contact2", "up"))
+    chin, cock, swat = (_facing_left(_bat_upright(a)) for a in (_BAT_CHIN, _BAT_COCK, _BAT_SWAT))
+    frames = [
+        Frame({}, 120, template=_hop_frame()),
+        Frame({}, 100, template=_hop_frame(pose="crouch")),
+        Frame({}, 120, template=_WALK_STAND),
+    ]
+    frames += [Frame({}, 110, template=_walk_frame(feet, tail), offset=(i, 0))
+               for i, (feet, tail) in enumerate(steps, 1)]
+    frames += [Frame({}, 100, template=_drop(chin, 2), offset=at),
+               Frame({}, 160, template=chin, offset=at),
+               Frame({}, 180, template=cock, offset=at),
+               Frame({}, 60, template=swat, offset=at),
+               Frame({}, 200, template=swat, offset=at),
+               Frame({}, 100, template=chin, offset=at),
+               Frame({}, 140, template=cock, offset=at),
+               Frame({}, 60, template=swat, offset=at),
+               Frame({}, 300, template=swat, offset=at),
+               Frame({}, 140, template=chin, offset=at),
+               Frame({}, 100, template=_drop(chin, 2), offset=at)]
+    frames += [Frame({}, 110, template=_facing_left(_walk_frame(feet, tail)), offset=(i, 0))
+               for i, (feet, tail) in reversed(list(enumerate(steps[:-1], 1)))]
+    frames += [Frame({}, 120, template=_facing_left(_WALK_STAND)),
+               Frame({}, 100, template=_hop_frame(pose="crouch")),
+               Frame({}, 200, template=_hop_frame())]
+    return single_track(_hop_frame(), frames, loop_from=None)
+
+
+MOVES["bat"] = _bat()
+
+
+# pounce (#127, #135): a session window reset without capping. The cat turns
+# side on toward the stats, drops into a hunting crouch, wiggles its rear,
+# springs forward in an arc and lands front paws first, four cells on (its
+# paws at most flush with the stats column), then trots back. Facing right.
+_POUNCE_REACH = 4
+
+
+def _side_frame(legs: Sequence[Tuple[int, int, int, int, str]],
+                tail: Sequence[Tuple[int, int]], drop: int = 0, rear: int = 0,
+                head: int = 0) -> List[str]:
+    """The walking body side on, `drop` rows lower, its rear half (columns
+    before 12) raised `rear` rows and its head (columns from 16, rows 3-11)
+    lowered `head` rows; each leg runs two cells wide from (hip row, hip col)
+    to its paw at (paw row, paw col); `tail` lists the tail's cells from the
+    rump out, two wide."""
+    rows = [["."] * 28 for _ in range(26)]
+    # the raised rear is painted over the rear where it was, so the haunches
+    # bunch up rather than tearing away from the back
+    for lift in sorted({0, rear}):
+        for r, line in enumerate(_WALK_BODY):
+            for c, ch in enumerate(line):
+                if ch == "." or (lift and c >= 12):
+                    continue
+                dr = drop - lift + (head if c >= 16 and r <= 11 else 0)
+                if 0 <= r + dr < 26:
+                    rows[r + dr][c] = ch
+    for hip_r, hip_c, paw_r, paw_c, fur in legs:
+        n = max(abs(paw_r - hip_r), abs(paw_c - hip_c), 1)
+        for i in range(n):
+            r = round(hip_r + (paw_r - hip_r) * i / n)
+            c = round(hip_c + (paw_c - hip_c) * i / n)
+            for cc in (c, c + 1):
+                if 0 <= r < 26 and 0 <= cc < 28 and rows[r][cc] in ".Oo":
+                    rows[r][cc] = fur
+        for cc in (paw_c, paw_c + 1):
+            if 0 <= paw_r < 26 and 0 <= cc < 28:
+                rows[paw_r][cc] = "m"
+    for i, (r, c) in enumerate(tail):
+        for cc in (c, c + 1):
+            if 0 <= r < 26 and 0 <= cc < 28 and rows[r][cc] == ".":
+                rows[r][cc] = "Y" if i // 2 % 2 == 0 else "y"
+    return ["".join(row) for row in rows]
+
+
+# crouched low, the forepaws tucked under the chest and the haunches folded,
+# the tail straight back along the ground with the tip flicking up
+def _pounce_crouch(rear: int = 0, tip: int = 0) -> List[str]:
+    return _side_frame(
+        legs=((22, 15, 25, 16, "O"), (22, 17, 25, 19, "o"),
+              (23 - rear, 5, 25, 5, "O"), (23 - rear, 7, 25, 8, "o")),
+        tail=((21 - rear, 3), (21 - rear, 2), (22 - rear, 1), (22 - rear, 0))
+        + (((21 - rear, 0), (20 - rear, 0)) if tip else ()),
+        drop=5, rear=rear, head=1)
+
+
+_POUNCE_LEAP = _side_frame(  # stretched out, forepaws reaching ahead, hind legs trailing
+    legs=((18, 15, 20, 23, "O"), (18, 17, 19, 25, "o"),
+          (18, 5, 22, 0, "O"), (18, 7, 21, 1, "o")),
+    tail=((12, 4), (12, 3), (12, 2), (11, 1), (11, 0)))
+_POUNCE_LAND = _side_frame(  # forepaws down first, the rear still up
+    legs=((21, 15, 25, 17, "O"), (21, 17, 25, 19, "o"),
+          (19, 5, 23, 3, "O"), (19, 7, 22, 5, "o")),
+    tail=((15, 4), (14, 3), (13, 2), (12, 2), (11, 2)), drop=3, rear=2)
+
+
+def _pounce() -> Animation:
+    feet = (("contact", "up"), ("pass", "sway"), ("contact2", "up"), ("pass2", "sway"))
+    far = (_POUNCE_REACH, 0)
+    frames = [
+        Frame({}, 120, template=_hop_frame()),
+        Frame({}, 100, template=_hop_frame(pose="crouch")),
+        Frame({}, 160, template=_WALK_STAND),
+        Frame({}, 400, template=_pounce_crouch()),
+    ]
+    for _ in range(3):  # the wiggle
+        frames += [Frame({}, 90, template=_pounce_crouch(rear=2, tip=1)),
+                   Frame({}, 90, template=_pounce_crouch())]
+    frames += [
+        Frame({}, 250, template=_pounce_crouch(tip=1)),
+        Frame({}, 60, template=_POUNCE_LEAP, offset=(1, -2)),
+        Frame({}, 70, template=_POUNCE_LEAP, offset=(2, -4)),
+        Frame({}, 60, template=_POUNCE_LEAP, offset=(3, -3)),
+        Frame({}, 90, template=_POUNCE_LAND, offset=far),
+        Frame({}, 300, template=_pounce_crouch(), offset=far),
+        Frame({}, 250, template=_WALK_STAND, offset=far),
+        Frame({}, 120, template=_facing_left(_WALK_STAND), offset=far),
+    ]
+    frames += [Frame({}, 110, template=_facing_left(_walk_frame(*feet[(_POUNCE_REACH - i) % 4])),
+                     offset=(i, 0))
+               for i in range(_POUNCE_REACH - 1, -1, -1)]
+    frames += [Frame({}, 120, template=_facing_left(_WALK_STAND)),
+               Frame({}, 100, template=_hop_frame(pose="crouch")),
+               Frame({}, 200, template=_hop_frame())]
+    return single_track(_hop_frame(), frames, loop_from=None)
+
+
+MOVES["pounce"] = _pounce()
+
+
+# bat_down (#127, #135): bat for a cat on the card's top edge. It walks along
+# the edge until it is over the session bar, lies down there and hangs its
+# right forepaw over the edge, eyes down, swats at the bar twice and walks
+# back. The loaf is drawn _HANG_LIFT rows higher in the grid and that much
+# lower on the card, so the body stays where the loaf lies and the grid has
+# room below the edge for the paw: hanging, it reaches the bar's top edge
+# (card y 31 in either design).
+_HANG_LIFT = 4
+_HANG_WALK = 16  # cells along the edge: puts the paw (cols 16-17) at card x 136
+_HANG_DROP = (0, _LOAF_DROP[1] + _HANG_LIFT)
+
+
+def _hang_frame(leg: Sequence[Tuple[int, int]]) -> List[str]:
+    """The loaf on the edge looking down, the right forepaw over the edge:
+    `leg` lists the (row, left col) of each row of the two-wide foreleg below
+    the paws' row, and the paw takes the two rows after the last."""
+    grid = _shift_up(_LOAF_REST, _HANG_LIFT)
+    paws = 21 - _HANG_LIFT
+    cells = {(paws, 15): "o", (paws, 16): "o", (paws, 17): "O", (paws, 18): "o",
+             (9, 10): "o", (9, 16): "o", (10, 10): "e", (10, 16): "e"}
+    for r, c in leg:
+        cells[(r, c)] = "o"
+        cells[(r, c + 1)] = "O"
+    r, c = leg[-1]
+    for pr in (r + 1, r + 2):
+        cells[(pr, c)] = cells[(pr, c + 1)] = "m"
+    return _overlay(grid, cells)
+
+
+_HANG_REACH = _hang_frame([(r, 16) for r in range(18, 24)])
+_HANG_COCK = _hang_frame([(r, 16) for r in range(18, 20)])
+_HANG_SWIPE = _hang_frame([(18, 16), (19, 16), (20, 16), (21, 17), (22, 17), (23, 18)])
+_HANG_LOOK = _overlay(_shift_up(_LOAF_REST, _HANG_LIFT),
+                      {(9, 10): "o", (9, 16): "o", (10, 10): "e", (10, 16): "e"})
+
+
+def _on_edge(grid: List[str]) -> Tuple[int, int]:
+    """The drop that rests a lying grid's lowest body row (not its tail) on
+    the card's top edge, where a sitting cat's row 25 rests."""
+    bottom = max(r for r, row in enumerate(grid) if any(ch not in ".yY" for ch in row))
+    return (0, len(grid) - 1 - bottom)
+
+
+# The loaf rolling, at 45, 135, 225 and 315 degrees counter-clockwise, with
+# the happy squint: turned from an 8x Scale2x enlargement and sampled back
+# down (RotSprite), for the in-between frames of bat_down_roll's roll.
+_ROLL_DIAGONALS: Dict[int, List[str]] = {
+    45: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "........xxxx.O..............",
+        "........xxxxOO..............",
+        "........oxpoO..oOOO.........",
+        ".......ooxooOOoooOOOO.......",
+        ".....ooosooooooooooOOOYyy...",
+        ".....oosoosoooooooooOOOyyY..",
+        "....oosooso---oooooooOO.YYY.",
+        ".xxxxsooooxxoxxoooooooO..Yy.",
+        ".xxxxcosoxxxwwxxooocoo....yy",
+        ".xxpccsoxxwwwwwwoocco.......",
+        ".xxocco--xwnwwwooucm........",
+        "..ooooo-owwwwwwuuum.........",
+        "..o.ooo-xxwwwwuuum..........",
+        "....ooooxxwwwuuuo...........",
+        "....ooooxxoouuuo............",
+        "....oooooooouum.............",
+        "....oosoooooum..............",
+        "....osoooooom...............",
+        ".....oosoooo................",
+        "......soooo.................",
+        ".......ooo..................",
+    ],
+    135: [
+        "..........Yyy...............",
+        ".........YYY................",
+        "........yyY.................",
+        "........yy..................",
+        "........YOOO................",
+        "........OOOoo...............",
+        ".......OOOoooo..............",
+        ".......OOoooccm.............",
+        "......OOoooooccm............",
+        "......OOoooooouum...........",
+        "......Ooooooooouuo..........",
+        "......ooooooxwouuuo.........",
+        ".......ooooxxwwwuuum........",
+        "....OO.Ooo-xwwwwwuuum.......",
+        ".....OOOoo-owwwwwwuuum......",
+        "....xxoooo-xxwnwwwooooo.....",
+        "....xxpoosoxxwwwwwoooooo....",
+        "....xxxxoosoxxxwxxxoooooo...",
+        "....xxoosoooox-oxxxoooooo...",
+        ".......oosooso---ooooosoo...",
+        "........oosoosoooooosoos....",
+        "........oooscccooooooso.....",
+        "..........oxxccooooooo......",
+        "...........xxpoo............",
+        "...........xxxxoo...........",
+        "...........xxxx.............",
+    ],
+    225: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "...................ooo......",
+        "..................oooos.....",
+        ".................oooosoo....",
+        "................mooooooso...",
+        "...............muooooosoo...",
+        "..............muuoooooooo...",
+        ".............ouuuooxxoooo...",
+        "............ouuuwwwxxoooo...",
+        "...........muuuwwwwxx-ooo.o.",
+        "..........muuuwwwwwwo-ooooo.",
+        ".........mcuoowwwnwx--occoxx",
+        "........occoowwwwwwxxosccpxx",
+        ".yy....oocoooxxwwxxxosocxxxx",
+        "..yY..Ooooooooxxoxxoooosxxxx",
+        "..YYY.OOooooooo---osoosoo...",
+        "...YyyOOOooooooooosoosoo....",
+        "....yyYOOOoooooooooosooo....",
+        "........OOOOoooOOooxoo......",
+        "..........OOOo..Oopxo.......",
+        "...............OOxxxx.......",
+        "...............O.xxxx.......",
+    ],
+    315: [
+        "..............xxxx..........",
+        "............ooxxxx..........",
+        ".............oopxx..........",
+        ".......oooooooccxxo.........",
+        "......osoooooocccsooo.......",
+        ".....soosoooooosoosoo.......",
+        "....oosooooo---osoosoo......",
+        "....ooooooxxxo-xoooosooxx...",
+        "....ooooooxxxwxxxosooxxxx...",
+        ".....oooooowwwwwxxosoopxx...",
+        "......ooooowwwnwxx-ooooxx...",
+        ".......muuuwwwwwwo-ooOOO....",
+        "........muuuwwwwwx-ooO.OO...",
+        ".........muuuwwwxxoooo......",
+        "..........ouuuowxooooo......",
+        "...........ouuooooooooO.....",
+        "............muuooooooOO.....",
+        ".............mccoooooOO.....",
+        "..............mccoooOO......",
+        "...............ooooOOO......",
+        "................ooOOO.......",
+        ".................OOOY.......",
+        "...................yy.......",
+        "..................Yyy.......",
+        ".................YYY........",
+        "................yyY.........",
+    ],
+}
+
+
+def _turn_ccw(grid: List[str]) -> List[str]:
+    """The drawing turned a quarter counter-clockwise about its own centre
+    column, at the top of a blank grid of the same size."""
+    cells = [(r, c) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch != "."]
+    top, bottom = min(r for r, _ in cells), max(r for r, _ in cells)
+    left, right = min(c for _, c in cells), max(c for _, c in cells)
+    h, w = bottom - top + 1, right - left + 1
+    first = (left + right + 1) // 2 - h // 2
+    rows = [["."] * len(grid[0]) for _ in grid]
+    for r, c in cells:
+        # (r, c) in the box -> row (w - 1 - (c - left)), col (r - top)
+        rows[w - 1 - (c - left)][first + r - top] = grid[r][c]
+    return ["".join(row) for row in rows]
+
+
+def _body_mid(grid: List[str]) -> float:
+    """The centre column of the drawing's body, not its tail."""
+    cols = [c for row in grid for c, ch in enumerate(row) if ch not in ".yY"]
+    return (min(cols) + max(cols)) / 2
+
+
+def _rolled(grid: List[str], mid: float) -> Tuple[int, int]:
+    """The offset that puts a rolling frame's body centred on column `mid`
+    (halves rounding the same way every time) and resting on the ground, so a
+    roll moves evenly however each turned frame sits in its grid."""
+    return (math.floor(mid - _body_mid(grid) + 0.5), _on_edge(grid)[1])
+
+
+def _bat_down(roll_home: bool = False) -> Animation:
+    """bat_down; with `roll_home` the cat rolls back along the edge instead of
+    walking: one roll over facing us, the loaf turning an eighth at a time,
+    and it stays lying in the loaf where it started (LYING_MOVES)."""
+    feet = (("contact", "up"), ("pass", "sway"), ("contact2", "up"), ("pass2", "sway"))
+    at = (_HANG_WALK, 0)
+    lying = (_HANG_WALK, _LOAF_DROP[1])
+    hang = (_HANG_WALK, _HANG_DROP[1])
+    frames = [
+        Frame({}, 120, template=_hop_frame()),
+        Frame({}, 100, template=_hop_frame(pose="crouch")),
+        Frame({}, 120, template=_WALK_STAND),
+    ]
+    frames += [Frame({}, 100, template=_walk_frame(*feet[(i - 1) % 4]), offset=(i, 0))
+               for i in range(1, _HANG_WALK + 1)]
+    frames += [Frame({}, 120, template=_WALK_STAND, offset=at),
+               Frame({}, 120, template=_hop_frame(pose="crouch"), offset=at),
+               Frame({}, 140, template=_SETTLE_LOWER, offset=lying),
+               Frame({}, 140, template=_SETTLE_SINK, offset=lying),
+               Frame({}, 200, template=_LOAF_REST, offset=lying),
+               Frame({}, 300, template=_HANG_LOOK, offset=hang),
+               Frame({}, 150, template=_HANG_COCK, offset=hang),
+               Frame({}, 350, template=_HANG_REACH, offset=hang),
+               Frame({}, 140, template=_HANG_COCK, offset=hang),
+               Frame({}, 60, template=_HANG_SWIPE, offset=hang),
+               Frame({}, 200, template=_HANG_SWIPE, offset=hang),
+               Frame({}, 120, template=_HANG_COCK, offset=hang),
+               Frame({}, 60, template=_HANG_SWIPE, offset=hang),
+               Frame({}, 300, template=_HANG_SWIPE, offset=hang),
+               Frame({}, 140, template=_HANG_COCK, offset=hang),
+               Frame({}, 200, template=_HANG_LOOK, offset=hang)]
+    if roll_home:
+        # eyes squeezed into the happy arch while it rolls
+        squint = compose(spot_state("content", "on_top"), [7, 0, 0, 0, 0])
+        frames.append(Frame({}, 250, template=_LOAF_REST, offset=lying))
+        quarter = squint
+        home = _body_mid(squint)
+        for eighth in range(1, 8):
+            if eighth % 2:
+                grid = _ROLL_DIAGONALS[45 * eighth]
+            else:
+                grid = quarter = _turn_ccw(quarter)
+            frames.append(Frame({}, 70, template=grid,
+                                offset=_rolled(grid, home + _HANG_WALK - 2 * eighth)))
+        # it stays down: the move ends in the loaf, as lie_down does
+        frames += [Frame({}, 110, template=squint, offset=_LOAF_DROP),
+                   Frame({}, 500, template=_LOAF_REST, offset=_LOAF_DROP)]
+        return single_track(_hop_frame(), frames, loop_from=None)
+    frames += [Frame({}, 150, template=_LOAF_REST, offset=lying),
+               Frame({}, 120, template=_SETTLE_SINK, offset=lying),
+               Frame({}, 120, template=_SETTLE_LOWER, offset=lying),
+               Frame({}, 120, template=_hop_frame(pose="crouch"), offset=at),
+               Frame({}, 120, template=_facing_left(_WALK_STAND), offset=at)]
+    frames += [Frame({}, 100, template=_facing_left(_walk_frame(*feet[(_HANG_WALK - i) % 4])),
+                     offset=(i, 0))
+               for i in range(_HANG_WALK - 1, -1, -1)]
+    frames += [Frame({}, 120, template=_facing_left(_WALK_STAND)),
+               Frame({}, 100, template=_hop_frame(pose="crouch")),
+               Frame({}, 200, template=_hop_frame())]
+    return single_track(_hop_frame(), frames, loop_from=None)
+
+
+MOVES["bat_down"] = _bat_down()
+MOVES["bat_down_roll"] = _bat_down(roll_home=True)
+
+
+# roll (#127 play): the cat lies down, rolls over facing us onto its back
+# toward the stats side (a cell per eighth of a turn, so four cells at most),
+# wriggles there with its paws batting the air, and rolls back the way it
+# came to sit where it started.
+# The loaf rolling over clockwise onto its back (#127 roll), at 45 and 135
+# degrees and rocking 15 degrees either side of belly-up: turned from an 8x
+# Scale2x enlargement and sampled back down, like _ROLL_DIAGONALS.
+_ROLL_OVER: Dict[int, List[str]] = {
+    -45: [
+        "..............xxxx..........",
+        "............ooxxxx..........",
+        ".............oopxx..........",
+        ".......oooooooccxxo.........",
+        "......osoooooocccsooo.......",
+        ".....soosoooooosoosoo.......",
+        "....oosoooooooeosoosoo......",
+        "....ooooooxxooxxoooosooxx...",
+        "....ooooooxxxxxxxosooxxxx...",
+        ".....oooooowwwwwxxosoopxx...",
+        "......ooooowwwnwxxeooooxx...",
+        ".......muuuwwwwwxxeooOOO....",
+        "........muuuwwwwwxoooO.OO...",
+        ".........muuuwwwxxoooo......",
+        "..........ouuuowxoooooo.....",
+        "...........ouuooooooooO.....",
+        "............muuooooooOO.....",
+        ".............mccoooooOO.....",
+        "..............mccoooOO......",
+        "...............ooooOOO......",
+        "................ooOOO.......",
+        ".................OOOY.......",
+        "...................yy.......",
+        "..................Yyy.......",
+        ".................YYY........",
+        "................yyY.........",
+    ],
+    -135: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "...................ooo......",
+        "..................oooos.....",
+        ".................oooosoo....",
+        "................mooooooso...",
+        "...............muooooosoo...",
+        "..............muuoooooooo...",
+        ".............ouuuooxxoooo...",
+        "............ouuuwwwxxoooo...",
+        "...........muuuwwwwxooooo.o.",
+        "..........muuuwwwwwxooooooo.",
+        ".........mcuoowwwnwxxeoccoxx",
+        "........occoowwwwwwxxosccpxx",
+        ".yy....oocoooxxwxxxxosocxxxx",
+        "..yY..Ooooooooxxxxxoooosxxxx",
+        "..YYY.OOooooooooeeosoosoo...",
+        "...YyyOOOooooooooosoosoo....",
+        "....yyYOOOoooooooooosooo....",
+        "........OOOOoooOOooxoo......",
+        "..........OOOo..Oopxo.......",
+        "...............OOxxxx.......",
+        "...............O.xxxx.......",
+    ],
+    -165: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        ".....................oooo...",
+        "..y...............mmoooooo..",
+        "..y...........ooomuuoooooo..",
+        "..YY......mmmmuuuuuoooosss..",
+        "..YY..Oooocuuuuuuuoooooooos.",
+        "..Yy.OOocccoouwwwwwwxooosso.",
+        "..yyOOoooocooowwwwwwxxooooo.",
+        "....YOOoooooxwwwwwwwxooooo..",
+        ".....OOoooooxxwwnwwxooooo...",
+        ".....OOooooooxxxwwxxeoooo...",
+        "......OOoooooooxxxxooooo....",
+        ".......Oooooooeoooossccooo..",
+        "........ooooooossooooccpxx..",
+        "...........OOOooooossxxxxx..",
+        "...........Ooooosssoooxxx...",
+        "..........OOxpxxoooo...xx...",
+        "...........xxxxo..o.........",
+        "............xxx.............",
+        ".............xx.............",
+    ],
+    -195: [
+        "............................",
+        "............................",
+        "............................",
+        "....y.......................",
+        "...YY.......................",
+        "...YY.......................",
+        "...yy.......................",
+        "...yOOOoo...................",
+        "...YOOoooomm................",
+        "....OOoocccummoo............",
+        "....OOoooccuuuuuommm........",
+        "...OOooooooouuuuuuuuoooo....",
+        "....OOooooowxwwwuuuoooooo...",
+        "....OOooooxwwwwwwoooooooo...",
+        "....Ooooooxwwwwwwwoooosoo...",
+        ".....ooooooxwwnwwwxxoooss...",
+        "......Ooooexxwwwxxxooosoo...",
+        ".......Ooooxxxxxoooooooss...",
+        ".....OOOOosooooxeooooooo....",
+        ".....xxoooossosooooooo......",
+        ".....xxpxxsoooosccooo.......",
+        ".....xxxxoosssoccco.........",
+        "......xx..oooosxxpooo.......",
+        ".......x...oo.ooxxxx........",
+        "................xxx.........",
+        "................xx..........",
+    ],
+}
+
+
+def _paw_up(grid: List[str], left: bool) -> List[str]:
+    """Belly up: one of the paws (the top row of "m") raised two rows on its
+    leg."""
+    top = min(r for r, row in enumerate(grid) if "m" in row)
+    cols = [c for c, ch in enumerate(grid[top]) if ch == "m"]
+    runs = [[cols[0]]]
+    for c in cols[1:]:
+        if c == runs[-1][-1] + 1:
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    run = runs[0] if left else runs[-1]
+    mid = run[len(run) // 2 - 1:len(run) // 2 + 1]
+    cells = {(top, c): "o" for c in run}
+    cells.update({(top - 1, c): "o" for c in mid})
+    cells.update({(top - 2, c): "m" for c in mid})
+    cells.update({(top - 3, c): "m" for c in mid})
+    return _overlay(grid, cells)
+
+
+def _no_tail(grid: List[str]) -> List[str]:
+    return [row.replace("y", ".").replace("Y", ".") for row in grid]
+
+
+def _roll() -> Animation:
+    """Lying down the tail tucks out of sight: inside, the loaf's hanging tail
+    would reach past the card's bottom, and turned it waves about."""
+    loaf, sink, lower = (_no_tail(g) for g in (_LOAF_REST, _SETTLE_SINK, _SETTLE_LOWER))
+    # belly up, low enough in the grid that a paw can be raised above it
+    back = _drop(_turn_ccw(_turn_ccw(loaf)), 6)
+    over = [_no_tail(_ROLL_OVER[-45]), _turn_ccw(back), _no_tail(_ROLL_OVER[-135]), back]
+    rock = {d: _no_tail(_ROLL_OVER[d]) for d in (-165, -195)}
+    home = _body_mid(loaf)
+
+    def at(grid: List[str], dx: int) -> Tuple[int, int]:
+        return _rolled(grid, home + dx)
+
+    frames = [
+        Frame({}, 150, template=_hop_frame()),
+        Frame({}, 140, template=_hop_frame(pose="crouch")),
+        Frame({}, 160, template=lower, offset=_LOAF_DROP),
+        Frame({}, 160, template=sink, offset=_LOAF_DROP),
+        Frame({}, 400, template=loaf, offset=_LOAF_DROP),
+    ]
+    frames += [Frame({}, 80, template=g, offset=at(g, i)) for i, g in enumerate(over[:3], 1)]
+    frames.append(Frame({}, 300, template=back, offset=at(back, 4)))
+    for _ in range(2):  # the wriggle, paws batting the air
+        for g, ms in ((rock[-165], 130), (back, 110), (rock[-195], 130), (back, 110),
+                      (_paw_up(back, True), 100), (_paw_up(back, False), 100),
+                      (_paw_up(back, True), 100), (back, 150)):
+            frames.append(Frame({}, ms, template=g, offset=at(g, 4)))
+    frames += [Frame({}, 80, template=g, offset=at(g, i))
+               for i, g in reversed(list(enumerate(over[:3], 1)))]
+    frames += [Frame({}, 300, template=loaf, offset=_LOAF_DROP),
+               Frame({}, 120, template=sink, offset=_LOAF_DROP),
+               Frame({}, 120, template=lower, offset=_LOAF_DROP),
+               Frame({}, 140, template=_hop_frame(pose="crouch")),
+               Frame({}, 250, template=_hop_frame())]
+    return single_track(_hop_frame(), frames, loop_from=None)
+
+
+MOVES["roll"] = _roll()
+
+
+# tail_catch (#127 play): sitting, the cat's eyes follow its tail tip as it
+# twitches, it swats at it twice and misses as the tip flicks away, then
+# catches it in both forepaws in front of its chest, nibbles it with a few bobs
+# of the head, and lets go: the tail springs back to its curl. Front on, so it
+# plays in every spot.
+_TC_SWAT = {(15, 20): "o", (15, 21): "o", (16, 21): "o",
+            (14, 22): "m", (14, 23): "m", (15, 22): "m", (15, 23): "m",
+            (24, 14): "o", (24, 15): "o", (24, 16): "o"}
+# the tail drawn from the rump across the belly up to the chin, both
+# forepaws holding it there
+_TC_HELD = {**_tail((21, 19, 20), (20, 18, 19), (19, 17, 18), (18, 16, 17), (17, 15, 16),
+                    (16, 14, 15), (15, 13, 14)),
+            (16, 11): "m", (16, 12): "m", (17, 11): "m", (17, 12): "m",
+            (17, 17): "m", (17, 18): "m", (18, 18): "m", (18, 19): "m",
+            **{(24, c): "o" for c in range(10, 17)},
+            **{(r, c): "." for r in range(18, 22) for c in range(22, 26)
+               if SITTING_TEMPLATE[r][c] in "yY"}}
+
+
+def _tail_catch_frame(tail: Optional[Dict[Tuple[int, int], str]] = None,
+                      eyes: Optional[Dict[Tuple[int, int], str]] = None,
+                      extra: Optional[Dict[Tuple[int, int], str]] = None,
+                      ear: bool = False, nibble: bool = False) -> List[str]:
+    """The sitting cat with its tail tip (rows 12-17 of the curl) in pose
+    `tail`, or held in front of it when `tail` is None and `extra` holds it."""
+    base = _overlay(SITTING_TEMPLATE, {**_SIT_EYES_OPEN, **(eyes or {})})
+    base = [row.replace("A", "n") for row in base]
+    clear = {(r, c): "." for r in range(12, 18) for c in range(19, 28) if base[r][c] in "yY"}
+    grid = _overlay(base, {**clear, **(tail or {}), **(extra or {}),
+                           **(_SIT_EAR_FLICK if ear else {})})
+    if ear:
+        grid = _overlay(grid, {(1, 18): "."})
+    return _sink_head(grid) if nibble else grid
+
+
+def _tail_catch() -> Animation:
+    look, shut, arch = _SIT_EYES_RIGHT, _SIT_EYES_LINE, _SIT_EYES_ARCH
+    sit = _tail_catch_frame(_SIT_TAIL_NEUTRAL)
+    held = _tail_catch_frame(eyes=_SIT_EYES_OPEN, extra=_TC_HELD)
+    frames = [
+        Frame({}, 300, template=sit),
+        Frame({}, 260, template=_tail_catch_frame(_SIT_TAIL_UP, look)),
+        Frame({}, 200, template=_tail_catch_frame(_SIT_TAIL_NEUTRAL, look, ear=True)),
+        Frame({}, 160, template=_tail_catch_frame(_SIT_TAIL_IN, look)),
+        Frame({}, 200, template=_tail_catch_frame(_SIT_TAIL_UP, look, ear=True)),
+        Frame({}, 110, template=_tail_catch_frame(_SIT_TAIL_HIGH, look, _TC_SWAT)),
+        Frame({}, 160, template=_tail_catch_frame(_SIT_TAIL_OUT, look)),
+        Frame({}, 220, template=_tail_catch_frame(_SIT_TAIL_IN, look)),
+        Frame({}, 110, template=_tail_catch_frame(_SIT_TAIL_HIGH, look, _TC_SWAT)),
+        Frame({}, 120, template=_tail_catch_frame(_SIT_TAIL_NEUTRAL, look)),
+        Frame({}, 350, template=held),
+    ]
+    for _ in range(3):  # the nibble
+        frames += [Frame({}, 170, template=_tail_catch_frame(eyes=shut, extra=_TC_HELD, nibble=True)),
+                   Frame({}, 140, template=_tail_catch_frame(eyes=arch, extra=_TC_HELD))]
+    frames += [
+        Frame({}, 300, template=_tail_catch_frame(eyes=arch, extra=_TC_HELD)),
+        Frame({}, 140, template=_tail_catch_frame(_SIT_TAIL_OUT)),
+        Frame({}, 140, template=_tail_catch_frame(_SIT_TAIL_UP)),
+        Frame({}, 300, template=sit),
+    ]
+    return single_track(sit, frames, loop_from=None)
+
+
+MOVES["tail_catch"] = _tail_catch()
+
+
+# tail_catch_roll (#127 play): tail_catch, but with the tail caught the cat
+# hugs it, lies down and rolls over onto its back with it facing us (roll's
+# roll), wrestles it there, rolls back and sits up to let it go.
+# The loaf hugging its tail: the tail comes round from the right flank across
+# the front, both forepaws off the ground and clutching it.
+_TC_HUG_LOAF = _overlay(_no_tail(_LOAF_REST), {
+    **{(21, c): "o" for c in range(8, 19) if _LOAF_REST[21][c] == "m"},
+    **_tail((18, 25, 25), (19, 12, 25), (20, 11, 24)),
+    (19, 14): "m", (19, 15): "m", (20, 14): "m", (20, 15): "m",
+    (19, 19): "m", (19, 20): "m", (20, 19): "m", (20, 20): "m",
+})
+
+# _TC_HUG_LOAF rolling over clockwise, at 45 and 135 degrees and rocking 15
+# degrees either side of belly-up, made like _ROLL_OVER.
+_TC_HUG_ROLL: Dict[int, List[str]] = {
+    -45: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "..............xxxx..........",
+        "............ooxxxx..........",
+        ".............oopxx..........",
+        ".......oooooooccxxo.........",
+        "......osoooooocccsooo.......",
+        ".....soosoooooosoosoo.......",
+        "....oosoooooooeosoosoo......",
+        "....ooooooxxooxxoooosooxx...",
+        "....ooooooxxxxxxxosooxxxx...",
+        ".....oooooowwwwwxxosoopxx...",
+        "......ooooowwwnwxxeooooxx...",
+        ".......ouuuwwwwwxxeooOOO....",
+        "........oyyYwwwwwxoooO.OO...",
+        ".........oyymwwwxxoooo......",
+        "..........ommmowxoooooo.....",
+        "...........omyYoooooooO.....",
+        "............oyyYoooooOO.....",
+        ".............oyymooooOO.....",
+        "..............ommYooOO......",
+        "...............oyyYOOO......",
+        "................oyyYO.......",
+        ".................OyyY.......",
+    ],
+    -135: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "................ooo.........",
+        "...............oooos........",
+        "..............oooosoo.......",
+        ".............oooooooso......",
+        "............ouooooosoo......",
+        "...........oyuoooooooo......",
+        "..........oyyuooxxoooo......",
+        ".........omyYwwwxxoooo......",
+        "........ommmwwwwxooooo.o....",
+        ".......oyymwwwwwxooooooo....",
+        "......oyyYowwwnwxxeoccoxx...",
+        ".....omyYowwwwwwxxosccpxx...",
+        "....oymmooxxwxxxxosocxxxx...",
+        "...OyyYooooxxxxxoooosxxxx...",
+        "...yyYoooooooeeosoosoo......",
+        "...yYOooooooooosoosoo.......",
+        "...YOOOoooooooooosooo.......",
+        ".....OOOOoooOOooxoo.........",
+        ".......OOOo..Oopxo..........",
+        "............OOxxxx..........",
+        "............O.xxxx..........",
+    ],
+    -165: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "....................oooo....",
+        ".................oooooooo...",
+        ".............oooouuoooooo...",
+        ".........oooomyyuuoooosss...",
+        ".....OoooyyymmYYuoooooooos..",
+        "....OOymmYYYmwwwwwwxooosso..",
+        "....yyYYmmooowwwwwwxxooooo..",
+        "...YYYoooooxwwwwwwwxooooo...",
+        "...YOOoooooxxwwnwwxooooo....",
+        "....OOooooooxxxwwxxeoooo....",
+        ".....OOoooooooxxxxooooo.....",
+        "......Oooooooeoooossccooo...",
+        ".......ooooooossooooccpxx...",
+        "..........OOOooooossxxxxx...",
+        "..........Ooooosssoooxxx....",
+        ".........OOxpxxoooo...xx....",
+        "..........xxxxo..o..........",
+        "...........xxx..............",
+        "............xx..............",
+    ],
+    -195: [
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "............................",
+        "......OOo...................",
+        "....Yyyyoooo................",
+        "...YYYYYmmyyoooo............",
+        "....OOoommYYymmyoooo........",
+        "...OOoooooooYmmYyyuuoooo....",
+        "....OOooooowxwwwYuuoooooo...",
+        "....OOooooxwwwwwwoooooooo...",
+        "....Ooooooxwwwwwwwoooosoo...",
+        ".....ooooooxwwnwwwxxoooss...",
+        "......Ooooexxwwwxxxooosoo...",
+        ".......Ooooxxxxxoooooooss...",
+        ".....OOOOosooooxeooooooo....",
+        ".....xxoooossosooooooo......",
+        ".....xxpxxsoooosccooo.......",
+        ".....xxxxoosssoccco.........",
+        "......xx..oooosxxpooo.......",
+        ".......x...oo.ooxxxx........",
+        "................xxx.........",
+        "................xx..........",
+    ],
+}
+
+
+def _tail_catch_roll() -> Animation:
+    """tail_catch up to the catch, then the hug, the roll and back."""
+    catch = list(_tail_catch().tracks[0].frames[:11])
+    held = catch[-1].template
+    hug = _TC_HUG_LOAF
+    back = _drop(_turn_ccw(_turn_ccw(hug)), 6)
+    over = [_TC_HUG_ROLL[-45], _turn_ccw(back), _TC_HUG_ROLL[-135]]
+    home = _body_mid(hug)
+
+    def at(grid: List[str], dx: int) -> Tuple[int, int]:
+        # the hugged tail is part of the bundle, so it rests on the floor too
+        bottom = max(r for r, row in enumerate(grid) if row.strip("."))
+        return (_rolled(grid, home + dx)[0], len(grid) - 1 - bottom)
+
+    frames = catch + [
+        Frame({}, 140, template=_sink_head(held)),
+        Frame({}, 300, template=hug, offset=_LOAF_DROP),
+    ]
+    frames += [Frame({}, 80, template=g, offset=at(g, i)) for i, g in enumerate(over, 1)]
+    frames.append(Frame({}, 250, template=back, offset=at(back, 4)))
+    for _ in range(3):  # the wrestle
+        for g, ms in ((_TC_HUG_ROLL[-165], 110), (back, 90), (_TC_HUG_ROLL[-195], 110), (back, 90)):
+            frames.append(Frame({}, ms, template=g, offset=at(g, 4)))
+    frames.append(Frame({}, 250, template=back, offset=at(back, 4)))
+    frames += [Frame({}, 80, template=g, offset=at(g, i)) for i, g in reversed(list(enumerate(over, 1)))]
+    frames += [
+        Frame({}, 300, template=hug, offset=_LOAF_DROP),
+        Frame({}, 140, template=_sink_head(held)),
+        Frame({}, 250, template=held),
+        Frame({}, 140, template=_tail_catch_frame(_SIT_TAIL_OUT)),
+        Frame({}, 140, template=_tail_catch_frame(_SIT_TAIL_UP)),
+        Frame({}, 300, template=_tail_catch_frame(_SIT_TAIL_NEUTRAL)),
+    ]
+    return single_track(catch[0].template, frames, loop_from=None)
+
+
+MOVES["tail_catch_roll"] = _tail_catch_roll()
+
+
+# fly (#127 play): a fly buzzes in from the stats side, loops over the cat's
+# head, down the far side and back round. The cat's eyes follow it, an ear
+# flicks, it chatters, then swats, missing, faster and faster from side to
+# side until a two-pawed grab with a hop, and the fly escapes straight up. A grey body ("g") with a wing pixel in the screen glow
+# ("B") that flickers each frame. Sitting front on, so it plays in every spot.
+_FLY_PATH = ((4, 27), (3, 26), (2, 25), (1, 24), (0, 22), (0, 19), (0, 16), (0, 13), (0, 10),
+             (1, 7), (2, 5), (4, 4), (6, 3), (8, 4), (7, 5), (5, 4), (3, 5), (1, 7), (0, 10),
+             (0, 14), (1, 17), (2, 21), (4, 22), (6, 23))
+# a forepaw flung up beside the head: the arm two wide, angled out from the
+# shoulder and shaded on its outer side so it stands off the face
+_FLY_ARM_R = ((13, 19), (12, 20), (11, 20), (10, 21), (9, 21))
+_FLY_SWAT_R = {**{(r, c): "o" for r, c in _FLY_ARM_R}, **{(r, c + 1): "O" for r, c in _FLY_ARM_R},
+               (7, 22): "m", (7, 23): "m", (8, 22): "m", (8, 23): "m",
+               (24, 14): "o", (24, 15): "o", (24, 16): "o"}
+_FLY_SWAT_L = {**{(r, 26 - c): "o" for r, c in _FLY_ARM_R},
+               **{(r, 25 - c): "O" for r, c in _FLY_ARM_R},
+               (7, 3): "m", (7, 4): "m", (8, 3): "m", (8, 4): "m",
+               (24, 10): "o", (24, 11): "o", (24, 12): "o"}
+_FLY_SWAT_BOTH = {**_FLY_SWAT_R, **_FLY_SWAT_L}
+# After the loop the swats come faster and faster, the fly darting from side
+# to side over the head, until a two-pawed grab with a hop and it escapes
+# straight up: (fly, swat, hold ms, hop rows).
+_FLY_FIGHT = (
+    ((5, 24), _FLY_SWAT_R, 170, 0), ((3, 25), _FLY_SWAT_R, 120, 0), ((3, 25), None, 120, 0),
+    ((1, 19), None, 70, 0), ((0, 13), None, 70, 0), ((2, 6), None, 70, 0),
+    ((5, 3), _FLY_SWAT_L, 120, 0), ((3, 2), _FLY_SWAT_L, 90, 0), ((1, 6), None, 60, 0),
+    ((0, 12), None, 60, 0), ((2, 21), None, 60, 0), ((4, 24), _FLY_SWAT_R, 80, 0),
+    ((1, 22), None, 50, 0), ((0, 9), _FLY_SWAT_L, 60, 0), ((1, 17), _FLY_SWAT_R, 60, 0),
+    ((0, 7), _FLY_SWAT_L, 60, 1), ((1, 19), _FLY_SWAT_R, 60, 1), ((0, 13), _FLY_SWAT_BOTH, 90, 2),
+    (None, _FLY_SWAT_BOTH, 90, 1),
+)
+_CHATTER = {(11, 13): LID_CHAR}
+
+
+def _fly_frame(fly: Optional[Tuple[int, int]], i: int,
+               eyes: Dict[Tuple[int, int], str], extra: Optional[Dict] = None) -> List[str]:
+    grid = _overlay(SITTING_TEMPLATE, {**eyes, **(extra or {})})
+    grid = [row.replace("A", "n") for row in grid]
+    if fly is not None:
+        r, c = fly
+        wing = (r - 1, c + (1 if i % 2 else -1)) if r else (r, c + (1 if i % 2 else -1))
+        cells = {(r, c): "g"}
+        if 0 <= wing[0] < 26 and 0 <= wing[1] < 28:
+            cells[wing] = "B"
+        grid = _overlay(grid, {cell: ch for cell, ch in cells.items()
+                               if grid[cell[0]][cell[1]] == "."})
+    return grid
+
+
+def _fly() -> Animation:
+    sit = _fly_frame(None, 0, _SIT_EYES_OPEN)
+    frames = [Frame({}, 250, template=sit)]
+    for i, (r, c) in enumerate(_FLY_PATH):
+        eyes = _SIT_EYES_RIGHT if c >= 19 else _SIT_EYES_LEFT if c <= 7 else _SIT_EYES_OPEN
+        extra = {}
+        if i in (4, 5, 17, 18):
+            extra.update(_SIT_EAR_FLICK)
+        if i in (9, 11, 13, 15):  # chattering at it
+            extra.update(_CHATTER)
+        frames.append(Frame({}, 100, template=_fly_frame((r, c), i, eyes, extra)))
+    for i, (fly, swat, ms, hop) in enumerate(_FLY_FIGHT):
+        c = 14 if fly is None else fly[1]
+        eyes = _SIT_EYES_RIGHT if c >= 19 else _SIT_EYES_LEFT if c <= 7 else _SIT_EYES_OPEN
+        frames.append(Frame({}, ms, template=_fly_frame(fly, i, eyes, swat), offset=(0, -hop)))
+    frames += [Frame({}, 400, template=_fly_frame(None, 0, _SIT_EYES_OPEN)),
+               Frame({}, 160, template=_fly_frame(None, 0, _SIT_EYES_LINE)),
+               Frame({}, 400, template=sit)]
+    return single_track(sit, frames, loop_from=None)
+
+
+MOVES["fly"] = _fly()
+
+
+
+# yarn (#127 play): a ball of yarn (the flag's magenta, wound with pink lines
+# that turn as it rolls, a thread trailing) rolls in along the floor from the
+# card's edge and stops in front of the cat. It looks down at it, bats it from
+# paw to paw faster and faster, then winds up and swipes it back off the
+# card's edge, and watches it go. Inside only: inside_right mirrors it.
+_YARN_BALL = ((".ff.", "fnff", "ffnf", ".ff."), (".ff.", "ffnf", "fnff", ".ff."))
+_YARN_TOP = 22  # the ball's top row: it sits on the floor (rows 22-25)
+_YARN_L = {(24, 10): "o", (24, 11): "o", (24, 12): "o",
+           (24, 6): "m", (24, 7): "m", (25, 6): "m", (25, 7): "m"}
+_YARN_R = {(24, 14): "o", (24, 15): "o", (24, 16): "o",
+           (24, 19): "m", (24, 20): "m", (25, 19): "m", (25, 20): "m"}
+_YARN_R_UP = {(24, 14): "o", (24, 15): "o", (24, 16): "o", (22, 18): "o", (23, 18): "o",
+              (20, 17): "m", (20, 18): "m", (21, 17): "m", (21, 18): "m"}
+_YARN_L_UP = {(24, 10): "o", (24, 11): "o", (24, 12): "o", (22, 8): "o", (23, 8): "o",
+              (20, 8): "m", (20, 9): "m", (21, 8): "m", (21, 9): "m"}
+_SIT_EYES_DOWN = {**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (9, 10): "e", (9, 16): "e"}
+
+
+def _yarn_frame(col: Optional[int], spin: int, eyes: Dict[Tuple[int, int], str],
+                paw: Optional[Dict] = None, sink: bool = False) -> List[str]:
+    """The sitting cat with the ball's left edge at `col` (off the grid's left
+    edge when negative, gone when None). Its thread lies along the floor from
+    the card's edge, where the ball came in, to the ball, in front of the cat."""
+    grid = _overlay(SITTING_TEMPLATE, {**eyes, **(paw or {})})
+    grid = [row.replace("A", "n") for row in grid]
+    if sink:
+        grid = _sink_head(grid)
+    if col is None:
+        return grid
+    cells = {}
+    for r, line in enumerate(_YARN_BALL[spin % 2]):
+        for c, ch in enumerate(line):
+            if ch != "." and 0 <= col + c < 28:
+                cells[(_YARN_TOP + r, col + c)] = ch
+    for c in range(0, col + 1):  # up to the ball's rounded bottom corner
+        # in front of the cat like the ball, but under a paw slapping down
+        if grid[25][c] != "m" and (25, c) not in cells:
+            cells[(25, c)] = "f"
+    return _overlay(grid, cells)
+
+
+def _yarn() -> Animation:
+    sit = _yarn_frame(None, 0, _SIT_EYES_OPEN)
+    left, right, down = _SIT_EYES_LEFT, _SIT_EYES_RIGHT, _SIT_EYES_DOWN
+
+    def look(col: int) -> Dict[Tuple[int, int], str]:
+        return left if col < 8 else right if col > 13 else down
+
+    frames = [Frame({}, 250, template=sit)]
+    # rolling in from the edge, slowing to a stop in front of the paws
+    for i, (col, ms) in enumerate(((-3, 90), (-1, 90), (1, 100), (3, 110), (5, 130), (7, 170),
+                                   (8, 250))):
+        frames.append(Frame({}, ms, template=_yarn_frame(col, i, look(col))))
+    frames.append(Frame({}, 450, template=_yarn_frame(8, 0, down, sink=True)))
+    # paw to paw, faster each time: (slapping paw, the ball's path, hold per step)
+    rallies = ((_YARN_L, (10, 12, 14, 15), 110), (_YARN_R, (13, 11, 9, 8), 100),
+               (_YARN_L, (11, 14, 15), 80), (_YARN_R, (12, 9, 8), 70),
+               (_YARN_L, (12, 15), 60))
+    spin = 0
+    for paw, path, ms in rallies:
+        start = path[0] - 2 if paw is _YARN_L else path[0] + 2
+        lift = _YARN_L_UP if paw is _YARN_L else _YARN_R_UP
+        frames += [Frame({}, ms, template=_yarn_frame(start, spin, look(start), lift)),
+                   Frame({}, 90, template=_yarn_frame(start, spin, look(start), paw))]
+        for col in path:
+            spin += 1
+            frames.append(Frame({}, ms, template=_yarn_frame(col, spin, look(col))))
+        frames.append(Frame({}, 150, template=_yarn_frame(path[-1], spin, look(path[-1]))))
+    # the wind-up and the big swipe off the card's edge
+    frames += [Frame({}, 300, template=_yarn_frame(15, spin, right, _YARN_R_UP)),
+               Frame({}, 80, template=_yarn_frame(15, spin, right, _YARN_R))]
+    for col in (11, 7, 3, -1, -5):
+        spin += 1
+        frames.append(Frame({}, 60, template=_yarn_frame(col, spin, left)))
+    frames += [Frame({}, 50, template=_yarn_frame(-9, 0, left)),
+               Frame({}, 600, template=_yarn_frame(None, 0, left, _SIT_EAR_FLICK)),
+               Frame({}, 160, template=_yarn_frame(None, 0, _SIT_EYES_LINE)),
+               Frame({}, 400, template=sit)]
+    return single_track(sit, frames, loop_from=None)
+
+
+MOVES["yarn"] = _yarn()
+
+
+# knock_off (#127 play): on the card's top edge. A glass of water is slid along
+# the edge from the card's far end, behind the cat, to a stop on its other
+# side. The cat eyes it, looks at us, pats it twice (it slides to the end),
+# looks at us again, then nudges it: the glass tips, splashes and tumbles down
+# the card's face. It peers down after it, looks back at us and blinks slowly.
+# on_top only, and never mirrored (see grid_size).
+# open at the top so the shape alone says glass, water in its lower half
+_GLASS = ("g..g", "g..g", "gbbg", "gbBg", "gggg")
+_GLASS_TIPPED = ("ggggg", "..bBg", "..bbg", "ggggg")  # turned on its side, mouth to the left
+_GLASS_TOP = 21  # standing on the edge: rows 21-25
+_KO_ARM = {(24, 10): "o", (24, 11): "o", (24, 12): "o"}  # the left forepaw is off the ground
+_KO_PAW_UP = {**_KO_ARM, (17, 2): "m", (17, 3): "m", (18, 2): "m", (18, 3): "m",
+              (17, 4): "o", (17, 5): "o", (18, 4): "o", (18, 5): "o"}
+_KO_PAW_PAT = {**_KO_ARM, (19, 2): "m", (19, 3): "m", (20, 2): "m", (20, 3): "m",
+               (19, 4): "o", (20, 4): "o", (20, 5): "o"}
+_KO_PAW_PUSH = {**_KO_ARM, (21, 4): "m", (21, 5): "m", (22, 4): "m", (22, 5): "m"}
+_KO_SPLASH = ({(21, 0): "b", (20, 1): "B"}, {(19, 0): "b", (18, 1): "b", (20, 2): "B"})
+
+
+# knock_off's grid reaches from the cat's spot on the top edge (x 8) to the
+# card's right end and down to its bottom, so the glass can be slid in from the
+# far end and fall down the card's face. The cat sits in its top-left corner.
+# theme imports this module, so the card's size and the cat's x on the edge
+# are repeated here (a test keeps them equal to theme's).
+KO_CARD = (300, 128)
+KO_CAT_X = 8
+_KO_COLS = (KO_CARD[0] - KO_CAT_X) // SCALE
+_KO_ROWS = 26 + KO_CARD[1] // SCALE
+# the glass emptied by the tip, tumbling: on its side, upside down, on its
+# other side, upright
+_GLASS_TUMBLE = (("ggggg", "....g", "....g", "ggggg"), ("gggg", "g..g", "g..g", "g..g", "g..g"),
+                 ("ggggg", "g....", "g....", "ggggg"), ("g..g", "g..g", "g..g", "g..g", "gggg"))
+
+
+def _knock_off_frame(glass: Optional[Tuple[int, int, Tuple[str, ...]]],
+                     eyes: Dict[Tuple[int, int], str], paw: Optional[Dict] = None,
+                     ear: bool = False, sink: bool = False,
+                     drops: Sequence[Tuple[int, int]] = ()) -> List[str]:
+    """The sitting cat in the corner of the big grid, the glass's top-left at
+    (row, col) in `glass`'s shape (behind the cat where they cross) and water
+    drops at `drops`."""
+    cat = _overlay(SITTING_TEMPLATE, {**eyes, **(_SIT_EAR_FLICK if ear else {})})
+    cat = [row.replace("A", "n") for row in cat]
+    if ear:
+        cat = _overlay(cat, {(1, 18): "."})
+    if sink:
+        cat = _sink_head(cat)
+    grid = [row + "." * (_KO_COLS - 28) for row in cat] + ["." * _KO_COLS] * (_KO_ROWS - 26)
+    cells = {(r, c): "b" for r, c in drops if 0 <= r < _KO_ROWS and 0 <= c < _KO_COLS}
+    if glass is not None:
+        top, left, shape = glass
+        for r, line in enumerate(shape):
+            for c, ch in enumerate(line):
+                if ch != "." and 0 <= top + r < _KO_ROWS and 0 <= left + c < _KO_COLS \
+                        and grid[top + r][left + c] == ".":
+                    cells[(top + r, left + c)] = ch
+    return _overlay(grid, {**cells, **(paw or {})})
+
+
+def _knock_off() -> Animation:
+    left, right, at_us, down = _SIT_EYES_LEFT, _SIT_EYES_RIGHT, _SIT_EYES_OPEN, _SIT_EYES_DOWN
+    standing = (_GLASS_TOP, 1, _GLASS)
+    slid = (_GLASS_TOP, 0, _GLASS)
+    sit = _knock_off_frame(None, at_us)
+    frames = [Frame({}, 300, template=sit)]
+    # slid along the edge from the card's far end like a drink down a bar,
+    # behind the cat, to a stop on its other side
+    far = _KO_COLS - 4
+    for col, ms in ((far, 40), (far - 5, 40), (far - 10, 40), (far - 15, 40), (far - 20, 40),
+                    (far - 25, 40), (far - 30, 40), (far - 35, 40), (far - 40, 50),
+                    (far - 45, 50), (24, 50), (20, 50), (16, 60), (12, 60), (8, 70), (5, 80),
+                    (3, 100), (2, 130), (1, 160)):
+        eyes = right if col > 18 else left if col < 6 else at_us
+        frames.append(Frame({}, ms, template=_knock_off_frame((_GLASS_TOP, col, _GLASS), eyes)))
+    frames += [
+        Frame({}, 90, template=_knock_off_frame((_GLASS_TOP, 2, _GLASS), left)),
+        Frame({}, 400, template=_knock_off_frame(standing, left)),
+        Frame({}, 400, template=_knock_off_frame(standing, at_us, ear=True)),
+        Frame({}, 300, template=_knock_off_frame(standing, left)),
+        Frame({}, 180, template=_knock_off_frame(standing, left, _KO_PAW_UP)),
+        Frame({}, 140, template=_knock_off_frame(standing, left, _KO_PAW_PAT)),
+        Frame({}, 200, template=_knock_off_frame(standing, left, _KO_PAW_UP)),
+        Frame({}, 140, template=_knock_off_frame(slid, left, _KO_PAW_PAT)),
+        Frame({}, 250, template=_knock_off_frame(slid, left)),
+        Frame({}, 700, template=_knock_off_frame(slid, at_us)),
+        Frame({}, 300, template=_knock_off_frame(slid, left)),
+        Frame({}, 140, template=_knock_off_frame(slid, left, _KO_PAW_PUSH)),
+        Frame({}, 100, template=_knock_off_frame((22, 0, _GLASS_TIPPED), left,
+                                                 {**_KO_PAW_PUSH, **_KO_SPLASH[0]})),
+    ]
+    # down the card's face, tumbling and speeding up, the water falling with it
+    for i, (top, ms) in enumerate(((25, 70), (28, 60), (32, 60), (37, 50), (43, 50), (50, 50),
+                                   (58, 40))):
+        shape = _GLASS_TUMBLE[i % 4]
+        drops = ((top - 3, 1), (top - 2, 4), (top - 6, 2)) if i < 4 else ()
+        frames.append(Frame({}, ms, template=_knock_off_frame((top, 0, shape), down, drops=drops)))
+    frames += [
+        Frame({}, 500, template=_knock_off_frame(None, down, sink=True)),
+        Frame({}, 500, template=_knock_off_frame(None, at_us)),
+        Frame({}, 700, template=_knock_off_frame(None, _SIT_EYES_ARCH)),
+        Frame({}, 400, template=sit),
+    ]
+    return single_track(sit, frames, loop_from=None)
+
+
+MOVES["knock_off"] = _knock_off()
+
+
+# wand (#127 play): a cat wand. A feather toy on a string comes down from
+# above (the window's top on the edge, the card's top inside: _WAND_ROOM rows
+# over the cat), bobs and sways by the cat's head, gets swatted from either
+# side, dangles in front of its face, and is yanked up just as the cat
+# stretches both paws over its head to grab it, then pulled away out of
+# sight. The grid has _WAND_ROOM extra rows on top, the cat sits that much
+# lower in it and every frame is drawn that much higher. First-row cards only.
+_WAND_ROOM = 3
+_WAND_TOY = (".h.", "fqf", "fqf", ".f.")  # the knot the string is tied to, the feathers
+_SIT_EYES_UP = {**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (7, 10): "e", (7, 16): "e"}
+# both forepaws stretched up past the ears, meeting over the head
+_WAND_REACH = {**{(r, 6): "o" for r in range(2, 14)}, **{(r, 5): "O" for r in range(3, 13)},
+               **{(r, 20): "o" for r in range(2, 14)}, **{(r, 21): "O" for r in range(3, 13)},
+               (1, 7): "o", (1, 8): "o", (0, 9): "o", (1, 19): "o", (1, 18): "o", (0, 17): "o",
+               (-1, 10): "m", (-1, 11): "m", (0, 10): "m", (0, 11): "m",
+               (-1, 15): "m", (-1, 16): "m", (0, 15): "m", (0, 16): "m",
+               **{(24, c): "o" for c in range(10, 17)}}
+
+
+def _wand_frame(toy: Optional[Tuple[int, int]], anchor: int,
+                eyes: Dict[Tuple[int, int], str], extra: Optional[Dict] = None,
+                sink: bool = False) -> List[str]:
+    """The sitting cat (`extra` painted over it, rows above it negative) in
+    the wand's grid, the toy's top-left at `toy` in the cat's rows and
+    columns, and the string from the top of the grid at column `anchor` down
+    to the toy's knot, behind the cat."""
+    cat = [row.replace("A", "n") for row in _overlay(SITTING_TEMPLATE, eyes)]
+    if sink:
+        cat = _sink_head(cat)
+    grid = [list(row) for row in ["." * 28] * _WAND_ROOM + cat]
+    for (r, c), ch in (extra or {}).items():
+        if 0 <= r + _WAND_ROOM < len(grid) and 0 <= c < 28:
+            grid[r + _WAND_ROOM][c] = ch
+    if toy is not None:
+        top, left = toy
+        knot = (top + _WAND_ROOM, left + 1)
+        n = max(knot[0], abs(knot[1] - anchor), 1)
+        for i in range(n):
+            r = round(knot[0] * i / n)
+            c = round(anchor + (knot[1] - anchor) * i / n)
+            if 0 <= r < len(grid) and 0 <= c < 28 and grid[r][c] == ".":
+                grid[r][c] = "g"
+        for r, line in enumerate(_WAND_TOY):
+            for c, ch in enumerate(line):
+                rr, cc = top + _WAND_ROOM + r, left + c
+                if ch != "." and 0 <= rr < len(grid) and 0 <= cc < 28:
+                    grid[rr][cc] = ch
+    return ["".join(row) for row in grid]
+
+
+def _wand() -> Animation:
+    up, right, left, at_us = _SIT_EYES_UP, _SIT_EYES_RIGHT, _SIT_EYES_LEFT, _SIT_EYES_OPEN
+    lift = (0, -_WAND_ROOM)
+    steps = [
+        (None, 22, at_us, None, 300),
+        ((-7, 21), 22, up, None, 90), ((-4, 21), 22, up, None, 90),
+        ((-1, 21), 22, right, _SIT_EAR_FLICK, 100), ((2, 21), 22, right, None, 120),
+        ((4, 21), 22, right, None, 300), ((5, 21), 23, right, None, 160),
+        ((4, 21), 22, right, None, 160), ((3, 22), 23, right, None, 200),
+        ((5, 21), 22, right, None, 250),
+        ((5, 22), 22, right, _FLY_SWAT_R, 100),          # swat
+        ((1, 23), 23, up, _FLY_SWAT_R, 90),
+        ((0, 20), 19, up, None, 110), ((-2, 15), 15, up, None, 120),   # over the head
+        ((-1, 9), 10, up, None, 120), ((2, 4), 6, left, None, 140),
+        ((4, 3), 5, left, None, 300),
+        ((5, 2), 4, left, _FLY_SWAT_L, 100),            # swat
+        ((1, 1), 3, up, _FLY_SWAT_L, 90),
+        ((3, 6), 9, up, None, 120), ((7, 11), 12, at_us, None, 150),   # the tease
+        ((9, 12), 13, at_us, None, 600),
+    ]
+    frames = [Frame({}, ms, template=_wand_frame(toy, anchor, eyes, extra), offset=lift)
+              for toy, anchor, eyes, extra, ms in steps]
+    frames.insert(-1, Frame({}, 200, template=_wand_frame((8, 12), 13, at_us, sink=True),
+                            offset=lift))
+    frames += [
+        Frame({}, 80, template=_wand_frame((3, 12), 13, up), offset=lift),     # yanked
+        Frame({}, 300, template=_wand_frame((-3, 12), 13, up, _WAND_REACH), offset=lift),
+        Frame({}, 80, template=_wand_frame((-7, 12), 13, up, _WAND_REACH), offset=lift),
+        Frame({}, 500, template=_wand_frame(None, 13, up), offset=lift),
+        Frame({}, 300, template=_wand_frame(None, 13, up, _SIT_EAR_FLICK), offset=lift),
+        Frame({}, 400, template=_wand_frame(None, 13, at_us), offset=lift),
+    ]
+    return single_track(frames[0].template, frames, loop_from=None)
+
+
+MOVES["wand"] = _wand()
+
+
+# mouse (#127 play): a mouse runs laps round the cat, faster each lap, and the
+# cat turns on the spot in a low crouch to keep facing it: front on while it
+# passes the paws, side on (pounce's crouch) at the sides, its back to us while
+# the mouse is behind it, where the cat hides it. Then the mouse bolts off
+# across the card to its far end, and the cat sits up dizzy, its head
+# wobbling. Every spot.
+_MOUSE = ("...ng.", "nggggk", "..g.g.")  # running right: ear, eye at the nose, tail behind
+
+
+def _back_view() -> List[str]:
+    """The sitting cat from behind: the face and belly furred over, a stripe
+    or two across the head and back, outer ears, paws hidden, and the tail
+    lying along the ground out to the right."""
+    rows = [list(row) for row in SITTING_TEMPLATE]
+    for r in range(26):
+        for c in range(28):
+            ch = rows[r][c]
+            if ch in "yY":
+                rows[r][c] = "."
+            elif ch == "p":
+                rows[r][c] = "x"
+            elif ch in "xwnALRucm" and not (r <= 3 and ch == "x"):
+                rows[r][c] = "o"
+    stripes = {6: range(9, 18), 9: range(9, 18), 16: range(8, 19), 19: range(7, 20),
+               22: range(8, 19)}
+    for r, cols in stripes.items():
+        for c in cols:
+            if rows[r][c] == "o" and (c % 3) != 0:
+                rows[r][c] = "s"
+    for r, c0, c1 in ((24, 14, 22), (23, 22, 23), (22, 23, 24)):
+        for c in range(c0, c1 + 1):
+            if rows[r][c] in ".oO":
+                rows[r][c] = _tail_band(r)
+    return ["".join(row) for row in rows]
+
+
+_BACK_VIEW = _back_view()
+
+
+def _mouse_frame(cat: List[str], col: Optional[int], right: bool, behind: bool) -> List[str]:
+    """`cat` with the mouse's left edge at `col` on the floor, running right
+    or left; behind the cat it only shows where the cat doesn't."""
+    if col is None:
+        return cat
+    shape = _MOUSE if right else [row[::-1] for row in _MOUSE]
+    cells = {}
+    for r, line in enumerate(shape):
+        for c, ch in enumerate(line):
+            rr, cc = 23 + r, col + c
+            if ch != "." and 0 <= cc < len(cat[0]) and not (behind and cat[rr][cc] != "."):
+                cells[(rr, cc)] = ch
+    return _overlay(cat, cells)
+
+
+def _crouch_front(eyes: Dict[Tuple[int, int], str]) -> List[str]:
+    return _sink_head([row.replace("A", "n") for row in _overlay(SITTING_TEMPLATE, eyes)])
+
+
+def _mouse() -> Animation:
+    """Laps round the cat, then the mouse bolts across the bottom of the card
+    (under the stats) and out the far end, so the grid is card wide like
+    knock_off's; mirrored for inside_right it runs the other way."""
+    def wide(grid: List[str]) -> List[str]:
+        return [row + "." * (_KO_COLS - 28) for row in grid]
+
+    sit = wide(_hop_frame())
+    side_r = wide(_pounce_crouch())
+    side_l = wide(_facing_left(_pounce_crouch()))
+    back = wide(_BACK_VIEW)
+
+    def front(eyes: Dict[Tuple[int, int], str]) -> List[str]:
+        return wide(_crouch_front(eyes))
+
+    # one lap: (mouse col, running right, behind the cat, the cat's view)
+    lap = [(c, True, False, "front") for c in (2, 6, 10, 14)]
+    lap += [(c, True, False, "right") for c in (18, 21, 22)]
+    lap += [(c, False, True, "back") for c in (20, 16, 12, 8, 4)]
+    lap += [(c, False, False, "left") for c in (1, 0)]
+    views = {"right": side_r, "left": side_l, "back": back}
+    frames = [Frame({}, 250, template=sit),
+              Frame({}, 300, template=_mouse_frame(front(_SIT_EYES_LEFT), -3, True, False))]
+    for ms in (110, 80, 60):
+        for col, right, behind, view in lap:
+            if view == "front":
+                cat = front(_SIT_EYES_RIGHT if col > 8 else _SIT_EYES_DOWN)
+            else:
+                cat = views[view]
+            frames.append(Frame({}, ms, template=_mouse_frame(cat, col, right, behind)))
+    # it bolts across the front and the bottom of the card, out the far end
+    for col in (3, 8, 13, 19):
+        frames.append(Frame({}, 50, template=_mouse_frame(front(_SIT_EYES_RIGHT), col, True, False)))
+    for col in range(26, _KO_COLS + 1, 7):
+        frames.append(Frame({}, 50, template=_mouse_frame(side_r, col, True, False)))
+    frames.append(Frame({}, 400, template=side_r))
+    # dizzy: the head wobbles side to side, slowing, then settles
+    dizzy = wide(_overlay(_hop_frame(), _SIT_EYES_LINE))
+    for dc, ms in ((1, 120), (-1, 120), (1, 160), (-1, 180), (1, 220), (0, 260)):
+        frames.append(Frame({}, ms, template=_shift_head(dizzy, dc)))
+    frames += [Frame({}, 200, template=wide(_overlay(_hop_frame(), _SIT_EYES_ARCH))),
+               Frame({}, 400, template=sit)]
+    return single_track(sit, frames, loop_from=None)
+
+
+def _shift_head(grid: List[str], dc: int, neck_row: int = 13, width: int = 24) -> List[str]:
+    """The head (rows down to neck_row, the columns before `width`, wide
+    enough to hold all of it) moved dc columns."""
+    if not dc:
+        return grid
+    rows = [list(row) for row in grid]
+    for r in range(neck_row + 1):
+        head = rows[r][:width]
+        moved = (["."] * dc + head[:-dc]) if dc > 0 else (head[-dc:] + ["."] * -dc)
+        rows[r][:width] = moved
+    return ["".join(row) for row in rows]
+
+
+MOVES["mouse"] = _mouse()
 
 
 def _activate_settles(to_state: str) -> Animation:
@@ -2721,6 +4174,57 @@ def _alert_to_interested() -> Animation:
         Frame({}, 300, template=calm),
         Frame({}, 400, template=_sink_head(calm, neck_row=14)),
         Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
+def _alert_to_tired() -> Animation:
+    """The "!" goes, a long blink, the lids come back down only halfway, the
+    ears sag and the cat lets out a sigh."""
+    return single_track(_at("alert"), [
+        Frame({}, 120, template=_at("alert")),
+        Frame({}, 250, template=_at("alert", bang=1)),
+        Frame({}, 300, template=_at("alert", bang=1, eyes=1)),
+        Frame({}, 300, template=_at("tired", ears=1)),
+        Frame({}, 450, template=_sink_head(_at("tired"), neck_row=14)),
+        Frame({}, 100, template=_at("tired")),
+    ], loop_from=None)
+
+
+def _tired_to_alert() -> Animation:
+    """The eyes snap open, the cat shakes its ears up and the "!" pops."""
+    return single_track(_at("tired"), [
+        Frame({}, 120, template=_at("tired")),
+        Frame({}, 150, template=_at("tired", eyes=7)),
+        Frame({}, 90, template=_at("waking", ears=1)),
+        Frame({}, 90, template=_at("waking")),
+        Frame({}, 90, template=_at("waking", ears=1)),
+        Frame({}, 80, template=_at("alert", bang=2)),
+        Frame({}, 100, template=_at("alert", bang=3)),
+        Frame({}, 100, template=_at("alert")),
+    ], loop_from=None)
+
+
+def _tired_to_interested() -> Animation:
+    """Relief: the eyes open, the ears come up and the cat sighs (its head
+    sinks a row) before settling."""
+    return single_track(_at("tired"), [
+        Frame({}, 120, template=_at("tired")),
+        Frame({}, 250, template=_at("tired", eyes=7)),
+        Frame({}, 400, template=_sink_head(_at("alert", bang=1), neck_row=14)),
+        Frame({}, 100, template=_at("interested")),
+    ], loop_from=None)
+
+
+def _interested_to_tired() -> Animation:
+    """An ear perks and the cat sits up tall as into alert, but there is no
+    "!": a long blink, and the lids and ears come back down."""
+    return single_track(_at("interested"), [
+        Frame({}, 120, template=_at("interested")),
+        Frame({}, 220, template=_at("interested", ears=1)),
+        Frame({}, 250, template=_at("alert", bang=1)),
+        Frame({}, 300, template=_at("alert", bang=1, eyes=1)),
+        Frame({}, 300, template=_at("tired", ears=1)),
+        Frame({}, 100, template=_at("tired")),
     ], loop_from=None)
 
 
@@ -2807,5 +4311,9 @@ del _mood
 TRANSITIONS[("activate", "sleeping")] = _activate_dozes_off()
 TRANSITIONS[("interested", "alert")] = _interested_to_alert()
 TRANSITIONS[("alert", "interested")] = _alert_to_interested()
+TRANSITIONS[("alert", "tired")] = _alert_to_tired()
+TRANSITIONS[("tired", "alert")] = _tired_to_alert()
+TRANSITIONS[("tired", "interested")] = _tired_to_interested()
+TRANSITIONS[("interested", "tired")] = _interested_to_tired()
 TRANSITIONS[(ANY_STATE, "confused")] = _double_take()
 _check_transitions()

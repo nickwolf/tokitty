@@ -272,10 +272,11 @@ class QtPane:
         return self._roam.pose
 
     @property
-    def mask_place(self) -> Tuple[Pose, Tuple[Tuple[int, int], ...]]:
-        """Where the playing animation can draw the cat: the pose and every
-        offset it moves the sprite by. Changes per animation, not per frame."""
-        return self.pose, sprites.offsets(self.playing)
+    def mask_place(self) -> Tuple[Pose, Tuple[Tuple[int, int], ...], Tuple[int, int]]:
+        """Where the playing animation can draw the cat: the pose, every
+        offset it moves the sprite by and its grid size in cells. Changes per
+        animation, not per frame."""
+        return self.pose, sprites.offsets(self.playing), sprites.grid_size(self.playing)
 
     @property
     def playing(self) -> str:

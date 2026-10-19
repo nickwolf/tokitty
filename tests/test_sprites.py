@@ -262,7 +262,7 @@ def _frames(*chars, ms=800):
 
 def test_all_states_follows_the_animation_table():
     assert ALL_STATES == tuple(ANIMATIONS)
-    assert len(ALL_STATES) == 17 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
+    assert len(ALL_STATES) == 18 and ALL_STATES[0] == "sleeping" and ALL_STATES[-1] == "done_hop"
 
 
 def test_the_table_passes_the_track_rules():
@@ -518,6 +518,108 @@ def test_every_tail_stays_joined_to_the_cat():
             assert joined == tail, (name, i, sorted(tail - joined))
 
 
+def _placed(grid, offset):
+    """The drawn cells of a grid, moved by the frame's offset."""
+    dx, dy = offset
+    return {(r + dy, c + dx) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch != "."}
+
+
+_NOT_PLAY_MOVES = ("jump_up", "jump_down")
+_ENDS_ELSEWHERE = _NOT_PLAY_MOVES + ("walk_start", "walk", "walk_stop", "lie_down", "sit_up")
+
+
+def test_every_move_stays_within_the_room_over_the_cat():
+    from tokitty import theme
+    from tokitty.sprites import MOVES, move_name
+
+    room = theme.HOP_HEADROOM // SCALE
+    for move in MOVES:
+        if move in _NOT_PLAY_MOVES:
+            continue
+        frames = MOVES[move].tracks[0].frames
+        for i, (grid, frame) in enumerate(zip(get_frames(move_name(move)), frames)):
+            top = min(r for r, c in _placed(grid, (0, 0)))
+            assert top + frame.offset[1] >= -room, (move, i)
+
+
+def test_every_move_starts_and_ends_where_the_cat_sits():
+    from tokitty.sprites import LYING_MOVES, MOVES, compose_offset, enumeration_positions, move_name, spot_state
+
+    sit = _placed(sprites._hop_frame(), (0, 0))
+    loaf = spot_state("content", "on_top")
+    loaf_cells = _placed(get_frames(loaf)[0], compose_offset(loaf, enumeration_positions(loaf)[0]))
+    for move in MOVES:
+        if move in _ENDS_ELSEWHERE:
+            continue
+        frames = MOVES[move].tracks[0].frames
+        grids = get_frames(move_name(move))
+        assert _placed(grids[0], frames[0].offset) == sit, move
+        want = loaf_cells if move in LYING_MOVES else sit
+        assert _placed(grids[-1], frames[-1].offset) == want, move
+
+
+def _pieces(grid):
+    """How many separate pieces the body (not the tail) is drawn in."""
+    cells = {(r, c) for r, row in enumerate(grid) for c, ch in enumerate(row) if ch not in ".yY"}
+    count = 0
+    while cells:
+        count += 1
+        stack = [cells.pop()]
+        while stack:
+            r, c = stack.pop()
+            for near in ((r + dr, c + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1)):
+                if near in cells:
+                    cells.remove(near)
+                    stack.append(near)
+    return count
+
+
+def test_the_face_on_rolls_stay_on_the_floor_and_the_body_moves_smoothly():
+    # raised paws once wrapped to the bottom row through negative indexes,
+    # which split the body in two and lifted the cat ten rows
+    from tokitty.sprites import MOVES, move_name
+
+    for move in ("roll", "tail_catch_roll", "bat_down_roll"):
+        frames = MOVES[move].tracks[0].frames
+        # bat_down_roll's paw hangs over the edge on purpose; its roll comes
+        # after. A tail may hang over (the loaf's does), so only the body counts.
+        hung = [i for i, f in enumerate(frames) if f.offset[1] == sprites._HANG_DROP[1]]
+        first = hung[-1] + 1 if move == "bat_down_roll" else 0
+        centres = []
+        for i, (grid, frame) in enumerate(zip(get_frames(move_name(move)), frames)):
+            dx, dy = frame.offset
+            body = [r for r, row in enumerate(grid) if any(ch not in ".yY" for ch in row)]
+            if i >= first:
+                assert max(body) + dy <= 25, (move, i)
+                assert _pieces(grid) == 1, (move, i)
+            cols = [c for row in grid for c, ch in enumerate(row) if ch not in ".yY"]
+            centres.append((min(cols) + max(cols)) / 2 + dx)
+        for i, (a, b) in enumerate(zip(centres, centres[1:])):
+            assert abs(b - a) <= 2.5, (move, i)
+
+
+def test_the_card_the_props_ride_on_mirrors_the_themes_and_the_mirror_reaches_its_edge():
+    from tokitty import theme
+
+    assert sprites.KO_CARD == (theme.CARD_WIDTH, theme.CARD_HEIGHT)
+    assert sprites.KO_CAT_X == theme.placement("on_top").origin[0] == theme.placement("inside").origin[0]
+    wide = sprites.grid_size("move:mouse")[0]
+    assert theme.placement("inside_right").origin[0] - (wide - 28) * SCALE == 0
+
+
+def test_only_the_prop_moves_have_a_grid_bigger_than_the_cat():
+    from tokitty.sprites import MOVES, SPOT_VARIANTS, TRANSITIONS, move_name, spot_state, transition_name
+
+    props = {"knock_off", "mouse", "wand"}
+    plain = (list(ALL_STATES) + [spot_state(*key) for key in SPOT_VARIANTS]
+             + [transition_name(*pair) for pair in TRANSITIONS]
+             + [move_name(m) for m in MOVES if m not in props])
+    for name in plain:
+        assert sprites.grid_size(name) == (28, 26), name
+    for move in props:
+        assert sprites.grid_size(move_name(move)) != (28, 26), move
+
+
 def test_art_is_pinned():
     # Pins the art byte for byte, so a change to any frame is deliberate.
     # The #125 art passes change pixels on purpose: update this hash with them.
@@ -531,7 +633,7 @@ def test_art_is_pinned():
     frames = {n: [get_frames(n), [compose_offset(n, pos) for pos in enumeration_positions(n)]]
               for n in names}
     digest = hashlib.sha256(json.dumps(frames).encode()).hexdigest()
-    assert digest == "ec1a9014709977546134ffb35e47cd2b47064f95210e4b93a793dd892496e452"
+    assert digest == "d2eb62e23f1f1e2dd7d7c7aebae6a42f30df9b74a577359671adf5e33ff8b1fb"
 
 
 def test_shut_eyes_use_the_fur_darkened_not_the_outline():
@@ -607,10 +709,10 @@ def test_spot_variants_and_moves_resolve_and_are_checked(monkeypatch):
     once = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100,
                                                  offset=(0, -29))], None)
     looping = single_track(SITTING_TEMPLATE, [Frame({"L": "e", "R": "e", "A": "n"}, ms=100)], 0)
-    assert spot_state("alert", "on_top") == "alert"
-    monkeypatch.setitem(SPOT_VARIANTS, ("alert", "on_top"), looping)
-    assert spot_state("alert", "on_top") == "alert@on_top"
-    assert get_animation("alert@on_top") is looping
+    assert spot_state("panicked", "on_top") == "panicked"
+    monkeypatch.setitem(SPOT_VARIANTS, ("panicked", "on_top"), looping)
+    assert spot_state("panicked", "on_top") == "panicked@on_top"
+    assert get_animation("panicked@on_top") is looping
     with pytest.raises(KeyError):
         get_animation("confused@on_top")
     # a transition may name a variant on either side

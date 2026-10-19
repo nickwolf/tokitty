@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tokitty import sprites
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.app_core import PaneUpdate, apply_handoff, apply_hint, step_unit
 from tokitty.handoff import Hint, Standing, handoff_hints
@@ -130,13 +129,11 @@ def test_perk_up_not_when_dimmed():
     assert apply_hint(update, Hint("room"), "sleeping") is update
 
 
-def test_near_adds_text_and_tired_only_with_art(monkeypatch):
+def test_near_adds_text_and_only_an_alert_cat_turns_tired():
     hint = Hint("near", "Codex has room")
     out = apply_hint(_update("alert"), hint, "alert")
     assert out.kwargs["handoff_text"] == "Codex has room"
-    assert out.kwargs["state"] == "alert"
-    monkeypatch.setitem(sprites.ANIMATIONS, "tired", sprites.ANIMATIONS["alert"])
-    assert apply_hint(_update("alert"), hint, "alert").kwargs["state"] == "tired"
+    assert out.kwargs["state"] == "tired"
     for state in ("panicked", "flopped", "stirring", "waking", "activate", "working", "permission", "content"):
         assert apply_hint(_update(state), hint, state).kwargs["state"] == state
     assert apply_hint(_update("panicked"), hint, "panicked").kwargs["handoff_text"] == "Codex has room"

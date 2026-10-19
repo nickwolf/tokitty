@@ -239,6 +239,8 @@ Colorways run top to bottom in the order listed above, patterns left to right.
 
 **Cat sits** in Settings ▸ Look puts the cat on the Left or Right inside the card, or On top of it. On top is offered for panes in the first row of the grid.
 
+**Personality** in Settings ▸ Look sets how each cat spends its idle time: `balanced` (the default), `lazy`, `playful` or `curious`. With **Cat wanders** on in Settings ▸ Theme, a calm cat goes for walks, naps and plays on its own, and with **Follows the clock** on it keeps to the hour, busy in the morning and sleepy at night. What it plays is for you to find out.
+
 Settings ▸ Look has a row with a **Change…** button per overridable piece (Coat, Shade, Card background, Bar fill). Each pick previews live, and **Reset to preset** clears all four back to the current colorway and pattern's stock colors.
 
 Every per-pane choice is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Accounts](#accounts) above for the exact path per OS). With no accounts configured the file has one entry keyed `"default"`, and with accounts it is keyed by each account's identity slug, so each pane keeps its own look and colors. It stores `colorway`, `pattern`, `tail`, `cat_home` (`inside`, `inside_right` or `on_top`), the four color overrides and the label.
