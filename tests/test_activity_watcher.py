@@ -116,11 +116,15 @@ def test_get_sessions_empty_when_distro_stopped():
     fs = FakeFs()
     fs.files["s1"] = rec("UserPromptSubmit", ts=100.0)
     running = ["Ubuntu"]
-    watcher = _watcher(fs, distro_name="Ubuntu", list_running_distros_fn=lambda: list(running))
+    clock = _Clock()
+    watcher = _watcher(
+        fs, distro_name="Ubuntu", list_running_distros_fn=lambda: list(running), monotonic_fn=clock
+    )
     watcher._tick_once()
     assert len(watcher.get_sessions()) == 1
 
     running.clear()
+    clock.now += 5.0  # past the running-trust window, so the next tick probes
     watcher._tick_once()
     assert watcher.get_sessions() == []
 
@@ -315,3 +319,140 @@ def test_start_and_stop_run_thread_and_publish():
         assert watcher.get_latest() is not None
     finally:
         watcher.stop()
+
+
+class _Probe:
+    def __init__(self, running=("Ubuntu",)):
+        self.running = list(running)
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        return list(self.running)
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _wsl_watcher(fs, probe, clock, **kwargs):
+    return _watcher(
+        fs, distro_name="Ubuntu", list_running_distros_fn=probe, monotonic_fn=clock, **kwargs
+    )
+
+
+def _active_fs():
+    fs = FakeFs()
+    fs.files["s1"] = rec("PreToolUse", ts=100.0, tool_name="Bash")
+    return fs
+
+
+def test_first_wsl_tick_always_probes():
+    probe, clock = _Probe(), _Clock()
+    _wsl_watcher(_active_fs(), probe, clock)._tick_once()
+    assert probe.calls == 1
+
+
+def test_active_and_recently_running_skips_probe_but_still_reads():
+    fs = _active_fs()
+    probe, clock = _Probe(), _Clock()
+    reads = []
+    real_read = fs.read_file_fn
+    fs.read_file_fn = lambda p: (reads.append(p), real_read(p))[1]
+    watcher = _wsl_watcher(fs, probe, clock)
+    watcher._tick_once()
+    clock.now += 1.0
+    watcher._tick_once()
+    clock.now += 3.9
+    watcher._tick_once()
+    assert probe.calls == 1
+    assert len(reads) == 3
+    assert watcher.get_latest().state == "working"
+
+
+def test_active_probes_again_once_trust_window_elapsed():
+    probe, clock = _Probe(), _Clock()
+    watcher = _wsl_watcher(_active_fs(), probe, clock)
+    watcher._tick_once()
+    clock.now += 5.0
+    watcher._tick_once()
+    assert probe.calls == 2
+    clock.now += 4.0
+    watcher._tick_once()
+    assert probe.calls == 2
+
+
+def test_trust_window_is_configurable():
+    probe, clock = _Probe(), _Clock()
+    watcher = _wsl_watcher(_active_fs(), probe, clock, running_trust_s=1.0)
+    watcher._tick_once()
+    clock.now += 1.0
+    watcher._tick_once()
+    assert probe.calls == 2
+
+
+def test_idle_watcher_probes_every_tick():
+    fs = FakeFs()
+    probe, clock = _Probe(), _Clock()
+    watcher = _wsl_watcher(fs, probe, clock)
+    for _ in range(3):
+        watcher._tick_once()
+        clock.now += 0.1
+    assert watcher.get_latest().state == "idle"
+    assert probe.calls == 3
+
+
+def test_not_running_is_never_trusted_and_path_untouched():
+    fs = _active_fs()
+    probe, clock = _Probe(running=()), _Clock()
+    listed = []
+
+    def fs_list(d):
+        listed.append(d)
+        return []
+
+    watcher = _wsl_watcher(fs, probe, clock)
+    watcher._list_files_fn = fs_list
+    watcher._tick_once()
+    watcher._tick_once()
+    assert probe.calls == 2
+    assert listed == []
+
+
+def test_active_then_distro_stops_probes_and_goes_idle_after_window():
+    fs = _active_fs()
+    probe, clock = _Probe(), _Clock()
+    watcher = _wsl_watcher(fs, probe, clock)
+    watcher._tick_once()
+    probe.running = []
+    clock.now += 6.0
+    watcher._tick_once()
+    assert probe.calls == 2
+    assert watcher.get_latest().state == "idle"
+    probe.running = ["Ubuntu"]
+    clock.now += 0.1
+    watcher._tick_once()
+    assert probe.calls == 3
+
+
+def test_thread_gets_the_given_name():
+    fs = FakeFs()
+    seen = []
+    done = threading.Event()
+
+    def sleep_fn(seconds):
+        seen.append(threading.current_thread().name)
+        done.set()
+        return True
+
+    watcher = _watcher(fs, sleep_fn=sleep_fn, name="activity-7")
+    watcher.start()
+    try:
+        assert done.wait(timeout=2)
+    finally:
+        watcher.stop()
+    assert seen[0] == "activity-7"

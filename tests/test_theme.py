@@ -2,12 +2,15 @@ import json
 import subprocess
 import sys
 
+from dataclasses import replace
+
 import pytest
 
 from tokitty import theme as T
 from tokitty.theme import (
     BarStyle, CardStyle, TextStyle, Theme,
     bar_fill, card_alpha, halo_active, halo_applies, load_theme, save_theme,
+    theme_from_dict, rejected_fields,
 )
 
 
@@ -17,10 +20,11 @@ def _write(tmp_path, obj):
 
 def test_defaults():
     t = Theme()
-    assert t.card == CardStyle(background="#1c1c22", opacity=100, radius=0,
-                               border_width=0, border_color="#333340")
-    assert t.bars.height == 8 and (t.bars.mid_at, t.bars.high_at) == (50, 80)
-    assert t.bars.layout == "beside_cat" and t.bars.shape == "flat"
+    assert t.card == CardStyle(design="refined", background="#1b1b21", opacity=100, radius=10,
+                               border_width=1, border_color="#2e2e38")
+    assert t.bars.height == 6 and (t.bars.mid_at, t.bars.high_at) == (50, 80)
+    assert t.bars.layout == "beside_cat" and t.bars.shape == "rounded"
+    assert t == T.REFINED
     assert t.text.show == frozenset(T.TEXT_ELEMENTS)
     assert (t.text.halo, t.text.halo_below) == ("off", 60)
     assert (T.CARD_WIDTH, T.CARD_HEIGHT) == (300, 128)
@@ -80,7 +84,7 @@ def test_one_bad_field_loses_only_that_field(tmp_path):
                       "bars": {"height": 6, "low": "green"}})
     t = load_theme(tmp_path)
     assert t.card.background == "#102030"
-    assert t.card.radius == 0 and t.card.opacity == 100
+    assert t.card.radius == 10 and t.card.opacity == 100
     assert t.bars.height == 6 and t.bars.low == BarStyle().low
 
 
@@ -102,8 +106,8 @@ def test_bool_rejected_as_int(tmp_path):
     _write(tmp_path, {"card": {"radius": True, "opacity": False},
                       "bars": {"height": True}, "text": {"halo_below": True}})
     t = load_theme(tmp_path)
-    assert t.card.radius == 0 and t.card.opacity == 100
-    assert t.bars.height == 8 and t.text.halo_below == 60
+    assert t.card.radius == 10 and t.card.opacity == 100
+    assert t.bars.height == 6 and t.text.halo_below == 60
 
 
 @pytest.mark.parametrize("value", [55, 5, -10, 110, 1.5, "50"])
@@ -113,9 +117,9 @@ def test_opacity_must_be_multiple_of_ten_in_range(tmp_path, value):
 
 
 @pytest.mark.parametrize("section,key,value,default", [
-    ("card", "radius", 17, 0), ("card", "radius", -1, 0),
-    ("card", "border_width", 4, 0),
-    ("bars", "height", 3, 8), ("bars", "height", 11, 8),
+    ("card", "radius", 17, 10), ("card", "radius", -1, 10),
+    ("card", "border_width", 4, 1),
+    ("bars", "height", 3, 6), ("bars", "height", 11, 6),
     ("bars", "mid_at", 101, 50), ("bars", "high_at", -1, 80),
     ("text", "halo_below", 101, 60),
 ])
@@ -127,13 +131,13 @@ def test_out_of_range_rejected_not_clamped(tmp_path, section, key, value, defaul
 @pytest.mark.parametrize("bad", ["#fff", "#12345g", "123456", 5, None, "#1234567"])
 def test_bad_hex_rejected(tmp_path, bad):
     _write(tmp_path, {"card": {"background": bad}})
-    assert load_theme(tmp_path).card.background == "#1c1c22"
+    assert load_theme(tmp_path).card.background == "#1b1b21"
 
 
 def test_bad_enums_fall_back(tmp_path):
     _write(tmp_path, {"bars": {"layout": "wide", "shape": 3}, "text": {"halo": "yes"}})
     t = load_theme(tmp_path)
-    assert (t.bars.layout, t.bars.shape, t.text.halo) == ("beside_cat", "flat", "off")
+    assert (t.bars.layout, t.bars.shape, t.text.halo) == ("beside_cat", "rounded", "off")
 
 
 def test_unknown_show_names_dropped(tmp_path):
@@ -255,7 +259,12 @@ def test_import_isolation():
 
 from itertools import combinations  # noqa: E402
 
-from tokitty.theme import CARD_HEIGHT, CARD_WIDTH, Rect, layout_card  # noqa: E402
+from tokitty.theme import CARD_HEIGHT, CARD_WIDTH, CLASSIC, Rect, layout_card  # noqa: E402
+
+
+def _classic(**parts):
+    """The classic preset with some sections replaced: the old geometry."""
+    return replace(CLASSIC, **parts)
 
 
 def _xywh(layout, name):
@@ -272,7 +281,7 @@ def test_rect_geometry():
 
 
 def test_limits_defaults_match_tk():
-    lay = layout_card(Theme(), "limits", "inside")
+    lay = layout_card(CLASSIC, "limits", "inside")
     assert lay.layout == "beside_cat"
     assert _xywh(lay, "cat_area") == (8, 8, 112, 112)
     assert [lay[n].y for n in ("session_label", "session_bar", "session_percent",
@@ -289,7 +298,7 @@ def test_limits_defaults_match_tk():
 
 
 def test_models_defaults_match_tk():
-    lay = layout_card(Theme(), "models", "inside")
+    lay = layout_card(CLASSIC, "models", "inside")
     assert [lay[f"model_name_{i}"].y for i in range(3)] == [20, 48, 76]
     assert [lay[f"model_bar_{i}"].y for i in range(3)] == [34, 62, 90]
     assert all(lay[f"model_name_{i}"].x == 132 for i in range(3))
@@ -300,7 +309,7 @@ def test_models_defaults_match_tk():
 
 
 def test_taller_bar_pushes_rows_down():
-    th = Theme(bars=BarStyle(height=10))
+    th = _classic(bars=replace(CLASSIC.bars, height=10))
     lay = layout_card(th, "limits", "inside")
     assert lay["session_bar"].y == 30 and lay["session_bar"].h == 10
     assert lay["session_percent"].y == 44
@@ -311,7 +320,7 @@ def test_taller_bar_pushes_rows_down():
 
 
 def test_hiding_section_labels_collapses_the_step():
-    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"section_labels"}))
+    th = _classic(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"section_labels"}))
     lay = layout_card(th, "limits", "inside")
     assert "session_label" not in lay and "weekly_label" not in lay
     assert lay["session_bar"].y == 12
@@ -320,14 +329,14 @@ def test_hiding_section_labels_collapses_the_step():
 
 
 def test_percent_hidden_reset_takes_line_start():
-    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent"}))
+    th = _classic(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent"}))
     lay = layout_card(th, "limits", "inside")
     assert "session_percent" not in lay
     assert lay["session_reset"] == Rect(132, 42, 158, 14)
 
 
 def test_both_runs_hidden_drops_line_and_step():
-    th = Theme(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent", "reset"}))
+    th = _classic(text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - {"percent", "reset"}))
     lay = layout_card(th, "limits", "inside")
     assert not lay.lines
     assert lay["weekly_label"].y == 30 + 8 + 4
@@ -340,7 +349,7 @@ def test_hidden_status_and_account_label_absent():
 
 
 def test_models_hidden_names_drop_name_and_value():
-    th = Theme(text=TextStyle(show=frozenset({"status"})))
+    th = _classic(text=TextStyle(show=frozenset({"status"})))
     lay = layout_card(th, "models", "inside")
     assert "model_name_0" not in lay and "model_value_0" not in lay
     assert lay["model_bar_0"].y == 20
@@ -368,20 +377,22 @@ def _subsets(items):
             yield frozenset(combo)
 
 
+@pytest.mark.parametrize("design", T.DESIGNS)
 @pytest.mark.parametrize("view", T.VIEWS)
 @pytest.mark.parametrize("layout,spot", [("beside_cat", "inside"),
                                          ("full_width", "on_top"),
                                          ("beside_cat", "inside_right"),
                                          ("full_width", "inside"),
                                          ("full_width", "inside_right")])
-def test_every_combination_fits_and_does_not_overlap(view, layout, spot):
+def test_every_combination_fits_and_does_not_overlap(design, view, layout, spot):
     card = Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
     for height in range(4, 11):
         for show in _subsets(T.TEXT_ELEMENTS):
-            th = Theme(bars=BarStyle(layout=layout, height=height),
-                       text=TextStyle(show=show))
+            base = T.design_preset(design)
+            th = replace(base, bars=replace(base.bars, layout=layout, height=height),
+                         text=TextStyle(show=show))
             lay = layout_card(th, view, spot)
-            where = (view, layout, spot, height, sorted(show))
+            where = (design, view, layout, spot, height, sorted(show))
             for name, r in lay.rects.items():
                 assert card.contains(r), (name, where)
             solid = [(n, r) for n, r in lay.rects.items() if n != "account_label"]
@@ -396,7 +407,7 @@ import itertools  # noqa: E402
 
 from tokitty.customize import Customization, effective_palette  # noqa: E402
 from tokitty.theme import (  # noqa: E402
-    SCRATCH_SPOTS, SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
+    SPRITE_H, SPRITE_W, Placement, Track, cell_size, grid_shape,
     hit_region, layout_window, placement, reachable_spots, resolve_home,
     resolve_pane_style, snap, top_edge_track,
 )
@@ -412,7 +423,6 @@ def test_placements():
     assert placement("inside") == Placement((8, 12), False)
     assert placement("on_top") == Placement((8, -104), False)
     assert placement("inside_right") == Placement((180, 12), True)
-    assert SCRATCH_SPOTS == {"inside", "inside_right"}
     assert set(T.SPOTS) == {"inside", "inside_right", "on_top"}
 
 
@@ -510,16 +520,16 @@ def test_window_margins_homes_only():
     assert w.margins == (0, 0, 0, 0)
     assert w.size == (300, 384)
     w = layout_window(["on_top", "inside"])
-    assert w.margins == (0, 104, 0, 0)
-    assert w.size == (300, 104 + 256)
+    assert w.margins == (0, 116, 0, 0)
+    assert w.size == (300, 116 + 256)
 
 
 def test_window_margins_wander_sizes_for_reachable():
     w = layout_window(["inside", "inside"], wander=True)
-    assert w.margins == (0, 104, 0, 0)
-    assert w.size == (300, 104 + 256)
+    assert w.margins == (0, 116, 0, 0)
+    assert w.size == (300, 116 + 256)
     # no pane in the first row, so nothing can reach the top
-    assert layout_window(["inside"] * 9, wander=True).margins == (0, 104, 0, 0)
+    assert layout_window(["inside"] * 9, wander=True).margins == (0, 116, 0, 0)
 
 
 @pytest.mark.parametrize("n", [1, 2, 5, 9])
@@ -528,14 +538,14 @@ def test_window_never_has_side_margins(n):
         homes = list(homes) + ["inside"] * (n - len(homes))
         for wander in (False, True):
             m = layout_window(homes, wander).margins
-            assert m in ((0, 0, 0, 0), (0, 104, 0, 0)), (homes, wander)
-            assert (m[1] == 104) == ("on_top" in homes or wander)
+            assert m in ((0, 0, 0, 0), (0, 116, 0, 0)), (homes, wander)
+            assert (m[1] == 116) == ("on_top" in homes or wander)
 
 
 def test_window_origins_two_columns():
     w = layout_window(["on_top"] + ["inside"] * 4)
-    assert w.pane_origins == ((0, 104), (300, 104), (0, 232), (300, 232), (0, 360))
-    assert w.size == (600, 104 + 384)
+    assert w.pane_origins == ((0, 116), (300, 116), (0, 244), (300, 244), (0, 372))
+    assert w.size == (600, 116 + 384)
 
 
 def test_round_up4():
@@ -572,8 +582,9 @@ def test_cell_size():
 def test_pane_style_theme_only():
     th = Theme()
     ps = resolve_pane_style(th, Customization(), False, 0, 1)
-    assert (ps.background, ps.foreground, ps.dim) == ("#1c1c22", "#f0f0f0", "#8a8a92")
-    assert ps.opacity == 100 and ps.bar_fill_override is None and ps.home == "inside"
+    assert (ps.background, ps.foreground, ps.dim) == ("#1b1b21", "#ececf1", "#8e8e98")
+    assert ps.opacity == 100 and ps.session_bar_override is None and ps.weekly_bar_override is None
+    assert ps.home == "inside"
     assert ps.palette == effective_palette(Customization())
 
 
@@ -584,9 +595,20 @@ def test_pane_style_account_override():
                          cat_home="inside_right")
     ps = resolve_pane_style(th, cust, False, 0, 2)
     assert ps.background == "#112233" and ps.opacity == 70
-    assert ps.bar_fill_override == "#445566"
+    assert ps.session_bar_override == ps.weekly_bar_override == "#445566"
     assert ps.palette == effective_palette(cust) and ps.palette["o"] == "#010101"
     assert ps.home == "inside_right"
+
+
+def test_pane_style_bar_overrides_resolve_per_bar():
+    def style(**overrides):
+        ps = resolve_pane_style(Theme(), Customization(overrides=overrides), False, 0, 1)
+        return ps.session_bar_override, ps.weekly_bar_override
+
+    assert style(session_bar="#111111") == ("#111111", None)
+    assert style(weekly_bar="#222222") == (None, "#222222")
+    assert style(bar_fill="#333333", weekly_bar="#222222") == ("#333333", "#222222")
+    assert style(bar_fill="#333333", session_bar="#111111", weekly_bar="#222222") == ("#111111", "#222222")
 
 
 def test_pane_style_accent_wins():
@@ -694,3 +716,283 @@ def test_non_list_show_and_non_dict_section_are_rejected():
 def test_theme_from_dict_ignores_a_non_dict():
     assert T.theme_from_dict(None, Theme()) == Theme()
     assert T.rejected_fields([], Theme()) == set()
+
+
+def test_on_top_margin_holds_the_sprite_and_the_hop_headroom():
+    from tokitty.theme import HOP_HEADROOM
+
+    assert HOP_HEADROOM == 12
+    assert layout_window(["on_top"]).margins[1] == SPRITE_H + HOP_HEADROOM
+    for homes in (["inside"], ["inside_right", "inside"]):
+        assert layout_window(homes).margins[1] == 0
+    # reachable only: the headroom comes with the spot, not on top of it
+    assert layout_window(["inside", "inside"], wander=True).margins[1] == SPRITE_H + HOP_HEADROOM
+    assert layout_window(["on_top"]).pane_origins == ((0, SPRITE_H + HOP_HEADROOM),)
+
+
+def test_cat_shadow_is_on_by_default_and_for_a_file_without_a_cat_section(tmp_path):
+    from tokitty.theme import CatStyle, load_theme
+
+    assert Theme().cat == CatStyle(shadow=True, wander=True)
+    (tmp_path / "theme.json").write_text(json.dumps({"card": {"radius": 3}}), encoding="utf-8")
+    loaded = load_theme(tmp_path)
+    assert loaded.card.radius == 3 and loaded.cat.shadow is True
+
+
+def test_cat_shadow_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
+
+    theme = Theme(cat=CatStyle(shadow=False))
+    assert theme_to_dict(theme)["cat"] == {"shadow": False, "wander": True, "time_of_day": True}
+    save_theme(tmp_path, theme)
+    assert json.loads((tmp_path / "theme.json").read_text(encoding="utf-8"))["cat"] == {"shadow": False, "wander": True, "time_of_day": True}
+    assert load_theme(tmp_path).cat.shadow is False
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.shadow is False
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_shadow_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"shadow": bad}}
+    assert theme_from_dict(raw, Theme()).cat.shadow is True
+    assert rejected_fields(raw, Theme()) == {"cat.shadow"}
+    off = Theme(cat=replace(Theme().cat, shadow=False))
+    assert theme_from_dict(raw, off).cat.shadow is False  # the fallback's value
+
+
+def test_cat_wander_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme, theme_to_dict
+
+    theme = Theme(cat=CatStyle(wander=False))
+    assert theme_to_dict(theme)["cat"] == {"shadow": True, "wander": False, "time_of_day": True}
+    save_theme(tmp_path, theme)
+    assert load_theme(tmp_path).cat.wander is False
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.wander is True
+
+
+def test_cat_time_of_day_defaults_on_and_off_round_trips(tmp_path):
+    from tokitty.theme import CatStyle, load_theme, save_theme
+
+    assert theme_from_dict({"cat": {"shadow": False}}, Theme()).cat.time_of_day is True
+    save_theme(tmp_path, Theme(cat=CatStyle(time_of_day=False)))
+    assert load_theme(tmp_path).cat.time_of_day is False
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_time_of_day_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"time_of_day": bad}}
+    assert theme_from_dict(raw, Theme()).cat.time_of_day is True
+    assert rejected_fields(raw, Theme()) == {"cat.time_of_day"}
+
+
+@pytest.mark.parametrize("bad", [1, 0, "no", None, [True]])
+def test_cat_wander_of_the_wrong_type_is_rejected_and_reported(bad):
+    raw = {"cat": {"wander": bad}}
+    assert theme_from_dict(raw, Theme()).cat.wander is True
+    assert rejected_fields(raw, Theme()) == {"cat.wander"}
+
+
+def test_cat_section_that_is_not_a_dict_is_reported():
+    assert rejected_fields({"cat": True}, Theme()) == {"cat"}
+    assert theme_from_dict({"cat": True}, Theme()).cat.shadow is True
+
+
+# --- card design (#139) ---
+
+def _look(theme):
+    return {s: {k: getattr(getattr(theme, s), k) for k in keys} for s, keys in T.LOOK_FIELDS.items()}
+
+
+def test_presets_hold_the_agreed_looks():
+    assert _look(T.CLASSIC) == {
+        "card": {"design": "classic", "background": "#1c1c22", "radius": 0, "border_width": 0,
+                 "border_color": "#333340"},
+        "bars": {"shape": "flat", "height": 8, "track": "#333340", "low": "#4caf6b",
+                 "mid": "#e0a838", "high": "#e05252", "neutral": "#5a7fa8"},
+        "text": {"foreground": "#f0f0f0", "dim": "#8a8a92"},
+    }
+    assert _look(T.REFINED)["card"] == {
+        "design": "refined", "background": "#1b1b21", "radius": 10, "border_width": 1,
+        "border_color": "#2e2e38"}
+    assert T.design_preset("refined") is T.REFINED and T.design_preset("classic") is T.CLASSIC
+    with pytest.raises(ValueError):
+        T.design_preset("glass")
+
+
+def test_design_is_validated_like_other_enums(tmp_path):
+    _write(tmp_path, {"card": {"design": "classic"}})
+    assert load_theme(tmp_path).card.design == "classic"
+    for bad in ("glass", 3, None, True):
+        raw = {"card": {"design": bad}}
+        assert theme_from_dict(raw, Theme()).card.design == "refined"
+        assert rejected_fields(raw, Theme()) == {"card.design"}
+    assert theme_from_dict(raw, T.CLASSIC).card.design == "classic"
+
+
+def test_design_round_trips(tmp_path):
+    assert T.theme_to_dict(T.CLASSIC)["card"]["design"] == "classic"
+    save_theme(tmp_path, T.CLASSIC)
+    assert load_theme(tmp_path) == T.CLASSIC
+    assert theme_from_dict(T.theme_to_dict(T.CLASSIC), Theme()) == T.CLASSIC
+
+
+def _classic_file():
+    """What a pre-#139 save of the all-default theme wrote: no design key."""
+    raw = T.theme_to_dict(T.CLASSIC)
+    del raw["card"]["design"]
+    return raw
+
+
+def test_a_pre_139_file_with_classic_values_moves_to_refined(tmp_path):
+    _write(tmp_path, _classic_file())
+    assert load_theme(tmp_path) == T.REFINED
+
+
+def test_a_pre_139_file_keeps_what_the_user_changed(tmp_path):
+    raw = _classic_file()
+    raw["card"]["background"] = "#102030"
+    raw["card"]["opacity"] = 70
+    raw["bars"]["height"] = 5
+    raw["bars"]["layout"] = "full_width"
+    raw["text"]["show"] = ["percent"]
+    raw["text"]["dim"] = "#8A8A92"  # classic, in another case
+    _write(tmp_path, raw)
+    t = load_theme(tmp_path)
+    assert t.card.background == "#102030" and t.bars.height == 5
+    assert (t.card.opacity, t.bars.layout, t.text.show) == (70, "full_width", frozenset({"percent"}))
+    assert t.card.design == "refined" and t.card.radius == 10 and t.card.border_width == 1
+    assert t.bars.shape == "rounded" and t.bars.track == "#2c2c35"
+    assert t.text.dim == "#8e8e98" and t.text.foreground == "#ececf1"
+
+
+def test_a_pre_139_file_with_only_some_sections(tmp_path):
+    _write(tmp_path, {"cat": {"shadow": False}})
+    assert load_theme(tmp_path) == replace(T.REFINED, cat=replace(T.REFINED.cat, shadow=False))
+    _write(tmp_path, {"card": {"radius": 0}, "bars": []})
+    t = load_theme(tmp_path)
+    assert t.card.radius == 10 and t.bars == T.REFINED.bars  # bars: not a dict, rejected
+
+
+def test_a_pre_139_bad_value_falls_back_to_refined(tmp_path):
+    _write(tmp_path, {"card": {"background": "red", "border_width": False}})
+    t = load_theme(tmp_path)
+    assert t.card.background == "#1b1b21" and t.card.border_width == 1
+
+
+def test_a_file_with_a_design_loads_as_written(tmp_path):
+    raw = T.theme_to_dict(T.CLASSIC)
+    _write(tmp_path, raw)
+    assert load_theme(tmp_path) == T.CLASSIC
+    _write(tmp_path, {"card": {"design": "classic"}})  # missing keys take the refined fallback
+    t = load_theme(tmp_path)
+    assert t.card.design == "classic" and t.card.radius == 10 and t.bars.height == 6
+    _write(tmp_path, {"card": {"design": "refined", "radius": 0}})
+    assert load_theme(tmp_path).card.radius == 0  # no migration once a design is saved
+
+
+def test_loading_does_not_rewrite_the_file(tmp_path):
+    _write(tmp_path, _classic_file())
+    before = (tmp_path / "theme.json").read_bytes()
+    load_theme(tmp_path)
+    assert (tmp_path / "theme.json").read_bytes() == before
+
+
+def test_apply_design_swaps_the_look_and_keeps_the_rest():
+    mine = Theme(
+        card=CardStyle(opacity=40, background="#102030"),
+        bars=BarStyle(layout="full_width", mid_at=20, high_at=70, height=9, low="#00ff00"),
+        text=TextStyle(show=frozenset({"percent"}), halo="on", halo_below=30, dim="#999999"),
+        cat=T.CatStyle(shadow=False, wander=False))
+    classic = T.apply_design(mine, "classic")
+    assert _look(classic) == _look(T.CLASSIC)
+    assert classic.card.opacity == 40
+    assert classic.bars.layout == "full_width" and (classic.bars.mid_at, classic.bars.high_at) == (20, 70)
+    assert classic.text.show == mine.text.show and classic.text.halo == "on"
+    assert classic.text.halo_below == 30 and classic.cat == mine.cat
+    assert T.apply_design(classic, "refined") == replace(mine, card=replace(
+        T.REFINED.card, opacity=40), bars=replace(T.REFINED.bars, layout="full_width", mid_at=20,
+                                                  high_at=70), text=replace(
+        T.REFINED.text, show=mine.text.show, halo="on", halo_below=30), cat=mine.cat)
+    assert T.apply_design(T.REFINED, "refined") == T.REFINED
+    with pytest.raises(ValueError):
+        T.apply_design(mine, "nope")
+
+
+def test_refined_limits_rects():
+    lay = layout_card(T.REFINED, "limits", "inside")  # bars 6 high
+    assert lay.layout == "beside_cat"
+    assert _xywh(lay, "session_label") == (132, 12, 118, 16)
+    assert _xywh(lay, "session_percent") == (250, 12, 40, 16)
+    assert _xywh(lay, "session_bar") == (132, 31, 158, 6)
+    assert _xywh(lay, "session_reset") == (132, 40, 158, 14)
+    assert _xywh(lay, "weekly_label") == (132, 58, 118, 16)
+    assert lay["weekly_bar"].y == 77 and lay["weekly_reset"].y == 86
+    assert lay.lines["session"] == Rect(132, 12, 158, 42)
+    assert _xywh(lay, "status") == (132, 104, 158, 14)
+    assert lay["account_label"] == Rect(132, 104, 158, 14) and lay["account_label"].right == 290
+    # the stats column alone: the cat's area is as before
+    assert _xywh(lay, "cat_area") == (8, 8, 112, 112)
+
+
+def test_refined_row_steps_match_the_agreed_arrangement():
+    lay = layout_card(replace(T.REFINED, bars=replace(T.REFINED.bars, height=8)), "limits", "inside")
+    assert [lay[n].y for n in ("session_label", "session_bar", "session_reset", "weekly_label",
+                               "weekly_bar", "weekly_reset", "status")] == [12, 31, 42, 60, 79, 90, 108]
+
+
+def test_refined_models_rects():
+    th = replace(T.REFINED, bars=replace(T.REFINED.bars, height=6))
+    lay = layout_card(th, "models", "inside")
+    assert [lay[f"model_name_{i}"].y for i in range(3)] == [12, 44, 76]
+    assert [lay[f"model_bar_{i}"].y for i in range(3)] == [29, 61, 93]
+    assert _xywh(lay, "model_name_0") == (132, 12, 98, 14)
+    assert _xywh(lay, "model_value_0") == (230, 12, 60, 14)
+    assert lay["status"].y == 108 and lay["account_label"].y == 108
+
+
+def test_refined_hidden_elements_remove_their_rows():
+    def lay_for(*hidden, view="limits"):
+        th = replace(T.REFINED, text=TextStyle(show=frozenset(T.TEXT_ELEMENTS) - set(hidden)))
+        return layout_card(th, view, "inside")
+
+    full = lay_for()
+    no_reset = lay_for("reset")
+    assert "session_reset" not in no_reset
+    assert no_reset["weekly_label"].y == full["weekly_label"].y - 18
+    only_percent = lay_for("section_labels")
+    assert "session_label" not in only_percent and only_percent["session_percent"] == Rect(250, 12, 40, 16)
+    only_label = lay_for("percent")
+    assert only_label["session_label"] == Rect(132, 12, 158, 16) and "session_percent" not in only_label
+    bare = lay_for("section_labels", "percent")
+    assert bare["session_bar"].y == 12
+    assert bare["weekly_bar"].y == 12 + 6 + 3 + 18
+    no_status = lay_for("status")
+    assert "status" not in no_status and no_status["account_label"].y == full["account_label"].y
+    no_account = lay_for("account_label")
+    assert "account_label" not in no_account and no_account["status"] == full["status"]
+    models = lay_for("model_rows", view="models")
+    assert "model_name_0" not in models and models["model_bar_0"].y == 12
+    assert models["model_bar_1"].y == 12 + 6 + 9
+
+
+@pytest.mark.parametrize("view", T.VIEWS)
+def test_refined_fits_the_card_for_every_bar_height(view):
+    card = Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
+    for height in range(4, 11):
+        th = replace(T.REFINED, bars=replace(T.REFINED.bars, height=height))
+        lay = layout_card(th, view, "inside")
+        assert lay["status"].bottom <= CARD_HEIGHT, height
+        leaves = [(n, r) for n, r in lay.rects.items() if n not in ("account_label", "cat_area")]
+        for name, r in leaves:
+            assert card.contains(r), (name, height)
+        for i, (n1, r1) in enumerate(leaves):
+            for n2, r2 in leaves[i + 1:]:
+                assert not r1.intersects(r2), (n1, n2, height)
+
+
+def test_refined_full_width_and_inside_right():
+    th = replace(T.REFINED, bars=replace(T.REFINED.bars, layout="full_width"))
+    wide = layout_card(th, "limits", "on_top")
+    assert (wide["session_bar"].x, wide["session_bar"].w) == (8, 284)
+    assert wide["account_label"].right == CARD_WIDTH - 10
+    right = layout_card(T.REFINED, "limits", "inside_right")
+    assert right["session_bar"].x == 10 and right["cat_area"].x == 180

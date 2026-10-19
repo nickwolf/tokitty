@@ -72,8 +72,17 @@ def test_pane_color_reads_the_palette_and_overrides(make_world):
     pane = world.widget.panes[0]
     assert world.host.pane_color(0, "coat_base") == pane.palette["o"]
     assert world.host.pane_color(0, "coat_shade") == pane.palette["O"]
-    assert world.host.pane_color(0, "bar_fill") == "#0a0b0c"
+    # the legacy shared colour shows on both bar rows
+    assert world.host.pane_color(0, "session_bar") == "#0a0b0c"
+    assert world.host.pane_color(0, "weekly_bar") == "#0a0b0c"
     assert world.host.pane_color(0, "card_bg") == T.CardStyle.background
+
+
+def test_pane_color_prefers_the_new_bar_keys_over_legacy(make_world):
+    world = make_world(1, customs=[Customization(overrides={
+        "bar_fill": "#0a0b0c", "session_bar": "#111111"})])
+    assert world.host.pane_color(0, "session_bar") == "#111111"
+    assert world.host.pane_color(0, "weekly_bar") == "#0a0b0c"
 
 
 def test_on_layout_changed_replaces_the_customization_and_rebuilds_on_a_new_home(make_world):

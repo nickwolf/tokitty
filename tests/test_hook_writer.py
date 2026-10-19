@@ -445,6 +445,19 @@ class TestPermissionDisabled:
         env.decide()
         assert env.wait() == {"behavior": "allow"}
 
+    @pytest.mark.parametrize("tool", ["AskUserQuestion", "ExitPlanMode"])
+    def test_question_tools_never_reach_the_dock(self, env, capsys, tool):
+        # Even with the dock on, a findable tool use and a matching decision
+        # waiting, nothing is written and nothing is printed.
+        env.payload["tool_name"] = tool
+        env.write_transcript(tool_use("toolu_A", name=tool))
+        env.decide()
+        env.run()
+        assert capsys.readouterr().out == ""
+        assert pending_files(env) == []
+        assert env.clock.sleeps == []
+        assert env.wait() is None
+
 
 class TestPermissionDecisions:
     def test_matching_allow_prints_exact_shape_and_cleans_up(self, env, capsys):
@@ -1014,6 +1027,22 @@ class TestPermissionEndToEnd:
         proc, data = self._launch(tmp_path, None, payload)
         out, err = proc.communicate(data, timeout=10)
         assert out == b"" and err == b"" and proc.returncode == 0
+
+    @pytest.mark.parametrize("tool", ["AskUserQuestion", "ExitPlanMode"])
+    def test_question_tool_exits_silently_with_dock_on(self, tmp_path, tool):
+        payload = self._payload(tmp_path)
+        payload["tool_name"] = tool
+        (tmp_path / "t.jsonl").write_text(json.dumps(tool_use("toolu_A", name=tool)) + "\n")
+        tdir = tmp_path / "tokitty"
+        tdir.mkdir()
+        (tdir / "streamdock.enabled").write_text("")
+        proc, data = self._launch(tmp_path, None, payload)
+        out, err = proc.communicate(data, timeout=10)
+        assert out == b"" and err == b"" and proc.returncode == 0
+        assert not (tdir / "pending").exists()
+        # The cat still sees the permission event.
+        state = json.loads((tdir / "sessions" / "sess-1.json").read_text())
+        assert state["event"] == "PermissionRequest" and state["tool_name"] == tool
 
     def test_allow_round_trip(self, tmp_path):
         import time as _t

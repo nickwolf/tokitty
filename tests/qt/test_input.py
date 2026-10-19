@@ -112,7 +112,7 @@ def test_qt_mode_menu_model(qapp):
 
 def make(count=1, homes=None, path=None, model=None):
     customs = [Customization(cat_home=(homes[i] if homes else "inside")) for i in range(count)]
-    widget = TokittyQtWidget(T.Theme(), customs, count, position_path=path,
+    widget = TokittyQtWidget(T.Theme(cat=T.CatStyle(wander=False)), customs, count, position_path=path,
                              build_menu_model=model)
     widget.anim.stop()
     return widget
@@ -298,7 +298,9 @@ def test_mask_follows_rebuild_layout(qapp):
     widget.rebuild_layout(["on_top"])
     assert widget.mask() == expected_mask(widget)
     assert widget.mask().boundingRect().height() > before.height()
-    assert widget.mask().boundingRect().height() == widget.height()
+    # the hop headroom above the cat is not clickable
+    bounds = widget.mask().boundingRect()
+    assert bounds.top() == T.HOP_HEADROOM and bounds.bottom() + 1 == widget.height()
     widget.hide()
 
 

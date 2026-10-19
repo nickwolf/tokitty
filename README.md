@@ -96,7 +96,7 @@ Optional, off by default. With a downloaded build, adding an account in the Acco
 python -m tokitty --install-hooks
 ```
 
-and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt, and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
+and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt (left unanswered, the cat gets impatient after 30 seconds and frantic after 3 minutes), and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
 
 Installing also registers a `PermissionRequest` hook for the Stream Dock. It is inert unless a Stream Dock is connected: with no deck it prints nothing and Claude Code's own prompt is unaffected. Running Claude Code sessions pick it up after a restart.
 
@@ -227,7 +227,7 @@ How answering from the deck works:
 
 ## Customization
 
-A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern** offers nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways.
+A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern** offers nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways. **Tail** is an optional third dropdown that swaps the tail for a ringed one (`plain` by default, then `ringed`, `ringed_light`, `ringed_shade` and `ringed_pale`), and it is saved per pane like the other two.
 
 <p align="center">
   <img src="docs/media/looks-grid.png" alt="All six colorways down, all nine patterns across" width="760">
@@ -239,9 +239,11 @@ Colorways run top to bottom in the order listed above, patterns left to right.
 
 **Cat sits** in Settings ▸ Look puts the cat on the Left or Right inside the card, or On top of it. On top is offered for panes in the first row of the grid.
 
+**Personality** in Settings ▸ Look sets how each cat spends its idle time: `balanced` (the default), `lazy`, `playful` or `curious`. With **Cat wanders** on in Settings ▸ Theme, a calm cat goes for walks, naps and plays on its own, and with **Follows the clock** on it keeps to the hour, busy in the morning and sleepy at night. What it plays is for you to find out.
+
 Settings ▸ Look has a row with a **Change…** button per overridable piece (Coat, Shade, Card background, Bar fill). Each pick previews live, and **Reset to preset** clears all four back to the current colorway and pattern's stock colors.
 
-Every per-pane choice is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Accounts](#accounts) above for the exact path per OS). With no accounts configured the file has one entry keyed `"default"`, and with accounts it is keyed by each account's identity slug, so each pane keeps its own look and colors. It stores `colorway`, `pattern`, `cat_home` (`inside`, `inside_right` or `on_top`), the four color overrides and the label.
+Every per-pane choice is saved to `customization.json`, in the same per-user state directory as `position.json` (see [Accounts](#accounts) above for the exact path per OS). With no accounts configured the file has one entry keyed `"default"`, and with accounts it is keyed by each account's identity slug, so each pane keeps its own look and colors. It stores `colorway`, `pattern`, `tail`, `cat_home` (`inside`, `inside_right` or `on_top`), the four color overrides and the label.
 
 Each pane also gets a label under the sprite. Set one in the Name field of Settings ▸ Look; a pane with no name shows no label. The Accounts dialog's own list shows a placeholder ("Cat 1", "Cat 2", and so on) for any account that hasn't been renamed, just for that list.
 

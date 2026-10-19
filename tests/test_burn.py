@@ -4,7 +4,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tokitty.api import LimitInfo, UsageSnapshot
-from tokitty.burn import BurnTracker, MIN_SPAN_SECONDS, WINDOW_SECONDS, Projection, Sample
+from tokitty.burn import (
+    PACE_CAPS,
+    PACE_UNKNOWN,
+    PACE_WONT_CAP,
+    BurnTracker,
+    MIN_SPAN_SECONDS,
+    WINDOW_SECONDS,
+    Pace,
+    Projection,
+    Sample,
+)
 
 NOW = datetime(2026, 8, 4, 12, 0, 0, tzinfo=timezone.utc)
 SESSION_RESET = NOW + timedelta(hours=3)
@@ -291,3 +301,49 @@ def test_project_still_detects_a_real_reset_despite_jitter_tolerance():
     assert projection == Projection(
         kind="session", caps_at=NOW + timedelta(seconds=1050)
     )
+
+
+# ---- pace: the per-kind verdict the hover popup reads -----------------------
+
+def test_pace_is_unknown_while_warming_up():
+    assert _tracker_with([(0, 10.0, 5.0)]).pace("session", NOW) == Pace(PACE_UNKNOWN)
+    short = _tracker_with([(0, 10.0, 5.0), (60, 20.0, 5.0)])
+    assert short.pace("session", NOW + timedelta(seconds=60)) == Pace(PACE_UNKNOWN)
+
+
+def test_pace_reports_the_cap_time_when_the_burn_reaches_it():
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    pace = tracker.pace("session", NOW + timedelta(seconds=600))
+    assert pace == Pace(PACE_CAPS, NOW + timedelta(seconds=1800))
+
+
+def test_pace_says_wont_cap_for_a_slow_or_flat_burn_unlike_project():
+    slow = _tracker_with([(0, 10.0, 5.0), (600, 11.0, 5.0)])
+    flat = _tracker_with([(0, 10.0, 5.0), (600, 10.0, 5.0)])
+    for tracker in (slow, flat):
+        now = NOW + timedelta(seconds=600)
+        assert tracker.pace("session", now) == Pace(PACE_WONT_CAP)
+        assert tracker.project(now) is None
+
+
+def test_pace_is_per_kind():
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    now = NOW + timedelta(seconds=600)
+    assert tracker.pace("session", now).status == PACE_CAPS
+    assert tracker.pace("weekly", now).status == PACE_WONT_CAP
+
+
+def test_pace_is_unknown_when_capped_or_without_a_reset_time():
+    capped = LimitInfo(kind="session", percent=100.0, severity="exceeded",
+                       resets_at=SESSION_RESET, is_active=True)
+    tracker = BurnTracker()
+    tracker.add(_snapshot(offset_seconds=0, session_pct=10.0))
+    tracker.add(_snapshot(offset_seconds=600, session_pct=100.0, limits=[capped]))
+    assert tracker.pace("session", NOW + timedelta(seconds=600)) == Pace(PACE_UNKNOWN)
+    bare = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)], session_resets_at=None)
+    assert bare.pace("session", NOW + timedelta(seconds=600)) == Pace(PACE_UNKNOWN)
+
+
+def test_pace_decays_to_unknown_once_the_samples_age_out():
+    tracker = _tracker_with([(0, 10.0, 5.0), (600, 40.0, 5.0)])
+    assert tracker.pace("session", NOW + timedelta(seconds=WINDOW_SECONDS + 700)) == Pace(PACE_UNKNOWN)
