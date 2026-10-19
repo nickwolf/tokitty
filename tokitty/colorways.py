@@ -231,7 +231,7 @@ def palette_from_tones(tones: Dict[str, str], pattern: str = "tabby",
     rings = sprites.TAIL_STYLES[tail]
     if rings is not None:
         merged["y"], merged["Y"] = tokens[rings[0]], tokens[rings[1]]
-    return sprites.derive_tones(merged)
+    return sprites.derive_tones(merged, pattern)
 
 
 def tones_of(entry: Dict[str, str]) -> Dict[str, str]:

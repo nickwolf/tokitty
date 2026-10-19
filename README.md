@@ -227,13 +227,13 @@ How answering from the deck works:
 
 ## Customization
 
-A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers six (`orange`, `gray`, `black`, `white`, `cream`, `brown`) and **Pattern** offers nine (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`). Picking either applies immediately and persists, so six colorways × nine patterns give 54 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways. **Tail** is an optional third dropdown that swaps the tail for a ringed one (`plain` by default, then `ringed`, `ringed_light`, `ringed_shade` and `ringed_pale`), and it is saved per pane like the other two.
+A cat's look is two independent axes: a **colorway** (its tone palette) times a **pattern** (which tone each body region takes). Right-click a pane, choose **Settings…**, and open Look to change either (its Editing picker starts on the pane you right-clicked). **Colorway** offers fourteen built-ins (`orange`, `gray`, `black`, `white`, `cream`, `brown`, `blue`, `lilac`, `cinnamon`, `silver`, `golden`, `auburn`, `seal`, `midnight`) and **Pattern** offers eleven (`solid`, `tabby`, `bicolor`, `tabby_white`, `calico`, `tuxedo`, `socks`, `colorpoint`, `van`, `harlequin`, `cap_and_saddle`). Picking either applies immediately and persists, so fourteen colorways × eleven patterns give 154 built-in looks. `colorpoint` and `van` pale the body toward the colorway's light tone, so they read best on the lighter colorways. `harlequin` and `cap_and_saddle` are mostly white, so the colorway shows in the ears, spots, cap and tail. **Tail** is an optional third dropdown that swaps the tail for a ringed one (`plain` by default, then `ringed`, `ringed_light`, `ringed_shade` and `ringed_pale`), and it is saved per pane like the other two.
 
 <p align="center">
-  <img src="docs/media/looks-grid.png" alt="All six colorways down, all nine patterns across" width="760">
+  <img src="docs/media/looks-grid.png" alt="Six colorways down, all eleven patterns across" width="760">
 </p>
 
-Colorways run top to bottom in the order listed above, patterns left to right.
+The grid shows the first six colorways listed above, top to bottom, and the patterns left to right in the order listed.
 
 **Randomize** in Settings ▸ Look rolls a fresh colorway and pattern for that pane and saves it, and **Surprise me** (a toggle in Settings ▸ General, off by default) re-rolls every pane on each launch. Both only roll from the built-in colorways and patterns. A fresh install rolls one random look on first launch and keeps it.
 

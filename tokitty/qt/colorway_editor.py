@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QColorDialog, QDialog, QMessageBox, QWidget
+from PySide6.QtWidgets import QColorDialog, QDialog, QGridLayout, QMessageBox, QWidget
 
 from tokitty import colorways, sprites
 from tokitty.customize import load_customization
@@ -27,7 +27,8 @@ TONE_ROWS = (
     ("Ears", "ear"),
 )
 PREVIEW_CELL = 6   # the big cat: twice the Look tab's preview
-STRIP_CELL = 2     # the nine patterns
+STRIP_CELL = 2     # the eleven patterns
+STRIP_COLUMNS = 6  # per row: eleven columns don't fit the dialog's 600 px
 DEFAULT_NAME = "My colorway"
 
 
@@ -133,10 +134,13 @@ class ColorwayEditor(QDialog):
         root.addWidget(text("All patterns", color=MUTED, font=FONT_SMALL))
         root.addSpacing(4)
         strip = QWidget()
-        strip_row = hbox(strip, spacing=4)
+        strip_grid = QGridLayout(strip)
+        strip_grid.setContentsMargins(0, 0, 0, 0)
+        strip_grid.setHorizontalSpacing(4)
+        strip_grid.setVerticalSpacing(8)
         self.strip: Dict[str, SpritePreview] = {}
         self.strip_labels: Dict[str, QWidget] = {}
-        for pattern in sprites.PATTERNS:
+        for i, pattern in enumerate(sprites.PATTERNS):
             cell = kit.sprite_preview(self._palette(pattern), cell=STRIP_CELL)
             cell.setToolTip(pattern.replace("_", " "))
             self.strip[pattern] = cell
@@ -150,8 +154,8 @@ class ColorwayEditor(QDialog):
             label.setFixedWidth(STRIP_CELL * 28 + 4)
             column_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignHCenter)
             self.strip_labels[pattern] = label
-            strip_row.addWidget(column, 0, Qt.AlignmentFlag.AlignTop)
-        strip_row.addStretch(1)
+            strip_grid.addWidget(column, i // STRIP_COLUMNS, i % STRIP_COLUMNS, Qt.AlignmentFlag.AlignTop)
+        strip_grid.setColumnStretch(STRIP_COLUMNS, 1)
         root.addWidget(strip)
         root.addSpacing(14)
 

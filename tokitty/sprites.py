@@ -38,6 +38,8 @@ import threading
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+from tokitty import piebald
+
 SCALE = 4  # device pixels per sprite pixel when rendered on the Canvas
 
 # Non-coat colors: shared by every coat preset.
@@ -148,8 +150,8 @@ PATTERNS: Dict[str, Dict[str, str]] = {
                     "m": "coat", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "tabby":       {"o": "coat", "O": "shade", "s": "mark", "c": "coat",
                     "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
-    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "white",
-                    "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
+    "bicolor":     {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "tabby_white": {"o": "coat", "O": "shade", "s": "mark", "c": "white",
                     "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
     "calico":      {"o": "coat", "O": "shade", "s": "#453a33", "c": "#e8823c",
@@ -157,15 +159,73 @@ PATTERNS: Dict[str, Dict[str, str]] = {
     # Silhouette patterns -- these use the new regions to change the cat's
     # read, not just tint it. colorpoint/van pale the body toward the
     # colorway's `light` tone, so they only sing on light colorways.
-    "tuxedo":      {"o": "coat", "O": "shade", "s": "coat", "c": "white",
-                    "m": "white", "x": "coat", "y": "shade", "u": "white", "Y": "shade"},
+    "tuxedo":      {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "socks":       {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
                     "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
     "colorpoint":  {"o": "light", "O": "light", "s": "light", "c": "light",
                     "m": "mark", "x": "mark", "y": "mark", "u": "light", "Y": "mark"},
     "van":         {"o": "white", "O": "shade", "s": "white", "c": "white",
                     "m": "white", "x": "coat", "y": "coat", "u": "white", "Y": "coat"},
+    # Piebald patterns (#211): coat everywhere but the paws, white where the
+    # drawing's piebald class carries the pattern's bit (PATTERN_PIEBALD).
+    "harlequin":   {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                    "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
+    "cap_and_saddle": {"o": "coat", "O": "shade", "s": "coat", "c": "coat",
+                       "m": "white", "x": "coat", "y": "shade", "u": "coat", "Y": "shade"},
 }
+
+# White spotting (#211): a pattern can also paint white the cells whose
+# piebald class (tokitty.piebald) carries its bit. The drawn templates fold each body
+# cell's class into its char, so a piebald char is a (region char, class)
+# pair; every other pattern draws it exactly as its region char.
+PIEBALD_BASES = "oOscxu"
+PATTERN_PIEBALD: Dict[str, int] = {"tuxedo": piebald.TUXEDO, "bicolor": piebald.BICOLOR,
+                                   "harlequin": piebald.HARLEQUIN, "cap_and_saddle": piebald.CAP_SADDLE}
+
+
+def piebald_char(base: str, bits: int) -> str:
+    """The char for a `base` region cell of piebald class `bits` (0-15)."""
+    return chr(0x100 + PIEBALD_BASES.index(base) * 16 + bits)
+
+
+PIEBALD_CHARS: Dict[str, Tuple[str, int]] = {piebald_char(b, k): (b, k) for b in PIEBALD_BASES for k in range(16)}
+
+
+def piebald_base(ch: str) -> str:
+    """The char a cell would hold without its piebald class: the region char
+    for a piebald char, the plain dim or glow char for their twins."""
+    return _UNPIEBALD.get(ch, ch)
+
+
+def _rebase(ch: str, base: str) -> str:
+    """`ch` redrawn as region `base`, keeping its piebald class."""
+    return piebald_char(base, PIEBALD_CHARS[ch][1]) if ch in PIEBALD_CHARS else base
+
+
+def _classed(pose: Dict[Tuple[int, int], str], bits: int) -> Dict[Tuple[int, int], str]:
+    """A pose's bare region chars all given one piebald class (a limb)."""
+    return {cell: piebald_char(ch, bits) if ch in PIEBALD_BASES else ch for cell, ch in pose.items()}
+
+
+def _class_at(classes: Sequence[Sequence], r: int, c: int) -> int:
+    v = classes[r][c]
+    return v if isinstance(v, int) else int(v, 16)
+
+
+def _piebald(template: List[str], classes: Sequence[Sequence]) -> List[str]:
+    """Fold a drawing's piebald classes (ints, or hex digit rows) into its
+    bare region chars; chars that already carry a class are kept."""
+    return ["".join(piebald_char(ch, _class_at(classes, r, c)) if ch in PIEBALD_BASES else ch
+                    for c, ch in enumerate(row)) for r, row in enumerate(template)]
+
+
+def _piebald_pose(pose: Dict[Tuple[int, int], str], classes: Sequence[Sequence]
+                  ) -> Dict[Tuple[int, int], str]:
+    """A pose's bare region chars folded with the drawing they're painted on."""
+    return {(r, c): piebald_char(ch, _class_at(classes, r, c)) if ch in PIEBALD_BASES else ch
+            for (r, c), ch in pose.items()}
+
 
 # Old bundled coat names -> (colorway, pattern). Legacy black/white carried a
 # subtle tone-on-tone sheen (a mark-tone stripe), so they map to +tabby, not
@@ -215,14 +275,21 @@ def _resolved_palette(colorway: str, pattern: str, tail: str) -> Dict[str, str]:
     rings = TAIL_STYLES[tail]
     if rings is not None:
         merged["y"], merged["Y"] = tones[rings[0]], tones[rings[1]]
-    return derive_tones(merged)
+    return derive_tones(merged, pattern)
 
 
-def derive_tones(palette: Dict[str, str]) -> Dict[str, str]:
-    """Fill in the tones derived from a palette's own colours (the lid, the
-    screen glow, the dark-room twins), so a coat override can re-derive them."""
+def derive_tones(palette: Dict[str, str], pattern: Optional[str] = None) -> Dict[str, str]:
+    """Fill in the tones derived from a palette's own colours (the piebald
+    chars, the lid, the screen glow, the dark-room twins), so a coat override
+    can re-derive them. `pattern` picks which piebald classes paint white."""
+    bit = PATTERN_PIEBALD.get(pattern, 0)
+    for char, (base, bits) in PIEBALD_CHARS.items():
+        palette[char] = BASE_PALETTE["w"] if bits & bit else palette[base]
     palette[LID_CHAR] = lid_tone(palette["o"])
     palette[GLOW_CHAR] = glow_tone(palette["o"])
+    # the screen lights face fur as the o tone (GLOW_CHAR), white as white
+    for char, lit in GLOW_CHARS.items():
+        palette[lit] = glow_tone(BASE_PALETTE["w"] if PIEBALD_CHARS[char][1] & bit else palette["o"])
     for char, dark in DIM_CHARS.items():
         palette[dark] = dim_tone(palette[char])
     return palette
@@ -239,6 +306,7 @@ LID_DARKEN = 0.5
 # so the whole cat can sit in shadow while the screen lights bands of it.
 DIM_CHARS: Dict[str, str] = {"o": "(", "O": ")", "x": "[", "s": "]", "c": "{", "m": "}",
                              "u": "<", "w": ">", "y": "^", "Y": "_", "p": ";", "n": ":", "g": "|"}
+DIM_CHARS.update({ch: chr(ord(ch) + 0x80) for ch in PIEBALD_CHARS})
 DIM_FACTOR = 0.5
 
 
@@ -251,6 +319,15 @@ def dim_tone(color: str) -> str:
 GLOW_CHAR = "~"
 GLOW_LIGHT = "#c8f2ff"  # the bright screen glow, BASE_PALETTE "B"
 GLOW_MIX = 0.55
+# Piebald o/x cells keep their own colour under the glow, so they get twins too.
+GLOW_CHARS: Dict[str, str] = {ch: chr(0x1E0 + "ox".index(b) * 16 + k)
+                              for ch, (b, k) in PIEBALD_CHARS.items() if b in "ox"}
+_UNPIEBALD: Dict[str, str] = {}
+for _ch, (_base, _bits) in PIEBALD_CHARS.items():
+    _UNPIEBALD[_ch] = _base
+    _UNPIEBALD[DIM_CHARS[_ch]] = DIM_CHARS[_base]
+    if _ch in GLOW_CHARS:
+        _UNPIEBALD[GLOW_CHARS[_ch]] = GLOW_CHAR
 
 
 @functools.lru_cache(maxsize=None)
@@ -278,7 +355,7 @@ PALETTE: Dict[str, str] = resolve_palette("orange", "tabby")
 
 # Sitting, calm pose -- ears relaxed. L/R are the eye cells, A is a
 # single accent cell (nose by default, repainted per state).
-SITTING_TEMPLATE: List[str] = [
+SITTING_TEMPLATE: List[str] = _piebald([
     "............................",
     "........x.........x.........",
     ".......xxx...o...xxx........",
@@ -305,11 +382,11 @@ SITTING_TEMPLATE: List[str] = [
     ".......ooouuuuuuuoooYYY.....",
     "........oommmmmmmOO.........",
     ".........oooooooOO..........",
-]
+], piebald.SITTING)
 
 # Sitting, alert pose -- ears sharply perked, upright posture. Same
 # placeholder cells as SITTING_TEMPLATE.
-ALERT_TEMPLATE: List[str] = [
+ALERT_TEMPLATE: List[str] = _piebald([
     "........x.........x.........",
     "........x....o....x.........",
     ".......xpooooooooopx........",
@@ -336,11 +413,11 @@ ALERT_TEMPLATE: List[str] = [
     "........oouuuuuuuooYYY......",
     ".........OmmmmmmmO..........",
     "..........oooooOO...........",
-]
+], piebald.ALERT)
 
 # Lying down, for the capped/wake sequence. L is the visible (near)
 # eye; 1-5 mark the three tail-sweep poses (see the flopped animation).
-FLOPPED_TEMPLATE: List[str] = [
+FLOPPED_TEMPLATE: List[str] = _piebald([
     "............................",
     "............................",
     "............................",
@@ -367,7 +444,7 @@ FLOPPED_TEMPLATE: List[str] = [
     "........................oomm",
     "............................",
     "............................",
-]
+], piebald.FLOPPED)
 
 def _overlay(template: List[str], patches: Dict[tuple, str]) -> List[str]:
     """Copy `template`, stamping single characters at (row, col) coords.
@@ -442,10 +519,10 @@ PERMISSION_TEMPLATE: List[str] = _overlay(ALERT_TEMPLATE, {
     # lower shaft: single-width, stepping inward to the cat's side
     (14, 25): "8", (15, 24): "8", (16, 24): "8",
     (17, 23): "8", (18, 23): "8", (19, 22): "8",
-    # arm + paw gripping the pole
-    (11, 22): "o", (11, 23): "o", (11, 24): "o",
-    (12, 17): "o", (12, 18): "o", (12, 19): "o", (12, 20): "o",
-    (12, 21): "o", (12, 22): "o", (12, 23): "o", (12, 24): "o",
+    # arm + paw gripping the pole (a front leg)
+    **_classed({(11, 22): "o", (11, 23): "o", (11, 24): "o",
+                (12, 17): "o", (12, 18): "o", (12, 19): "o", (12, 20): "o",
+                (12, 21): "o", (12, 22): "o", (12, 23): "o", (12, 24): "o"}, piebald.FRONT_LEG),
     # raised pennant (flies high and wide off the pole top)
     (0, 19): "6", (0, 20): "6", (0, 21): "6", (0, 22): "6", (0, 23): "6",
     (0, 24): "6",
@@ -591,8 +668,11 @@ def check_animation(anim: Animation) -> None:
 
 
 # Chars _pose_cells may use as markers: any printable ASCII the template and
-# palette don't already use.
-_MARKER_CHARS = "".join(chr(c) for c in range(33, 127) if chr(c) not in "\"'\\")
+# palette don't already use, then Greek and Cyrillic letters, clear of the
+# piebald chars and their twins (U+0100-U+01FF).
+_MARKER_CHARS = ("".join(chr(c) for c in range(33, 127) if chr(c) not in "\"'\\")
+                 + "".join(chr(c) for c in range(0x391, 0x3CA) if c != 0x3A2)
+                 + "".join(chr(c) for c in range(0x410, 0x450)))
 
 
 def _pose_cells(template: List[str], poses: Sequence[Dict[Tuple[int, int], str]]
@@ -605,13 +685,14 @@ def _pose_cells(template: List[str], poses: Sequence[Dict[Tuple[int, int], str]]
     pose i's subs paint its own cells and blank the rest. Returns the marked
     template and one subs dict per pose."""
     used = (set("".join(template)) | set(BASE_PALETTE) | set(REGION_CHARS)
-            | {"p", LID_CHAR, GLOW_CHAR} | set(DIM_CHARS.values()))
+            | {"p", LID_CHAR, GLOW_CHAR} | set(DIM_CHARS.values()) | set(PIEBALD_CHARS)
+            | set(GLOW_CHARS.values()))
     pool = [ch for ch in _MARKER_CHARS if ch not in used]
     cells = sorted({cell for pose in poses for cell in pose})
     # A pose that leaves a cell unpainted blanks it, so the cells may only
     # hold the part being replaced, never another part of the cat.
-    part = {ch for pose in poses for ch in pose.values()} | {".", "L", "R"}
-    clash = [cell for cell in cells if template[cell[0]][cell[1]] not in part]
+    part = {piebald_base(ch) for pose in poses for ch in pose.values()} | {".", "L", "R"}
+    clash = [cell for cell in cells if piebald_base(template[cell[0]][cell[1]]) not in part]
     if clash:
         raise ValueError(f"pose cells {clash} would erase template pixels")
     patterns = sorted({tuple(pose.get(cell, ".") for pose in poses) for cell in cells})
@@ -649,8 +730,13 @@ _SIT_TAIL_OUT = _tail((14, 22, 23), (15, 23, 24), (16, 23, 24), (17, 23, 24))
 _SIT_TAIL_UP = _tail((14, 24, 25), (15, 24, 25), (16, 24, 25), (17, 24, 25))
 _SIT_TAIL_HIGH = _tail(*((r, 24, 25) for r in range(12, 18)))
 # Right ear: the tip pixel twitches one cell outward.
-_SIT_EAR_REST = _cells("x", (1, 18, 18))
-_SIT_EAR_FLICK = _cells("x", (1, 19, 19))
+def _sit(pose: Dict[Tuple[int, int], str]) -> Dict[Tuple[int, int], str]:
+    """A pose drawn on the sitting cat, its fur classed as the sitting cat's."""
+    return _piebald_pose(pose, piebald.SITTING)
+
+
+_SIT_EAR_REST = _sit(_cells("x", (1, 18, 18)))
+_SIT_EAR_FLICK = _sit(_cells("x", (1, 19, 19)))
 
 # The sitting cat's eyes. Each eye is one pixel on row 8 between the fur and
 # the mask, so a pose repaints the cells around both eyes: _SIT_EYE_CELLS is
@@ -658,8 +744,8 @@ _SIT_EAR_FLICK = _cells("x", (1, 19, 19))
 # reads as an open dark eye, so shut eyes are a 3px line in the lid tone
 # (LID_CHAR), and the happy
 # squint of a slow blink is an arch.
-_SIT_EYE_CELLS = {(8, 9): "o", (8, 10): "o", (8, 11): "x", (8, 15): "x", (8, 16): "o", (8, 17): "o",
-                  (9, 9): "o", (9, 10): "o", (9, 11): "x", (9, 15): "x", (9, 16): "o", (9, 17): "o"}
+_SIT_EYE_CELLS = _sit({(8, 9): "o", (8, 10): "o", (8, 11): "x", (8, 15): "x", (8, 16): "o", (8, 17): "o",
+                       (9, 9): "o", (9, 10): "o", (9, 11): "x", (9, 15): "x", (9, 16): "o", (9, 17): "o"})
 
 
 def _sit_eyes(*cells: Tuple[int, int], char: str = "e") -> Dict[Tuple[int, int], str]:
@@ -669,8 +755,8 @@ def _sit_eyes(*cells: Tuple[int, int], char: str = "e") -> Dict[Tuple[int, int],
 _SIT_EYES_OPEN = _sit_eyes((8, 10), (8, 16))
 _SIT_EYES_LINE = _sit_eyes((8, 9), (8, 10), (8, 11), (8, 15), (8, 16), (8, 17), char=LID_CHAR)
 _SIT_EYES_ARCH = _sit_eyes((9, 9), (8, 10), (9, 11), (9, 15), (8, 16), (9, 17), char=LID_CHAR)
-_SIT_EYES_LEFT = {**_sit_eyes((8, 9), (8, 15)), (8, 10): "x", (8, 16): "o"}
-_SIT_EYES_RIGHT = {**_sit_eyes((8, 11), (8, 17)), (8, 16): "x"}
+_SIT_EYES_LEFT = _sit({**_sit_eyes((8, 9), (8, 15)), (8, 10): "x", (8, 16): "o"})
+_SIT_EYES_RIGHT = _sit({**_sit_eyes((8, 11), (8, 17)), (8, 16): "x"})
 
 _CONTENT_TEMPLATE, _CONTENT_TAIL = _pose_cells(
     SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_IN, _SIT_TAIL_OUT, _SIT_TAIL_UP])
@@ -717,8 +803,8 @@ CONTENT_ANIMATION = Animation(_CONTENT_TEMPLATE, (
 # interested: eyes glance left and right (the 1px eye moves a cell, the
 # fur or mask fills in behind it), ears perk one at a time, the tail tip
 # twitches.
-_SIT_EAR_PERK_LEFT = {**_SIT_EAR_REST, **_cells("x", (0, 8, 8))}
-_SIT_EAR_PERK_RIGHT = {**_SIT_EAR_REST, **_cells("x", (0, 18, 18))}
+_SIT_EAR_PERK_LEFT = _sit({**_SIT_EAR_REST, **_cells("x", (0, 8, 8))})
+_SIT_EAR_PERK_RIGHT = _sit({**_SIT_EAR_REST, **_cells("x", (0, 18, 18))})
 
 _INTERESTED_TEMPLATE, (_INT_TAIL_NEUTRAL, _INT_TAIL_OUT, _INT_TAIL_UP) = _pose_cells(
     SITTING_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP])
@@ -787,9 +873,9 @@ _SLEEP_TEMPLATE, (_SLEEP_EAR_REST, _SLEEP_EAR_FLICK) = _pose_cells(
     _SLEEP_TEMPLATE, [_SIT_EAR_REST, _SIT_EAR_FLICK])
 # Now and then one eye peeks open, looks left and right ("anyone there?
 # no?") and shuts again.
-_SLEEP_PEEK = {**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "e", (8, 17): "o"}
-_SLEEP_PEEK_LEFT = {**_SIT_EYES_LINE, (8, 15): "e", (8, 16): "o", (8, 17): "o"}
-_SLEEP_PEEK_RIGHT = {**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "x", (8, 17): "e"}
+_SLEEP_PEEK = _sit({**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "e", (8, 17): "o"})
+_SLEEP_PEEK_LEFT = _sit({**_SIT_EYES_LINE, (8, 15): "e", (8, 16): "o", (8, 17): "o"})
+_SLEEP_PEEK_RIGHT = _sit({**_SIT_EYES_LINE, (8, 15): "x", (8, 16): "x", (8, 17): "e"})
 _SLEEP_TEMPLATE, (_SLEEP_SHUT, _SLEEP_OPEN, _SLEEP_LOOK_L, _SLEEP_LOOK_R) = _pose_cells(
     _SLEEP_TEMPLATE, [_SIT_EYES_LINE, _SLEEP_PEEK, _SLEEP_PEEK_LEFT, _SLEEP_PEEK_RIGHT])
 _SLEEP_TEMPLATE, (_Z_BIG, _Z_NONE, _Z_DOT, _Z_SMALL) = _pose_cells(
@@ -865,16 +951,16 @@ _ALERT_EYES_ARCH = _shift(_SIT_EYES_ARCH, -1)
 # One eye shut, the other open: left shut, then right shut.
 _ALERT_WINK_L = {**_ALERT_EYES_OPEN, (7, 9): LID_CHAR, (7, 10): LID_CHAR, (7, 11): LID_CHAR}
 _ALERT_WINK_R = {**_ALERT_EYES_OPEN, (7, 15): LID_CHAR, (7, 16): LID_CHAR, (7, 17): LID_CHAR}
-_ALERT_PEEK_R = {**_ALERT_EYES_LINE, (7, 15): "x", (7, 16): "e", (7, 17): "o"}
+_ALERT_PEEK_R = _piebald_pose({**_ALERT_EYES_LINE, (7, 15): "x", (7, 16): "e", (7, 17): "o"}, piebald.ALERT)
 # The waking yawn: eyes squeezed, mouth open under the nose.
 _YAWN_MOUTH = {(10, 12): LID_CHAR, (10, 13): "n", (10, 14): LID_CHAR, (11, 13): LID_CHAR}
 _MOUTH_SHUT = {(10, 12): "w", (10, 13): "w", (10, 14): "w", (11, 13): "w"}
-_ALERT_EAR_REST = _cells("x", (0, 18, 18))
-_ALERT_EAR_FLICK = _cells("x", (0, 19, 19))
-_ALERT_EARS_REST = _cells("x", (0, 8, 8), (0, 18, 18))
-_ALERT_EARS_SHAKE = _cells("x", (0, 7, 7), (0, 19, 19))
-_ALERT_EAR_DROOP = {(0, 8): ".", (1, 7): "x", (0, 18): "x"}
-_ALERT_EAR_UP = {(0, 8): "x", (0, 18): "x"}
+_ALERT_EAR_REST = _piebald_pose(_cells("x", (0, 18, 18)), piebald.ALERT)
+_ALERT_EAR_FLICK = _piebald_pose(_cells("x", (0, 19, 19)), piebald.ALERT)
+_ALERT_EARS_REST = _piebald_pose(_cells("x", (0, 8, 8), (0, 18, 18)), piebald.ALERT)
+_ALERT_EARS_SHAKE = _piebald_pose(_cells("x", (0, 7, 7), (0, 19, 19)), piebald.ALERT)
+_ALERT_EAR_DROOP = _piebald_pose({(0, 8): ".", (1, 7): "x", (0, 18): "x"}, piebald.ALERT)
+_ALERT_EAR_UP = _piebald_pose({(0, 8): "x", (0, 18): "x"}, piebald.ALERT)
 _BANG = ("##", "##", "##", "##", "..", "##")
 _BANG_LOW = _glyph("!", 2, 23, *_BANG)
 _BANG_HIGH = _glyph("!", 0, 23, *_BANG)
@@ -1036,10 +1122,10 @@ WAKING_ANIMATION = Animation(_WK_TMPL, (
 # sides, a slow tail, now and then a yawn, and every so often it nods off,
 # the head sinking a row with the eyes shut, and jerks awake wide-eyed.
 _TIRED_EYES_HEAVY = {**_ALERT_EYES_LINE, (8, 10): "e", (8, 16): "e"}
-_TIRED_EARS_SAG = {(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
-                   (0, 18): ".", (1, 18): ".", (1, 19): "x", (2, 20): "x"}
-_TIRED_EAR_LIFT = {(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
-                   (0, 18): "x", (1, 18): "x"}
+_TIRED_EARS_SAG = _piebald_pose({(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
+                                 (0, 18): ".", (1, 18): ".", (1, 19): "x", (2, 20): "x"}, piebald.ALERT)
+_TIRED_EAR_LIFT = _piebald_pose({(0, 8): ".", (1, 8): ".", (1, 7): "x", (2, 6): "x",
+                                 (0, 18): "x", (1, 18): "x"}, piebald.ALERT)
 
 _TI_TMPL, (_TI_T_NEUTRAL, _TI_T_IN, _TI_T_OUT, _TI_T_UP, _TI_T_HIGH), \
     (_TI_HEAVY, _TI_SHUT, _TI_OPEN, _TI_YAWN) = _alert_base(
@@ -1124,7 +1210,7 @@ ACTIVATE_ANIMATION = Animation(_AC_TMPL, (
 # strokes rooted at (16, 25), banded by row like the other tails.
 _FLOP_BASE = _overlay(
     [row.translate(str.maketrans("12345", ".....")) for row in FLOPPED_TEMPLATE],
-    {(11, 5): "o", (11, 10): "o", (11, 11): "o"})
+    _piebald_pose({(11, 5): "o", (11, 10): "o", (11, 11): "o"}, piebald.FLOPPED))
 _FLOP_TIP_A = _tail((16, 25, 25), (15, 24, 25), (14, 23, 24), (13, 22, 23), (12, 21, 22))
 _FLOP_TIP_B = _tail((16, 25, 25), (15, 24, 25), (14, 24, 25), (13, 23, 24), (12, 23, 23))
 _FLOP_TIP_C = _tail((16, 25, 25), (15, 25, 26), (14, 25, 26), (13, 24, 25), (12, 24, 25))
@@ -1132,9 +1218,9 @@ _FLOP_TIP_D = _tail((16, 25, 25), (15, 25, 26), (14, 25, 26), (13, 25, 26), (12,
 _FLOP_TIP_E = _tail((15, 26, 27), (14, 26, 27), (13, 27, 27), (12, 27, 27))
 # Eyes sit symmetric about the face: cols 5-6 and 10-11 on row 11.
 _FLOP_EYES_SHUT = {(11, 5): LID_CHAR, (11, 6): LID_CHAR, (11, 10): LID_CHAR, (11, 11): LID_CHAR}
-_FLOP_EYES_OPEN = {(11, 5): "e", (11, 6): "o", (11, 10): "o", (11, 11): "e"}
-_FLOP_EARS_UP = {**_cells("x", (3, 12, 13)), (2, 5): "x", (2, 12): "x"}
-_FLOP_EARS_DOWN = _cells("x", (3, 12, 13))
+_FLOP_EYES_OPEN = _piebald_pose({(11, 5): "e", (11, 6): "o", (11, 10): "o", (11, 11): "e"}, piebald.FLOPPED)
+_FLOP_EARS_UP = _piebald_pose({**_cells("x", (3, 12, 13)), (2, 5): "x", (2, 12): "x"}, piebald.FLOPPED)
+_FLOP_EARS_DOWN = _piebald_pose(_cells("x", (3, 12, 13)), piebald.FLOPPED)
 
 
 def _lift_head(template: List[str], top: int = 3, bottom: int = 14, width: int = 15) -> List[str]:
@@ -1150,7 +1236,7 @@ def _lift_head(template: List[str], top: int = 3, bottom: int = 14, width: int =
 # head rolled over onto the floor, tongue out. The belly rises and falls, a
 # limp front paw droops, the tail tip curls, and now and then one eye checks
 # the clock. Rolling over into stirring is the (flopped, stirring) transition.
-FLOPPED_BACK_TEMPLATE: List[str] = [
+FLOPPED_BACK_TEMPLATE: List[str] = _piebald([
     "............................",
     "............................",
     "............................",
@@ -1177,14 +1263,14 @@ FLOPPED_BACK_TEMPLATE: List[str] = [
     "............................",
     "............................",
     "............................",
-]
+], piebald.FLOPPED_BACK)
 # The head lies rolled 90 degrees, ears on the floor to the left, so each
 # eye is a two-cell vertical bar: R on rows 12-13, L on rows 19-20, col 6.
 _BACK_EYES_SHUT = {(12, 6): LID_CHAR, (13, 6): LID_CHAR, (19, 6): LID_CHAR, (20, 6): LID_CHAR}
-_BACK_EYES_PEEK = {**_BACK_EYES_SHUT, (12, 6): "o", (13, 6): "e"}
+_BACK_EYES_PEEK = _piebald_pose({**_BACK_EYES_SHUT, (12, 6): "o", (13, 6): "e"}, piebald.FLOPPED_BACK)
 # The belly band rises a row between the leg pairs on each breath in.
 _BACK_EXHALE = {(12, 15): ".", (12, 16): "."}
-_BACK_INHALE = {(12, 15): "u", (12, 16): "u"}
+_BACK_INHALE = _piebald_pose({(12, 15): "u", (12, 16): "u"}, piebald.FLOPPED_BACK)
 # The near front paw droops a row from its limp wrist.
 _BACK_PAW_REST = _cells("m", (9, 9, 10), (10, 9, 10))
 _BACK_PAW_DROOP = _cells("m", (10, 9, 10), (11, 9, 10))
@@ -1294,6 +1380,7 @@ _WK_BASE = ["".join(DIM_CHARS.get(ch, ch) for ch in row) for row in _WK_BASE]
 _WRK_TMPL = _WK_BASE
 _EYE_CELLS = set(_SIT_EYE_CELLS)
 _FACE_LIGHT = {"o": GLOW_CHAR, "x": GLOW_CHAR, "w": "W", "s": "s", "c": "c", "p": "p", "n": "n"}
+_FACE_LIGHT.update({ch: GLOW_CHARS.get(ch, ch) for ch, (b, _) in PIEBALD_CHARS.items() if b in "oxsc"})
 
 
 def _light_band(rows) -> Dict[Tuple[int, int], str]:
@@ -1419,14 +1506,14 @@ PERMISSION_ANIMATION = Animation(_PM_TMPL, (
 # twice as fast, the brows come down (frame 0, so a key or preview reads
 # impatient too), the tail lashes and a hind foot beside the body taps,
 # heel down, toes up.
-_SCOWL_CELLS = {(6, 9): "o", (6, 10): "o", (6, 16): "o", (6, 17): "o"}
+_SCOWL_CELLS = _piebald_pose({(6, 9): "o", (6, 10): "o", (6, 16): "o", (6, 17): "o"}, piebald.ALERT)
 _SCOWL = {**_SCOWL_CELLS, (6, 9): LID_CHAR, (6, 10): LID_CHAR, (7, 11): LID_CHAR,
           (7, 15): LID_CHAR, (6, 16): LID_CHAR, (6, 17): LID_CHAR}
 _PU_EYES_OPEN = {**_ALERT_EYES_OPEN, **_SCOWL}
 _PU_EYES_LINE = {**_ALERT_EYES_LINE, **_SCOWL}
-_HAUNCH = _cells("o", (23, 6, 7), (24, 5, 8))
-_FOOT_DOWN = {**_HAUNCH, **_cells("o", (25, 5, 9)), **_cells("m", (25, 3, 4))}
-_FOOT_UP = {**_HAUNCH, **_cells("o", (25, 6, 9)), **_cells("m", (24, 3, 4))}
+_HAUNCH = _classed(_cells("o", (23, 6, 7), (24, 5, 8)), piebald.HIND_LEG)
+_FOOT_DOWN = {**_HAUNCH, **_classed(_cells("o", (25, 5, 9)), piebald.HIND_LEG), **_cells("m", (25, 3, 4))}
+_FOOT_UP = {**_HAUNCH, **_classed(_cells("o", (25, 6, 9)), piebald.HIND_LEG), **_cells("m", (24, 3, 4))}
 
 _PU_TMPL, (_PU_W0, _PU_W1, _PU_W2) = _pose_cells(_PM_BASE, _FLAG_WAVES)
 _PU_TMPL, (_PU_OPEN, _PU_LINE) = _pose_cells(_PU_TMPL, [_PU_EYES_OPEN, _PU_EYES_LINE])
@@ -1496,7 +1583,7 @@ PERMISSION_FRANTIC_ANIMATION = Animation(_PF_TMPL, (
 # tilted and a speech bubble with a big "?" bobs beside it, apart from the
 # permission flag and from confused's bare yellow "?". The head is the alert
 # head drawn tilted (left ear up, right ear down), the body the alert body.
-QUESTION_TEMPLATE: List[str] = [row.ljust(28, ".") for row in (
+QUESTION_TEMPLATE: List[str] = _piebald([row.ljust(28, ".") for row in (
     "..........x..........",
     ".........xpx.....o...",
     "........xxpooooooooxx",
@@ -1511,7 +1598,7 @@ QUESTION_TEMPLATE: List[str] = [row.ljust(28, ".") for row in (
     ".........oxwwwwwwwxOO",
     "..........oxxwwwxxOO.",
     "...........oooooOOO..",
-)] + ALERT_TEMPLATE[14:]
+)] + ALERT_TEMPLATE[14:], piebald.ALERT)
 
 _ASK_BUBBLE = (".#####.", "#######", "#######", "#######", "#######", "#######", "#######",
                "#######", ".#####.", ".#.....", "#......")
@@ -1523,18 +1610,18 @@ def _ask_bubble(top: int) -> Dict[Tuple[int, int], str]:
 
 
 # The tilted eyes: the left one on row 7, the right one a row lower.
-_QU_EYE_CELLS = {(7, 10): "o", (7, 11): "o", (7, 12): "x", (8, 17): "x", (8, 18): "o", (8, 19): "o"}
+_QU_EYE_CELLS = _piebald_pose({(7, 10): "o", (7, 11): "o", (7, 12): "x", (8, 17): "x", (8, 18): "o", (8, 19): "o"}, piebald.ALERT)
 _QU_EYES_OPEN = {**_QU_EYE_CELLS, (7, 11): "e", (8, 18): "e"}
 _QU_EYES_LINE = {**_QU_EYE_CELLS, **{cell: LID_CHAR for cell in _QU_EYE_CELLS}}
 # A glance up at the bubble.
-_QU_EYES_LOOK = {**_QU_EYE_CELLS, (7, 12): "e", (8, 18): "x", (8, 19): "e"}
+_QU_EYES_LOOK = _piebald_pose({**_QU_EYE_CELLS, (7, 12): "e", (8, 18): "x", (8, 19): "e"}, piebald.ALERT)
 
 _QU_TMPL, (_QU_T_NEUTRAL, _QU_T_OUT, _QU_T_UP) = _pose_cells(
     QUESTION_TEMPLATE, [_SIT_TAIL_NEUTRAL, _SIT_TAIL_OUT, _SIT_TAIL_UP])
 _QU_TMPL, (_QU_OPEN, _QU_LINE, _QU_LOOK) = _pose_cells(
     _QU_TMPL, [_QU_EYES_OPEN, _QU_EYES_LINE, _QU_EYES_LOOK])
 _QU_TMPL, (_QU_EAR_REST, _QU_EAR_FLICK) = _pose_cells(
-    _QU_TMPL, [_cells("x", (0, 10, 10)), _cells("x", (0, 9, 9))])
+    _QU_TMPL, [_piebald_pose(_cells("x", (0, c, c)), piebald.ALERT) for c in (10, 9)])
 _QU_TMPL, (_QU_ASK_UP, _QU_ASK_DOWN) = _pose_cells(_QU_TMPL, [_ask_bubble(0), _ask_bubble(1)])
 
 QUESTION_ANIMATION = Animation(_QU_TMPL, (
@@ -1642,7 +1729,7 @@ ANY_STATE = "*"
 # The flopped cat rolls over into stirring: an eye opens, the paws tuck in,
 # a curled half-roll seen from its back, then it lands on stirring's frame 0
 # so the hand-off to stirring's own loop is seamless.
-_ROLL_CURL: List[str] = [
+_ROLL_CURL: List[str] = _piebald([
     "............................",
     "............................",
     "............................",
@@ -1669,7 +1756,7 @@ _ROLL_CURL: List[str] = [
     "............................",
     "............................",
     "............................",
-]
+], piebald.ROLL_CURL)
 TRANSITIONS: Dict[Tuple[str, str], Animation] = {}
 
 # A state's own look in one cat spot (theme.SPOTS), keyed by (state, spot):
@@ -1872,12 +1959,12 @@ def get_frames(state: str) -> List[List[str]]:
 
 def _flopped_to_stirring() -> Animation:
     on_back = list(get_frames("flopped")[0])
-    peek = _overlay(on_back, {(12, 6): "o", (13, 6): "e"})
+    peek = _overlay(on_back, _piebald_pose({(12, 6): "o", (13, 6): "e"}, piebald.FLOPPED_BACK))
     # paws tucked in: the legs fold down onto the chest, both eyes open
     tucked = _overlay(peek, {**{(r, c): "." for r in range(6, 13) for c in range(9, 26)
                                 if on_back[r][c] not in "yY"},
                              (12, 11): "m", (12, 12): "m", (12, 18): "m", (12, 19): "m",
-                             (19, 6): "o", (20, 6): "e"})
+                             **_piebald_pose({(19, 6): "o"}, piebald.FLOPPED_BACK), (20, 6): "e"})
     landed = list(get_frames("stirring")[0])
     return single_track(on_back, [
         Frame({}, 250, template=peek),
@@ -1891,7 +1978,7 @@ def _flopped_to_stirring() -> Animation:
 # a low wide body with the front paws tucked under the chest, the tail hanging
 # down over the front of the card. It replaces content and sleeping when the
 # cat's spot is on_top. Same placeholders as the sitting template (L, R, A).
-LOAF_TEMPLATE: List[str] = [
+LOAF_TEMPLATE: List[str] = _piebald([
     "............................",
     "............................",
     "............................",
@@ -1918,7 +2005,7 @@ LOAF_TEMPLATE: List[str] = [
     "............................",
     "............................",
     "............................",
-]
+], piebald.LOAF)
 _LOAF_HEAD_DROP = 5  # rows the sitting head sits lower on the loaf
 # The loaf's paws are on row 21; it is drawn this much lower than a sitting
 # cat on the edge, so the paws rest on the card's top edge and the tail
@@ -1934,8 +2021,8 @@ def _loaf_tail(tip: str) -> Dict[Tuple[int, int], str]:
 
 
 # The flanks fill out by a pixel on each breath in.
-_LOAF_INHALE = {**_cells("o", *((r, 2, 2) for r in range(16, 21))),
-                **_cells("O", *((r, 25, 25) for r in range(15, 19)))}
+_LOAF_INHALE = _piebald_pose({**_cells("o", *((r, 2, 2) for r in range(16, 21))),
+                              **_cells("O", *((r, 25, 25) for r in range(15, 19)))}, piebald.LOAF)
 
 _LF_TMPL, (_LF_TAIL_MID, _LF_TAIL_LEFT, _LF_TAIL_RIGHT) = _pose_cells(
     LOAF_TEMPLATE, [_loaf_tail("mid"), _loaf_tail("left"), _loaf_tail("right")])
@@ -2046,11 +2133,11 @@ def _perch_tail(tip: str) -> Dict[Tuple[int, int], str]:
     return _tail((19, 20, 21), (20, 21, 22), (21, 21, 22), (22, 21, 22), *tips[tip])
 
 
-_PERCH_EYES_DOWN = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 10): "e", (8, 16): "e"}
-_PERCH_EYES_DOWN_R = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 11): "e", (8, 17): "e"}
-_PERCH_EYES_DOWN_L = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 9): "e", (8, 15): "e"}
-_PERCH_EYES_SHUT = {**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o",
-                    **_cells(LID_CHAR, (8, 9, 11), (8, 15, 17))}
+_PERCH_EYES_DOWN = _piebald_pose({**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 10): "e", (8, 16): "e"}, piebald.ALERT)
+_PERCH_EYES_DOWN_R = _piebald_pose({**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 11): "e", (8, 17): "e"}, piebald.ALERT)
+_PERCH_EYES_DOWN_L = _piebald_pose({**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o", (8, 9): "e", (8, 15): "e"}, piebald.ALERT)
+_PERCH_EYES_SHUT = _piebald_pose({**_ALERT_EYES_OPEN, (7, 10): "o", (7, 16): "o",
+                                  **_cells(LID_CHAR, (8, 9, 11), (8, 15, 17))}, piebald.ALERT)
 
 _PC_TMPL, (_PC_TAIL_MID, _PC_TAIL_LEFT, _PC_TAIL_RIGHT) = _pose_cells(
     _perch_template(), [_perch_tail("mid"), _perch_tail("left"), _perch_tail("right")])
@@ -2131,7 +2218,8 @@ _JUMP_ARMS = {**{(r, c + dc): "o" for r, c in _JUMP_ARM for dc in (-1, 0, 1)},
               **{(r, 27 - c + dc): "o" for r, c in _JUMP_ARM for dc in (-2, -1)},
               **{(r, 27 - c): "O" for r, c in _JUMP_ARM},
               **_cells("m", (4, 2, 3), (5, 2, 3), (4, 23, 24), (5, 23, 24))}
-_JUMP_LAUNCH: List[str] = _overlay(_JUMP_HEAD + _JUMP_LAUNCH_BODY, _JUMP_ARMS)
+_JUMP_LAUNCH: List[str] = _piebald(_overlay(_JUMP_HEAD + _JUMP_LAUNCH_BODY, _JUMP_ARMS),
+                                    piebald.JUMP_LAUNCH)
 
 _JUMP_FALL_BODY = [
     "........ooooooooooo.........",
@@ -2149,18 +2237,18 @@ _JUMP_FALL_BODY = [
 ]
 # The ears swept flat (their tips gone) and the tail rising from the rump
 # behind the right flank.
-_JUMP_FALL: List[str] = _overlay(
+_JUMP_FALL: List[str] = _piebald(_overlay(
     _JUMP_HEAD[:1] + ["." * 28] + _JUMP_HEAD[2:] + _JUMP_FALL_BODY,
     {(r, c + dc): band for r, c, band in (
         (19, 19, "Y"), (18, 20, "Y"), (17, 21, "y"), (16, 21, "y"), (15, 21, "Y"),
         (14, 22, "Y"), (13, 22, "y"), (12, 23, "y"), (11, 23, "Y"), (10, 23, "Y"))
-     for dc in (0, 1)})
+     for dc in (0, 1)}), piebald.JUMP_FALL)
 
 # Looking down over the edge: the head lowered three rows onto the chest, the
 # eyes a row low under dark lids.
 _JUMP_PEEK_DROP = 3
-_JUMP_PEEK_EYES = {(8, 9): "o", (8, 10): "x", (8, 11): "o", (8, 15): "o", (8, 16): "x",
-                   (8, 17): "o", (9, 10): "e", (9, 16): "e"}
+_JUMP_PEEK_EYES = _sit({(8, 9): "o", (8, 10): "x", (8, 11): "o", (8, 15): "o", (8, 16): "x",
+                   (8, 17): "o", (9, 10): "e", (9, 16): "e"})
 
 
 def _jump_peek() -> List[str]:
@@ -2270,8 +2358,9 @@ def _walk_frame(feet: str = "stand", tail: str = "up") -> List[str]:
     rows = [list(row) for row in _WALK_BODY]
     near_front, far_front, near_hind, far_hind = _WALK_FEET[feet]
     # far legs first, so the near ones cover them where they cross
-    for hip, foot, fur in ((16, far_front, "O"), (5, far_hind, "O"),
-                           (17, near_front, "o"), (6, near_hind, "o")):
+    front, hind = piebald.FRONT_LEG, piebald.HIND_LEG
+    for hip, foot, fur in ((16, far_front, piebald_char("O", front)), (5, far_hind, piebald_char("O", hind)),
+                           (17, near_front, piebald_char("o", front)), (6, near_hind, piebald_char("o", hind))):
         # two cells wide from under the body (row 19) to the paw on row 25
         for i, r in enumerate(range(19, 25)):
             c = round(hip + (foot - hip) * i / 5)
@@ -2279,7 +2368,7 @@ def _walk_frame(feet: str = "stand", tail: str = "up") -> List[str]:
         rows[25][foot] = rows[25][foot + 1] = "m"
     for i, (r, c) in enumerate(_WALK_TAILS[tail]):
         rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
-    return ["".join(row) for row in rows]
+    return _piebald(["".join(row) for row in rows], piebald.WALK)
 
 
 _WALK_STAND = _walk_frame()
@@ -2335,7 +2424,8 @@ def _settle_frame(head_down: int, body: Mapping[int, Tuple[int, int]],
             if ch == "." or r + head_down > 21:
                 continue
             # the head's shaded edge only against the air, as on the loaf
-            rows[r + head_down][c] = "o" if ch == "O" and rows[r + head_down][c] != "." else ch
+            rows[r + head_down][c] = (_rebase(ch, "o") if piebald_base(ch) == "O"
+                                      and rows[r + head_down][c] != "." else ch)
     # a bib from below the chin to the paws, no more than four rows deep
     for r in range(max(14 + head_down, 17), 21):
         first, last = (10, 16) if r < 19 else (9, 17)
@@ -2347,7 +2437,8 @@ def _settle_frame(head_down: int, body: Mapping[int, Tuple[int, int]],
     right = max(body[r][1] for r in (19, 20))
     grid = _overlay(grid, {(r, c): "Y" for r in (19, 20) for c in range(right + 1, 25)})
     grid = _overlay(grid, _shift(_SIT_EYES_OPEN, head_down))
-    return [row.replace("A", "n") for row in grid]
+    # the head brought its classes from the sitting cat; the body is the loaf's
+    return _piebald([row.replace("A", "n") for row in grid], piebald.LOAF)
 
 
 _SETTLE_LOWER = _settle_frame(0, _SETTLE_HALF, (8, 9, 10, 16, 17, 18), "left")
@@ -2532,7 +2623,7 @@ def _panicked_to_flopped() -> Animation:
 
 # The play bow of a cat stretching awake: head down between front paws
 # pushed out along the ground, rump and tail up, eyes squeezed shut.
-_STRETCH_BOW: List[str] = [
+_STRETCH_BOW: List[str] = _piebald([
     "............................",
     "..........................y.",
     ".........................yy.",
@@ -2559,7 +2650,7 @@ _STRETCH_BOW: List[str] = [
     "............................",
     "............................",
     "............................",
-]
+], piebald.STRETCH_BOW)
 
 
 def _stirring_to_waking() -> Animation:
@@ -2632,7 +2723,7 @@ def _scratch_frame(near: int = 0, far: int = 0) -> List[str]:
             rows[25][c] = "B"
     for i, (r, c) in enumerate(_SCRATCH_TAIL):
         rows[r][c] = rows[r][c + 1] = "Y" if i // 2 % 2 == 0 else "y"
-    return ["".join(row) for row in rows]
+    return _piebald(["".join(row) for row in rows], piebald.SCRATCH)
 
 
 _SCRATCH_REACH = _scratch_frame()
@@ -2698,7 +2789,7 @@ def _scratch_upright(near: int = 0, far: int = 0,
         put(r, c, "s")
     for r in (23, 24):
         for c, ch in ((9, "o"), (10, "o"), (15, "O"), (16, "O")):
-            put(r, c, ch)
+            put(r, c, piebald_char(ch, piebald.HIND_LEG))
     for c in (8, 9, 10, 15, 16, 17):
         put(25, c, "m")
     # the walking cat's head, turned to face the edge and raised
@@ -2711,6 +2802,7 @@ def _scratch_upright(near: int = 0, far: int = 0,
     if paws is None:
         paws = ((14 + far, 0, "O"), (11 + near, 0, "o"))
     for (shoulder_r, shoulder_c), (paw_r, paw_c, ch) in zip(((15, 10), (13, 9)), paws):
+        ch = piebald_char(ch, piebald.FRONT_LEG)
         for c in range(paw_c + 2, shoulder_c + 1):
             r = round(paw_r + (shoulder_r - paw_r) * (c - paw_c - 2) / (shoulder_c - paw_c - 2))
             put(r, c, ch, behind)
@@ -2718,13 +2810,12 @@ def _scratch_upright(near: int = 0, far: int = 0,
         for r in (paw_r, paw_r + 1):
             put(r, paw_c, "m")
             put(r, paw_c + 1, "m")
-    if behind:
-        return ["".join(row) for row in rows]
-    for r in range(11, 11 + near, 2):
-        put(r, 0, "B")
-    for r in range(14, 14 + far, 2):
-        put(r, 0, "B")
-    return ["".join(row) for row in rows]
+    if not behind:
+        for r in range(11, 11 + near, 2):
+            put(r, 0, "B")
+        for r in range(14, 14 + far, 2):
+            put(r, 0, "B")
+    return _piebald(["".join(row) for row in rows], piebald.SCRATCH_UPRIGHT)
 
 
 def _facing_left(grid: List[str]) -> List[str]:
@@ -2775,7 +2866,7 @@ MOVES["scratch_edge"] = _upright_scratch(toward_stats=False)
 # the bar beside the face, pulled back to the chin in between. Facing left.
 def _bat_arm(paw: Tuple[int, int], arm: Sequence[Tuple[int, int]]) -> Dict[Tuple[int, int], str]:
     r, c = paw
-    return {**{cell: "o" for cell in arm}, (r, c): "m", (r, c + 1): "m", (r + 1, c): "m",
+    return {**_classed({cell: "o" for cell in arm}, piebald.FRONT_LEG), (r, c): "m", (r, c + 1): "m", (r + 1, c): "m",
             (r + 1, c + 1): "m"}
 
 
@@ -2843,7 +2934,7 @@ def _side_frame(legs: Sequence[Tuple[int, int, int, int, str]],
     # the raised rear is painted over the rear where it was, so the haunches
     # bunch up rather than tearing away from the back
     for lift in sorted({0, rear}):
-        for r, line in enumerate(_WALK_BODY):
+        for r, line in enumerate(_piebald(_WALK_BODY, piebald.WALK)):
             for c, ch in enumerate(line):
                 if ch == "." or (lift and c >= 12):
                     continue
@@ -2851,12 +2942,13 @@ def _side_frame(legs: Sequence[Tuple[int, int, int, int, str]],
                 if 0 <= r + dr < 26:
                     rows[r + dr][c] = ch
     for hip_r, hip_c, paw_r, paw_c, fur in legs:
+        fur = piebald_char(fur, piebald.FRONT_LEG if hip_c >= 12 else piebald.HIND_LEG)
         n = max(abs(paw_r - hip_r), abs(paw_c - hip_c), 1)
         for i in range(n):
             r = round(hip_r + (paw_r - hip_r) * i / n)
             c = round(hip_c + (paw_c - hip_c) * i / n)
             for cc in (c, c + 1):
-                if 0 <= r < 26 and 0 <= cc < 28 and rows[r][cc] in ".Oo":
+                if 0 <= r < 26 and 0 <= cc < 28 and piebald_base(rows[r][cc]) in ".Oo":
                     rows[r][cc] = fur
         for cc in (paw_c, paw_c + 1):
             if 0 <= paw_r < 26 and 0 <= cc < 28:
@@ -2935,17 +3027,22 @@ _HANG_WALK = 16  # cells along the edge: puts the paw (cols 16-17) at card x 136
 _HANG_DROP = (0, _LOAF_DROP[1] + _HANG_LIFT)
 
 
+# looking down: the loaf's eye cells, classed as the loaf lifted _HANG_LIFT rows
+_HANG_EYES = _piebald_pose({(9, 10): "o", (9, 16): "o", (10, 10): "e", (10, 16): "e"},
+                           piebald.LOAF[_HANG_LIFT:])
+
+
 def _hang_frame(leg: Sequence[Tuple[int, int]]) -> List[str]:
     """The loaf on the edge looking down, the right forepaw over the edge:
     `leg` lists the (row, left col) of each row of the two-wide foreleg below
     the paws' row, and the paw takes the two rows after the last."""
     grid = _shift_up(_LOAF_REST, _HANG_LIFT)
     paws = 21 - _HANG_LIFT
-    cells = {(paws, 15): "o", (paws, 16): "o", (paws, 17): "O", (paws, 18): "o",
-             (9, 10): "o", (9, 16): "o", (10, 10): "e", (10, 16): "e"}
+    cells = {(paws, 15): "o", (paws, 16): "o", (paws, 17): "O", (paws, 18): "o"}
     for r, c in leg:
         cells[(r, c)] = "o"
         cells[(r, c + 1)] = "O"
+    cells = {**_classed(cells, piebald.FRONT_LEG), **_HANG_EYES}
     r, c = leg[-1]
     for pr in (r + 1, r + 2):
         cells[(pr, c)] = cells[(pr, c + 1)] = "m"
@@ -2955,8 +3052,7 @@ def _hang_frame(leg: Sequence[Tuple[int, int]]) -> List[str]:
 _HANG_REACH = _hang_frame([(r, 16) for r in range(18, 24)])
 _HANG_COCK = _hang_frame([(r, 16) for r in range(18, 20)])
 _HANG_SWIPE = _hang_frame([(18, 16), (19, 16), (20, 16), (21, 17), (22, 17), (23, 18)])
-_HANG_LOOK = _overlay(_shift_up(_LOAF_REST, _HANG_LIFT),
-                      {(9, 10): "o", (9, 16): "o", (10, 10): "e", (10, 16): "e"})
+_HANG_LOOK = _overlay(_shift_up(_LOAF_REST, _HANG_LIFT), _HANG_EYES)
 
 
 def _on_edge(grid: List[str]) -> Tuple[int, int]:
@@ -3083,6 +3179,7 @@ _ROLL_DIAGONALS: Dict[int, List[str]] = {
         "................yyY.........",
     ],
 }
+_ROLL_DIAGONALS = {k: _piebald(g, piebald.ROLL_DIAGONALS[k]) for k, g in _ROLL_DIAGONALS.items()}
 
 
 def _turn_ccw(grid: List[str]) -> List[str]:
@@ -3300,6 +3397,7 @@ _ROLL_OVER: Dict[int, List[str]] = {
         "................xx..........",
     ],
 }
+_ROLL_OVER = {k: _piebald(g, piebald.ROLL_OVER[k]) for k, g in _ROLL_OVER.items()}
 
 
 def _paw_up(grid: List[str], left: bool) -> List[str]:
@@ -3315,8 +3413,8 @@ def _paw_up(grid: List[str], left: bool) -> List[str]:
             runs.append([c])
     run = runs[0] if left else runs[-1]
     mid = run[len(run) // 2 - 1:len(run) // 2 + 1]
-    cells = {(top, c): "o" for c in run}
-    cells.update({(top - 1, c): "o" for c in mid})
+    cells = _classed({(top, c): "o" for c in run}, piebald.FRONT_LEG)
+    cells.update(_classed({(top - 1, c): "o" for c in mid}, piebald.FRONT_LEG))
     cells.update({(top - 2, c): "m" for c in mid})
     cells.update({(top - 3, c): "m" for c in mid})
     return _overlay(grid, cells)
@@ -3371,18 +3469,18 @@ MOVES["roll"] = _roll()
 # catches it in both forepaws in front of its chest, nibbles it with a few bobs
 # of the head, and lets go: the tail springs back to its curl. Front on, so it
 # plays in every spot.
-_TC_SWAT = {(15, 20): "o", (15, 21): "o", (16, 21): "o",
+_TC_SWAT = _classed({(15, 20): "o", (15, 21): "o", (16, 21): "o",
             (14, 22): "m", (14, 23): "m", (15, 22): "m", (15, 23): "m",
-            (24, 14): "o", (24, 15): "o", (24, 16): "o"}
+            (24, 14): "o", (24, 15): "o", (24, 16): "o"}, piebald.FRONT_LEG)
 # the tail drawn from the rump across the belly up to the chin, both
 # forepaws holding it there
-_TC_HELD = {**_tail((21, 19, 20), (20, 18, 19), (19, 17, 18), (18, 16, 17), (17, 15, 16),
+_TC_HELD = _classed({**_tail((21, 19, 20), (20, 18, 19), (19, 17, 18), (18, 16, 17), (17, 15, 16),
                     (16, 14, 15), (15, 13, 14)),
             (16, 11): "m", (16, 12): "m", (17, 11): "m", (17, 12): "m",
             (17, 17): "m", (17, 18): "m", (18, 18): "m", (18, 19): "m",
             **{(24, c): "o" for c in range(10, 17)},
             **{(r, c): "." for r in range(18, 22) for c in range(22, 26)
-               if SITTING_TEMPLATE[r][c] in "yY"}}
+               if SITTING_TEMPLATE[r][c] in "yY"}}, piebald.FRONT_LEG)
 
 
 def _tail_catch_frame(tail: Optional[Dict[Tuple[int, int], str]] = None,
@@ -3439,7 +3537,7 @@ MOVES["tail_catch"] = _tail_catch()
 # The loaf hugging its tail: the tail comes round from the right flank across
 # the front, both forepaws off the ground and clutching it.
 _TC_HUG_LOAF = _overlay(_no_tail(_LOAF_REST), {
-    **{(21, c): "o" for c in range(8, 19) if _LOAF_REST[21][c] == "m"},
+    **_classed({(21, c): "o" for c in range(8, 19) if _LOAF_REST[21][c] == "m"}, piebald.FRONT_LEG),
     **_tail((18, 25, 25), (19, 12, 25), (20, 11, 24)),
     (19, 14): "m", (19, 15): "m", (20, 14): "m", (20, 15): "m",
     (19, 19): "m", (19, 20): "m", (20, 19): "m", (20, 20): "m",
@@ -3561,6 +3659,7 @@ _TC_HUG_ROLL: Dict[int, List[str]] = {
         "................xx..........",
     ],
 }
+_TC_HUG_ROLL = {k: _piebald(g, piebald.TC_HUG_ROLL[k]) for k, g in _TC_HUG_ROLL.items()}
 
 
 def _tail_catch_roll() -> Animation:
@@ -3613,13 +3712,13 @@ _FLY_PATH = ((4, 27), (3, 26), (2, 25), (1, 24), (0, 22), (0, 19), (0, 16), (0, 
 # a forepaw flung up beside the head: the arm two wide, angled out from the
 # shoulder and shaded on its outer side so it stands off the face
 _FLY_ARM_R = ((13, 19), (12, 20), (11, 20), (10, 21), (9, 21))
-_FLY_SWAT_R = {**{(r, c): "o" for r, c in _FLY_ARM_R}, **{(r, c + 1): "O" for r, c in _FLY_ARM_R},
+_FLY_SWAT_R = _classed({**{(r, c): "o" for r, c in _FLY_ARM_R}, **{(r, c + 1): "O" for r, c in _FLY_ARM_R},
                (7, 22): "m", (7, 23): "m", (8, 22): "m", (8, 23): "m",
-               (24, 14): "o", (24, 15): "o", (24, 16): "o"}
-_FLY_SWAT_L = {**{(r, 26 - c): "o" for r, c in _FLY_ARM_R},
+               (24, 14): "o", (24, 15): "o", (24, 16): "o"}, piebald.FRONT_LEG)
+_FLY_SWAT_L = _classed({**{(r, 26 - c): "o" for r, c in _FLY_ARM_R},
                **{(r, 25 - c): "O" for r, c in _FLY_ARM_R},
                (7, 3): "m", (7, 4): "m", (8, 3): "m", (8, 4): "m",
-               (24, 10): "o", (24, 11): "o", (24, 12): "o"}
+               (24, 10): "o", (24, 11): "o", (24, 12): "o"}, piebald.FRONT_LEG)
 _FLY_SWAT_BOTH = {**_FLY_SWAT_R, **_FLY_SWAT_L}
 # After the loop the swats come faster and faster, the fly darting from side
 # to side over the head, until a two-pawed grab with a hop and it escapes
@@ -3683,15 +3782,15 @@ MOVES["fly"] = _fly()
 # card's edge, and watches it go. Inside only: inside_right mirrors it.
 _YARN_BALL = ((".ff.", "fnff", "ffnf", ".ff."), (".ff.", "ffnf", "fnff", ".ff."))
 _YARN_TOP = 22  # the ball's top row: it sits on the floor (rows 22-25)
-_YARN_L = {(24, 10): "o", (24, 11): "o", (24, 12): "o",
-           (24, 6): "m", (24, 7): "m", (25, 6): "m", (25, 7): "m"}
-_YARN_R = {(24, 14): "o", (24, 15): "o", (24, 16): "o",
-           (24, 19): "m", (24, 20): "m", (25, 19): "m", (25, 20): "m"}
-_YARN_R_UP = {(24, 14): "o", (24, 15): "o", (24, 16): "o", (22, 18): "o", (23, 18): "o",
-              (20, 17): "m", (20, 18): "m", (21, 17): "m", (21, 18): "m"}
-_YARN_L_UP = {(24, 10): "o", (24, 11): "o", (24, 12): "o", (22, 8): "o", (23, 8): "o",
-              (20, 8): "m", (20, 9): "m", (21, 8): "m", (21, 9): "m"}
-_SIT_EYES_DOWN = {**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (9, 10): "e", (9, 16): "e"}
+_YARN_L = _classed({(24, 10): "o", (24, 11): "o", (24, 12): "o",
+           (24, 6): "m", (24, 7): "m", (25, 6): "m", (25, 7): "m"}, piebald.FRONT_LEG)
+_YARN_R = _classed({(24, 14): "o", (24, 15): "o", (24, 16): "o",
+           (24, 19): "m", (24, 20): "m", (25, 19): "m", (25, 20): "m"}, piebald.FRONT_LEG)
+_YARN_R_UP = _classed({(24, 14): "o", (24, 15): "o", (24, 16): "o", (22, 18): "o", (23, 18): "o",
+              (20, 17): "m", (20, 18): "m", (21, 17): "m", (21, 18): "m"}, piebald.FRONT_LEG)
+_YARN_L_UP = _classed({(24, 10): "o", (24, 11): "o", (24, 12): "o", (22, 8): "o", (23, 8): "o",
+              (20, 8): "m", (20, 9): "m", (21, 8): "m", (21, 9): "m"}, piebald.FRONT_LEG)
+_SIT_EYES_DOWN = _sit({**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (9, 10): "e", (9, 16): "e"})
 
 
 def _yarn_frame(col: Optional[int], spin: int, eyes: Dict[Tuple[int, int], str],
@@ -3770,11 +3869,12 @@ MOVES["yarn"] = _yarn()
 _GLASS = ("g..g", "g..g", "gbbg", "gbBg", "gggg")
 _GLASS_TIPPED = ("ggggg", "..bBg", "..bbg", "ggggg")  # turned on its side, mouth to the left
 _GLASS_TOP = 21  # standing on the edge: rows 21-25
-_KO_ARM = {(24, 10): "o", (24, 11): "o", (24, 12): "o"}  # the left forepaw is off the ground
-_KO_PAW_UP = {**_KO_ARM, (17, 2): "m", (17, 3): "m", (18, 2): "m", (18, 3): "m",
-              (17, 4): "o", (17, 5): "o", (18, 4): "o", (18, 5): "o"}
-_KO_PAW_PAT = {**_KO_ARM, (19, 2): "m", (19, 3): "m", (20, 2): "m", (20, 3): "m",
-               (19, 4): "o", (20, 4): "o", (20, 5): "o"}
+# the left forepaw is off the ground
+_KO_ARM = _classed({(24, 10): "o", (24, 11): "o", (24, 12): "o"}, piebald.FRONT_LEG)
+_KO_PAW_UP = _classed({**_KO_ARM, (17, 2): "m", (17, 3): "m", (18, 2): "m", (18, 3): "m",
+              (17, 4): "o", (17, 5): "o", (18, 4): "o", (18, 5): "o"}, piebald.FRONT_LEG)
+_KO_PAW_PAT = _classed({**_KO_ARM, (19, 2): "m", (19, 3): "m", (20, 2): "m", (20, 3): "m",
+               (19, 4): "o", (20, 4): "o", (20, 5): "o"}, piebald.FRONT_LEG)
 _KO_PAW_PUSH = {**_KO_ARM, (21, 4): "m", (21, 5): "m", (22, 4): "m", (22, 5): "m"}
 _KO_SPLASH = ({(21, 0): "b", (20, 1): "B"}, {(19, 0): "b", (18, 1): "b", (20, 2): "B"})
 
@@ -3877,14 +3977,14 @@ MOVES["knock_off"] = _knock_off()
 # lower in it and every frame is drawn that much higher. First-row cards only.
 _WAND_ROOM = 3
 _WAND_TOY = (".h.", "fqf", "fqf", ".f.")  # the knot the string is tied to, the feathers
-_SIT_EYES_UP = {**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (7, 10): "e", (7, 16): "e"}
+_SIT_EYES_UP = _sit({**_SIT_EYES_OPEN, (8, 10): "o", (8, 16): "o", (7, 10): "e", (7, 16): "e"})
 # both forepaws stretched up past the ears, meeting over the head
-_WAND_REACH = {**{(r, 6): "o" for r in range(2, 14)}, **{(r, 5): "O" for r in range(3, 13)},
+_WAND_REACH = _classed({**{(r, 6): "o" for r in range(2, 14)}, **{(r, 5): "O" for r in range(3, 13)},
                **{(r, 20): "o" for r in range(2, 14)}, **{(r, 21): "O" for r in range(3, 13)},
                (1, 7): "o", (1, 8): "o", (0, 9): "o", (1, 19): "o", (1, 18): "o", (0, 17): "o",
                (-1, 10): "m", (-1, 11): "m", (0, 10): "m", (0, 11): "m",
                (-1, 15): "m", (-1, 16): "m", (0, 15): "m", (0, 16): "m",
-               **{(24, c): "o" for c in range(10, 17)}}
+               **{(24, c): "o" for c in range(10, 17)}}, piebald.FRONT_LEG)
 
 
 def _wand_frame(toy: Optional[Tuple[int, int]], anchor: int,
@@ -3969,7 +4069,8 @@ def _back_view() -> List[str]:
     """The sitting cat from behind: the face and belly furred over, a stripe
     or two across the head and back, outer ears, paws hidden, and the tail
     lying along the ground out to the right."""
-    rows = [list(row) for row in SITTING_TEMPLATE]
+    # from behind, none of the front's piebald classes apply
+    rows = [[piebald_base(ch) for ch in row] for row in SITTING_TEMPLATE]
     for r in range(26):
         for c in range(28):
             ch = rows[r][c]
@@ -3989,7 +4090,7 @@ def _back_view() -> List[str]:
         for c in range(c0, c1 + 1):
             if rows[r][c] in ".oO":
                 rows[r][c] = _tail_band(r)
-    return ["".join(row) for row in rows]
+    return _piebald(["".join(row) for row in rows], piebald.BACK_VIEW)
 
 
 _BACK_VIEW = _back_view()
@@ -4242,7 +4343,7 @@ def _permission_to_urgent() -> Animation:
     """The wait wears thin: the brows lower flat, then pinch into the scowl
     as the hind leg slides out, and the first tap lands on urgent's frame 0."""
     flat = {(6, 9): LID_CHAR, (6, 10): LID_CHAR, (6, 16): LID_CHAR, (6, 17): LID_CHAR}
-    leg = {**_cells("o", (23, 7, 7), (24, 6, 8), (25, 6, 9)), (25, 5): "m"}
+    leg = {**_classed(_cells("o", (23, 7, 7), (24, 6, 8), (25, 6, 9)), piebald.HIND_LEG), (25, 5): "m"}
     return single_track(_at("permission"), [
         Frame({}, 200, template=_at("permission")),
         Frame({}, 160, template=_overlay(_at("permission"), flat)),
