@@ -223,6 +223,8 @@ How answering from the deck works:
 - A command approved in the terminal that keeps running for a long time leaves its deck key flagged until it finishes, because Claude Code records nothing until the command returns. Answering from the deck doesn't have this problem.
 - Tokitty can't see tabs in a Windows Terminal running as Administrator, so those sessions always get the popup window.
 - The M18's ring isn't supported.
+- The deck holds a permission prompt for up to an hour. Install sets a one-hour timeout on tokitty's `PermissionRequest` hook (Claude Code's default is 10 minutes), and a running widget adds it to an existing install on its next start. After that the prompt goes back to the terminal.
+- A session key whose title reads "terminal" is showing a prompt the deck can't answer: it is waiting on you but no request reached the deck, for example because the hold ran out or the prompt isn't a permission request. Pressing it still brings the tab to the front, so answer it there. The title only appears once the prompt has been up for 8 seconds.
 - Pressing a key that shows "no tab" removes that session from the deck until it asks for permission or ends, and the **Show sessions from** toggles in Settings ▸ Stream Dock turn accounts on and off.
 
 ## Customization

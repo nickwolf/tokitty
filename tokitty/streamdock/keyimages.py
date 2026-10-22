@@ -15,6 +15,7 @@ from tokitty.streamdock.model import KeySpec
 
 IDLE_SPRITE = "content"
 NO_TAB = "no tab"
+TERMINAL_ONLY = "terminal"
 # Focus statuses that mean the session's terminal tab could not be confirmed.
 NO_TAB_STATUSES = frozenset({"not_found", "ambiguous", "no_title", "unavailable", "not_front"})
 
@@ -32,7 +33,12 @@ def spec_image(spec: KeySpec, palette_fn: Callable[[int], Dict[str, str]],
         palette = palette_fn(spec.ref.account_index)
         if kind == "overflow":
             return render.session_key(_sprite(spec.state), 0, palette, f"+{spec.count}", accent=spec.alert)
-        title = NO_TAB if spec.focus in NO_TAB_STATUSES else spec.title
+        if spec.focus in NO_TAB_STATUSES:
+            title = NO_TAB
+        elif spec.terminal_only:
+            title = TERMINAL_ONLY
+        else:
+            title = spec.title
         return render.session_key(_sprite(spec.state), 0, palette, title, accent=spec.pending)
     if kind == "usage":
         return render.usage_key(spec.session_pct, spec.weekly_pct, spec.warn, bars or T.BarStyle())
