@@ -91,3 +91,13 @@ def test_unarmed_decision_is_greyed():
 def test_preview_picks_its_own_key():
     spec = KeySpec("preview", text="a" * 40, index=1, total=2)
     assert img(spec) == render.preview_keys("a" * 40, 2)[1]
+
+
+def test_terminal_only_title_replaces_the_session_title():
+    spec = KeySpec("slot", ref=REF, state="permission", title="api", terminal_only=True)
+    assert img(spec) == render.session_key("permission", 0, palette(0), "terminal")
+
+
+def test_no_tab_wins_over_terminal_only():
+    spec = KeySpec("slot", ref=REF, state="permission", title="api", focus="not_found", terminal_only=True)
+    assert img(spec) == render.session_key("permission", 0, palette(0), "no tab")

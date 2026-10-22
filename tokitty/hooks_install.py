@@ -118,8 +118,17 @@ class HookTarget:
     top_level_keys: Optional[Tuple[str, ...]] = None
 
 
+# How long Claude Code may keep the PermissionRequest hook alive (its default
+# is 600 s). hook_writer._PERM_CAP_S is this minus 10 and must stay in step.
+PERMISSION_HOOK_TIMEOUT_S = 3600
+
 _HOOK_TARGETS: Dict[str, HookTarget] = {
-    "claude": HookTarget("settings.json", "settings.local.json", tuple(HOOK_EVENTS)),
+    "claude": HookTarget(
+        "settings.json",
+        "settings.local.json",
+        tuple(HOOK_EVENTS),
+        timeouts=(("PermissionRequest", PERMISSION_HOOK_TIMEOUT_S),),
+    ),
     CODEX_PROVIDER: HookTarget(
         "hooks.json",
         None,
@@ -873,6 +882,10 @@ def _handler_needs_rewrite(
         return _codex_handler_needs_rewrite(
             old_handler, desired_handler, refresh=refresh, config_dir=config_dir
         )
+    # A desired "timeout" is enforced (an older install lacks it); a handler
+    # whose desired has none keeps whatever timeout the user set.
+    if "timeout" in desired_handler and old_handler.get("timeout") != desired_handler["timeout"]:
+        return True
     if refresh and "args" in old_handler and "args" not in desired_handler:
         return False
     if "args" not in old_handler and "args" not in desired_handler:
@@ -1329,7 +1342,14 @@ def _reconcile_hooks(
                 desired = _codex_effective_desired(
                     primary_handler, desired, refresh=refresh, config_dir=config_dir
                 )
-            replacement = _merge_handler(primary_handler, desired)
+            if provider != CODEX_PROVIDER and not needs_rewrite(
+                primary_handler, {k: v for k, v in desired.items() if k != "timeout"}
+            ):
+                # Only the timeout differs: set it and leave the command as written.
+                replacement = dict(primary_handler)
+                replacement["timeout"] = desired["timeout"]
+            else:
+                replacement = _merge_handler(primary_handler, desired)
             if provider == CODEX_PROVIDER and "timeout" not in desired:
                 replacement.pop("timeout", None)
             kept = replacement

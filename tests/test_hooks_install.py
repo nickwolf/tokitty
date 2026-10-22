@@ -685,6 +685,104 @@ def test_uninstall_removes_permission_request(tmp_path):
     assert "PermissionRequest" not in data.get("hooks", {})
 
 
+def test_uninstall_removes_permission_request_with_stale_or_missing_timeout(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    path = config_dir / "settings.json"
+    data = json.loads(path.read_text())
+    data["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"] = 600
+    path.write_text(json.dumps(data))
+    hi.uninstall_hooks_for_dir(str(config_dir))
+    data = json.loads(path.read_text())
+    assert "PermissionRequest" not in data.get("hooks", {})
+
+
+def _perm_handler(config_dir):
+    data = json.loads((config_dir / "settings.json").read_text())
+    return data["hooks"]["PermissionRequest"][0]["hooks"][0]
+
+
+def test_install_sets_permission_request_timeout(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    assert _perm_handler(config_dir)["timeout"] == hi.PERMISSION_HOOK_TIMEOUT_S
+    data = json.loads((config_dir / "settings.json").read_text())
+    assert "timeout" not in data["hooks"]["Stop"][0]["hooks"][0]
+
+
+def test_hook_writer_cap_is_ten_seconds_under_installed_timeout():
+    from tokitty import hook_writer
+
+    assert hook_writer._PERM_CAP_S == hi.PERMISSION_HOOK_TIMEOUT_S - 10
+
+
+@pytest.mark.parametrize("add_missing", [True, False])
+def test_existing_string_shape_install_gains_permission_timeout(tmp_path, add_missing):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    path = config_dir / "settings.json"
+    data = json.loads(path.read_text())
+    handler = data["hooks"]["PermissionRequest"][0]["hooks"][0]
+    del handler["timeout"]
+    # An equivalent spelling the user or an older version wrote stays as is.
+    handler["command"] = handler["command"].replace("python3 ", "python ", 1)
+    command = handler["command"]
+    path.write_text(json.dumps(data))
+    assert "args" not in _perm_handler(config_dir)
+
+    fn = hi.install_hooks_for_dir if add_missing else hi.refresh_hooks_for_dir
+    result = fn(str(config_dir))
+
+    assert result.ok
+    assert "PermissionRequest" in result.refreshed_events
+    assert _perm_handler(config_dir)["timeout"] == hi.PERMISSION_HOOK_TIMEOUT_S
+    assert _perm_handler(config_dir)["command"] == command
+
+
+def test_refresh_adds_permission_timeout_to_exec_form_without_demoting(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    exe = _fake_release(tmp_path / "release")
+    monkeypatch.setattr(hi.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(hi.sys, "executable", str(exe))
+    monkeypatch.setattr(hi, "state_dir_path", lambda: state_dir)
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    path = config_dir / "settings.json"
+    try:
+        hi.install_hooks_for_dir(str(config_dir))
+        data = json.loads(path.read_text())
+        del data["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"]
+        path.write_text(json.dumps(data))
+        before = _perm_handler(config_dir)
+        assert "args" in before
+        # A source launch's refresh sees a string-shape desired handler.
+        monkeypatch.setattr(hi.sys, "frozen", False, raising=False)
+        result = hi.refresh_hooks_for_dir(str(config_dir))
+    finally:
+        _unlink_current_link(state_dir)
+
+    assert result.ok
+    after = _perm_handler(config_dir)
+    assert after == {**before, "timeout": hi.PERMISSION_HOOK_TIMEOUT_S}
+
+
+def test_refresh_does_not_touch_user_timeout_on_other_events(tmp_path):
+    config_dir = tmp_path / ".claude"
+    config_dir.mkdir()
+    hi.install_hooks_for_dir(str(config_dir))
+    path = config_dir / "settings.json"
+    data = json.loads(path.read_text())
+    data["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 30
+    path.write_text(json.dumps(data))
+    before = path.read_bytes()
+    result = hi.refresh_hooks_for_dir(str(config_dir))
+    assert result.ok
+    assert path.read_bytes() == before
+
+
 def test_install_is_additive_preserves_existing_hooks(tmp_path):
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()

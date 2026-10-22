@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple, Union
 
@@ -24,6 +24,11 @@ PROMPT_DECISIONS = ("allow", "deny", "always")
 # key already showing one of these dismisses the session; ambiguous and not_front
 # mean a tab exists, so those keys keep focusing.
 NO_TAB = ("not_found", "no_title", "unavailable")
+# How long a prompt may be up with no pending request before its key says the
+# deck cannot answer it. The hook's transcript lookup can take up to 5 s and the
+# pending watcher polls every 0.5 s, so a fresh prompt must not flash "terminal"
+# before its request lands.
+TERMINAL_GRACE_S = 8.0
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class KeySpec:
     focus: str = ""
     count: int = 0
     alert: bool = False
+    terminal_only: bool = False
     decision: str = ""
     armed: bool = False
     text: str = ""
@@ -229,6 +235,16 @@ class DeckModel:
         # Wall-clock seconds, the clock hook timestamps use.
         self._now = now
         live = {SessionRef(acct, v.session_id): v for acct, views in sessions_by_account.items() for v in views}
+        # A held request outlives activity's view of its prompt, which reads as
+        # idle after 10 minutes with no event and drops the session at 30. While
+        # the hook still holds it, the key keeps the prompt up.
+        for req in sorted(pending, key=lambda r: r.started):
+            ref = SessionRef(req.account_index, req.session_id)
+            v = live.get(ref)
+            if v is None:
+                live[ref] = SessionView(req.session_id, "permission", "", req.started, req.started, req.started)
+            elif v.state not in ("permission", "question"):
+                live[ref] = replace(v, state="permission", tool_label="", since=req.started)
         # A dismissal is forgotten when its session ends, or when it asks for permission.
         self._dismissed &= set(live)
         self._dismissed -= {SessionRef(r.account_index, r.session_id) for r in pending}
@@ -503,6 +519,14 @@ class DeckModel:
 
     def _slot_spec(self, ref: SessionRef, kind: str, count: int = 0, alert: bool = False) -> KeySpec:
         v = self._views[ref]
+        terminal_only = (
+            kind == "slot"
+            and v.state in ("permission", "question")
+            and ref not in self._pending
+            and self._now is not None
+            and v.since is not None
+            and self._now - v.since >= TERMINAL_GRACE_S
+        )
         return KeySpec(
             kind,
             ref=ref,
@@ -513,6 +537,7 @@ class DeckModel:
             focus=self._focus.get(ref, ""),
             count=count,
             alert=alert,
+            terminal_only=terminal_only,
         )
 
     def _build_plan(self) -> Dict[str, KeySpec]:

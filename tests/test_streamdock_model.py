@@ -15,6 +15,7 @@ from tokitty.streamdock.model import (
     Noop,
     PlanBox,
     SessionRef,
+    TERMINAL_GRACE_S,
     VerifyThenDecide,
 )
 from tokitty.streamdock.pending import PendingRequest
@@ -116,18 +117,47 @@ def test_overflow_alert_and_pending_first():
 
 def test_key_state_escalates_with_wall_clock_and_bumps_revision():
     views = [sv("a", 1, "permission", since=100.0)]
-    m = setup(["slot"], views)
+    # A pending request keeps terminal_only (its own revision bump) out of this.
+    m = setup(["slot"], views, [req("a")])
     assert m.render_plan()["k0"].state == "permission"
 
     def step(now):
         before = m.revision
-        m.update({0: views}, [], {}, now=now)
+        m.update({0: views}, [req("a")], {}, now=now)
         return m.render_plan()["k0"].state, m.revision - before
 
     assert step(129.9) == ("permission", 0)
     assert step(130.0) == ("permission_urgent", 1)
     assert step(200.0) == ("permission_urgent", 0)
     assert step(280.0) == ("permission_frantic", 1)
+
+
+def terminal_only_at(state, now, pending=(), since=100.0):
+    views = [sv("a", 1, state, since=since)]
+    m = setup(["slot"], views, pending)
+    m.update({0: views}, list(pending), {}, now=now)
+    return m.render_plan()["k0"].terminal_only
+
+
+def test_terminal_only_after_grace_for_prompt_without_pending():
+    assert terminal_only_at("permission", 100.0 + TERMINAL_GRACE_S) is True
+    assert terminal_only_at("question", 100.0 + TERMINAL_GRACE_S) is True
+
+
+def test_terminal_only_not_set_within_grace_with_pending_or_other_state():
+    assert terminal_only_at("permission", 100.0 + TERMINAL_GRACE_S - 0.1) is False
+    assert terminal_only_at("permission", 500.0, pending=[req("a")]) is False
+    assert terminal_only_at("working", 500.0) is False
+    assert terminal_only_at("permission", None) is False
+
+
+def test_terminal_only_flip_bumps_revision_on_the_next_tick():
+    views = [sv("a", 1, "permission", since=100.0)]
+    m = setup(["slot"], views)
+    m.update({0: views}, [], {}, now=100.0 + TERMINAL_GRACE_S - 0.5)
+    before = m.revision
+    m.update({0: views}, [], {}, now=100.0 + TERMINAL_GRACE_S)
+    assert m.revision == before + 1
 
 
 def test_key_state_unchanged_without_now_and_for_questions():
@@ -808,3 +838,24 @@ def test_overflow_dismisses_the_session_it_shows():
     assert m.press("k1") == Noop("dismissed")
     plan = m.render_plan()
     assert plan["k0"].ref == ref("a") and plan["k1"].ref == ref("b") and plan["k1"].kind == "slot"
+
+
+def test_held_request_keeps_the_prompt_up_after_activity_reads_idle():
+    # Activity reads a prompt as idle after 10 minutes with no event.
+    m = setup(["slot"], [sv("a", 1)], [req("a", started=50.0)])
+    m.update({0: [sv("a", 1)]}, [req("a", started=50.0)], {}, now=60.0)
+    spec = m.render_plan()["k0"]
+    assert spec.state == "permission" and spec.pending and not spec.terminal_only
+
+
+def test_held_request_keeps_its_key_after_activity_drops_the_session():
+    # Activity sweeps a session 30 minutes after its last event.
+    m = setup(["slot"], [], [req("a", started=50.0)])
+    spec = m.render_plan()["k0"]
+    assert spec.ref == ref("a") and spec.state == "permission" and spec.pending
+    assert isinstance(m.press("k0"), FocusAndOpen)
+
+
+def test_question_view_is_left_alone_by_a_held_request():
+    m = setup(["slot"], [sv("a", 1, "question", since=70.0)], [req("a", started=50.0)])
+    assert m.render_plan()["k0"].state == "question"
