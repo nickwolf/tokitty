@@ -114,7 +114,7 @@ _USAGE_MAX_AGE_S = 900.0
 
 
 # Permission wait (Stream Dock). Tunables are module constants.
-_PERM_CAP_S = 590.0  # just under Claude Code's 600 s default hook timeout
+_PERM_CAP_S = 3590.0  # 10 s under the 3600 s "timeout" tokitty installs on the hook (hooks_install.PERMISSION_HOOK_TIMEOUT_S)
 _POLL_S = 0.25
 _HEARTBEAT_S = 5.0
 _MARKER_MAX_AGE_S = 120.0
@@ -465,7 +465,7 @@ def _wait(
     output. The pending and decision files are removed on every exit.
 
     now_fn (wall clock) is used only for the marker age and the `started`
-    field; the 590 s cap and the heartbeat use mono_fn.
+    field; the 3590 s cap and the heartbeat use mono_fn.
     """
     session_id = payload.get("session_id")
     tool_name = payload.get("tool_name")

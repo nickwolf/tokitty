@@ -124,7 +124,7 @@ def test_codex_hook_target():
 
 def test_claude_hook_target_keeps_matchers_and_exec_form():
     target = hi._hook_target("claude")
-    assert target.timeouts == ()
+    assert target.timeouts == (("PermissionRequest", hi.PERMISSION_HOOK_TIMEOUT_S),)
     assert target.exec_form is True
     assert ("Notification", "permission_prompt") in target.events
 

@@ -685,14 +685,14 @@ class TestPermissionStops:
         env.clock.on_sleep = gone
         assert env.wait() is None
 
-    def test_590_second_cap(self, env, capsys):
+    def test_perm_cap(self, env, capsys):
         def keep_marker(clock):
             env.enable()
 
         env.clock.on_sleep = keep_marker
         env.run()
         assert capsys.readouterr().out == ""
-        assert 589.9 <= env.clock.t - T0 <= 590.5
+        assert hw._PERM_CAP_S - 0.1 <= env.clock.t - T0 <= hw._PERM_CAP_S + 0.5
         assert not env.pending.exists()
 
     def test_pending_removed_when_loop_raises(self, env, capsys):
@@ -1302,7 +1302,7 @@ class TestReviewGaps:
             )
             is None
         )
-        assert 589.9 <= mono["t"] <= 590.5
+        assert hw._PERM_CAP_S - 0.1 <= mono["t"] <= hw._PERM_CAP_S + 0.5
 
     def test_answer_between_decision_read_and_recheck(self, env, capsys):
         env.decide()

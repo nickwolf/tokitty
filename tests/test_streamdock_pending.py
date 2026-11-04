@@ -11,6 +11,7 @@ from tokitty import hook_writer
 from tokitty.streamdock.pending import (
     PendingRequest,
     PendingWatcher,
+    STRAY_MAX_AGE_S,
     clear_enabled,
     touch_enabled,
     write_decision,
@@ -245,14 +246,14 @@ def test_vanished_file_is_skipped():
     assert w.get_pending() == []
 
 
-def test_claim_swept_only_after_660_unchanged_seconds():
+def test_claim_swept_only_after_stray_max_age_unchanged_seconds():
     fs = FakeFs()
     clock = Clock()
     fs.put("pending", "a" * 32 + ".claim", "", mtime=NOW - 99999)
     fs.put("pending", "b" * 32 + ".claim", "", mtime=NOW + 99999)
     w = watcher(fs, clock=clock)
     w._tick_once()
-    clock.advance(660)
+    clock.advance(STRAY_MAX_AGE_S)
     fs.put("pending", "b" * 32 + ".claim", "", mtime=NOW + 100000)
     w._tick_once()
     assert fs.removed == []
@@ -261,14 +262,14 @@ def test_claim_swept_only_after_660_unchanged_seconds():
     assert fs.removed == [("pending", "a" * 32 + ".claim")]
 
 
-def test_stray_decision_swept_only_after_660_unchanged_seconds():
+def test_stray_decision_swept_only_after_stray_max_age_unchanged_seconds():
     fs = FakeFs()
     clock = Clock()
     fs.put("decisions", f"{NONCE}.json", "{}", mtime=NOW - 99999)
     fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW)
     w = watcher(fs, clock=clock)
     w._tick_once()
-    clock.advance(661)
+    clock.advance(STRAY_MAX_AGE_S + 1)
     fs.put("decisions", f"{NONCE2}.json", "{}", mtime=NOW + 1)
     w._tick_once()
     assert fs.removed == [("decisions", f"{NONCE}.json")]

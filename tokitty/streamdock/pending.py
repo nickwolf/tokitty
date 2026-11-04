@@ -21,8 +21,8 @@ from tokitty.wsl_probe import list_running_distros
 
 POLL_INTERVAL_S = 0.5
 LIVE_MAX_AGE_S = 30.0
-# No live hook holds a claim or a decision past its 590 s cap.
-STRAY_MAX_AGE_S = 660.0
+# No live hook holds a claim or a decision past its 3590 s cap.
+STRAY_MAX_AGE_S = 3660.0
 ENABLED_MARKER = "streamdock.enabled"
 
 _PENDING_NAME = re.compile(r"[0-9a-f]{16}\.json")
