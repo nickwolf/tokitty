@@ -366,12 +366,18 @@ class UpdateController:
                 staging=staged.staging,
             )
             top = None if mac else self._promote(
-                staged, target, tag, self._state_dir, sys_platform=self._sys_platform, self_check=self._self_check
+                staged,
+                target,
+                tag,
+                self._state_dir,
+                sys_platform=self._sys_platform,
+                self_check=lambda gui: self._self_check(gui, tag),
             )
-        except (UpdateInstallError, OSError) as exc:
+        except Exception as exc:  # anything escaping tick() would leave the tab waiting forever
+            message = str(exc) if isinstance(exc, (UpdateInstallError, OSError)) else f"The update failed: {exc}"
             self._discard(staged)
             self._clear_pending(token)
-            self._conclude("failed", str(exc), tag)
+            self._conclude("failed", message, tag)
             return
         backup = None
         try:
