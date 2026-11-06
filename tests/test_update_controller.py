@@ -69,6 +69,8 @@ class Rig:
         self.launch_error = None
         self.swap_in_error = None
         self.promote_error = None
+        self.promote_reuses = False
+        self.self_checks = []
         self.argv = None
         self.env = None
         if sys_platform == "darwin":
@@ -86,7 +88,7 @@ class Rig:
             environ={"PATH": "/bin"},
             clock=lambda: NOW,
             stage=self.stage,
-            self_check=lambda gui, tag: None,
+            self_check=lambda gui, tag: self.self_checks.append((gui, tag)),
             promote=self.promote,
             mac_swap_in=self.mac_swap_in,
             mac_swap_back=self.mac_swap_back,
@@ -122,6 +124,9 @@ class Rig:
         self.log("promote", self.pending_now())
         if self.promote_error:
             raise self.promote_error
+        if self.promote_reuses:
+            # update_swap.promote calls self_check with the GUI path only.
+            self_check(target.final_path(tag) / "gui")
         return target.final_path(tag)
 
     def mac_swap_in(self, staged, app, old_tag, state_dir):
@@ -351,6 +356,23 @@ def test_a_failed_promote_never_hides_the_windows(rig):
     result = rig.run()
 
     assert result == UpdateResult("failed", "exists", "v0.2.0")
+    assert "hide" not in rig.names()
+    assert rig.pending_now() is None
+
+
+def test_reusing_an_installed_copy_self_checks_it_against_the_release_tag(rig):
+    rig.promote_reuses = True
+    result = rig.run()
+
+    assert result.outcome == "installed"
+    assert rig.self_checks == [(rig.versions / "v0.2.0" / "tokitty" / "gui", "v0.2.0")]
+
+
+def test_an_unexpected_promote_error_is_reported_and_clears_pending(rig):
+    rig.promote_error = TypeError("boom")
+    result = rig.run()
+
+    assert result.outcome == "failed" and "boom" in result.message
     assert "hide" not in rig.names()
     assert rig.pending_now() is None
 
