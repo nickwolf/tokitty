@@ -286,8 +286,8 @@ def test_mask_excludes_an_empty_ragged_row_cell(qapp):
     widget = make(5)
     widget.show()
     # 5 panes make 2 columns by 3 rows; the sixth cell is empty
-    assert not widget.mask().contains(QPoint(300 + 150, 2 * 128 + 60))
-    assert widget.mask().contains(QPoint(150, 2 * 128 + 60))
+    assert not widget.mask().contains(QPoint(300 + 150, 2 * 144 + 60))
+    assert widget.mask().contains(QPoint(150, 2 * 144 + 60))
     widget.hide()
 
 

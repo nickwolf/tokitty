@@ -27,7 +27,7 @@ def test_defaults():
     assert t == T.REFINED
     assert t.text.show == frozenset(T.TEXT_ELEMENTS)
     assert (t.text.halo, t.text.halo_below) == ("off", 60)
-    assert (T.CARD_WIDTH, T.CARD_HEIGHT) == (300, 128)
+    assert (T.CARD_WIDTH, T.CARD_HEIGHT) == (300, 144)
 
 
 def test_missing_file_gives_defaults(tmp_path):
@@ -511,23 +511,23 @@ def test_resolve_home_agrees_with_reachable():
 def test_window_all_inside_is_just_the_grid():
     w = layout_window(["inside"] * 3)
     assert w.margins == (0, 0, 0, 0)
-    assert w.size == (300, 384)
-    assert w.pane_origins == ((0, 0), (0, 128), (0, 256))
+    assert w.size == (300, 432)
+    assert w.pane_origins == ((0, 0), (0, 144), (0, 288))
 
 
 def test_window_margins_homes_only():
     w = layout_window(["inside_right", "inside", "inside"])
     assert w.margins == (0, 0, 0, 0)
-    assert w.size == (300, 384)
+    assert w.size == (300, 432)
     w = layout_window(["on_top", "inside"])
     assert w.margins == (0, 116, 0, 0)
-    assert w.size == (300, 116 + 256)
+    assert w.size == (300, 116 + 288)
 
 
 def test_window_margins_wander_sizes_for_reachable():
     w = layout_window(["inside", "inside"], wander=True)
     assert w.margins == (0, 116, 0, 0)
-    assert w.size == (300, 116 + 256)
+    assert w.size == (300, 116 + 288)
     # no pane in the first row, so nothing can reach the top
     assert layout_window(["inside"] * 9, wander=True).margins == (0, 116, 0, 0)
 
@@ -544,8 +544,8 @@ def test_window_never_has_side_margins(n):
 
 def test_window_origins_two_columns():
     w = layout_window(["on_top"] + ["inside"] * 4)
-    assert w.pane_origins == ((0, 116), (300, 116), (0, 244), (300, 244), (0, 372))
-    assert w.size == (600, 116 + 384)
+    assert w.pane_origins == ((0, 116), (300, 116), (0, 260), (300, 260), (0, 404))
+    assert w.size == (600, 116 + 432)
 
 
 def test_round_up4():
@@ -558,8 +558,8 @@ def test_hit_region_leaves_out_empty_cell():
     region = hit_region(w, [cat])
     cards = [r for r in region if r != cat]
     assert len(cards) == 5 and cat in region
-    assert Rect(300, 256, 300, 128) not in region  # the empty sixth cell
-    assert Rect(0, 256, 300, 128) in region
+    assert Rect(300, 288, 300, 144) not in region  # the empty sixth cell
+    assert Rect(0, 288, 300, 144) in region
 
 
 @pytest.mark.parametrize("dpr", [1, 1.25, 1.5, 1.75, 2])
@@ -928,7 +928,7 @@ def test_refined_limits_rects():
     assert lay["weekly_bar"].y == 77 and lay["weekly_reset"].y == 86
     assert lay.lines["session"] == Rect(132, 12, 158, 42)
     assert _xywh(lay, "status") == (132, 104, 158, 14)
-    assert lay["account_label"] == Rect(132, 104, 158, 14) and lay["account_label"].right == 290
+    assert lay["account_label"] == Rect(132, 118, 158, 14) and lay["account_label"].right == 290
     # the stats column alone: the cat's area is as before
     assert _xywh(lay, "cat_area") == (8, 8, 112, 112)
 
@@ -946,7 +946,7 @@ def test_refined_models_rects():
     assert [lay[f"model_bar_{i}"].y for i in range(3)] == [29, 61, 93]
     assert _xywh(lay, "model_name_0") == (132, 12, 98, 14)
     assert _xywh(lay, "model_value_0") == (230, 12, 60, 14)
-    assert lay["status"].y == 108 and lay["account_label"].y == 108
+    assert lay["status"].y == 108 and lay["account_label"].y == 122
 
 
 def test_refined_hidden_elements_remove_their_rows():
@@ -980,13 +980,24 @@ def test_refined_fits_the_card_for_every_bar_height(view):
     for height in range(4, 11):
         th = replace(T.REFINED, bars=replace(T.REFINED.bars, height=height))
         lay = layout_card(th, view, "inside")
-        assert lay["status"].bottom <= CARD_HEIGHT, height
-        leaves = [(n, r) for n, r in lay.rects.items() if n not in ("account_label", "cat_area")]
+        assert lay["account_label"].bottom <= CARD_HEIGHT, height
+        leaves = [(n, r) for n, r in lay.rects.items() if n != "cat_area"]
         for name, r in leaves:
             assert card.contains(r), (name, height)
         for i, (n1, r1) in enumerate(leaves):
             for n2, r2 in leaves[i + 1:]:
                 assert not r1.intersects(r2), (n1, n2, height)
+
+
+@pytest.mark.parametrize("view", T.VIEWS)
+@pytest.mark.parametrize("spot", ["inside", "inside_right"])
+def test_refined_label_sits_below_status(view, spot):
+    card = Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
+    lay = layout_card(T.REFINED, view, spot)
+    status, label = lay["status"], lay["account_label"]
+    assert not status.intersects(label)
+    assert label.y == status.bottom and label.x == status.x
+    assert card.contains(status) and card.contains(label)
 
 
 def test_refined_full_width_and_inside_right():

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
 
 from tokitty import theme as T
 from tokitty.customize import Customization
@@ -426,20 +427,32 @@ def test_refined_limits_text_follows_the_layout(qapp):
     assert seen["work"][0] == T.REFINED.text.dim
 
 
-def test_refined_status_is_one_elided_line_clear_of_the_account_label(qapp):
+def test_refined_status_is_one_elided_line_on_its_own_row(qapp):
     long = "a very long status line that cannot possibly fit in the stats column"
+    lay = T.layout_card(T.REFINED, "limits", "inside")
     widget = _logged(T.REFINED, status=long)
-    status = next(e for e in widget.log if e[0] != "work" and e[0].startswith("a very"))
+    status = next(e for e in widget.log if e[0].startswith("a very"))
     assert status[0] != long and status[0].endswith("…")
-    label = next(e for e in widget.log if e[0] == "work")
-    status_right = status[2][0] + status[2][2]
-    assert status_right <= label[2][0] + label[2][2] - 6  # the label's text starts after it
     assert not (status[3] & int(Qt.TextFlag.TextWordWrap))
+    assert status[2] == (lay["status"].x, lay["status"].y, lay["status"].w, lay["status"].h)
+    label = next(e for e in widget.log if e[0] == "work")
+    assert label[2][1] >= status[2][1] + status[2][3]  # the label row is below the status row
     short = _logged(T.REFINED, status="idle")
     assert any(e[0] == "idle" for e in short.log)
     no_label = _logged(T.REFINED, label="", status=long)
     wide = next(e for e in no_label.log if e[0].startswith("a very"))
-    assert wide[2][2] == T.layout_card(T.REFINED, "limits", "inside")["status"].w
+    assert wide[2][2] == lay["status"].w
+
+
+def test_refined_status_is_not_elided_for_a_long_label(qapp):
+    # The status fits the column alone; a wide account label must not shorten it.
+    status, label = "week caps ~Wed 12:40 PM", "claude-personal-with-a-long-name"
+    widget = _logged(T.REFINED, label=label, status=status)
+    fm = QFontMetrics(widget._font_set()[2])
+    rect = T.layout_card(T.REFINED, "limits", "inside")["status"]
+    assert fm.horizontalAdvance(status) <= rect.w
+    shown = next(e for e in widget.log if e[0].startswith("week caps"))
+    assert shown[0] == status and shown[2][2] == rect.w
 
 
 def test_refined_models_rows(qapp):
