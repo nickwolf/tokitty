@@ -58,8 +58,6 @@ _LEFT_VCENTER = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 _RIGHT_VCENTER = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _LEFT_BOTTOM = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
 _RIGHT_BOTTOM = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
-# Refined card: room kept between the status line and the account label.
-STATUS_LABEL_GAP = 6
 
 
 def is_context_press(button, modifiers, platform: str = sys.platform) -> bool:
@@ -612,23 +610,21 @@ class TokittyQtWidget(QWidget):
         p.restore()
 
     def _paint_footer(self, p: QPainter, pane: QtPane, layout, dim: QColor) -> None:
-        """The refined status line and account label, one row. The label is
-        right-aligned; the status is one line, elided so it never runs under
-        the label."""
+        """The refined status line and account label, on two rows. Each is one
+        line, elided on the right to its own rect."""
         text_font = self._font_set()[2]
         p.setFont(text_font)
         label = pane._label if "account_label" in layout else ""
         if label:
-            self._text(p, dim, _qrect(layout["account_label"]), _RIGHT_VCENTER, label)
+            rect = layout["account_label"]
+            shown = p.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, rect.w)
+            self._text(p, dim, _qrect(rect), _RIGHT_VCENTER, shown)
         if "status" in layout:
             status = pane.status_text if pane._view_mode == "limits" else (
                 pane.usage_view.status_text if pane.usage_view is not None else "")
             rect = layout["status"]
-            width = rect.w
-            if label:
-                width -= p.fontMetrics().horizontalAdvance(label) + STATUS_LABEL_GAP
-            shown = p.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, max(width, 0))
-            self._text(p, dim, QRectF(rect.x, rect.y, max(width, 0), rect.h), _LEFT_VCENTER, shown)
+            shown = p.fontMetrics().elidedText(status, Qt.TextElideMode.ElideRight, rect.w)
+            self._text(p, dim, _qrect(rect), _LEFT_VCENTER, shown)
 
     def _paint_card(self, p: QPainter, style: T.PaneStyle) -> None:
         card = self.theme.card

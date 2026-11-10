@@ -3884,7 +3884,7 @@ _KO_SPLASH = ({(21, 0): "b", (20, 1): "B"}, {(19, 0): "b", (18, 1): "b", (20, 2)
 # far end and fall down the card's face. The cat sits in its top-left corner.
 # theme imports this module, so the card's size and the cat's x on the edge
 # are repeated here (a test keeps them equal to theme's).
-KO_CARD = (300, 128)
+KO_CARD = (300, 144)
 KO_CAT_X = 8
 _KO_COLS = (KO_CARD[0] - KO_CAT_X) // SCALE
 _KO_ROWS = 26 + KO_CARD[1] // SCALE
@@ -3952,7 +3952,7 @@ def _knock_off() -> Animation:
     ]
     # down the card's face, tumbling and speeding up, the water falling with it
     for i, (top, ms) in enumerate(((25, 70), (28, 60), (32, 60), (37, 50), (43, 50), (50, 50),
-                                   (58, 40))):
+                                   (58, 40), (67, 40))):
         shape = _GLASS_TUMBLE[i % 4]
         drops = ((top - 3, 1), (top - 2, 4), (top - 6, 2)) if i < 4 else ()
         frames.append(Frame({}, ms, template=_knock_off_frame((top, 0, shape), down, drops=drops)))

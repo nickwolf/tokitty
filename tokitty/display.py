@@ -80,10 +80,10 @@ def format_reset_day(dt: datetime) -> str:
 def format_projection(kind: str, caps_at: datetime) -> str:
     """Render a cap projection for the pane's status line.
 
-    The weekly form deliberately carries the weekday only -- adding the
-    month and day-of-month pushes the string past status_label's 160px
-    wrap width, and a wrapped second line falls below the pane's bottom
-    edge. A weekday is unambiguous inside a 7-day window.
+    The weekly form deliberately carries the weekday only. Adding the
+    month and day of month makes the string wider than the 158 px stats
+    column, so it would be elided or wrapped. A weekday is unambiguous
+    inside a 7-day window.
     """
     when = format_reset_time(caps_at)
     if kind == "session":

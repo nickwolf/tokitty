@@ -33,7 +33,7 @@ _SETTINGS_FILENAME = "settings.json"  # read raw for the opacity migration only
 # Card size is fixed: a resizable card is the main way a layout ends up
 # with text outside it. Values are the original Tk window's CARD_WIDTH / PANE_HEIGHT.
 CARD_WIDTH = 300
-CARD_HEIGHT = 128
+CARD_HEIGHT = 144
 
 # Permission accent (the original Tk window's ACCENT_BG / ACCENT_FG). Constants, not theme
 # fields: the accent exists to be noticed, so it cannot be themed away.
@@ -649,9 +649,8 @@ def _layout_refined(rects: dict, lines: dict, view: str, x: int, w: int,
 
     Limits: a label row (section name left, percent right), the bar, then the
     reset line. Models: name and value on one row, then the bar. The status
-    line and the account label share the row below the last bar; the status
-    rect spans the column and the account label is drawn over its right end,
-    so the painter elides the status to fit. lines[name] is the whole limits
+    line takes the row below the last bar and the account label its own row
+    under it, so neither is elided for the other. lines[name] is the whole limits
     row, label row top to reset line bottom, and overlaps its leaves by design.
     """
     y = FIRST_ROW_Y
@@ -681,12 +680,13 @@ def _layout_refined(rects: dict, lines: dict, view: str, x: int, w: int,
                 y += R_MODEL_NAME_STEP
             rects[f"model_bar_{i}"] = Rect(x, y, w, bar_h)
             y += bar_h + R_MODEL_GAP
-    # A tall bar in the models view would push the row past the card.
-    y = min(y, CARD_HEIGHT - SMALL_H)
+    # A tall bar in the models view would push the rows past the card; keep
+    # room for the status row and the account label row under it.
+    y = min(y, CARD_HEIGHT - 2 * SMALL_H)
     if "status" in show:
         rects["status"] = Rect(x, y, w, SMALL_H)
     if "account_label" in show:
-        rects["account_label"] = Rect(x, y, R_ROW_RIGHT - x, SMALL_H)
+        rects["account_label"] = Rect(x, y + SMALL_H, R_ROW_RIGHT - x, SMALL_H)
 
 
 # --- cat spots ------------------------------------------------------------

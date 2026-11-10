@@ -318,7 +318,7 @@ def test_spot_sheet_has_the_card_and_a_shadow_under_a_sitting_cat(tmp_path, stil
     out = tmp_path / "sheet.png"
     assert render_sheet(out, scale=4, states=["still"], spot=spot) == ["still"]
     w, h = scene_size(4)
-    assert (w, h) == (32 * 4, 61 * 4) and _png_size(out)[0] == 4 + w + 4
+    assert (w, h) == (32 * 4, 65 * 4) and _png_size(out)[0] == 4 + w + 4
     card, backdrop = _rgb("#1c1c22"), _rgb(SCENE_BACKDROP)
     side = 296 if spot == "inside_right" else 4  # in the 8 px margin beside the sprite
     # the card body is at its real place: a pixel inside it, one above its top edge
@@ -394,7 +394,7 @@ def test_spot_gif_and_variant_resolution(tmp_path, monkeypatch):
     paths = write_gifs(tmp_path, ["content@on_top"], scale=2, seconds=1.6, spot="on_top")
     assert [p.name for p in paths] == ["content-at-on_top.gif"]
     with PIL.open(paths[0]) as gif:
-        assert gif.size == (32 * 2, 61 * 2) and gif.n_frames == 2
+        assert gif.size == (32 * 2, 65 * 2) and gif.n_frames == 2
 
 
 def test_render_media_writes_gifs_for_moves_and_variants(tmp_path, hop, monkeypatch):
