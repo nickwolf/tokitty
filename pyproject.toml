@@ -1,6 +1,6 @@
 [project]
 name = "tokitty"
-version = "1.0.1"
+version = "1.0.2"
 description = "A cat-themed desktop widget for tracking Claude Code and Codex usage limits"
 readme = "README.md"
 requires-python = ">=3.10"
