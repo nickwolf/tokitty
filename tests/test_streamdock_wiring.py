@@ -201,6 +201,77 @@ def test_starter_forwards_settings_changes_made_while_retrying():
     assert d.runtime.presets == [{"name": "new"}] and d.runtime.hidden == ["x"]
 
 
+class StoppingRuntime(FakeRuntime):
+    stopped = []
+
+    def stop(self):
+        StoppingRuntime.stopped.append(self)
+
+
+def test_starter_restart_stops_the_runtime_and_builds_one_for_the_units_now():
+    StoppingRuntime.stopped = []
+    units = [{"account": None, "sessions_dir": "/c/tokitty/sessions"}]
+    d, clock = starter(settings(), runtime_cls=StoppingRuntime)
+    d._units = units  # the caller's own list, mutated in place
+    d.begin()
+    old = d.runtime
+    units[:] = [{"account": None, "sessions_dir": "/a/tokitty/sessions"},
+                {"account": None, "sessions_dir": "/b/tokitty/sessions"}]
+
+    d.restart()
+
+    assert StoppingRuntime.stopped == [old]
+    assert d.runtime is not old and d.state == "running" and FakeRuntime.started == 2
+    assert len(FakeRuntime.kwargs[3]) == 2
+
+
+def test_starter_restart_takes_the_new_settings():
+    d, clock = starter(settings(), runtime_cls=StoppingRuntime)
+    d.begin()
+    fresh = settings(port=4001)
+    fresh.streamdock_presets = [{"name": "saved since"}]
+    fresh.streamdock_hidden_accounts = ["h"]
+
+    d.restart(fresh)
+
+    port, _token, presets, _accounts, kw = FakeRuntime.kwargs
+    assert presets == [{"name": "saved since"}] and kw["hidden_accounts"] == ["h"]
+    assert port == d.port == 4001
+
+
+def test_starter_restart_retries_while_the_old_server_holds_the_port():
+    d, clock = starter(settings(), runtime_cls=StoppingRuntime)
+    d.begin()
+    FakeRuntime.fail = OSError(errno.EADDRINUSE, "address in use")
+
+    d.restart()
+
+    assert d.runtime is None and d.state == "starting" and len(clock.queue) == 1
+    FakeRuntime.fail = None
+    clock.run()
+    assert d.state == "running" and isinstance(d.runtime, StoppingRuntime)
+
+
+def test_starter_restart_cancels_a_pending_retry():
+    FakeRuntime.fail = OSError(errno.EADDRINUSE, "address in use")
+    d, clock = starter(settings(), runtime_cls=StoppingRuntime)
+    d.begin()
+    pending = clock.queue[0]
+    FakeRuntime.fail = None
+
+    d.restart()
+
+    assert clock.cancelled == [pending] and not clock.queue
+    assert d.state == "running" and FakeRuntime.started == 1
+
+
+def test_starter_restart_when_not_configured_stays_off():
+    d, clock = starter(settings(0), runtime_cls=StoppingRuntime)
+    d.begin()
+    d.restart()
+    assert d.runtime is None and d.state == "off" and not clock.queue
+
+
 @pytest.mark.parametrize("exc,busy", [
     (OSError(errno.EADDRINUSE, "x"), True),
     (OSError(errno.EACCES, "x"), False),

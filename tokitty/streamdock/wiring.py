@@ -230,6 +230,24 @@ class DeckStarter:
         if self.runtime is not None:
             self.runtime.stop()
 
+    def restart(self, settings: Any = None) -> None:
+        """Stop and start again over the same `units` list, which the account
+        list changed (#166): the runtime numbers its keys by unit index when
+        it is built. `settings` replaces the launch ones. GUI thread.
+
+        The old runtime stops here, not on a worker: its marker clears must
+        land before the new runtime's touches. A port the old server has not
+        let go of yet takes the busy retry, as at launch."""
+        self.stop()
+        self.runtime = None
+        self._stopped = False
+        self.state = "off"
+        self.reason = ""
+        if settings is not None:
+            self._settings = settings
+            self.port = getattr(settings, "streamdock_port", 0)
+        self.begin()
+
 
 def apply_idle_cap(units: List[dict], connected: bool) -> None:
     """Poll idle accounts quickly while the deck is connected, so a new session gets a key."""
