@@ -171,6 +171,9 @@ class AccountsTab(_Tab):
         self._finishing = False
         self._mutating = False
         self._validating = False
+        # host.found_homes runs wsl.exe, so it is read on a worker too.
+        self._found_raw: list = []
+        self._finding = False
         self._guard_busy = False
         self._closed = False
         self.poller = QtPoller(self.owner, self.mailbox, self._on_result,
@@ -250,6 +253,10 @@ class AccountsTab(_Tab):
         self._render()
         state_dir, running = self.state_dir, self._distro_running()
         self._launch("status", lambda: collect_rows(state_dir, running))
+        probe = getattr(self.host, "found_homes", None)
+        if probe is not None and not self._finding:
+            self._finding = True
+            self._launch("found", probe)
 
     def _start_op(self, row: RowData, op: str) -> None:
         if self._locked():
@@ -290,6 +297,10 @@ class AccountsTab(_Tab):
         elif tag == "validate":
             self._validating = False
             self._after_validation(*value)
+        elif tag == "found":
+            self._finding = False
+            self._found_raw = list(value) if ok else []
+            self._render()
 
     def _after_op(self, ok: bool, value) -> None:
         if not ok:
@@ -711,12 +722,11 @@ class AccountsTab(_Tab):
     def _found_homes(self, loaded: AccountsLoadResult) -> List[Tuple[str, str, str, str]]:
         """(provider, where, shown path, config dir) of every home found and not
         yet an account. A WSL home shows its in-distro path.
-        Discovery's list is a startup snapshot, so it is filtered against the
+        The sweep may predate the last change, so it is filtered against the
         accounts.json of this moment."""
         current = loaded.accounts
-        probe = getattr(self.host, "found_homes", None)
         found = []
-        for spec in build_discovered_path_specs((probe() if probe else None) or []):
+        for spec in build_discovered_path_specs(self._found_raw):
             if not any(_same_config_dir(spec.config_dir, a.config_dir) for a in current):
                 found.append((DEFAULT_PROVIDER, spec.distro,
                               posixpath.dirname(spec.credentials_path), spec.config_dir))

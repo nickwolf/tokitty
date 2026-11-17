@@ -1,4 +1,5 @@
 """run_qt end to end under the offscreen platform."""
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -270,17 +271,45 @@ def test_the_host_gets_discoverys_homes_and_the_accounts_hook(qapp, state_dir, m
     seen = capture_widget(monkeypatch)
     found = {}
 
+    from tokitty import wsl_probe
+    from tokitty.distro_probe import RunningDistroProbe
+
+    monkeypatch.setattr(RunningDistroProbe, "get_running", lambda self: ["Ubuntu"])
+    monkeypatch.setattr(wsl_probe, "find_running_wsl_credentials", lambda running: [
+        ("Ubuntu", "/home/u/.claude/.credentials.json"),
+        ("Ubuntu", "/home/u/.claude-work/.credentials.json")])
+
     def hook(widget):
         host = hosts[0]
-        found["homes"] = host.found_homes()
+        with monkeypatch.context() as m:
+            m.setattr(sys, "platform", "win32")
+            found["homes"] = host.found_homes()
         found["hook"] = host.on_accounts_changed
         # The Manage window is gone (#268): nothing opens it any more.
         found["manage"] = getattr(host, "on_open_accounts", None)
 
     seen["hook"] = hook
     assert run_for(qapp, 300) == 0
-    assert found["homes"] == [("Ubuntu", "/home/u/.claude/.credentials.json")]
+    # Discovery's startup list, then what a fresh sweep adds, no repeats.
+    assert found["homes"] == [("Ubuntu", "/home/u/.claude/.credentials.json"),
+                              ("Ubuntu", "/home/u/.claude-work/.credentials.json")]
     assert callable(found["hook"]) and found["manage"] is None
+
+
+def test_found_homes_sweeps_running_distros_only_on_windows():
+    from tokitty.qt.app import make_found_homes
+
+    swept = []
+
+    def sweep(running):
+        swept.append(running)
+        return [("Ubuntu", "/home/u/.claude-edlio/.credentials.json")]
+
+    found = make_found_homes(lambda: [], lambda: ["Ubuntu"], platform="win32", sweep=sweep)
+    assert found() == [("Ubuntu", "/home/u/.claude-edlio/.credentials.json")]
+    assert swept == [["Ubuntu"]]
+    elsewhere = make_found_homes(lambda: [], lambda: ["Ubuntu"], platform="linux", sweep=sweep)
+    assert elsewhere() == [] and len(swept) == 1
 
 
 # -- applying account changes without a restart (#166) ------------------------

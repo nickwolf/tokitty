@@ -200,6 +200,14 @@ def find_all_wsl_credentials(run: Callable = subprocess.run) -> List[Tuple[str, 
     return matches
 
 
+def find_running_wsl_credentials(running: List[str],
+                                 run: Callable = subprocess.run) -> List[Tuple[str, str]]:
+    """find_all_wsl_credentials over the distros already running only, for
+    a sweep on demand (the Accounts page) that must never boot a distro."""
+    return [(distro, path) for distro in running
+            for path in _credentials_paths_in_distro(distro, run=run)]
+
+
 def _wsl_config_dir_windows_style(wsl_credentials_path: str) -> str:
     """Windows-style (backslash) relative path to the credentials file's
     parent directory, independent of that directory's basename. Fixes

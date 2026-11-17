@@ -133,6 +133,25 @@ def stop_units_later(units) -> None:
         threading.Thread(target=run, daemon=True, name="units-stop").start()
 
 
+def make_found_homes(startup_matches, get_running, platform=None, sweep=None):
+    """The Accounts page's found homes: (distro, credentials path) pairs.
+    Discovery only sweeps when accounts.json was absent at launch, so this
+    sweeps again, in running distros only so it never boots one. It runs
+    wsl.exe, so the page calls it from its worker."""
+    def found_homes() -> list:
+        if (platform or sys.platform) != "win32":
+            return []
+        from tokitty.wsl_probe import find_running_wsl_credentials
+
+        found = list(startup_matches())
+        for match in (sweep or find_running_wsl_credentials)(get_running()):
+            if match not in found:
+                found.append(match)
+        return found
+
+    return found_homes
+
+
 def run_guarded(label, fn) -> None:
     """Run one shutdown step so its failure is reported, not raised: it must
     neither hide the exception that is already unwinding nor skip the steps
@@ -612,7 +631,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         )
         discovery.start()
 
-        host.found_homes = discovery.wsl_matches
+        host.found_homes = make_found_homes(discovery.wsl_matches, distro_probe.get_running)
 
         def restart_deck() -> None:
             # The launch port and token, which the Stream Dock tab reports as

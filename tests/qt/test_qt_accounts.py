@@ -772,6 +772,23 @@ def test_found_homes_list_the_harness_where_and_path_with_an_add_button(
     assert tab.add_header.hint.isVisibleTo(tab.frame)
 
 
+def test_found_homes_are_read_on_a_worker_thread(make_world, fake_status, monkeypatch):
+    # The sweep runs wsl.exe and can take seconds.
+    world = make_world(1)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    threads = []
+
+    def found_homes():
+        threads.append(threading.current_thread())
+        return [("Ubuntu", "/home/u/.claude-edlio/.credentials.json")]
+
+    world.host.found_homes = found_homes
+    monkeypatch.setattr(qsa, "discover_local_codex_home", lambda accounts: None)
+    _window, tab = open_ready(world)
+    assert pump(lambda: len(tab.found_rows) == 1)
+    assert threads and threading.main_thread() not in threads
+
+
 def test_no_found_homes_hides_the_hint_and_tolerates_a_missing_seam(
         make_world, fake_status, monkeypatch):
     world = make_world(1)
