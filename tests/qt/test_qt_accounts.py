@@ -1,26 +1,24 @@
-"""The Qt accounts manager and the Settings Accounts tab, over a real widget,
-QtHost and Controls. apply_account_mutation, retry_pending_hook_op,
-hook_status_for_dir and apply_hook_operation are replaced with fakes that
-record their thread; dialogs are patched, never shown. Named test_qt_accounts
-because tests/test_accounts.py already owns the basename (no __init__.py)."""
+"""The Settings Accounts tab, the one place for accounts (#268), over a real
+widget, QtHost and Controls. apply_account_mutation, hook_status_for_dir and
+apply_hook_operation are replaced with fakes that record their thread; dialogs
+are patched, never shown. Named test_qt_accounts because tests/test_accounts.py
+already owns the basename (no __init__.py)."""
 import json
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from tokitty import accounts_logic, accounts_rows, hook_guard
-from tokitty.accounts import Account, save_accounts
-from tokitty.customize import SINGLE_KEY, load_customization
+from tokitty.accounts import load_accounts_result
+from tokitty.customize import load_customization
 from tokitty.hooks_install import HookOperationResult, HookStatus
 from tokitty.manual_path import PathValidationResult
-from tokitty.qt import accounts as qa
 from tokitty.qt import settings as qs
 from tokitty.qt import settings_accounts as qsa
-from tokitty.settings import load_settings
 
 pytestmark = pytest.mark.qt
 
@@ -56,14 +54,16 @@ def ok_result(**extra):
 
 
 class Dialogs:
-    """Stands in for QMessageBox and QInputDialog in the manager's module,
-    recording the parent, the text and the thread of every call."""
+    """Stands in for QMessageBox, QInputDialog and QFileDialog in the tab's
+    module, recording the parent, the text and the thread of every call."""
 
     def __init__(self):
         self.boxes = []
         self.threads = []
         self.answers = []  # what QInputDialog.getText returns, in order
         self.prompts = []
+        self.folders = []  # what QFileDialog.getExistingDirectory returns, in order
+        self.folder_calls = []
 
     def _box(self, kind):
         def show(parent, title, body, *rest):
@@ -77,13 +77,18 @@ class Dialogs:
             "critical": self._box("critical"), "warning": self._box("warning"),
             "information": self._box("information")})
 
-        def get_text(parent, title, label):
+        def get_text(parent, title, label, **kwargs):
             dialogs.threads.append(threading.current_thread())
-            dialogs.prompts.append((parent, title, label))
+            dialogs.prompts.append((parent, title, label, kwargs.get("text")))
             return dialogs.answers.pop(0) if dialogs.answers else ("", False)
 
-        monkeypatch.setattr(qa, "QMessageBox", message_box)
-        monkeypatch.setattr(qa, "QInputDialog", SimpleNamespace(getText=get_text))
+        def get_folder(parent, caption, start):
+            dialogs.folder_calls.append((parent, caption, start))
+            return dialogs.folders.pop(0) if dialogs.folders else ""
+
+        monkeypatch.setattr(qsa, "QMessageBox", message_box)
+        monkeypatch.setattr(qsa, "QInputDialog", SimpleNamespace(getText=get_text))
+        monkeypatch.setattr(qsa, "QFileDialog", SimpleNamespace(getExistingDirectory=get_folder))
         return self
 
 
@@ -95,22 +100,10 @@ def dialogs(monkeypatch):
 @pytest.fixture(autouse=True)
 def clean(qapp):
     yield
-    manager = qa.current()
-    if manager is not None:
-        manager.close()
     window = qs._instance
     if window is not None:
         window.close()
     hook_guard._in_flight_operations.clear()
-
-
-@pytest.fixture
-def retries(monkeypatch):
-    """The startup retry, faked: records the thread and returns no outcome."""
-    calls = []
-    monkeypatch.setattr(accounts_logic, "retry_pending_hook_op",
-                        lambda state_dir: calls.append((state_dir, threading.current_thread())))
-    return calls
 
 
 @pytest.fixture
@@ -134,583 +127,14 @@ def mutations(monkeypatch):
     return box
 
 
-def open_manager(world, matches=None, **kwargs):
-    return qa.AccountsManager.open(world.state_dir, matches, host=world.host, **kwargs)
-
-
-def settled(manager):
-    return lambda: not (manager._retry_in_flight or manager._mutation_in_flight
-                        or manager._validation_in_flight)
-
-
 def two_accounts(state_dir):
     write_accounts(state_dir, ("acct-a", str(state_dir / "a"), "claude"),
                    ("acct-b", str(state_dir / "b"), "codex"))
 
 
-# ---- every section renders ----------------------------------------------------
+def three_accounts(state_dir):
+    write_accounts(state_dir, *[(n, str(state_dir / n), "claude") for n in ("acct-a", "acct-b", "acct-c")])
 
-def test_every_section_renders_for_a_valid_accounts_file(make_world, retries, dialogs):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    (world.state_dir / "a" / "projects").mkdir(parents=True)
-    (world.state_dir / "a" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {}}))
-    (world.state_dir / "b" / "sessions").mkdir(parents=True)
-    (world.state_dir / "b" / "sessions" / "rollout.jsonl").write_text("{}")
-    manager = open_manager(world, [("Ubuntu", "/home/u/.claude/.credentials.json")])
-    text = labels(manager)
-
-    assert manager.windowTitle() == "Accounts" and manager.parent() is None
-    assert "Cat 1" in text and "Cat 2" in text
-    # capability facts, per harness
-    assert any("subscription usage: available" in t and "local usage: transcripts found" in t
-               for t in text)
-    assert any(t.startswith("Codex") and "local usage: rollouts found" in t for t in text)
-    # discovered path
-    assert any(t.startswith("Found in Ubuntu:") for t in text)
-    # usage section
-    assert set(manager.usage_groups) == {"view", "window", "readout"}
-    assert manager._budget_entry is not None
-    # restart notice, provider picker and the add button
-    assert any("Tokitty restart needed for new panes" in t for t in text)
-    assert manager.provider_picker.get() == "claude"
-    assert set(manager.provider_picker.items) == {"claude", "codex"}
-    assert not manager.add_box.isHidden() and manager.add_button.isEnabled() is False  # retry runs
-    assert len(buttons(manager, "Rename…")) == 2 and len(buttons(manager, "Remove")) == 2
-    assert pump(settled(manager))
-    assert all(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-
-
-def test_a_malformed_accounts_file_shows_only_the_malformed_row(make_world, retries, dialogs):
-    world = make_world(1)
-    (world.state_dir / "accounts.json").write_text("{nope")
-    manager = open_manager(world)
-    text = labels(manager)
-    assert any("accounts.json is malformed" in t for t in text)
-    assert buttons(manager, "Rename…") == [] and buttons(manager, "Remove") == []
-    # the sections that do not depend on the file still render
-    assert set(manager.usage_groups) == {"view", "window", "readout"}
-    assert any("Tokitty restart needed" in t for t in text)
-    assert not manager.add_box.isHidden()
-    # and an add is refused with the reason
-    assert pump(settled(manager))
-    manager._on_add()
-    assert dialogs.boxes[-1][0] == "critical" and "malformed" in dialogs.boxes[-1][3]
-    assert dialogs.prompts == []
-
-
-@pytest.mark.parametrize("content", ['{"accounts": []}', None])
-def test_an_empty_or_absent_accounts_file_renders_no_rows(make_world, retries, dialogs, content, monkeypatch):
-    # Off macOS: there an absent file shows the Keychain row instead (tested below).
-    monkeypatch.setattr(qa, "sys", SimpleNamespace(platform="linux"))
-    world = make_world(1)
-    if content is not None:
-        (world.state_dir / "accounts.json").write_text(content)
-    manager = open_manager(world)
-    assert buttons(manager, "Rename…") == []
-    assert set(manager.usage_groups) == {"view", "window", "readout"}
-    assert any("Tokitty restart needed" in t for t in labels(manager))
-    assert not manager.add_box.isHidden()
-
-
-def test_a_discovered_local_codex_home_gets_an_add_row(make_world, retries, dialogs, monkeypatch):
-    world = make_world(1)
-    codex = world.state_dir / "codex-home"
-    (codex / "sessions").mkdir(parents=True)
-    monkeypatch.setattr(accounts_logic, "default_codex_home", lambda: str(codex))
-    write_accounts(world.state_dir, ("acct-a", str(world.state_dir / "a"), "claude"))
-    manager = open_manager(world)
-    assert any(t.startswith("Found Codex:") for t in labels(manager))
-    assert len(buttons(manager, "Add")) == 1
-
-
-def test_reopening_returns_the_same_window_and_refreshes_the_discovered_rows(
-        make_world, retries, dialogs):
-    world = make_world(1)
-    two_accounts(world.state_dir)
-    first = open_manager(world, [])
-    assert not any(t.startswith("Found in") for t in labels(first))
-    second = open_manager(world, [("Debian", "/home/u/.claude/.credentials.json")])
-    assert second is first and qa.current() is first
-    assert any(t.startswith("Found in Debian:") for t in labels(first))
-
-
-def test_closing_fires_the_closed_callbacks_once_and_forgets_the_window(make_world, retries, dialogs):
-    world = make_world(1)
-    manager = open_manager(world)
-    fired = []
-    manager.closed.append(lambda: fired.append(1))
-    assert manager in world.host._windows
-    manager.close()
-    manager.close()
-    assert fired == [1]
-    assert qa.current() is None and manager not in world.host._windows
-    assert open_manager(world) is not manager
-
-
-def test_the_close_button_sits_below_the_restart_notice_and_closes_once(
-        make_world, retries, dialogs):
-    world = make_world(1)
-    manager = open_manager(world)
-    fired = []
-    manager.closed.append(lambda: fired.append(1))
-    assert buttons(manager, "Close") == [manager.close_button]
-    column = manager.layout()
-    assert column.indexOf(manager.close_button) == column.count() - 1
-    assert column.indexOf(manager.restart_notice) < column.indexOf(manager.close_button)
-    manager.close_button.click()
-    assert not manager.isVisible() and fired == [1]
-    assert qa.current() is None and manager not in world.host._windows
-    manager.close()
-    assert fired == [1]
-
-
-def test_escape_closes_once_through_the_same_path(make_world, retries, dialogs):
-    from PySide6.QtTest import QTest
-
-    world = make_world(1)
-    manager = open_manager(world)
-    fired = []
-    manager.closed.append(lambda: fired.append(1))
-    QTest.keyClick(manager, Qt.Key.Key_Escape)
-    assert not manager.isVisible() and fired == [1]
-    assert qa.current() is None and manager not in world.host._windows
-    manager.close()
-    assert fired == [1]
-
-
-# ---- rename and remove ---------------------------------------------------------
-
-def test_rename_goes_through_the_dialog_and_saves_the_label(make_world, retries, dialogs):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    dialogs.answers.append(("Mochi", True))
-    buttons(manager, "Rename…")[0].click()
-
-    parent, title, label = dialogs.prompts[0]
-    assert parent is manager and (title, label) == ("Rename", "Cat name:")
-    assert load_customization(world.state_dir)["acct-a"].label == "Mochi"
-    assert "Mochi" in labels(manager)
-
-    dialogs.answers.append(("Nope", False))  # cancelled
-    buttons(manager, "Rename…")[0].click()
-    assert load_customization(world.state_dir)["acct-a"].label == "Mochi"
-
-
-def test_remove_runs_the_mutation_off_thread_under_the_guard(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    refreshes = []
-    real = manager._refresh_rows
-    manager._refresh_rows = lambda: (refreshes.append(threading.current_thread()), real())[1]
-
-    buttons(manager, "Remove")[1].click()
-
-    assert manager._mutation_in_flight
-    assert not any(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-    assert pump(settled(manager))
-    (call,) = mutations.calls
-    assert (call.op, call.provider, call.names) == ("remove", "codex", ["acct-a"])
-    assert call.thread is not MAIN and call.guarded
-    assert not hook_guard.held(world.state_dir)
-    assert dialogs.boxes == []
-    assert refreshes and all(t is MAIN for t in refreshes)
-    assert all(b.isEnabled() for b in buttons(manager, "Remove"))
-
-
-def test_the_last_account_cannot_be_removed(make_world, retries, dialogs, mutations):
-    world = make_world(1)
-    write_accounts(world.state_dir, ("acct-a", str(world.state_dir / "a"), "claude"))
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    (remove,) = buttons(manager, "Remove")
-    assert not remove.isEnabled()
-    manager._on_remove("acct-a", str(world.state_dir / "a"))
-    assert mutations.calls == []
-
-
-def test_a_stale_row_is_refreshed_instead_of_acted_on(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    dirs = [str(world.state_dir / n) for n in "abc"]
-    write_accounts(world.state_dir, ("acct-a", dirs[0], "claude"), ("acct-b", dirs[1], "codex"),
-                   ("acct-c", dirs[2], "claude"))
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    assert len(buttons(manager, "Remove")) == 3
-    write_accounts(world.state_dir, ("acct-a", dirs[0], "claude"), ("acct-c", dirs[2], "claude"))
-    manager._on_remove("acct-b", dirs[1], "codex")
-    assert mutations.calls == []
-    assert len(buttons(manager, "Remove")) == 2
-
-
-def test_a_failed_mutation_is_reported_and_blocks_the_next_change(
-        make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    mutations.outcome = SimpleNamespace(ok=False, message="hook install failed", warning=None, note=None)
-    buttons(manager, "Remove")[0].click()
-    assert pump(lambda: dialogs.boxes)
-    kind, parent, title, body = dialogs.boxes[0]
-    assert (kind, parent, title) == ("critical", manager, "Accounts")
-    assert "hook install failed" in body and "Reopen Accounts" in body
-    assert manager._pending_hook_failure
-    assert not any(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-
-
-def test_a_raising_mutation_is_reported(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    mutations.outcome = RuntimeError("boom")
-    buttons(manager, "Remove")[0].click()
-    assert pump(lambda: dialogs.boxes)
-    assert dialogs.boxes[0][0] == "critical" and "boom" in dialogs.boxes[0][3]
-    assert not hook_guard.held(world.state_dir)
-
-
-def test_a_warning_and_a_note_share_one_box(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    mutations.outcome = SimpleNamespace(ok=True, message="done", warning="partly done",
-                                        note="waiting for approval in Codex")
-    buttons(manager, "Remove")[0].click()
-    assert pump(lambda: dialogs.boxes)
-    assert len(dialogs.boxes) == 1
-    assert dialogs.boxes[0][0] == "warning"
-    assert dialogs.boxes[0][3] == "partly done\n\nwaiting for approval in Codex"
-
-
-# ---- add ---------------------------------------------------------------------------
-
-def fake_validation(monkeypatch, config_dir, threads=None):
-    def validate(provider, raw, active):
-        if threads is not None:
-            threads.append(threading.current_thread())
-        return PathValidationResult(ok=True, config_dir=config_dir)
-
-    monkeypatch.setattr(qa, "validate_account_path", validate)
-    monkeypatch.setattr(accounts_logic, "validate_account_path", validate)
-
-
-def test_add_by_path_validates_saves_a_look_and_installs(
-        make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    new_dir = str(world.state_dir / "c")
-    fake_validation(monkeypatch, new_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    dialogs.answers.append((new_dir, True))
-    manager.add_button.click()
-
-    assert dialogs.prompts[0][1:] == ("Add account", "Claude config directory:")
-    assert pump(settled(manager))
-    (call,) = mutations.calls
-    assert call.op == "install" and call.config_dir == new_dir and call.provider == "claude"
-    assert call.names[:2] == ["acct-a", "acct-b"] and len(call.names) == 3
-    assert call.names[2] in load_customization(world.state_dir)  # a look was saved for it
-
-
-def test_the_harness_picker_chooses_the_prompt_and_provider(
-        make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    new_dir = str(world.state_dir / "c")
-    fake_validation(monkeypatch, new_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    manager.provider_picker.items["codex"].click()
-    dialogs.answers.append((new_dir, True))
-    manager.add_button.click()
-    assert dialogs.prompts[0][2] == "Codex home directory:"
-    assert pump(settled(manager))
-    assert mutations.calls[0].provider == "codex"
-
-
-def test_cancelled_and_invalid_adds_start_nothing(make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    dialogs.answers.append(("", True))
-    manager.add_button.click()
-    monkeypatch.setattr(qa, "validate_account_path",
-                        lambda p, raw, a: PathValidationResult(ok=False, error="No credentials here."))
-    dialogs.answers.append(("/nowhere", True))
-    manager.add_button.click()
-    assert dialogs.boxes[-1][0] == "critical" and dialogs.boxes[-1][3] == "No credentials here."
-    assert mutations.calls == []
-
-
-def test_a_duplicate_directory_is_refused(make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    fake_validation(monkeypatch, str(world.state_dir / "a"))
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    dialogs.answers.append((str(world.state_dir / "a"), True))
-    manager.add_button.click()
-    assert dialogs.boxes[-1][3] == "This account is already added."
-    assert mutations.calls == []
-
-
-def test_adding_a_discovered_path_installs_it(make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world, [("Ubuntu", "/home/u/.claude/.credentials.json")])
-    found = accounts_logic.build_discovered_path_specs(
-        [("Ubuntu", "/home/u/.claude/.credentials.json")])[0].config_dir
-    fake_validation(monkeypatch, found)
-    assert pump(settled(manager))
-    buttons(manager, "Add")[0].click()
-    assert pump(settled(manager))
-    assert mutations.calls[0].op == "install" and mutations.calls[0].config_dir == found
-
-
-def test_a_codex_wsl_path_is_validated_off_the_gui_thread(
-        make_world, retries, dialogs, mutations, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    unc = r"\\wsl.localhost\Ubuntu\home\u\.codex"
-    threads, gate = [], threading.Event()
-
-    def validate(provider, raw, active):
-        threads.append(threading.current_thread())
-        assert gate.wait(5)
-        return PathValidationResult(ok=True, config_dir=unc)
-
-    monkeypatch.setattr(accounts_logic, "validate_account_path", validate)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    manager._add_path(unc, accounts_logic.load_accounts_result(world.state_dir), "codex")
-
-    assert manager._validation_in_flight
-    assert not any(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-    gate.set()
-    assert pump(lambda: mutations.calls)
-    assert threads and threads[0] is not MAIN
-    assert mutations.calls[0].config_dir == unc and mutations.calls[0].provider == "codex"
-    assert pump(settled(manager))
-
-
-# ---- macOS virtual row -----------------------------------------------------------
-
-@pytest.fixture
-def mac(monkeypatch, tmp_path):
-    """sys.platform is darwin as the manager sees it, with an empty home."""
-    monkeypatch.setattr(qa, "sys", SimpleNamespace(platform="darwin"))
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setattr(qa.Path, "home", staticmethod(lambda: home))
-    return home
-
-
-def test_the_macos_virtual_row_replaces_the_rows_and_hides_add(make_world, retries, dialogs, mac):
-    world = make_world(1)
-    manager = open_manager(world)
-    assert "Default macOS account (Keychain)" in labels(manager)
-    assert manager.add_box.isHidden()
-    (remove,) = buttons(manager, "Remove")
-    assert not remove.isEnabled()
-    assert len(buttons(manager, "Rename…")) == 1
-    assert set(manager.usage_groups) == {"view", "window", "readout"}
-
-
-def test_renaming_the_macos_virtual_row_saves_under_the_single_key(
-        make_world, retries, dialogs, mac):
-    world = make_world(1)
-    manager = open_manager(world)
-    dialogs.answers.append(("Kiki", True))
-    buttons(manager, "Rename…")[0].click()
-    assert load_customization(world.state_dir)[SINGLE_KEY].label == "Kiki"
-    dialogs.answers.append(("Nope", False))
-    buttons(manager, "Rename…")[0].click()
-    assert load_customization(world.state_dir)[SINGLE_KEY].label == "Kiki"
-
-
-def test_a_local_credentials_file_means_no_virtual_row(make_world, retries, dialogs, mac):
-    world = make_world(1)
-    (mac / ".claude").mkdir()
-    (mac / ".claude" / ".credentials.json").write_text("{}")
-    manager = open_manager(world)
-    assert "Default macOS account (Keychain)" not in labels(manager)
-    assert not manager.add_box.isHidden()
-
-
-# ---- usage section -----------------------------------------------------------------
-
-def test_usage_controls_write_through_the_host_seams_and_notify(make_world, retries, dialogs):
-    world = make_world(1)
-    manager = open_manager(world)
-    notified = []
-    real = world.host.notify_state_changed
-    world.host.notify_state_changed = lambda: (notified.append(1), real())[1]
-
-    manager.usage_groups["view"][0].items["models"].click()
-    manager.usage_groups["window"][0].items["24h"].click()
-    manager.usage_groups["readout"][0].items["tokens"].click()
-
-    settings = load_settings(world.state_dir)
-    assert (settings.view_mode, settings.usage_window, settings.usage_readout) == (
-        "models", "24h", "tokens")
-    assert world.usage_state["view"] == "models"  # the live state follows too
-    assert len(notified) == 3
-
-
-def test_the_budget_entry_sets_clears_and_reports_errors(make_world, retries, dialogs):
-    world = make_world(1)
-    manager = open_manager(world)
-    entry = manager._budget_entry
-    entry.setText("$12.5")
-    entry.returnPressed.emit()
-    assert world.host.budget_for_pane(0) == 12.5
-    entry.setText("abc")
-    entry.returnPressed.emit()
-    assert dialogs.boxes[-1][0] == "critical" and dialogs.boxes[-1][2] == "Budget"
-    assert "not a number" in dialogs.boxes[-1][3]
-    entry.setText("0")
-    entry.returnPressed.emit()
-    assert "greater than zero" in dialogs.boxes[-1][3]
-    assert world.host.budget_for_pane(0) == 12.5
-    entry.setText("")
-    entry.returnPressed.emit()
-    assert world.host.budget_for_pane(0) is None
-
-
-def test_the_usage_controls_show_the_current_settings_on_open(make_world, retries, dialogs):
-    world = make_world(1)
-    world.host.on_view_mode("models")
-    world.host.set_budget_for_pane(0, "7")
-    manager = open_manager(world)
-    assert manager.usage_groups["view"][0].get() == "models"
-    assert manager._budget_entry.text() == "7"
-
-
-# ---- in flight, close and reopen --------------------------------------------------
-
-def test_the_startup_retry_runs_off_the_gui_thread_and_gates_the_buttons(
-        make_world, dialogs, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    gate, calls = threading.Event(), []
-
-    def slow(state_dir):
-        calls.append(threading.current_thread())
-        assert gate.wait(5)
-        return None
-
-    monkeypatch.setattr(accounts_logic, "retry_pending_hook_op", slow)
-    manager = open_manager(world)
-    assert manager._retry_in_flight
-    assert hook_guard.held(world.state_dir)
-    assert not any(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-    gate.set()
-    assert pump(settled(manager))
-    assert calls and calls[0] is not MAIN
-    assert all(b.isEnabled() for b in buttons(manager, "Remove") + [manager.add_button])
-    assert not hook_guard.held(world.state_dir)
-
-
-def test_a_failed_startup_retry_is_reported(make_world, dialogs, monkeypatch):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    monkeypatch.setattr(accounts_logic, "retry_pending_hook_op",
-                        lambda state_dir: HookOperationResult(False, "still pending"))
-    manager = open_manager(world)
-    assert pump(lambda: dialogs.boxes)
-    assert dialogs.boxes[0][0] == "critical" and "still pending" in dialogs.boxes[0][3]
-    assert manager._pending_hook_failure
-
-
-def test_a_mutation_in_flight_survives_close_and_reopen(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    first = open_manager(world)
-    assert pump(settled(first))
-    mutations.gate = threading.Event()
-    buttons(first, "Remove")[1].click()
-    assert pump(lambda: mutations.calls)
-
-    first.close()
-    second = open_manager(world)
-
-    assert second is not first
-    assert second._mutation_in_flight and not second._retry_in_flight
-    assert retries and len(retries) == 1  # only the first window started one
-    assert not any(b.isEnabled() for b in buttons(second, "Remove") + [second.add_button])
-    second._on_add()
-    second._on_remove("acct-a", str(world.state_dir / "a"))
-    assert dialogs.prompts == [] and len(mutations.calls) == 1
-
-    mutations.gate.set()
-    assert pump(settled(second))
-    assert all(b.isEnabled() for b in buttons(second, "Remove"))
-    assert not hook_guard.held(world.state_dir)
-    assert len(mutations.calls) == 1
-
-
-def test_results_after_close_are_not_applied(make_world, retries, dialogs, mutations):
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    mutations.gate = threading.Event()
-    mutations.outcome = SimpleNamespace(ok=False, message="late failure", warning=None, note=None)
-    buttons(manager, "Remove")[0].click()
-    assert pump(lambda: mutations.calls)
-    manager.close()
-    mutations.gate.set()
-    assert pump(lambda: not hook_guard.held(world.state_dir))
-    pump(lambda: False, 300)
-    assert dialogs.boxes == []  # the closed window's poll never ran
-
-
-def test_worker_callbacks_never_touch_the_gui(make_world, retries, dialogs, mutations, monkeypatch):
-    """Every on_done runs on a worker. It may only publish through hook_guard;
-    each dialog and each repaint happens on the GUI thread."""
-    world = make_world(2)
-    two_accounts(world.state_dir)
-    done_threads = []
-    real = qa._complete_operation
-    monkeypatch.setattr(qa, "_complete_operation",
-                        lambda *a: (done_threads.append(threading.current_thread()), real(*a))[1])
-    mutations.outcome = SimpleNamespace(ok=True, message="done", warning="heads up", note=None)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    buttons(manager, "Remove")[0].click()
-    assert pump(lambda: dialogs.boxes)
-    assert any(t is not MAIN for t in done_threads)  # the fake really ran off-thread
-    assert all(t is MAIN for t in dialogs.threads)
-
-
-def test_always_in_front_follows_the_widget_for_an_open_manager(make_world, retries, dialogs):
-    world = make_world(1)
-    hint = Qt.WindowType.WindowStaysOnTopHint
-    assert world.widget.always_on_top
-    manager = open_manager(world)
-    assert manager.windowFlags() & hint
-    world.host.toggle_always_on_top()
-    assert not manager.windowFlags() & hint and manager.isVisible()
-    world.host.toggle_always_on_top()
-    assert manager.windowFlags() & hint and manager.isVisible()
-
-
-def test_a_manager_opened_with_always_in_front_off_has_no_hint(make_world, retries, dialogs):
-    world = make_world(1)
-    world.widget.set_always_on_top(False)
-    manager = open_manager(world)
-    assert not manager.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
-
-
-# ---- the Settings tab -----------------------------------------------------------------
 
 STATUSES = {
     "/c/personal": HookStatus("installed"),
@@ -740,7 +164,12 @@ def open_tab(world):
 
 
 def tab_settled(tab):
-    return lambda: tab.snapshot is not None and not tab._checking and tab._pending == 0
+    return lambda: (tab.snapshot is not None and not tab._checking and tab._pending == 0
+                    and not tab._mutating and not tab._validating)
+
+
+def action(view, title):
+    return view.menu_actions[title]
 
 
 def by_name(tab):
@@ -766,10 +195,17 @@ def test_rows_come_from_accounts_with_pills_and_buttons(make_world, fake_status)
         "broken": "Error", "arch": "Unreachable"}
     assert rows["personal"].pill.property("tone") == "good"
     assert rows["broken"].pill.property("tone") == "bad"
-    assert rows["personal"].remove.isEnabled() and not rows["personal"].install.isEnabled()
-    assert rows["fresh"].install.isEnabled() and not rows["fresh"].remove.isEnabled()
-    assert rows["work"].install.isEnabled() and rows["work"].remove.isEnabled()  # outdated: both
-    assert rows["arch"].install is None and rows["arch"].remove is None  # no buttons
+    # a button only when one is needed: Install, or Repair for outdated hooks
+    assert rows["personal"].install is None
+    assert rows["fresh"].install.text() == "Install" and rows["fresh"].install.isEnabled()
+    assert rows["broken"].install.text() == "Install"
+    assert rows["work"].install.text() == "Repair" and rows["work"].install.isEnabled()
+    assert rows["arch"].install is None
+    # Remove hooks only follows REMOVE_STATES
+    enabled = {n: action(r, "Remove hooks only").isEnabled() for n, r in rows.items()}
+    assert enabled == {"personal": True, "work": True, "fresh": False, "broken": False,
+                       "arch": False}
+    assert rows["personal"].more.text() == "⋯"
     assert any("settings.json is not valid JSON" in t for t in labels(tab.table))
     assert fake_status and all(call[2] is not MAIN for call in fake_status)
 
@@ -782,7 +218,9 @@ def test_a_keychain_only_row_is_read_only(make_world, fake_status):
     tab._render()
     (row,) = tab.rows
     assert row.pill.text() == "Read-only"
-    assert row.install is None and row.remove is None
+    assert row.install is None
+    assert not action(row, "Remove hooks only").isEnabled()
+    assert not action(row, "Remove account…").isEnabled()
     assert "macOS Keychain (no config directory)" in labels(tab.table)
 
 
@@ -806,7 +244,7 @@ def test_checking_pills_while_a_query_is_pending(make_world, monkeypatch, fake_s
                         lambda *a, **k: (gate.wait(5), STATUSES["/c/personal"])[1])
     tab.refresh()
     assert {r.pill.text() for r in tab.rows} == {"Checking…"}
-    assert not any(r.install.isEnabled() or r.remove.isEnabled() for r in tab.rows)
+    assert not any(action(r, "Remove hooks only").isEnabled() for r in tab.rows)
     gate.set()
     assert pump(tab_settled(tab))
     assert tab.rows[0].pill.text() == "Installed"
@@ -820,14 +258,14 @@ def test_hook_buttons_are_disabled_while_the_guard_is_held(make_world, fake_stat
         _window, tab = open_tab(world)
         assert pump(tab_settled(tab))
         row = tab.rows[0]
-        assert not row.remove.isEnabled() and not row.install.isEnabled()
+        assert not action(row, "Remove hooks only").isEnabled()
         assert qsa.BUSY_MESSAGE in labels(tab.banner_holder)
         tab._start_op(row.data, "uninstall")  # ignored while locked
         assert tab._op_row is None
     finally:
         hook_guard.release(token)
     # the poll notices the release and re-enables the buttons by itself
-    assert pump(lambda: tab.rows and tab.rows[0].remove.isEnabled())
+    assert pump(lambda: tab.rows and action(tab.rows[0], "Remove hooks only").isEnabled())
     assert labels(tab.banner_holder) == []
 
 
@@ -852,7 +290,21 @@ def test_install_and_remove_run_under_the_guard_off_thread_then_requery(
     assert ops == [("/c/none", "claude", "install", ops[0][3], True)]
     assert ops[0][3] is not MAIN
     assert not hook_guard.held(world.state_dir)
-    assert tab.rows[0].remove.isEnabled()
+    assert action(tab.rows[0], "Remove hooks only").isEnabled()
+
+
+def test_remove_hooks_only_runs_the_uninstall_op(make_world, monkeypatch, fake_status):
+    world = make_world(1)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    ops = []
+    monkeypatch.setattr(accounts_rows, "apply_hook_operation",
+                        lambda sd, d, p, op: ops.append((d, op)) or HookOperationResult(True, "ok"))
+    _window, tab = open_tab(world)
+    assert pump(tab_settled(tab))
+    action(tab.rows[0], "Remove hooks only").trigger()
+    assert pump(lambda: ops and tab_settled(tab)())
+    assert ops == [("/c/personal", "uninstall")]
+    assert load_accounts_result(world.state_dir).accounts  # the account stays
 
 
 def test_an_op_for_an_account_removed_meanwhile_does_not_run(make_world, monkeypatch, fake_status):
@@ -937,55 +389,6 @@ def test_pill_spec_and_render_pill_are_reusable(make_world):
     assert (pill.text(), pill.property("tone")) == ("Installed", "good")
 
 
-def test_manage_accounts_is_hidden_without_an_opener(make_world, fake_status):
-    world = make_world(1)
-    _window, tab = open_tab(world)
-    assert tab.manage_button is None
-
-
-def test_closing_the_manager_rebuilds_the_tab_rows(make_world, retries, dialogs, fake_status):
-    world = make_world(2)
-    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"), ("work", "/c/work", "codex"))
-    world.host.on_open_accounts = lambda: qa.AccountsManager.open(
-        world.state_dir, [], host=world.host)
-    _window, tab = open_tab(world)
-    assert pump(tab_settled(tab))
-    assert list(by_name(tab)) == ["personal", "work"]
-    tab.manage_button.click()
-    manager = qa.current()
-    assert manager is not None and tab._on_manager_closed in manager.closed
-    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
-    pump(lambda: False, 300)
-    assert list(by_name(tab)) == ["personal", "work"]  # still open: no rebuild
-    manager.close()
-    assert pump(lambda: list(by_name(tab)) == ["personal"] and tab_settled(tab)())
-
-
-def test_an_account_removed_in_the_manager_leaves_the_tab(
-        make_world, retries, dialogs, monkeypatch, fake_status):
-    world = make_world(2)
-    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"), ("work", "/c/work", "codex"))
-
-    def fake_remove(state_dir, accounts, op, config_dir, provider="claude"):
-        save_accounts(state_dir, [Account(name=a.name, config_dir=a.config_dir, provider=a.provider)
-                                  for a in accounts])
-        return ok_result()
-
-    monkeypatch.setattr(accounts_logic, "apply_account_mutation", fake_remove)
-    world.host.on_open_accounts = lambda: qa.AccountsManager.open(
-        world.state_dir, [], host=world.host)
-    _window, tab = open_tab(world)
-    assert pump(tab_settled(tab))
-    tab.manage_button.click()
-    manager = qa.current()
-    assert pump(settled(manager))
-    next(b for b in buttons(manager, "Remove")).click()
-    assert pump(settled(manager))
-    assert list(by_name(tab)) == ["personal", "work"]  # not until the manager closes
-    manager.close()
-    assert pump(lambda: len(by_name(tab)) == 1 and tab_settled(tab)())
-
-
 def test_results_after_the_window_closes_are_ignored(make_world, monkeypatch):
     world = make_world(1)
     write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
@@ -1017,105 +420,508 @@ def test_refresh_from_another_tab_does_not_query(make_world, fake_status):
     assert window.tabs["accounts"].snapshot is None
 
 
-def test_a_closed_tab_stops_watching_the_manager(make_world, retries, dialogs, fake_status):
-    world = make_world(1)
-    world.host.on_open_accounts = lambda: qa.AccountsManager.open(
-        world.state_dir, [], host=world.host)
+# ---- the merged page: layout, menu, rename ---------------------------------------------
+
+def open_ready(world, fake_status=None):
     window, tab = open_tab(world)
-    tab.manage_button.click()
-    manager = qa.current()
-    window.close()
-    assert tab._on_manager_closed not in manager.closed
+    assert pump(tab_settled(tab))
+    return window, tab
 
 
-def three_accounts(state_dir):
-    write_accounts(state_dir, *[(n, str(state_dir / n), "claude") for n in ("acct-a", "acct-b", "acct-c")])
+def key_units(world, *names):
+    """Key the fake units by account slug, as build_units does for real accounts."""
+    for unit, name in zip(world.units, names):
+        world.store[name] = world.store.pop(unit["key"])
+        unit["key"] = name
 
 
-def arrows(manager, glyph):
-    return buttons(manager, glyph)
+@pytest.fixture
+def accounts_changes(make_world):
+    """Counts host.accounts_changed() calls without a #166 rebuild behind it."""
+    def watch(world):
+        calls = []
+        world.host.on_accounts_changed = lambda: calls.append(load_accounts_result(world.state_dir))
+        return calls
+    return watch
 
 
-def test_move_buttons_are_disabled_at_the_ends(make_world, retries, dialogs, mutations):
+def test_the_page_has_one_row_per_account_and_no_manage_button_or_restart_note(
+        make_world, fake_status):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"), ("work", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    text = labels(tab.frame)
+    assert "Each account is one cat on the card." in text
+    assert "Add an account" in text and "Somewhere else" in text
+    assert [r.label for r in tab.rows] == ["Cat 1", "Cat 2"]  # never the raw slug
+    assert any(t.strip() == "Claude Code" for t in text) and any(t.strip() == "Codex" for t in text)
+    assert buttons(tab.frame, "Manage accounts…") == []
+    assert not any("restart" in t.lower() for t in text)
+    assert set(tab.provider_picker.items) == {"claude", "codex"}
+    assert tab.provider_picker.get() == "claude"
+
+
+def test_the_menu_carries_the_account_actions_with_end_rules(make_world, fake_status):
     world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    assert [b.isEnabled() for b in arrows(manager, "↑")] == [False, True, True]
-    assert [b.isEnabled() for b in arrows(manager, "↓")] == [True, True, False]
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"), ("work", "/c/work", "codex"),
+                   ("fresh", "/c/none", "claude"))
+    _window, tab = open_ready(world)
+    first, middle, last = tab.rows
+    assert list(first.menu_actions) == ["Rename…", "Move up", "Move down", "Remove hooks only",
+                                        "Remove account…"]
+    assert [a.text() for a in first.menu.actions() if a.text()] == list(first.menu_actions)
+    assert [a for a in first.menu.actions() if a.isSeparator()]
+    assert not action(first, "Move up").isEnabled() and action(first, "Move down").isEnabled()
+    assert action(middle, "Move up").isEnabled() and action(middle, "Move down").isEnabled()
+    assert action(last, "Move up").isEnabled() and not action(last, "Move down").isEnabled()
+    assert action(first, "Remove hooks only").isEnabled()  # installed
+    assert not action(last, "Remove hooks only").isEnabled()  # not installed
+    assert all(action(r, "Remove account…").isEnabled() for r in tab.rows)
+    assert all(action(r, "Rename…").isEnabled() for r in tab.rows)
 
 
-def test_no_move_buttons_with_a_single_account(make_world, retries, dialogs, mutations):
+def test_the_only_account_cannot_be_removed(make_world, fake_status, dialogs, mutations):
     world = make_world(1)
-    write_accounts(world.state_dir, ("acct-a", str(world.state_dir / "a"), "claude"))
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    assert arrows(manager, "↑") == [] and arrows(manager, "↓") == []
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    _window, tab = open_ready(world)
+    remove = action(tab.rows[0], "Remove account…")
+    assert not remove.isEnabled() and "at least one account" in remove.toolTip()
+    tab._remove_account("personal", "/c/personal", "claude")  # even if called directly
+    assert mutations.calls == []
 
 
-def test_move_buttons_are_disabled_while_busy(make_world, retries, dialogs, mutations):
-    world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    # the startup retry is still in flight
-    assert not any(b.isEnabled() for b in arrows(manager, "↑") + arrows(manager, "↓"))
-    assert pump(settled(manager))
+def test_rename_updates_the_running_pane_through_the_look_tab_seam(make_world, fake_status, dialogs):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    key_units(world, "acct-a", "acct-b")
+    window, tab = open_ready(world)
+    dialogs.answers.append(("Mochi", True))
+    action(tab.rows[1], "Rename…").trigger()
+
+    parent, title, label, current = dialogs.prompts[0]
+    assert parent is window and (title, label) == ("Rename", "Cat name:")
+    # pane i is accounts.json's i-th account, and the pane follows live
+    assert world.host.pane_name(1)[0] == "Mochi" and world.host.pane_name(0)[0] == ""
+    assert world.widget.panes[1]._label.endswith("Mochi")
+    assert pump(lambda: [r.label for r in tab.rows] == ["Cat 1", "Mochi"] and tab_settled(tab)())
+
+    dialogs.answers.append(("Nope", False))  # cancelled
+    action(tab.rows[1], "Rename…").trigger()
+    assert world.host.pane_name(1)[0] == "Mochi"
+    assert dialogs.prompts[1][3] == "Mochi"  # the dialog starts from the current name
+
+
+def test_rename_is_disabled_while_a_change_is_in_flight(make_world, fake_status, dialogs, mutations,
+                                                        monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    assert all(action(r, "Rename…").isEnabled() for r in tab.rows)
     mutations.gate = threading.Event()
-    arrows(manager, "↓")[0].click()
-    assert manager._mutation_in_flight
-    assert not any(b.isEnabled() for b in arrows(manager, "↑") + arrows(manager, "↓"))
+    action(tab.rows[0], "Move down").trigger()
+    assert not any(action(r, "Rename…").isEnabled() for r in tab.rows)
     mutations.gate.set()
-    assert pump(settled(manager))
-    assert arrows(manager, "↓")[0].isEnabled()
+    assert pump(tab_settled(tab))
 
 
-def test_move_runs_the_move_op_off_thread_with_the_new_order(make_world, retries, dialogs, mutations):
+def test_the_look_tab_name_entry_shows_a_rename_made_here(make_world, fake_status, dialogs):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    key_units(world, "acct-a", "acct-b")
+    window, tab = open_ready(world)
+    dialogs.answers.append(("Mochi", True))
+    action(tab.rows[0], "Rename…").trigger()
+    window.set_pane(0)
+    assert window.tabs["look"].name_entry.text() == "Mochi"
+
+
+# ---- remove ------------------------------------------------------------------------------
+
+def test_remove_account_confirms_first_and_cancel_changes_nothing(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    asked = []
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: asked.append(a) or False)
+    action(tab.rows[1], "Remove account…").trigger()
+    assert asked == [("Cat 2", "Codex", "/c/work")]
+    pump(lambda: False, 200)
+    assert mutations.calls == [] and len(load_accounts_result(world.state_dir).accounts) == 2
+
+
+def test_the_confirmation_names_the_cat_the_path_and_defaults_to_cancel(
+        make_world, fake_status, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    seen = {}
+
+    def fake_exec(box):
+        seen["title"], seen["text"] = box.windowTitle(), box.text()
+        seen["buttons"] = [b.text() for b in box.buttons()]
+        seen["default"] = box.defaultButton().text()
+        seen["parent"] = box.parent()
+        box._remove = next(b for b in box.buttons() if b.text() == "Remove account")
+
+    monkeypatch.setattr(qsa.QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(qsa.QMessageBox, "clickedButton", lambda box: box._remove)
+    assert tab._confirm_remove("sys", "Claude Code", "/c/work") is True
+    assert seen["title"] == "Remove sys?" and seen["parent"] is tab.owner
+    assert seen["text"] == ("Its cat leaves the card and Tokitty removes its hooks from /c/work. "
+                            "Your Claude Code login, history and settings stay. You can add it "
+                            "back from Add an account.")
+    assert seen["buttons"] == ["Cancel", "Remove account"] and seen["default"] == "Cancel"
+
+
+def test_remove_runs_the_mutation_off_thread_under_the_guard_then_rebuilds(
+        make_world, fake_status, dialogs, mutations, monkeypatch, accounts_changes):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    changes = accounts_changes(world)
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.gate = threading.Event()
+    action(tab.rows[1], "Remove account…").trigger()
+
+    assert tab._mutating and tab.close_blocked()
+    assert not any(a.isEnabled() for r in tab.rows for a in r.menu_actions.values()
+                   if a.text() != "Rename…")
+    assert not tab.choose_button.isEnabled()
+    mutations.gate.set()
+    assert pump(lambda: tab_settled(tab)() and changes)
+    (call,) = mutations.calls
+    assert (call.op, call.provider, call.names) == ("remove", "codex", ["acct-a"])
+    assert call.thread is not MAIN and call.guarded
+    assert not hook_guard.held(world.state_dir) and not tab.close_blocked()
+    assert dialogs.boxes == [] and tab.banner is None
+    assert len(changes) == 1
+
+
+def test_a_stale_remove_row_is_refreshed_instead_of_acted_on(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
     world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    arrows(manager, "↑")[2].click()
-    assert pump(settled(manager))
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-c", "/c/none", "claude"))
+    action(tab.rows[1], "Remove account…").trigger()
+    assert pump(lambda: len(tab.rows) == 2 and tab_settled(tab)())
+    assert mutations.calls == []
+
+
+def test_a_failed_mutation_is_reported_in_a_banner(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.outcome = SimpleNamespace(ok=False, message="hook install failed", warning=None, note=None)
+    action(tab.rows[0], "Remove account…").trigger()
+    assert pump(lambda: tab.banner is not None and tab_settled(tab)())
+    assert tab.banner[0] == "blocked" and "hook install failed" in tab.banner[1]
+    assert tab.banner[2] == "/c/personal" and tab.finish_button is not None  # Finish it retries
+    assert dialogs.boxes == []
+
+
+def test_a_pending_hook_change_holds_the_next_account_change_until_finished(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(3)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.outcome = SimpleNamespace(ok=False, message="hook install failed", warning=None, note=None)
+    # a failed mutation leaves its pending-op record, as apply_account_mutation does
+    pending = {"op": "uninstall", "config_dir": "/c/personal", "provider": "claude"}
+    monkeypatch.setattr(qsa, "load_pending_hook_op", lambda sd: pending)
+    action(tab.rows[2], "Move up").trigger()
+    assert tab.banner[0] == "blocked" and tab.banner[2] == "/c/personal"
+    assert mutations.calls == []
+    monkeypatch.setattr(qsa, "load_pending_hook_op", lambda sd: None)
+    action(tab.rows[2], "Move up").trigger()
+    assert pump(lambda: mutations.calls and tab_settled(tab)())
+
+
+def test_a_raising_mutation_is_reported_and_frees_the_guard(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.outcome = RuntimeError("boom")
+    action(tab.rows[0], "Remove account…").trigger()
+    assert pump(lambda: tab.banner is not None and tab_settled(tab)())
+    assert tab.banner[0] == "blocked" and "boom" in tab.banner[1]
+    assert not hook_guard.held(world.state_dir)
+
+
+def test_a_warning_and_a_note_share_one_banner(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.outcome = SimpleNamespace(ok=True, message="done", warning="partly done",
+                                        note="waiting for approval in Codex")
+    action(tab.rows[0], "Remove account…").trigger()
+    assert pump(lambda: tab.banner is not None and tab_settled(tab)())
+    assert tab.banner == ("warn", "partly done waiting for approval in Codex", None)
+
+
+def test_a_mutation_is_refused_while_the_guard_is_held_elsewhere(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    token = hook_guard.try_acquire(world.state_dir, "elsewhere")
+    try:
+        tab._on_remove(tab.rows[0])
+        tab._on_move("acct-a", "/c/personal", "claude", 1)
+        tab._on_choose_folder()
+        assert mutations.calls == [] and dialogs.folder_calls == []
+    finally:
+        hook_guard.release(token)
+
+
+# ---- move --------------------------------------------------------------------------------
+
+def test_move_runs_the_move_op_off_thread_with_the_new_order(
+        make_world, fake_status, dialogs, mutations, accounts_changes):
+    world = make_world(3)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    changes = accounts_changes(world)
+    _window, tab = open_ready(world)
+    action(tab.rows[2], "Move up").trigger()
+    assert pump(lambda: tab_settled(tab)() and changes)
     (call,) = mutations.calls
     assert call.op == "move" and call.names == ["acct-a", "acct-c", "acct-b"]
     assert call.thread is not MAIN and call.guarded
     assert dialogs.boxes == []
 
 
-def test_a_stale_move_row_changes_nothing(make_world, retries, dialogs, mutations):
+def test_a_stale_move_row_changes_nothing(make_world, fake_status, dialogs, mutations):
     world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    manager._on_move("acct-gone", str(world.state_dir / "x"), "claude", 1)
-    manager._on_move("acct-a", str(world.state_dir / "acct-a"), "claude", -1)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    _window, tab = open_ready(world)
+    tab._on_move("acct-gone", "/c/x", "claude", 1)
+    tab._on_move("acct-a", "/c/personal", "claude", -1)
+    assert pump(tab_settled(tab))
     assert mutations.calls == []
 
 
-def test_move_uses_the_order_on_disk_not_the_stale_row(make_world, retries, dialogs, mutations):
+def test_move_uses_the_order_on_disk_not_the_stale_row(make_world, fake_status, dialogs, mutations):
     world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
-    # another window reordered meanwhile: c is now first
-    write_accounts(world.state_dir, *[(n, str(world.state_dir / n), "claude")
-                                      for n in ("acct-c", "acct-a", "acct-b")])
-    manager._on_move("acct-a", str(world.state_dir / "acct-a"), "claude", 1)
-    assert pump(settled(manager))
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    _window, tab = open_ready(world)
+    write_accounts(world.state_dir, ("acct-c", "/c/none", "claude"), ("acct-a", "/c/personal", "claude"),
+                   ("acct-b", "/c/work", "codex"))
+    tab._on_move("acct-a", "/c/personal", "claude", 1)
+    assert pump(lambda: mutations.calls and tab_settled(tab)())
     assert mutations.calls[0].names == ["acct-c", "acct-b", "acct-a"]
 
 
-def test_a_failed_move_reports_the_save_and_leaves_no_pending_hook_failure(
-        make_world, retries, dialogs, mutations):
+def test_a_failed_move_reports_the_save(make_world, fake_status, dialogs, mutations):
     world = make_world(3)
-    three_accounts(world.state_dir)
-    manager = open_manager(world)
-    assert pump(settled(manager))
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"),
+                   ("acct-c", "/c/none", "claude"))
+    _window, tab = open_ready(world)
     mutations.outcome = OSError("disk full")
-    arrows(manager, "↓")[0].click()
-    assert pump(settled(manager))
-    kind, _parent, _title, body = dialogs.boxes[-1]
-    assert kind == "critical" and "Couldn't save the new order" in body and "disk full" in body
-    assert "hook" not in body
-    assert not manager._pending_hook_failure
-    assert arrows(manager, "↓")[0].isEnabled()
+    action(tab.rows[0], "Move down").trigger()
+    assert pump(lambda: tab.banner is not None and tab_settled(tab)())
+    assert tab.banner[0] == "bad"
+    assert "Couldn't save the new order" in tab.banner[1] and "disk full" in tab.banner[1]
+    assert "hook" not in tab.banner[1]
+
+
+# ---- add ---------------------------------------------------------------------------------
+
+def fake_validation(monkeypatch, config_dir, threads=None):
+    def validate(provider, raw, active):
+        if threads is not None:
+            threads.append(threading.current_thread())
+        return PathValidationResult(ok=True, config_dir=config_dir)
+
+    monkeypatch.setattr(qsa, "validate_account_path", validate)
+    monkeypatch.setattr(accounts_logic, "validate_account_path", validate)
+
+
+def found_tab(world, matches, monkeypatch, codex_home=None):
+    world.host.found_homes = lambda: matches
+    monkeypatch.setattr(qsa, "discover_local_codex_home", lambda accounts: codex_home)
+    return open_ready(world)
+
+
+def test_found_homes_list_the_harness_where_and_path_with_an_add_button(
+        make_world, fake_status, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = found_tab(
+        world, [("Ubuntu", "/home/u/.claude-alma/.credentials.json")], monkeypatch,
+        codex_home="C:\\Users\\u\\.codex")
+    text = labels(tab.found_box)
+    assert "Claude Code  ·  Ubuntu" in text and "Codex  ·  " + qsa._this_computer() in text
+    # a WSL home shows its in-distro path, not the UNC one it is added by
+    assert "/home/u/.claude-alma" in text and "C:\\Users\\u\\.codex" in text
+    assert [b.text() for _p, b in tab.found_rows] == ["Add", "Add"]
+    assert tab.add_header.hint.isVisibleTo(tab.frame)
+
+
+def test_no_found_homes_hides_the_hint_and_tolerates_a_missing_seam(
+        make_world, fake_status, monkeypatch):
+    world = make_world(1)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    world.host.found_homes = None
+    monkeypatch.setattr(qsa, "discover_local_codex_home", lambda accounts: None)
+    _window, tab = open_ready(world)
+    assert tab.found_rows == [] and not tab.add_header.hint.isVisibleTo(tab.frame)
+
+
+def test_a_found_home_that_is_already_an_account_is_filtered_at_render_time(
+        make_world, fake_status, monkeypatch):
+    world = make_world(1)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    matches = [("Ubuntu", "/home/u/.claude/.credentials.json")]
+    _window, tab = found_tab(world, matches, monkeypatch)
+    (path, _button), = tab.found_rows
+    # the discovery list is a startup snapshot: the account is added meanwhile
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"), ("u", path, "claude"))
+    tab._render()
+    assert tab.found_rows == []
+
+
+def test_adding_a_found_home_validates_saves_a_look_installs_and_rebuilds(
+        make_world, fake_status, dialogs, mutations, monkeypatch, accounts_changes):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    changes = accounts_changes(world)
+    _window, tab = found_tab(
+        world, [("Ubuntu", "/home/u/.claude-alma/.credentials.json")], monkeypatch)
+    (path, button), = tab.found_rows
+    fake_validation(monkeypatch, path)
+    button.click()
+    assert pump(lambda: mutations.calls and tab_settled(tab)() and changes)
+    (call,) = mutations.calls
+    assert call.op == "install" and call.config_dir == path and call.provider == "claude"
+    assert call.names[:2] == ["acct-a", "acct-b"] and len(call.names) == 3
+    assert call.names[2] in load_customization(world.state_dir)  # a look was saved for it
+
+
+def test_adding_the_local_codex_home_uses_the_codex_provider(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = found_tab(world, [], monkeypatch, codex_home="/home/u/.codex")
+    (path, button), = tab.found_rows
+    fake_validation(monkeypatch, path)
+    button.click()
+    assert pump(lambda: mutations.calls and tab_settled(tab)())
+    assert mutations.calls[0].provider == "codex" and mutations.calls[0].config_dir == path
+
+
+def test_somewhere_else_picks_a_folder_with_the_chosen_harness(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    new_dir = str(world.state_dir / "c")
+    fake_validation(monkeypatch, new_dir)
+    window, tab = open_ready(world)
+    tab.provider_picker.items["codex"].click()
+    dialogs.folders.append(new_dir)
+    tab.choose_button.click()
+    (parent, _caption, start), = dialogs.folder_calls
+    assert parent is window and start == str(Path.home())
+    assert pump(lambda: mutations.calls and tab_settled(tab)())
+    assert mutations.calls[0].provider == "codex" and mutations.calls[0].config_dir == new_dir
+
+
+def test_a_cancelled_or_invalid_pick_starts_nothing(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    tab.choose_button.click()  # cancelled: no folder
+    monkeypatch.setattr(qsa, "validate_account_path",
+                        lambda p, raw, a: PathValidationResult(ok=False, error="No credentials here."))
+    dialogs.folders.append("/nowhere")
+    tab.choose_button.click()
+    assert dialogs.boxes[-1][0] == "critical" and dialogs.boxes[-1][3] == "No credentials here."
+    assert mutations.calls == []
+
+
+def test_a_duplicate_directory_is_refused(make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    fake_validation(monkeypatch, "/c/personal")
+    _window, tab = open_ready(world)
+    dialogs.folders.append("/c/personal")
+    tab.choose_button.click()
+    assert dialogs.boxes[-1][3] == "This account is already added."
+    assert mutations.calls == []
+
+
+def test_a_malformed_accounts_file_refuses_an_add(make_world, fake_status, dialogs, mutations):
+    world = make_world(1)
+    (world.state_dir / "accounts.json").write_text("{not json", encoding="utf-8")
+    _window, tab = open_ready(world)
+    dialogs.folders.append("/c/x")
+    tab.choose_button.click()
+    assert dialogs.boxes[-1][0] == "critical" and "malformed" in dialogs.boxes[-1][3]
+    assert dialogs.folder_calls == [] and mutations.calls == []
+
+
+def test_a_codex_wsl_path_is_validated_off_the_gui_thread(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    unc = r"\\wsl.localhost\Ubuntu\home\u\.codex"
+    threads, gate = [], threading.Event()
+
+    def validate(provider, raw, active):
+        threads.append(threading.current_thread())
+        assert gate.wait(5)
+        return PathValidationResult(ok=True, config_dir=unc)
+
+    monkeypatch.setattr(accounts_logic, "validate_account_path", validate)
+    _window, tab = open_ready(world)
+    tab._add_path(unc, load_accounts_result(world.state_dir), "codex")
+
+    assert tab._validating
+    assert not tab.choose_button.isEnabled()
+    gate.set()
+    assert pump(lambda: mutations.calls)
+    assert threads and threads[0] is not MAIN
+    assert mutations.calls[0].config_dir == unc and mutations.calls[0].provider == "codex"
+
+
+def test_worker_callbacks_never_touch_the_gui(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    _window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    action(tab.rows[0], "Remove account…").trigger()
+    assert pump(tab_settled(tab))
+    assert all(t is MAIN for t in dialogs.threads)
+    assert mutations.calls[0].thread is not MAIN
+
+
+def test_the_window_stays_open_while_a_mutation_runs(
+        make_world, fake_status, dialogs, mutations, monkeypatch):
+    world = make_world(2)
+    write_accounts(world.state_dir, ("acct-a", "/c/personal", "claude"), ("acct-b", "/c/work", "codex"))
+    window, tab = open_ready(world)
+    monkeypatch.setattr(tab, "_confirm_remove", lambda *a: True)
+    mutations.gate = threading.Event()
+    action(tab.rows[0], "Remove account…").trigger()
+    window.close()
+    assert window.isVisible()
+    mutations.gate.set()
+    assert pump(tab_settled(tab))
+    window.close()
+    assert not window.isVisible()
