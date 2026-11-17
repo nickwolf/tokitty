@@ -22,7 +22,7 @@ pytestmark = pytest.mark.qt
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEAMS = ("update_available_label", "on_install_update", "on_check_updates",
-         "update_check_enabled", "on_toggle_update_check")
+         "update_check_enabled", "on_toggle_update_check", "update_beta_enabled", "on_toggle_update_beta")
 RELEASE = Release(tag="v9.0.0", html_url="https://example.invalid/r", asset_url=None,
                   asset_size=None, sums_url=None)
 
@@ -30,8 +30,9 @@ RELEASE = Release(tag="v9.0.0", html_url="https://example.invalid/r", asset_url=
 class FakeChecker:
     instances = []
 
-    def __init__(self, state_dir, running, *, enabled, on_available):
+    def __init__(self, state_dir, running, *, enabled, on_available, beta=None, skipped=None):
         self.enabled_fn, self.on_available = enabled, on_available
+        self.beta_fn, self.skipped_fn = beta, skipped
         self.label = None
         self.latest_release = None
         self.release_history = None
@@ -43,6 +44,12 @@ class FakeChecker:
     @property
     def enabled(self):
         return self.enabled_fn()
+
+    def is_skipped(self, release):
+        return False
+
+    def apply_skip(self):
+        pass
 
     def menu_label(self):
         return self.label

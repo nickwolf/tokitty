@@ -20,6 +20,7 @@ from tokitty.updater import (
     UpdateCheckError,
     fetch_releases,
     is_newer,
+    is_prerelease_tag,
     load_update_state,
     mutate_update_state,
     platform_target,
@@ -34,10 +35,11 @@ RETRY_INTERVAL = timedelta(hours=1)
 
 @dataclass(frozen=True)
 class CheckResult:
-    """`release` is the newest stable release (None if there is none) and
-    `newer` whether it is ahead of the running version. `history` is every
-    stable release, highest version first, so `release` is its first entry.
-    `error` is set, and nothing else, when the check failed."""
+    """`release` is the newest release the channel offers (None if there is
+    none) and `newer` whether it is ahead of the running version. `history` is
+    every such release, highest version first, so `release` is its first entry.
+    A prerelease counts only while beta builds are on. `error` is set, and
+    nothing else, when the check failed."""
 
     release: Optional[Release] = None
     newer: bool = False
@@ -56,6 +58,8 @@ class UpdateChecker:
         running: RunningVersion,
         *,
         enabled: Callable[[], bool] = lambda: True,
+        beta: Callable[[], bool] = lambda: False,
+        skipped: Callable[[], str] = lambda: "",
         on_available: Optional[Callable[[Release], None]] = None,
         fetch: Optional[Callable[[], list]] = None,
         target: Optional[str] = None,
@@ -64,6 +68,9 @@ class UpdateChecker:
         self._state_dir = state_dir
         self._running = running
         self._enabled = enabled
+        # Both are plain state, read from the worker thread and the tray's.
+        self._beta = beta
+        self._skipped = skipped
         self._on_available = on_available
         # Looked up at call time, so a test can replace the module's fetch.
         self._fetch = fetch or (lambda: fetch_releases())
@@ -82,8 +89,9 @@ class UpdateChecker:
         self._announced: Optional[str] = None
         state = load_update_state(state_dir)
         # A tag found on an earlier run shows in the menu straight away, with
-        # no Release behind it: clicking it checks again first.
-        if is_newer(state.latest_tag, running.version):
+        # no Release behind it: clicking it checks again first. Not one that
+        # is skipped, or a prerelease while beta builds are off.
+        if is_newer(state.latest_tag, running.version) and self._offered(state.latest_tag):
             self._available_tag = state.latest_tag
         self._due = self._first_due(state.last_checked)
 
@@ -99,6 +107,20 @@ class UpdateChecker:
         if age is None or age < timedelta(0) or age > STALE_AFTER:
             return now + FIRST_CHECK_DELAY
         return now + (CHECK_INTERVAL - age)
+
+    def _offered(self, tag: Optional[str]) -> bool:
+        return tag != self._skipped() and (self._beta() or not is_prerelease_tag(tag))
+
+    def is_skipped(self, release: Optional[Release]) -> bool:
+        """Whether this is the release the user chose to skip."""
+        return release is not None and release.tag == self._skipped()
+
+    def apply_skip(self) -> None:
+        """Re-read the skipped tag: the menu item goes if it was the skipped
+        release's, with no new check."""
+        with self._lock:
+            if self._available_tag is not None and not self._offered(self._available_tag):
+                self._available_tag = None
 
     @property
     def latest_release(self) -> Optional[Release]:
@@ -158,7 +180,7 @@ class UpdateChecker:
 
     def _worker(self) -> None:
         try:
-            history = tuple(select_releases(self._fetch(), self._target))
+            history = tuple(select_releases(self._fetch(), self._target, include_prereleases=self._beta()))
             release = history[0] if history else None
             newer = release is not None and is_newer(release.tag, self._running.version)
             result = CheckResult(release, newer, history=history)
@@ -187,7 +209,7 @@ class UpdateChecker:
     def _consume(self, result: CheckResult) -> None:
         if result.error is None:
             self._due = self._now() + CHECK_INTERVAL
-            release = result.release if result.newer else None
+            release = result.release if result.newer and not self.is_skipped(result.release) else None
             with self._lock:
                 self._latest = result.release
                 self._history = result.history

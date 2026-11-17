@@ -19,6 +19,7 @@ from tokitty.updater import (
     drop_owned,
     fetch_releases,
     is_newer,
+    is_prerelease_tag,
     load_update_state,
     mutate_update_state,
     parse_version,
@@ -70,12 +71,17 @@ def _fake_urlopen(body, seen=None):
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("v1.2.3", (1, 2, 3)),
-        ("v0.10.0", (0, 10, 0)),
+        ("v1.2.3", (1, 2, 3, (1,))),
+        ("v0.10.0", (0, 10, 0, (1,))),
         ("v1.2", None),
         ("1.2.3", None),
         ("v01.2.3", None),
-        ("v1.2.3-rc1", None),
+        ("v1.2.3-rc1", (1, 2, 3, (0, (1, 0, "rc1")))),
+        ("v1.1.0-beta.1", (1, 1, 0, (0, (1, 0, "beta"), (0, 1, "")))),
+        ("v1.2.3-", None),
+        ("v1.2.3-beta..1", None),
+        ("v1.2.3-01", None),
+        ("v1.2.3+build", None),
         ("v1.2.3\n", None),
         ("v1.2.3.4", None),
         ("v1.2.٣", None),
@@ -147,11 +153,77 @@ def test_select_latest_ignores_drafts_prereleases_and_bad_tags():
         _release("v2.0.0", draft=True),
         _release("v1.5.0", prerelease=True),
         _release("v1.4.0-rc1"),
+        _release("v1.6.0-beta.1"),
         _release("nightly"),
         "not a release",
         _release("v0.9.9"),
     ]
     assert select_latest(releases, TARGET).tag == "v0.9.9"
+
+
+def _tags(releases, **kwargs):
+    return [r.tag for r in select_releases(releases, TARGET, **kwargs)]
+
+
+BETA_LISTING = [
+    _release("v1.0.2"),
+    _release("v1.1.0-beta.2", prerelease=True),
+    _release("v1.1.0-beta.10", prerelease=True),
+    _release("v1.1.0-beta.1", prerelease=True),
+    _release("v1.1.0"),
+    _release("v1.2.0-rc1", prerelease=True),
+    _release("v1.3.0-beta.1", draft=True, prerelease=True),
+]
+
+
+def test_prereleases_are_left_out_unless_asked_for():
+    assert _tags(BETA_LISTING) == ["v1.1.0", "v1.0.2"]
+
+
+def test_beta_lists_prereleases_in_version_order():
+    assert _tags(BETA_LISTING, include_prereleases=True) == [
+        "v1.2.0-rc1", "v1.1.0", "v1.1.0-beta.10", "v1.1.0-beta.2", "v1.1.0-beta.1", "v1.0.2",
+    ]
+
+
+def test_a_prerelease_flag_hides_a_stable_looking_tag_unless_beta():
+    releases = [_release("v1.1.0", prerelease=True), _release("v1.0.2")]
+    assert _tags(releases) == ["v1.0.2"]
+    assert _tags(releases, include_prereleases=True) == ["v1.1.0", "v1.0.2"]
+
+
+def test_select_latest_with_beta_takes_the_newest_by_version():
+    assert select_latest(BETA_LISTING, TARGET, include_prereleases=True).tag == "v1.2.0-rc1"
+    assert select_latest([_release("v1.1.0-beta.1", prerelease=True), _release("v1.0.2")], TARGET,
+                         include_prereleases=True).tag == "v1.1.0-beta.1"
+
+
+@pytest.mark.parametrize(
+    ("tag", "running", "newer"),
+    [
+        ("v1.1.0", "v1.1.0-beta.1", True),
+        ("v1.1.0-beta.1", "v1.1.0", False),
+        ("v1.1.0-beta.2", "v1.1.0-beta.1", True),
+        ("v1.1.0-beta.10", "v1.1.0-beta.2", True),
+        ("v1.1.0-rc.1", "v1.1.0-beta.9", True),
+        ("v1.1.0-beta.1", "v1.1.0-beta", True),
+        ("v1.1.0-beta.1", "v1.0.2", True),
+        ("v1.0.2", "v1.1.0-beta.1", False),
+        ("v1.1.0-beta.1", "v1.1.0-beta.1", False),
+        ("v1.1.0-alpha", "v1.1.0-1", True),
+    ],
+)
+def test_is_newer_orders_prereleases_below_their_release(tag, running, newer):
+    assert is_newer(tag, running) is newer
+
+
+def test_is_prerelease_tag():
+    assert is_prerelease_tag("v1.1.0-beta.1") and not is_prerelease_tag("v1.1.0")
+    assert not is_prerelease_tag("nightly") and not is_prerelease_tag(None)
+
+
+def test_running_a_prerelease_build_can_install():
+    assert running_version(frozen=True, build_id="v1.1.0-beta.1") == updater.RunningVersion("v1.1.0-beta.1", True)
 
 
 def test_select_latest_reports_urls_and_size():

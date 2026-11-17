@@ -33,10 +33,17 @@ class FakeController:
 
 
 class FakeChecker:
-    def __init__(self, latest=None, available=False, history=None, enabled=False):
+    def __init__(self, latest=None, available=False, history=None, enabled=False, skipped=""):
         self.latest_release, self.update_available = latest, available
         self.release_history, self.enabled = history, enabled
+        self.skipped, self.applied = skipped, 0
         self.waiting = []
+
+    def is_skipped(self, release):
+        return release is not None and release.tag == self.skipped
+
+    def apply_skip(self):
+        self.applied += 1
 
     def check_now(self, on_result):
         self.waiting.append(on_result)
@@ -293,6 +300,7 @@ class Hooks:
     def __init__(self):
         self.deferred, self.errors, self.infos, self.offers = [], [], [], []
         self.changes = 0
+        self.skips = []
 
     def actions(self, checker, controller=None):
         return UpdateActions(
@@ -302,6 +310,7 @@ class Hooks:
             error=lambda title, text: self.errors.append((title, text)),
             info=lambda title, text: self.infos.append((title, text)),
             offer=self.offers.append,
+            skip=self.skips.append,
             changed=self._changed,
         )
 
@@ -415,7 +424,7 @@ def test_new_flow_asks_the_controller_once():
     hooks, controller = Hooks(), FakeController()
     render = Render()
     flow = hooks.actions(FakeChecker(), controller).new_flow(RELEASE, render)
-    assert flow.alive and render.labels() == CHOICES and controller.refusals == 1
+    assert flow.alive and render.labels() == CHOICES + ["Skip this version"] and controller.refusals == 1
 
 
 def test_status_carries_the_checkers_history():
@@ -467,3 +476,64 @@ def test_a_remembered_tag_still_checks_out_loud():
     checker.waiting[0](CheckResult(RELEASE, True))
     hooks.run_deferred()
     assert hooks.offers == [RELEASE]
+
+
+# --- skipping a version -------------------------------------------------------
+
+
+def test_the_flow_offers_skip_next_to_install_when_it_can_skip():
+    render, skipped = Render(), []
+    UpdateFlow(RELEASE, FakeController(), render, on_skip=skipped.append)
+    assert render.labels() == ["Install", "Skip this version"]
+
+
+def test_a_refused_release_can_still_be_skipped():
+    render = Render()
+    UpdateFlow(RELEASE, FakeController(reason="No download."), render, on_skip=lambda r: None)
+    assert render.labels() == ["Skip this version"] and render.note == "No download."
+
+
+def test_skip_records_the_release_and_drops_the_button():
+    render, skipped = Render(), []
+    UpdateFlow(RELEASE, FakeController(), render, on_skip=skipped.append)
+    render.invoke("Skip this version")
+    assert skipped == [RELEASE]
+    assert render.labels() == ["Install"] and render.note.startswith("Skipped v0.3.0.")
+
+
+def test_an_already_skipped_release_offers_install_only():
+    render = Render()
+    UpdateFlow(RELEASE, FakeController(), render, on_skip=lambda r: None, skipped=True)
+    assert render.labels() == ["Install"]
+
+
+def test_actions_skip_persists_the_tag_and_updates_the_checker():
+    hooks, checker = Hooks(), FakeChecker(latest=RELEASE, available=True)
+    actions = hooks.actions(checker)
+    render = Render()
+    actions.new_flow(RELEASE, render)
+    render.invoke("Skip this version")
+    assert hooks.skips == ["v0.3.0"] and checker.applied == 1 and hooks.changes == 1
+
+
+def test_status_names_a_skipped_newer_release():
+    hooks, checker = Hooks(), FakeChecker(latest=RELEASE, available=False, skipped="v0.3.0")
+    status = hooks.actions(checker).status()
+    assert status.release is None and status.skipped == RELEASE
+    assert status.headline == "Tokitty v0.2.0 is installed.\nv0.3.0 is available, but you skipped it."
+
+
+def test_a_skipped_release_that_is_not_newer_is_not_reported():
+    old = Release("v0.1.0", None, None, None, None)
+    hooks, checker = Hooks(), FakeChecker(latest=old, available=False, skipped="v0.1.0")
+    assert hooks.actions(checker).status().skipped is None
+
+
+def test_a_manual_check_still_offers_a_skipped_release():
+    hooks, checker = Hooks(), FakeChecker(latest=RELEASE, skipped="v0.3.0")
+    actions = hooks.actions(checker)
+    actions.check_now()
+    checker.waiting[0](CheckResult(RELEASE, True))
+    hooks.run_deferred()
+    assert hooks.offers == [RELEASE]
+    assert actions.new_flow(RELEASE, Render()) is not None

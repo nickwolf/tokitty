@@ -47,6 +47,8 @@ class QtHost:
         self.tray_available: Optional[Callable[[], bool]] = None
         self.update_check_enabled = None
         self.on_toggle_update_check = None
+        self.update_beta_enabled = None
+        self.on_toggle_update_beta = None
         self.on_check_updates = None
         self.update_available_label = None
         self.on_install_update = None

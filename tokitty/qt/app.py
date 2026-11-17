@@ -436,15 +436,28 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         updates = update_controller.UpdateController(state_dir, update_host)
 
         # Plain-Python shadow state again, as in run_gui.
-        update_check_state = {"on": settings.update_check}
+        update_check_state = {
+            "on": settings.update_check, "beta": settings.update_beta, "skipped": settings.update_skipped_tag,
+        }
         checker = UpdateChecker(
             state_dir, updates.running, enabled=lambda: update_check_state["on"],
+            beta=lambda: update_check_state["beta"], skipped=lambda: update_check_state["skipped"],
             on_available=announcer(state_dir, AnnouncerTray(host, tray)),
         )
 
         def toggle_update_check() -> None:
             update_check_state["on"] = not update_check_state["on"]
             update_settings(state_dir, update_check=update_check_state["on"])
+
+        def toggle_update_beta() -> None:
+            update_check_state["beta"] = not update_check_state["beta"]
+            update_settings(state_dir, update_beta=update_check_state["beta"])
+            # The channel changed what is on offer: look again, quietly.
+            update_actions.check_now(quiet=True)
+
+        def skip_update(tag: str) -> None:
+            update_check_state["skipped"] = tag
+            update_settings(state_dir, update_skipped_tag=tag)
 
         def update_box(show_box):
             return lambda title, text: show_box(host.dialog_parent(), title, text)
@@ -457,6 +470,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             error=update_box(QMessageBox.critical),
             info=update_box(QMessageBox.information),
             offer=lambda release: SettingsWindow.open(host, tab="updates"),
+            skip=skip_update,
             changed=host.notify_state_changed,
         )
         host.update_actions = update_actions
@@ -465,6 +479,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         host.on_check_updates = update_actions.check_now
         host.update_check_enabled = lambda: update_check_state["on"]
         host.on_toggle_update_check = toggle_update_check
+        host.update_beta_enabled = lambda: update_check_state["beta"]
+        host.on_toggle_update_beta = toggle_update_beta
         apply_exit = {"code": 1}
         widget.restore_position()
         def account_name(index: int) -> str:

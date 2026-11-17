@@ -25,10 +25,10 @@ class Clock:
         self.now += timedelta(**kwargs)
 
 
-def listing(tag):
+def listing(tag, prerelease=False):
     name = f"tokitty-{tag}-linux-x86_64.tar.gz"
     return [{
-        "tag_name": tag, "draft": False, "prerelease": False, "html_url": f"https://example.test/{tag}",
+        "tag_name": tag, "draft": False, "prerelease": prerelease, "html_url": f"https://example.test/{tag}",
         "assets": [
             {"name": name, "browser_download_url": f"https://example.test/{name}", "size": 10},
             {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"},
@@ -39,7 +39,8 @@ def listing(tag):
 class Fetch:
     """A fake releases list that records its callers and can be held open."""
 
-    def __init__(self, tag="v0.3.0", error=None):
+    def __init__(self, tag="v0.3.0", error=None, extra=()):
+        self.extra = list(extra)
         self.tag, self.error, self.calls, self.threads = tag, error, 0, []
         self.gate = threading.Event()
         self.gate.set()
@@ -50,7 +51,7 @@ class Fetch:
         assert self.gate.wait(5)
         if self.error:
             raise self.error
-        return listing(self.tag)
+        return listing(self.tag) + self.extra
 
 
 def make(tmp_path, clock=None, fetch=None, **kwargs):
@@ -348,3 +349,81 @@ def test_announcer_leaves_notified_tag_unset_when_the_tray_could_not_notify(tmp_
     announcer(tmp_path, tray)(RELEASE)
     assert load_update_state(tmp_path).notified_tag is None
     tray.refresh.assert_called_once_with()
+
+
+BETA = listing("v0.4.0-beta.1", prerelease=True)
+
+
+def test_a_prerelease_is_not_offered_with_beta_off(tmp_path):
+    checker, clock, fetch = make(tmp_path, fetch=Fetch(extra=BETA))
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.latest_release.tag == "v0.3.0"
+    assert checker.menu_label() == "Update to v0.3.0…"
+
+
+def test_beta_on_offers_the_newest_prerelease(tmp_path):
+    checker, clock, fetch = make(tmp_path, fetch=Fetch(extra=BETA), beta=lambda: True)
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() == "Update to v0.4.0-beta.1…"
+    assert [r.tag for r in checker.release_history] == ["v0.4.0-beta.1", "v0.3.0"]
+
+
+def test_beta_on_still_offers_a_stable_release_over_its_own_prerelease(tmp_path):
+    checker, clock, _ = make(tmp_path, fetch=Fetch(tag="v0.4.0", extra=BETA), beta=lambda: True)
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() == "Update to v0.4.0…"
+
+
+def test_no_downgrade_offer_when_beta_is_off_on_a_prerelease_build(tmp_path):
+    running = RunningVersion("v0.4.0-beta.1", True)
+    clock, fetch = Clock(), Fetch(tag="v0.3.0")
+    checker = UpdateChecker(tmp_path, running, fetch=fetch, now=clock, target="linux-x86_64")
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() is None and not checker.update_available
+
+
+def test_a_remembered_prerelease_tag_is_dropped_when_beta_is_off(tmp_path):
+    save_update_state(tmp_path, UpdateState(latest_tag="v0.4.0-beta.1"))
+    off, _, _ = make(tmp_path)
+    on, _, _ = make(tmp_path, beta=lambda: True)
+    assert off.menu_label() is None
+    assert on.menu_label() == "Update to v0.4.0-beta.1…"
+
+
+def test_a_skipped_release_is_not_offered_or_announced(tmp_path):
+    announced = []
+    checker, clock, _ = make(tmp_path, skipped=lambda: "v0.3.0", on_available=announced.append)
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() is None and not checker.update_available
+    assert announced == []
+    # The release is still known, for the tab and a manual check.
+    assert checker.latest_release.tag == "v0.3.0" and checker.is_skipped(checker.latest_release)
+
+
+def test_a_remembered_skipped_tag_is_not_in_the_menu(tmp_path):
+    save_update_state(tmp_path, UpdateState(latest_tag="v0.3.0"))
+    checker, _, _ = make(tmp_path, skipped=lambda: "v0.3.0")
+    assert checker.menu_label() is None
+
+
+def test_a_newer_release_than_the_skipped_one_is_offered(tmp_path):
+    checker, clock, _ = make(tmp_path, fetch=Fetch(tag="v0.3.1"), skipped=lambda: "v0.3.0")
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() == "Update to v0.3.1…"
+
+
+def test_apply_skip_clears_the_menu_item_without_a_new_check(tmp_path):
+    skipped = {"tag": ""}
+    checker, clock, fetch = make(tmp_path, skipped=lambda: skipped["tag"])
+    clock.advance(seconds=60)
+    settle(checker)
+    assert checker.menu_label() == "Update to v0.3.0…"
+    skipped["tag"] = "v0.3.0"
+    checker.apply_skip()
+    assert checker.menu_label() is None and fetch.calls == 1

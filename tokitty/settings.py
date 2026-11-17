@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from tokitty.transparency import DEFAULT_LEVEL, LEVELS
+from tokitty.updater import parse_version
 from tokitty.usage_scan import DEFAULT_WINDOW, WINDOWS
 
 SETTINGS_FILENAME = "settings.json"
@@ -44,6 +45,10 @@ class Settings:
     tray_enabled: bool = True
     surprise_me: bool = False
     update_check: bool = True
+    # Offer prereleases too, and the tag of the one release the user chose not
+    # to be offered ("" for none). The skip holds only for that exact tag.
+    update_beta: bool = False
+    update_skipped_tag: str = ""
     opacity: int = DEFAULT_LEVEL
     view_mode: str = DEFAULT_VIEW_MODE
     usage_window: str = DEFAULT_WINDOW
@@ -100,6 +105,11 @@ def load_settings(state_dir) -> Settings:
     update_check = data.get("update_check", True)
     if not isinstance(update_check, bool):
         update_check = True
+    update_beta = data.get("update_beta", False)
+    if not isinstance(update_beta, bool):
+        update_beta = False
+    skipped = data.get("update_skipped_tag", "")
+    update_skipped_tag = skipped if parse_version(skipped) is not None else ""
     opacity = data.get("opacity", DEFAULT_LEVEL)
     if isinstance(opacity, bool) or opacity not in LEVELS:
         opacity = DEFAULT_LEVEL
@@ -113,6 +123,8 @@ def load_settings(state_dir) -> Settings:
         tray_enabled=tray_enabled,
         surprise_me=surprise_me,
         update_check=update_check,
+        update_beta=update_beta,
+        update_skipped_tag=update_skipped_tag,
         opacity=opacity,
         view_mode=_one_of(data.get("view_mode"), VIEW_MODES, DEFAULT_VIEW_MODE),
         usage_window=_one_of(data.get("usage_window"), WINDOWS, DEFAULT_WINDOW),
