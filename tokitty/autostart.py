@@ -167,6 +167,9 @@ class WindowsRegistryBackend:
     def deregister(self) -> None:
         self._registry.delete_value()
 
+    def location(self) -> str:
+        return f"HKCU\\{WINDOWS_KEY_PATH}\\{WINDOWS_VALUE_NAME}"
+
     def is_registered(self) -> bool:
         return self._registry.read_value() is not None
 
@@ -204,6 +207,9 @@ class MacLaunchAgentBackend:
             self._path().unlink()
         except FileNotFoundError:
             pass
+
+    def location(self) -> str:
+        return str(self._path())
 
     def is_registered(self) -> bool:
         return self._path().is_file()
@@ -277,6 +283,9 @@ class LinuxDesktopEntryBackend:
             self._path().unlink()
         except FileNotFoundError:
             pass
+
+    def location(self) -> str:
+        return str(self._path())
 
     def is_registered(self) -> bool:
         return self._path().is_file()

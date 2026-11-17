@@ -17,11 +17,12 @@ import PySide6
 from PySide6.QtCore import Qt, qVersion
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QColorDialog, QFileDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QWidget,
+    QCheckBox, QColorDialog, QFileDialog, QFrame, QHBoxLayout, QLineEdit, QMessageBox,
+    QScrollArea, QWidget,
 )
 
 from tokitty.qt import macos
-from tokitty import diagnostics, sprites, theme as T
+from tokitty import diagnostics, sprites, theme as T, uninstall
 from tokitty.app_version import version_text
 from tokitty.behaviour import PERSONALITIES
 from tokitty.display import PROVIDER_SEPARATOR, bar_color
@@ -84,6 +85,38 @@ DIAGNOSTICS_HINT = "For bug reports. Names, paths and tokens are left out."
 def _copy_text(value: str) -> None:
     """Put text on the system clipboard. The one clipboard write; tests patch it."""
     QGuiApplication.clipboard().setText(value)
+
+
+REMOVE_HINT = "Takes out the hooks, plugin and login entry, then quits."
+PURGE_LABEL = "Also delete my settings (accounts, looks, theme)"
+
+
+def _ask_removal(parent, plan) -> Optional[bool]:
+    """List what Remove Tokitty will do and ask. The choice to also delete the
+    settings, or None when cancelled. The one confirmation; tests patch it."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Remove Tokitty")
+    box.setText("\n".join(uninstall.format_plan(plan)))
+    box.setInformativeText(f"Your settings are kept in {plan.state_dir}.")
+    purge = QCheckBox(PURGE_LABEL)
+    box.setCheckBox(purge)
+    remove = box.addButton("Remove and quit", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(cancel)
+    box.exec()
+    return purge.isChecked() if box.clickedButton() is remove else None
+
+
+def _show_removal_result(parent, outcomes) -> None:
+    """Report each item, then the caller quits. The one result box; tests patch it."""
+    lines = uninstall.format_outcomes(outcomes)
+    if all(o.ok for o in outcomes):
+        QMessageBox.information(
+            parent, "Remove Tokitty",
+            "Tokitty was removed. Restart any open Claude Code and Codex sessions.")
+    else:
+        QMessageBox.warning(parent, "Remove Tokitty", "Some items could not be removed:\n" + "\n".join(lines))
 
 
 def _screen_facts() -> List[Tuple[int, int, float]]:
@@ -212,6 +245,53 @@ class GeneralTab(_Tab):
             add("surprise", "Surprise me", "New random cat look at every launch",
                 lambda _v: self.write(host.on_toggle_surprise))
         self._build_diagnostics()
+        self._build_remove()
+
+    def _build_remove(self) -> None:
+        self.remove_mailbox = Mailbox()
+        self._remove_pending = False
+        self.remove_poller = QtPoller(self.owner, self.remove_mailbox, self._on_remove_result,
+                                      lambda: self._remove_pending)
+        row, layout = _hrow()
+        row.setContentsMargins(0, 10, 0, 0)
+        self.remove_button = self.kit.button(
+            "Remove Tokitty from this computer…", "danger", self._remove, compact=True)
+        layout.addWidget(self.remove_button)
+        layout.addSpacing(10)
+        layout.addWidget(text(REMOVE_HINT, color=MUTED, font=FONT_SMALL), 1)
+        self.remove_row = row
+        row.setVisible(self.host.uninstall_finish is not None)
+        self.add(row)
+
+    def _remove(self) -> None:
+        if self._remove_pending:
+            return
+        self._remove_pending = True
+        state_dir = self.host.state_dir
+        run_worker(self.remove_mailbox, "plan", lambda: uninstall.build_plan(state_dir))
+        self.remove_poller.start()
+
+    def _on_remove_result(self, tag: str, ok: bool, value) -> None:
+        if tag == "plan":
+            if not ok:
+                self._remove_pending = False
+                QMessageBox.warning(self.owner, "Remove Tokitty", f"Could not list what to remove: {value}")
+                return
+            purge = _ask_removal(self.owner, value)
+            if purge is None:
+                self._remove_pending = False
+                return
+            plan = uninstall.with_purge(value) if purge else value
+            # The state directory goes after the app exits, not from here.
+            run_worker(self.remove_mailbox, "run", lambda: (purge, uninstall.execute(plan, defer_purge=True)))
+            return
+        self._remove_pending = False
+        if not ok:
+            QMessageBox.warning(self.owner, "Remove Tokitty", f"Removal failed: {value}")
+            return
+        purge, outcomes = value
+        _show_removal_result(self.owner, outcomes)
+        self.host.uninstall_finish(purge)
 
     def _build_diagnostics(self) -> None:
         self.mailbox = Mailbox()
@@ -266,6 +346,10 @@ class GeneralTab(_Tab):
 
     def close(self) -> None:
         self.poller.cancel()
+        self.remove_poller.cancel()
+
+    def close_blocked(self) -> bool:
+        return self._remove_pending
 
     def _tray_available(self) -> bool:
         available = self.host.tray_available

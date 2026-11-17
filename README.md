@@ -96,7 +96,7 @@ Optional, off by default. With a downloaded build, adding an account in the Acco
 python -m tokitty --install-hooks
 ```
 
-and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt (left unanswered, the cat gets impatient after 30 seconds and frantic after 3 minutes), and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
+and the cat reacts to what a running Claude Code session is doing: a thinking pose while Claude is composing a response, a working pose (with the tool name) while it's mid-tool-call, a flag when Claude is waiting on you for a permission prompt (left unanswered, the cat gets impatient after 30 seconds and frantic after 3 minutes), and a little done-hop when a work stretch wraps up. `python -m tokitty --uninstall-hooks` removes it again (the hook entries, not the copied hook script and session state files, so delete `<config-dir>/tokitty/` manually if you want those gone, or use [Removing Tokitty](#removing-tokitty) to take everything off in one step). Existing running Claude Code sessions need to be restarted to pick up a fresh install or uninstall, since hook edits aren't hot-reloaded.
 
 Installing also registers a `PermissionRequest` hook for the Stream Dock. It is inert unless a Stream Dock is connected: with no deck it prints nothing and Claude Code's own prompt is unaffected. Running Claude Code sessions pick it up after a restart.
 
@@ -113,6 +113,16 @@ The mechanism is native to each OS and needs no third-party dependency: the `HKC
 `python -m tokitty --install-autostart` and `python -m tokitty --uninstall-autostart` do the same thing from the command line, for headless setup or scripting.
 
 If tokitty's repo clone is moved, or the Python interpreter it was registered against changes, the registration can go stale and silently fail to launch at the next login with nothing on screen to explain it. tokitty checks for this itself at every startup and rewrites the registration if it's drifted, so as long as tokitty gets launched by hand at least once from wherever it now lives, the next automatic login launch self-heals. The one thing this can't fix: deleting the whole clone with no replacement leaves a permanently broken entry, since nothing is ever running to repair it. Uncheck **Start at login** (or run `--uninstall-autostart`) before deleting a clone that has autostart enabled.
+
+## Removing Tokitty
+
+To take Tokitty off a computer, open Settings ▸ General and choose **Remove Tokitty from this computer…**, or run `python -m tokitty --uninstall` (`Tokitty.exe --uninstall` for the frozen build). It removes the hooks from every account in `accounts.json`, the Stream Dock plugin, the start-at-login entry, and the hook script and session state files under each account's `<config-dir>/tokitty/`. It also removes the `current` link and `autostart_launcher.pyw` from the state directory.
+
+Before it does anything it lists the exact paths and entries it will remove and asks you to confirm. In Settings the list comes with an **Also delete my settings (accounts, looks, theme)** checkbox, unticked by default: leave it unticked and the state directory stays, so a later reinstall finds your accounts and looks again. On the command line the same choice is `--purge`, which also deletes the state directory, and `--yes` skips the y/N prompt for scripts. Without a terminal to answer the prompt, nothing is removed.
+
+Each item is removed on its own, so one failure (an account whose `settings.json` can't be parsed, say) doesn't stop the rest, and each failure is reported at the end. An account whose hooks could not be removed keeps its hook script, so the registered hook never points at a missing file. Settings quits Tokitty when it finishes, and the state directory, if you asked for it to go, is deleted after Tokitty has exited. The command line exits non-zero if anything failed. Close or restart open Claude Code and Codex sessions around it, since they keep calling the removed hook script until they restart (hook edits are not hot-reloaded). The list says so before you confirm.
+
+The release folders are not touched: delete the folder you unpacked or cloned Tokitty into yourself once it has quit. The three older flags (`--uninstall-hooks`, `--uninstall-streamdock`, `--uninstall-autostart`) still work on their own.
 
 ## Accounts
 
