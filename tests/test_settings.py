@@ -445,3 +445,23 @@ def test_parse_ntfy_token():
     for bad in ("tk abc", "x" * 257):
         value, error = parse_ntfy_token(bad)
         assert value is None and error
+
+
+def test_update_beta_defaults_off_and_roundtrips(tmp_path):
+    assert load_settings(tmp_path).update_beta is False
+    save_settings(tmp_path, Settings(update_beta=True))
+    assert load_settings(tmp_path).update_beta is True
+
+
+def test_update_beta_non_bool_defaults_off(tmp_path):
+    (tmp_path / "settings.json").write_text('{"update_beta": "yes"}', encoding="utf-8")
+    assert load_settings(tmp_path).update_beta is False
+
+
+def test_update_skipped_tag_roundtrips_and_rejects_junk(tmp_path):
+    assert load_settings(tmp_path).update_skipped_tag == ""
+    save_settings(tmp_path, Settings(update_skipped_tag="v1.1.0-beta.1"))
+    assert load_settings(tmp_path).update_skipped_tag == "v1.1.0-beta.1"
+    for junk in ("1.1.0", 7, None, "latest"):
+        (tmp_path / "settings.json").write_text(json.dumps({"update_skipped_tag": junk}), encoding="utf-8")
+        assert load_settings(tmp_path).update_skipped_tag == ""

@@ -26,6 +26,7 @@ HISTORY_MIN = 10
 NEW = "New"
 INSTALLED = "Installed"
 MORE_ON_GITHUB = "More on GitHub"
+SKIP = "Skip this version"
 
 Buttons = List[Tuple[str, Callable[[], None]]]
 
@@ -79,7 +80,8 @@ def history_entries(history, running: str) -> List[HistoryEntry]:
 @dataclass(frozen=True)
 class UpdateStatus:
     """What the tab says about the check. `release` is set only while a newer
-    one is known; `pending` is a newer tag remembered from an earlier run with
+    one is known, and `skipped` instead when the newer one is the release the
+    user skipped; `pending` is a newer tag remembered from an earlier run with
     no release behind it yet. `history` is every stable release the last
     successful check found, or None before one has."""
 
@@ -89,6 +91,7 @@ class UpdateStatus:
     error: Optional[str] = None
     pending: bool = False
     history: Optional[Tuple[Release, ...]] = None
+    skipped: Optional[Release] = None
 
     @property
     def entries(self) -> List[HistoryEntry]:
@@ -99,6 +102,8 @@ class UpdateStatus:
         installed = f"Tokitty {self.running} is installed."
         if self.release is not None:
             return f"{installed}\n{self.release.tag} is available."
+        if self.skipped is not None:
+            return f"{installed}\n{self.skipped.tag} is available, but you skipped it."
         if self.checking or self.pending:
             return "Checking…"
         if self.error:
@@ -111,8 +116,21 @@ class UpdateFlow:
     list of (label, callback), or None to keep the current ones) and `close()`.
     The constructor calls `render.show`, so the renderer must be ready."""
 
-    def __init__(self, release: Release, controller, render):
+    def __init__(
+        self,
+        release: Release,
+        controller,
+        render,
+        *,
+        on_skip: Optional[Callable[[Release], None]] = None,
+        skipped: bool = False,
+    ):
+        """`on_skip` persists the choice to skip `release`. `skipped` is a
+        release already skipped, which is still offered but can't be skipped
+        again."""
         self._release = release
+        self._on_skip = on_skip
+        self._skipped = skipped
         self._controller = controller
         self._render = render
         # refusal() writes and removes a probe file, so ask once, here.
@@ -127,8 +145,11 @@ class UpdateFlow:
 
     def _choices(self) -> Buttons:
         # A refused release has the reason as its note and the GitHub link in
-        # its notes, so there is nothing to offer.
-        return [] if self._reason else [("Install", self.install)]
+        # its notes, so it can only be skipped.
+        buttons: Buttons = [] if self._reason else [("Install", self.install)]
+        if self._on_skip is not None and not self._skipped:
+            buttons.append((SKIP, self.skip))
+        return buttons
 
     def _show_choices(self, note: str) -> None:
         self._show(note, self._choices())
@@ -138,6 +159,11 @@ class UpdateFlow:
             self._show_choices("An update is already in progress.")
             return
         self._show("Preparing…", [("Cancel", self.cancel)])
+
+    def skip(self) -> None:
+        self._on_skip(self._release)
+        self._skipped = True
+        self._show_choices(f"Skipped {self._release.tag}. You'll be offered the next release as usual.")
 
     def cancel(self) -> None:
         self._controller.cancel()
@@ -198,6 +224,7 @@ class UpdateActions:
         error: Callable[[str, str], None],
         info: Callable[[str, str], None],
         offer: Callable[[Release], None],
+        skip: Callable[[str], None] = lambda tag: None,
         changed: Callable[[], None] = lambda: None,
         open_url: Callable[[str], object] = webbrowser.open,
     ):
@@ -207,6 +234,7 @@ class UpdateActions:
         self._error = error
         self._info = info
         self._offer = offer
+        self._skip = skip
         self._changed = changed
         self.open_url = open_url
         self._checking = False
@@ -217,6 +245,8 @@ class UpdateActions:
     def status(self) -> UpdateStatus:
         available = self._checker.update_available
         release = self._checker.latest_release if available else None
+        latest = self._checker.latest_release
+        skipped = latest if latest is not None and not available and self._skipped_newer(latest) else None
         return UpdateStatus(
             running=self._controller.running.version,
             release=release,
@@ -224,10 +254,24 @@ class UpdateActions:
             error=self._last_error,
             pending=available and release is None,
             history=self._checker.release_history,
+            skipped=skipped,
         )
 
+    def _skipped_newer(self, release: Release) -> bool:
+        return self._checker.is_skipped(release) and is_newer(release.tag, self._controller.running.version)
+
     def new_flow(self, release: Release, render) -> UpdateFlow:
-        return UpdateFlow(release, self._controller, render)
+        return UpdateFlow(
+            release, self._controller, render,
+            on_skip=self.skip, skipped=self._checker.is_skipped(release),
+        )
+
+    def skip(self, release: Release) -> None:
+        """The "Skip this version" button: that tag stops being offered, in the
+        menu, the notification and the tab, until a newer release appears."""
+        self._skip(release.tag)
+        self._checker.apply_skip()
+        self._changed()
 
     def ensure_release(self) -> None:
         """What the tab asks for when it opens. A tag remembered from an
@@ -274,6 +318,8 @@ class UpdateActions:
         if result.error:
             self._error("Check for updates", f"Couldn't check for updates: {result.error}")
         elif result.newer and result.release is not None:
+            # A skipped release is still offered to someone who asked: the tab
+            # says it was skipped, and its Install button works.
             self._offer(result.release)
         else:
             self._info("Check for updates", f"Tokitty {self._controller.running.version} is the latest version.")

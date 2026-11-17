@@ -133,6 +133,13 @@ class UpdatesTab(_Tab):
                 on_change=lambda _v: self.write(host.on_toggle_update_check))
             self.update_toggle.setContentsMargins(12, 9, 12, 6)
             kit.add(card, self.update_toggle)
+        self.beta_toggle = None
+        if host.update_beta_enabled is not None and host.on_toggle_update_beta is not None:
+            self.beta_toggle = kit.toggle(
+                "Get beta builds",
+                on_change=lambda _v: self.write(host.on_toggle_update_beta))
+            self.beta_toggle.setContentsMargins(12, 3, 12, 6)
+            kit.add(card, self.beta_toggle)
         lower, row = _hrow()
         row.setContentsMargins(12, 3, 12, 9)
         self.update_pill = kit.pill("", "good")
@@ -190,6 +197,8 @@ class UpdatesTab(_Tab):
         host = self.host
         if self.update_toggle is not None:
             self.update_toggle.set(host.update_check_enabled())
+        if self.beta_toggle is not None:
+            self.beta_toggle.set(host.update_beta_enabled())
         label = host.update_available_label() if host.update_available_label else None
         if label:
             self.kit.set_pill(self.update_pill, label, "warn")
@@ -204,7 +213,7 @@ class UpdatesTab(_Tab):
         status = actions.status()
         self.headline.setText(status.headline)
         self._sync_notes(status.entries)
-        self._sync_flow(status.release)
+        self._sync_flow(status.release or status.skipped)
 
     def _sync_notes(self, entries: List[HistoryEntry]) -> None:
         self.notes.setVisible(bool(entries))
