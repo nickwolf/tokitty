@@ -28,8 +28,6 @@ class QtHost:
         self.controls = None
         # Called by notify_state_changed; the open Settings window sets it.
         self.settings_refresh: Optional[Callable[[], None]] = None
-        # The Manage accounts window; goes away with it in #268.
-        self.on_open_accounts: Optional[Callable[[], None]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
         # The Accounts page (#268) calls accounts_changed() after it wrote
         # accounts.json; run_qt sets on_accounts_changed to rebuild the panes
