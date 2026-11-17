@@ -128,14 +128,9 @@ class TokittyQtWidget(QWidget):
 
         # One monotonic ms clock for the panes' schedules and the timer.
         self._clock = clock
-        self.homes: List[str] = [
-            T.resolve_home(c.cat_home, i, pane_count) for i, c in enumerate(customizations)
-        ]
-        self.panes: List[QtPane] = [
-            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock(), spot=home,
-                   roams=self._roams(c, i, pane_count))
-            for i, (c, home) in enumerate(zip(customizations, self.homes))
-        ]
+        self.homes: List[str] = []
+        self.panes: List[QtPane] = []
+        self._make_panes(customizations)
         self.window_layout = T.layout_window(self.homes, wander=theme.cat.wander)
         # Per pane: where its cat can be drawn, to remask only when that changed.
         self._mask_places = self._current_mask_places()
@@ -185,6 +180,43 @@ class TokittyQtWidget(QWidget):
         and a way up to the top edge, which only a first-row pane has."""
         return self.theme.cat.wander and "on_top" in T.reachable_spots(
             self.theme, custom.cat_home, index, count)
+
+    def _make_panes(self, customizations: Sequence[Customization]) -> None:
+        count = len(customizations)
+        self.homes = [T.resolve_home(c.cat_home, i, count) for i, c in enumerate(customizations)]
+        self.panes = [
+            QtPane(c, on_change=self._pane_changed, clock=lambda: self._clock(), spot=home,
+                   roams=self._roams(c, i, count))
+            for i, (c, home) in enumerate(zip(customizations, self.homes))
+        ]
+
+    def replace_panes(self, customizations: Sequence[Customization]) -> None:
+        """Swap in a new set of panes, one per customization (the account list
+        changed, #166). The new panes start blank, so every cat restarts and
+        the cards fill in on the owner's next render. The window moves by the
+        change in margins, as in rebuild_layout, so the first card stays where
+        it is on screen."""
+        if not customizations:
+            raise ValueError("need at least one pane")
+        old = self.window_layout
+        self.hover_cancel()
+        self._make_panes(customizations)
+        self.window_layout = T.layout_window(self.homes, wander=self.theme.cat.wander)
+        self.setFixedSize(*self.window_layout.size)
+        # Everything keyed by pane index belongs to the old panes.
+        self._images.clear()
+        self._cards.clear()
+        self._styles.clear()
+        self._painted.clear()
+        self._shadow_memo.clear()
+        self._push_bar_rects()
+        dx = self.window_layout.margins[0] - old.margins[0]
+        dy = self.window_layout.margins[1] - old.margins[1]
+        if dx or dy:
+            self.move(self.x() - dx, self.y() - dy)
+        self._update_mask()
+        self._arm()
+        self.update()
 
     def rebuild_layout(self, homes: Sequence[str]) -> None:
         """Recompute geometry for new homes (or a changed wander setting).
