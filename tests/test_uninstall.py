@@ -63,15 +63,16 @@ def world(tmp_path, monkeypatch):
     (state / LAUNCHER_FILENAME).write_text("# launcher")
     release = tmp_path / "releases" / "0.9.0"
     release.mkdir(parents=True)
-    (release / "tokitty-hook").write_text("hook")
-    (release / "tokitty").write_text("gui")
+    exe = ".exe" if sys.platform == "win32" else ""
+    (release / f"tokitty-hook{exe}").write_text("hook")
+    (release / f"tokitty{exe}").write_text("gui")
     # A junction on Windows, a symlink elsewhere: the real link code makes it.
-    runner_link.ensure_runner_link(state, executable=str(release / "tokitty"))
+    runner_link.ensure_runner_link(state, executable=str(release / f"tokitty{exe}"))
     assert runner_link._is_link(state / "current")
     backend = FakeBackend()
     return type("World", (), dict(
         tmp=tmp_path, state=state, appdata=appdata, plugin=plugin, backend=backend,
-        release=release, configs=[a["config_dir"] for a in accounts]))
+        release=release, hook=release / f"tokitty-hook{exe}", configs=[a["config_dir"] for a in accounts]))
 
 
 def plan_for(world, purge=False, **kw):
@@ -161,14 +162,14 @@ def test_execute_removes_everything_but_the_state_directory(world):
     assert (world.state / "accounts.json").exists()
     assert load_settings(world.state).streamdock_port == 0
     # the release behind the link is untouched
-    assert (world.release / "tokitty-hook").read_text() == "hook"
+    assert world.hook.read_text() == "hook"
 
 
 def test_purge_also_deletes_the_state_directory_but_not_the_release(world):
     outcomes = uninstall.execute(plan_for(world, purge=True))
     assert all(o.ok for o in outcomes), uninstall.format_outcomes(outcomes)
     assert not world.state.exists()
-    assert (world.release / "tokitty-hook").read_text() == "hook"
+    assert world.hook.read_text() == "hook"
 
 
 def test_defer_purge_leaves_the_state_directory_for_after_exit(world):
@@ -177,7 +178,7 @@ def test_defer_purge_leaves_the_state_directory_for_after_exit(world):
     assert (world.state / "accounts.json").exists()
     ok, _ = uninstall.purge_state_dir(world.state)
     assert ok and not world.state.exists()
-    assert (world.release / "tokitty-hook").exists()
+    assert world.hook.exists()
 
 
 def test_the_stub_replaces_the_script_and_exits_zero_with_the_real_hook_args(world):
@@ -286,7 +287,7 @@ def test_purge_refuses_when_the_running_program_is_inside(world, monkeypatch):
 def test_purge_never_follows_the_current_link(world):
     ok, _ = uninstall.purge_state_dir(world.state)
     assert ok and not world.state.exists()
-    assert (world.release / "tokitty-hook").exists()
+    assert world.hook.exists()
 
 
 def test_purge_keeps_a_real_directory_standing_in_for_current(world):
