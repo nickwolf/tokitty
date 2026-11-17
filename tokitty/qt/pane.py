@@ -211,7 +211,7 @@ class QtPane:
         drives: Drives = Drives(),
         hover=None,
         handoff_text: Optional[str] = None,
-        bar_events: Tuple[int, int] = (0, 0),
+        bar_events: Tuple[int, int, int] = (0, 0, 0),
     ) -> None:
         self._roam.set_drives(drives, self._clock())
         fill_x = self._fill_x(driving_tag, session_pct, weekly_pct)

@@ -627,9 +627,9 @@ def test_the_driving_bars_fill_end_reaches_the_cat():
 def test_the_bar_events_of_a_render_reach_the_cat():
     pane = QtPane()
     _render(pane)
-    assert pane._roam.wanderer.bar_seen == [0, 0]
-    _render(pane, bar_events=(2, 1))
-    assert pane._roam.wanderer.bar_seen == [2, 1]
+    assert pane._roam.wanderer.bar_seen == [0, 0, 0]
+    _render(pane, bar_events=(2, 1, 0))
+    assert pane._roam.wanderer.bar_seen == [2, 1, 0]
 
 
 def test_a_cat_leaving_watch_does_not_chase_the_new_polls_fill_end():
@@ -666,10 +666,10 @@ def test_a_reset_in_the_same_render_as_the_calm_state_pounces_before_a_pending_b
     now = [0]
     pane, d = _watching_pane(now)
     pane.render("alert", 80, 30, "2h", "Mon", "5h", None, None, False, drives=d,
-                bar_events=(1, 0))
+                bar_events=(1, 0, 0))
     now[0] = 1_000
     pane.render("content", 3, 30, "2h", "Mon", "7d", None, None, False, drives=d,
-                bar_events=(1, 1))
+                bar_events=(1, 1, 0))
     assert pane._roam.wanderer.move == "pounce"
 
 
