@@ -390,10 +390,16 @@ class UpdateController:
         except Exception as exc:
             self._rollback(tag, token, backup, f"Tokitty {tag} couldn't be started ({exc}).", "failed")
             return
+        self._handover_state = (tag, token, backup)
+        try:
+            threading.Thread(target=self._ack_worker, args=(token, child), daemon=True, name="update-ack").start()
+        except Exception as exc:
+            # Nothing would ever publish an ack, so the windows would stay hidden.
+            self._kill(child)
+            self._rollback(tag, token, backup, f"Tokitty {tag} couldn't be watched ({exc}).", "failed")
+            return
         with self._lock:
             self._phase = "waiting"
-        self._handover_state = (tag, token, backup)
-        threading.Thread(target=self._ack_worker, args=(token, child), daemon=True, name="update-ack").start()
 
     def _clear_pending(self, token: str) -> None:
         try:

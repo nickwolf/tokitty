@@ -330,6 +330,26 @@ def test_a_failed_launch_rolls_back_without_waiting(mac_rig):
     assert rig.names() == ["stage", "hide", "swap_in", "launch", "swap_back", "restore", "notice"]
 
 
+def test_an_ack_thread_that_cannot_start_kills_the_child_and_rolls_back(mac_rig, monkeypatch):
+    rig = mac_rig
+
+    class NoAckThread(threading.Thread):
+        def start(self):
+            if self.name == "update-ack":
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(update_controller.threading, "Thread", NoAckThread)
+    result = rig.run()
+
+    assert result.outcome == "failed"
+    assert "couldn't be watched (can't start new thread)" in result.message
+    assert rig.child.killed
+    assert rig.names() == ["stage", "hide", "swap_in", "launch", "swap_back", "restore", "notice"]
+    assert rig.pending_now() is None
+    assert not rig.controller.busy
+
+
 def test_a_failed_mac_swap_does_not_swap_back(mac_rig):
     rig = mac_rig
     rig.swap_in_error = UpdateInstallError("no swap")
