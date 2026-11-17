@@ -34,6 +34,7 @@ from tokitty import sprites
 from tokitty.qt.menu import render_menu
 from tokitty.settings import update_settings
 from tokitty.tray_icon import tray_raster
+from tokitty.tray_tooltip import DEFAULT_TOOLTIP
 
 
 def _tray_qicon(colorway: str, pattern: str, tail: str = "plain") -> QIcon:
@@ -64,6 +65,7 @@ class QtTray:
         self._icon = None
         self._menu = None
         self._sync: Optional[Callable[[], None]] = None
+        self._tooltip = DEFAULT_TOOLTIP
         try:
             check = tray_available or QSystemTrayIcon.isSystemTrayAvailable
             self._qicon = _tray_qicon(colorway, pattern, tail)
@@ -96,7 +98,7 @@ class QtTray:
         try:
             icon = self._icon_factory()
             icon.setIcon(self._qicon)
-            icon.setToolTip("Tokitty")
+            icon.setToolTip(self._tooltip)
             menu = QMenu()
             self._menu = menu
             self._icon = icon
@@ -129,6 +131,17 @@ class QtTray:
         except Exception:
             # A tray that fails to refresh must never take the app down.
             pass
+
+    def set_tooltip(self, text: str) -> None:
+        """Kept for start() too, so an icon shown later opens with the latest."""
+        if text == self._tooltip:
+            return
+        self._tooltip = text
+        if self._icon is not None:
+            try:
+                self._icon.setToolTip(text)
+            except Exception:
+                pass
 
     def set_look(self, colorway: str, pattern: str, tail: str = "plain") -> None:
         """Repaint the icon for a new look (pane 0's). Cheap when nothing

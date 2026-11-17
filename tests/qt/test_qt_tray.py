@@ -126,6 +126,20 @@ def test_start_shows_one_square_icon_with_the_tooltip(qapp, tmp_path):
     assert isinstance(icon.menu, QMenu) and icon.menu.parent() is None
 
 
+def test_set_tooltip_updates_a_shown_icon_and_the_next_start(qapp, tmp_path):
+    tray = make_tray(tmp_path)
+    tray.set_tooltip("before start")
+    tray.start()
+    icon = FakeIcon.instances[0]
+    assert icon.tooltip == "before start"
+    tray.set_tooltip("work: no data yet")
+    assert icon.tooltip == "work: no data yet"
+
+
+def test_set_tooltip_without_an_icon_is_harmless(qapp, tmp_path):
+    make_tray(tmp_path).set_tooltip("x")
+
+
 def test_start_failure_marks_unavailable_and_leaves_no_icon(qapp, tmp_path):
     class Broken(FakeIcon):
         def show(self):

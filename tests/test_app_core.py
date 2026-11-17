@@ -153,6 +153,7 @@ def test_step_unit_limits_ok(events):
     assert unit["last_good"] is poll
     assert [s.fetched_at for s in unit["burn"].samples] == [NOW]
     assert unit["deck_usage"] == (40.0, 20.0, False)
+    assert unit["tray_usage"] == (40.0, 20.0, "resets " + format_reset_time(RESETS))
 
 
 def test_step_unit_models_view(events):
@@ -213,6 +214,7 @@ def test_step_unit_stale_token_without_history(events):
     assert unit["last_good"] is None
     assert unit["burn"].samples == []
     assert unit["deck_usage"] == (0.0, 0.0, True)
+    assert unit["tray_usage"] is None
 
 
 def test_step_unit_stale_token_with_a_last_good_sleeps(events):
@@ -230,6 +232,7 @@ def test_step_unit_stale_token_with_a_last_good_sleeps(events):
     assert unit["last_good"] is last_good
     assert unit["burn"].samples == []
     assert unit["deck_usage"] == (55.0, 30.0, True)
+    assert unit["tray_usage"][:2] == (55.0, 30.0)
 
 
 def test_step_unit_api_error_with_a_last_good_keeps_the_numbers(events):

@@ -226,6 +226,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
     from tokitty.qt.host import QtHost
     from tokitty.qt.settings import SettingsWindow
     from tokitty.qt.tray import QtTray
+    from tokitty.tray_tooltip import tooltip_text
     from tokitty.qt.update_host import QtUpdateHost
     from tokitty.qt.widget import TokittyQtWidget
     from tokitty.wsl_probe import WslCredentialsCache
@@ -569,6 +570,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                     deck_views.sync()
                 except Exception as exc:
                     print(f"tokitty: streamdock: tick: {exc}", file=sys.stderr)
+            tray.set_tooltip(tooltip_text([
+                (pane_label(i) or f"Cat {i + 1}", unit.get("tray_usage"))
+                for i, unit in enumerate(units)
+            ]))
             interval = 100 if updates.busy else UI_REFRESH_MS
             if timer.interval() != interval:
                 timer.setInterval(interval)

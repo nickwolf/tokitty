@@ -28,6 +28,7 @@ from tokitty.display import (
     format_projection,
     format_reset_day,
     format_reset_time,
+    reset_phrase,
 )
 from tokitty.handoff import Hint, Standing, handoff_hints
 from tokitty.hooks_install import retry_pending_hook_op
@@ -611,6 +612,12 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
     if latest.status == "ok" and latest.snapshot is not None:
         unit["burn"].add(latest.snapshot)
     unit["deck_usage"] = usage_from_display(display)
+    # Numbers only when a snapshot (fresh or cached) stands behind them: a
+    # failed first poll's display carries placeholder zeros.
+    has_snapshot = latest.snapshot is not None or (
+        unit["last_good"] is not None and unit["last_good"].snapshot is not None)
+    unit["tray_usage"] = (display["session_pct"], display["weekly_pct"],
+                          reset_phrase(display["session_reset_text"])) if has_snapshot else None
     display["projection_text"] = _projection_text_for(unit["burn"], display, now)
     activity = unit["watcher"].get_latest()
 
