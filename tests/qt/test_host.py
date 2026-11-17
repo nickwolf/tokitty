@@ -45,6 +45,31 @@ def test_always_on_top_is_a_method_over_the_widgets_property(make_world):
     assert world.widget.always_on_top is False and world.host.always_on_top() is False
 
 
+def test_toggling_always_on_top_reports_the_new_state(make_world):
+    world = make_world(1)
+    seen = []
+    world.host.on_always_on_top_changed = seen.append
+    world.host.toggle_always_on_top()
+    world.host.toggle_always_on_top()
+    assert seen == [False, True]
+
+
+def test_the_widget_starts_without_the_hint_when_told_not_to(qapp):
+    from PySide6.QtCore import Qt
+
+    from tokitty import theme as T
+    from tokitty.customize import Customization
+    from tokitty.qt.widget import TokittyQtWidget
+
+    widget = TokittyQtWidget(T.Theme(cat=T.CatStyle(wander=False)), [Customization()], 1,
+                             always_on_top=False)
+    widget.anim.stop()
+    assert widget.always_on_top is False
+    assert not widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    widget.set_always_on_top(True)
+    assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
 def test_set_theme_saves_theme_json_and_applies_it(make_world):
     world = make_world(1)
     theme = T.Theme(card=T.CardStyle(opacity=70))
@@ -143,3 +168,36 @@ def test_warn_is_parented_to_the_asking_window(make_world, monkeypatch):
     world.host.warn("t", "x")
     assert parents[-1] is window
     window.close()
+
+
+def test_hide_panes_hides_and_shows_the_widget_and_reports_each_change(make_world):
+    world = make_world(1)
+    seen = []
+    world.host.on_panes_hidden_changed = seen.append
+    world.widget.show()
+    assert world.host.panes_hidden() is False
+    world.host.toggle_hide_panes()
+    assert world.host.panes_hidden() is True and not world.widget.isVisible()
+    world.host.toggle_hide_panes()
+    assert world.host.panes_hidden() is False and world.widget.isVisible()
+    assert seen == [True, False]
+
+
+def test_show_panes_unhides_and_saves_but_only_reports_a_real_change(make_world):
+    world = make_world(1)
+    seen = []
+    world.host.on_panes_hidden_changed = seen.append
+    world.widget.show()
+    world.host.show_panes()
+    assert seen == []
+    world.host.toggle_hide_panes()
+    world.host.show_panes()
+    assert world.widget.isVisible() and world.host.panes_hidden() is False
+    assert seen == [True, False]
+
+
+def test_start_with_panes_hidden_marks_the_state_without_touching_the_widget(make_world):
+    world = make_world(1)
+    world.host.start_with_panes_hidden()
+    assert world.host.panes_hidden() is True
+    assert not world.widget.isVisible()

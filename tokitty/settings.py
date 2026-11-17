@@ -43,6 +43,9 @@ NTFY_TOPIC_ERROR = "Use 1 to 64 letters, digits, - or _."
 @dataclass(frozen=True)
 class Settings:
     tray_enabled: bool = True
+    always_on_top: bool = True
+    # Tray-only mode (#230). Ignored at startup when there is no tray.
+    hidden_panes: bool = False
     surprise_me: bool = False
     update_check: bool = True
     # Offer prereleases too, and the tag of the one release the user chose not
@@ -99,6 +102,12 @@ def load_settings(state_dir) -> Settings:
     tray_enabled = data.get("tray_enabled", True)
     if not isinstance(tray_enabled, bool):
         tray_enabled = True
+    always_on_top = data.get("always_on_top", True)
+    if not isinstance(always_on_top, bool):
+        always_on_top = True
+    hidden_panes = data.get("hidden_panes", False)
+    if not isinstance(hidden_panes, bool):
+        hidden_panes = False
     surprise_me = data.get("surprise_me", False)
     if not isinstance(surprise_me, bool):
         surprise_me = False
@@ -121,6 +130,8 @@ def load_settings(state_dir) -> Settings:
         ntfy_enabled = False
     return Settings(
         tray_enabled=tray_enabled,
+        always_on_top=always_on_top,
+        hidden_panes=hidden_panes,
         surprise_me=surprise_me,
         update_check=update_check,
         update_beta=update_beta,

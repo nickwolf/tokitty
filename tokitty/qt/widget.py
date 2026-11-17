@@ -89,6 +89,7 @@ class TokittyQtWidget(QWidget):
     def __init__(self, theme: T.Theme, customizations: Sequence[Customization],
                  pane_count: int, *, parent=None, position_path=None,
                  build_menu_model: Optional[Callable[[int], List[MenuItem]]] = None,
+                 always_on_top: bool = True,
                  clock: Callable[[], int] = monotonic_ms):
         super().__init__(parent)
         if len(customizations) != pane_count:
@@ -99,7 +100,7 @@ class TokittyQtWidget(QWidget):
         self.build_menu_model = build_menu_model
         # Called after a menu action ran (the host's notify_state_changed).
         self.on_menu_action_done: Optional[Callable[[], None]] = None
-        self._always_on_top = True  # starts on, never persisted
+        self._always_on_top = always_on_top
         self._drag: Optional[Tuple[int, int]] = None
         self._native_done = False  # _after_native_window ran for this native window
         # Hover popup (#130). The target is (pane index, "cat" | "limits" | "models",
@@ -115,11 +116,11 @@ class TokittyQtWidget(QWidget):
         self.setMouseTracking(True)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool  # no taskbar button on Windows
             | Qt.WindowType.WindowDoesNotAcceptFocus
             | Qt.WindowType.NoDropShadowWindowHint
         )
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, always_on_top)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         # Without this Qt hides a Tool window on macOS whenever the app is inactive.

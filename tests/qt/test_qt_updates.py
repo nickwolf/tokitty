@@ -539,15 +539,23 @@ class FakeTray:
         self.available = type(self).available
         self.calls = []
         self.notified = []
+        self.running = False
+        self.tooltip = None
         FakeTray.instances.append(self)
 
     def start(self):
         self.calls.append("start")
         if type(self).fail_start:
             self.available = False
+        else:
+            self.running = True
 
     def stop(self):
         self.calls.append("stop")
+        self.running = False
+
+    def set_tooltip(self, text):
+        self.tooltip = text
 
     def set_look(self, colorway, pattern, tail="plain"):
         self.colorway, self.pattern = colorway, pattern
