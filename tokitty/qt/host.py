@@ -52,6 +52,8 @@ class QtHost:
         self.on_install_update = None
         # The UpdateActions behind the Updates tab's status, notes and install.
         self.update_actions = None
+        # Called with the new state after the widget flipped; run_qt saves it.
+        self.on_always_on_top_changed: Optional[Callable[[bool], None]] = None
         self._windows: List[QWidget] = []
 
     def attach(self, controls) -> None:
@@ -75,6 +77,8 @@ class QtHost:
         window without the hint sits under a topmost widget, and raise()
         cannot change that."""
         self.widget.set_always_on_top(not self.widget.always_on_top)
+        if self.on_always_on_top_changed is not None:
+            self.on_always_on_top_changed(self.widget.always_on_top)
         for window in list(self._windows):
             try:
                 self._apply_stacking(window)

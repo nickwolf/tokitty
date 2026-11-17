@@ -445,3 +445,14 @@ def test_parse_ntfy_token():
     for bad in ("tk abc", "x" * 257):
         value, error = parse_ntfy_token(bad)
         assert value is None and error
+
+
+def test_always_on_top_defaults_on_and_roundtrips(tmp_path):
+    assert load_settings(tmp_path).always_on_top is True
+    save_settings(tmp_path, Settings(always_on_top=False))
+    assert load_settings(tmp_path).always_on_top is False
+
+
+def test_always_on_top_non_bool_defaults_on(tmp_path):
+    (tmp_path / "settings.json").write_text('{"always_on_top": 0}', encoding="utf-8")
+    assert load_settings(tmp_path).always_on_top is True

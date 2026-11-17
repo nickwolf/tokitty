@@ -42,6 +42,7 @@ NTFY_TOPIC_ERROR = "Use 1 to 64 letters, digits, - or _."
 @dataclass(frozen=True)
 class Settings:
     tray_enabled: bool = True
+    always_on_top: bool = True
     surprise_me: bool = False
     update_check: bool = True
     opacity: int = DEFAULT_LEVEL
@@ -94,6 +95,9 @@ def load_settings(state_dir) -> Settings:
     tray_enabled = data.get("tray_enabled", True)
     if not isinstance(tray_enabled, bool):
         tray_enabled = True
+    always_on_top = data.get("always_on_top", True)
+    if not isinstance(always_on_top, bool):
+        always_on_top = True
     surprise_me = data.get("surprise_me", False)
     if not isinstance(surprise_me, bool):
         surprise_me = False
@@ -111,6 +115,7 @@ def load_settings(state_dir) -> Settings:
         ntfy_enabled = False
     return Settings(
         tray_enabled=tray_enabled,
+        always_on_top=always_on_top,
         surprise_me=surprise_me,
         update_check=update_check,
         opacity=opacity,

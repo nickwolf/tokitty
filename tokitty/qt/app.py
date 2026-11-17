@@ -378,6 +378,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         widget = TokittyQtWidget(
             loaded_theme, [unit["custom"] for unit in units], len(units),
             position_path=state_dir / POSITION_FILENAME, build_menu_model=menu_model,
+            always_on_top=settings.always_on_top,
         )
         def pane_label(i):
             return widget.panes[i]._label if i < len(widget.panes) else None
@@ -395,6 +396,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             warn=host.warn,
         )
         host.attach(controls)
+        host.on_always_on_top_changed = lambda on: update_settings(state_dir, always_on_top=on)
         widget.on_menu_action_done = host.notify_state_changed
         for unit, pane in zip(units, widget.panes):
             unit["pane"] = pane
