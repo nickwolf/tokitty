@@ -76,6 +76,8 @@ class UsageSnapshot:
     limits: List[LimitInfo] = field(default_factory=list)
     credits_used: Optional[float] = None
     credits_limit: Optional[float] = None
+    # What Codex reports instead: the money left, with no limit to compare it to.
+    credits_balance: Optional[float] = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

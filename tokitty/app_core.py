@@ -23,6 +23,7 @@ from tokitty.credentials import CredentialLoader
 from tokitty.customize import SINGLE_KEY, Customization, save_customization
 from tokitty.display import (
     format_countdown,
+    format_credits,
     format_observed_at,
     format_pane_label,
     format_projection,
@@ -97,10 +98,6 @@ def _display_from_snapshot(snapshot, now: datetime) -> dict:
         session_text = format_reset_time(snapshot.session_resets_at) if snapshot.session_resets_at else "—"
         weekly_text = format_reset_day(snapshot.weekly_resets_at) if snapshot.weekly_resets_at else "—"
 
-    credits_text = None
-    if snapshot.credits_used is not None and snapshot.credits_used > 0 and snapshot.credits_limit is not None:
-        credits_text = f"${snapshot.credits_used:.2f} / ${snapshot.credits_limit:.2f}"
-
     return {
         "state": state,
         "session_pct": snapshot.session_pct,
@@ -108,7 +105,7 @@ def _display_from_snapshot(snapshot, now: datetime) -> dict:
         "session_reset_text": session_text,
         "weekly_reset_text": weekly_text,
         "driving_tag": driving_tag,
-        "credits_text": credits_text,
+        "credits_text": format_credits(snapshot),
         # Derived from the snapshot rather than the poll, so it reports
         # the age of the numbers on screen whether they came from this
         # poll, a cached one, or a transcript written hours ago.

@@ -91,6 +91,17 @@ def format_projection(kind: str, caps_at: datetime) -> str:
     return f"week caps ~{caps_at.astimezone().strftime('%a')} {when}"
 
 
+def format_credits(snapshot) -> Optional[str]:
+    """The credits line for a snapshot: "$3.62 / $20.00" for Claude's extra
+    usage, "$12.40 left" for a Codex balance. None when there is nothing
+    spent or left to report."""
+    if snapshot.credits_used is not None and snapshot.credits_used > 0 and snapshot.credits_limit is not None:
+        return f"${snapshot.credits_used:.2f} / ${snapshot.credits_limit:.2f}"
+    if snapshot.credits_balance is not None and snapshot.credits_balance > 0:
+        return f"${snapshot.credits_balance:.2f} left"
+    return None
+
+
 def resolve_status_text(
     hint_text: Optional[str],
     credits_text: Optional[str],

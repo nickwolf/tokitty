@@ -190,6 +190,19 @@ def test_parses_a_real_shaped_token_count_event():
     assert {limit.kind for limit in snapshot.limits} == {"session", "weekly"}
 
 
+def test_a_codex_balance_lands_in_credits_balance_not_credits_used():
+    credits = {"has_credits": True, "unlimited": False, "balance": "12.40"}
+    snapshot = parse_token_count_event(_event("2026-09-22T12:00:00.000Z", 10.0, 20.0, credits=credits))
+    assert snapshot.credits_balance == pytest.approx(12.40)
+    assert snapshot.credits_used is None and snapshot.credits_limit is None
+
+
+def test_unlimited_or_unreadable_codex_credits_leave_no_balance():
+    for credits in ({"unlimited": True, "balance": "9"}, {"unlimited": False, "balance": "n/a"}):
+        snapshot = parse_token_count_event(_event("2026-09-22T12:00:00.000Z", 10.0, 20.0, credits=credits))
+        assert snapshot.credits_balance is None
+
+
 def test_fetched_at_is_the_events_own_timestamp_not_the_read_time():
     """The numbers are only as fresh as the last Codex turn. Stamping them
     with the read time would make a week-old snapshot look live."""

@@ -120,6 +120,12 @@ def _step(unit, events, *, usage_state=None, notifier=None, store=None, removed=
     )
 
 
+def test_step_unit_shows_a_codex_balance_on_the_card(events):
+    snapshot = replace(_snapshot(), credits_balance=12.4)
+    update = _step(_unit(poll=_poll(snapshot=snapshot)), events, usage_state=_usage_state(notes=(True, 90, 95)))
+    assert update.kwargs["credits_text"] == "$12.40 left"
+
+
 def test_step_unit_limits_ok(events):
     poll = _poll(snapshot=_snapshot())
     unit = _unit(poll=poll)
