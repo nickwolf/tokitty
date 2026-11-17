@@ -38,7 +38,7 @@ from tokitty.customize import (
 from tokitty.lock import LOCK_FILENAME
 from tokitty.migration import absorb_implicit_default
 from tokitty.providers.codex import default_codex_home
-from tokitty.randomize import random_look, random_tail
+from tokitty.randomize import random_eyes, random_look, random_tail
 from tokitty import sprites
 from tokitty.settings import Settings, update_settings
 from tokitty.wsl_probe import wsl_config_dir_from_credentials
@@ -259,6 +259,7 @@ def save_picked_accounts(state_dir, picked: List[Candidate]) -> List[Account]:
         elif slug not in store:
             colorway, pattern = random_look(sprites.colorway_names(), list(sprites.PATTERNS))
             save_customization_entry(
-                state, slug, Customization(colorway=colorway, pattern=pattern, tail=random_tail()))
+                state, slug, Customization(colorway=colorway, pattern=pattern, tail=random_tail(),
+                              eyes=random_eyes(pattern)))
     save_accounts(state, accounts)
     return accounts

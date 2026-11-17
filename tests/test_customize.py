@@ -285,3 +285,25 @@ def test_missing_or_invalid_personality_loads_balanced(tmp_path, raw):
     got = load_customization(tmp_path)[SINGLE_KEY]
     assert got.personality == "balanced"
     assert (got.colorway, got.pattern) == ("gray", "solid")
+
+
+def test_eyes_round_trip_and_apply_to_the_palette(tmp_path):
+    save_customization(tmp_path, {SINGLE_KEY: Customization(eyes="blue")})
+    got = load_customization(tmp_path)[SINGLE_KEY]
+    assert got.eyes == "blue"
+    assert effective_palette(got)["e"] == sprites.EYE_COLORS["blue"]
+
+
+@pytest.mark.parametrize("raw", ['"eyes": "nope"', '"eyes": 3', '"eyes": null', '"x": 1'])
+def test_missing_or_invalid_eyes_load_green(tmp_path, raw):
+    (tmp_path / "customization.json").write_text(
+        '{"default": {"colorway": "gray", "pattern": "solid", ' + raw + '}}', encoding="utf-8")
+    got = load_customization(tmp_path)[SINGLE_KEY]
+    assert got.eyes == "green"
+    assert effective_palette(got) == effective_palette(Customization(colorway="gray", pattern="solid"))
+    assert effective_palette(got)["e"] == sprites.BASE_PALETTE["e"] == "#3fae5c"
+
+
+def test_eye_colours_are_distinct_and_default_is_the_base_green():
+    assert sprites.EYE_COLORS[sprites.DEFAULT_EYES] == sprites.BASE_PALETTE["e"]
+    assert len(set(sprites.EYE_COLORS.values())) == len(sprites.EYE_COLORS)

@@ -215,17 +215,18 @@ def delete_colorway(state_dir: Path, cid: str) -> int:
 
 
 def palette_from_tones(tones: Dict[str, str], pattern: str = "tabby",
-                       tail: str = "plain") -> Dict[str, str]:
+                       tail: str = "plain", eyes: str = sprites.DEFAULT_EYES) -> Dict[str, str]:
     """The full palette sprites.resolve_palette would give a colorway with
     these tones, without registering it (the editor's live preview). Mirrors
     sprites._resolved_palette; tests/qt/test_colorway_editor.py pins the two
-    together over every built-in x pattern x tail."""
+    together over every built-in x pattern x tail x eyes."""
     tokens = {
         "coat": tones["coat"], "shade": tones["shade"], "mark": tones["mark"],
         "light": tones["light"], "white": sprites.BASE_PALETTE["w"],
     }
     merged = dict(sprites.BASE_PALETTE)
     merged["p"] = tones["ear"]
+    merged["e"] = sprites.EYE_COLORS[eyes]
     for char, src in sprites.PATTERNS[pattern].items():
         merged[char] = tokens.get(src, src)
     rings = sprites.TAIL_STYLES[tail]

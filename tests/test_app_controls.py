@@ -102,6 +102,7 @@ def build(kind, tmp_path, monkeypatch, *, panes=2, with_accounts=True, startup=N
     # The original seams predate personalities and leave them alone.
     monkeypatch.setattr(app_controls, "random_personality", lambda: "balanced")
     monkeypatch.setattr(app_controls, "random_tail", lambda: "plain")
+    monkeypatch.setattr(app_controls, "random_eyes", lambda pattern: "green")
     monkeypatch.setattr(app_controls, "ntfy_send_test", fake_send)
     monkeypatch.setattr(old_seams, "random_look", fake_random)
     monkeypatch.setattr(old_seams, "ntfy_send_test", fake_send)
@@ -462,6 +463,20 @@ def test_randomize_rolls_the_tail_and_reset_keeps_it(tmp_path, monkeypatch):
     seams.on_customization_changed(0, "reset", None)
     assert world.store["k0"].tail == "ringed"
     assert world.store["k0"].overrides == {}
+
+
+def test_eyes_field_stores_and_randomize_rolls_eyes(tmp_path, monkeypatch):
+    world = build("new", tmp_path, monkeypatch)
+    seams = world.seams
+    seams.on_customization_changed(0, "eyes", "copper")
+    assert world.store["k0"].eyes == "copper"
+    seams.on_customization_changed(0, "eyes", "nope")
+    assert world.store["k0"].eyes == "copper"
+    monkeypatch.setattr(app_controls, "random_eyes", lambda pattern: "amber")
+    seams.on_randomize(0)
+    assert world.store["k0"].eyes == "amber"
+    seams.on_customization_changed(0, "reset", None)
+    assert world.store["k0"].eyes == "amber"
 
 
 def test_pane_name_returns_the_stored_label_and_the_harness_tag(tmp_path, monkeypatch):

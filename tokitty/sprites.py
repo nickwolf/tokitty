@@ -65,6 +65,17 @@ BASE_PALETTE: Dict[str, str] = {
     "W": "#e8fbff",  # white lit by the laptop screen in the dark (working)
 }
 
+# Selectable eye colours: the BASE_PALETTE "e" entry by name. "green" is the
+# default and equals BASE_PALETTE["e"].
+EYE_COLORS: Dict[str, str] = {
+    "green": "#3fae5c",
+    "amber": "#f5a312",
+    "copper": "#c24a18",
+    "blue": "#4a90e2",
+    "yellow": "#f2d02a",
+}
+DEFAULT_EYES = "green"
+
 # --- colorway x pattern model (replaces the old bundled coat presets) ---
 # A colorway is a tone palette; a pattern maps each coat-driven char to a
 # tone token ("coat"/"shade"/"mark"/"light"/"white") or a literal #rrggbb.
@@ -252,17 +263,18 @@ TAIL_STYLES: Dict[str, Optional[Tuple[str, str]]] = {
 
 
 def resolve_palette(colorway: str = "orange", pattern: str = "tabby",
-                    tail: str = "plain") -> Dict[str, str]:
-    """Full char->color map for one colorway x pattern x tail. The colorway
+                    tail: str = "plain", eyes: str = DEFAULT_EYES) -> Dict[str, str]:
+    """Full char->color map for one colorway x pattern x tail x eyes. The colorway
     supplies the tone slots; the pattern maps each coat-driven char to a tone
     token or a literal hex; a ringed tail overrides the two tail bands. Every
     other char is BASE_PALETTE unchanged. Pure, so computed once per input;
     each call returns a fresh dict the caller may mutate."""
-    return dict(_resolved_palette(colorway, pattern, tail))
+    return dict(_resolved_palette(colorway, pattern, tail, eyes))
 
 
 @functools.lru_cache(maxsize=None)
-def _resolved_palette(colorway: str, pattern: str, tail: str) -> Dict[str, str]:
+def _resolved_palette(colorway: str, pattern: str, tail: str,
+                      eyes: str = DEFAULT_EYES) -> Dict[str, str]:
     cw = colorway_tones(colorway)
     tones = {
         "coat": cw["coat"], "shade": cw["shade"], "mark": cw["mark"],
@@ -270,6 +282,7 @@ def _resolved_palette(colorway: str, pattern: str, tail: str) -> Dict[str, str]:
     }
     merged = dict(BASE_PALETTE)
     merged["p"] = cw["ear"]
+    merged["e"] = EYE_COLORS[eyes]
     for char, src in PATTERNS[pattern].items():
         merged[char] = tones.get(src, src)  # tone token -> tone, else literal hex
     rings = TAIL_STYLES[tail]

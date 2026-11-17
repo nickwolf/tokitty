@@ -1,6 +1,7 @@
-"""Curated appearance randomization: pick a colorway, a pattern and a tail
-style from the existing preset keys. Never rolls free-form hex overrides -- curated presets
-always look intentional. rng is injectable for deterministic tests."""
+"""Curated appearance randomization: pick a colorway, a pattern, a tail
+style and an eye colour from the existing preset keys. Never rolls free-form
+hex overrides, so curated presets always look intentional. rng is injectable
+for deterministic tests."""
 from __future__ import annotations
 
 import random
@@ -24,6 +25,14 @@ def random_tail(rng: Optional[random.Random] = None) -> str:
     if not ringed or r.random() < PLAIN_TAIL_WEIGHT:
         return "plain"
     return r.choice(ringed)
+
+
+def random_eyes(pattern: str, rng: Optional[random.Random] = None) -> str:
+    """Blue on a colorpoint (the classic pairing), else any of the choices."""
+    if pattern == "colorpoint":
+        return "blue"
+    r = rng or random
+    return r.choice(list(sprites.EYE_COLORS))
 
 
 def random_personality(rng: Optional[random.Random] = None) -> str:

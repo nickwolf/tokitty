@@ -53,7 +53,7 @@ class ColorwayEditor(QDialog):
         self.pane_index = pane_index
         self.cid = cid
         pane = host.panes[pane_index]
-        self.pattern, self.tail = pane._pattern, pane._tail
+        self.pattern, self.tail, self.eyes = pane._pattern, pane._tail, pane._eyes
         store = host.colorway_store()
         if cid is not None and cid in store:
             self.draft: Dict[str, str] = colorways.tones_of(store[cid])
@@ -176,7 +176,7 @@ class ColorwayEditor(QDialog):
     # -- draft -----------------------------------------------------------------
 
     def _palette(self, pattern: str) -> dict:
-        return colorways.palette_from_tones(self.draft, pattern, self.tail)
+        return colorways.palette_from_tones(self.draft, pattern, self.tail, self.eyes)
 
     def _sync(self) -> None:
         """Repaint every swatch and sprite from the draft."""

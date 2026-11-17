@@ -877,3 +877,14 @@ def test_every_colorway_routes_its_tones_through_every_pattern():
             for char, value in BASE_PALETTE.items():
                 if char not in regions and char != "p":
                     assert palette[char] == value, (colorway, pattern, char)
+
+
+def test_eyes_only_change_the_eye_char():
+    from tokitty.sprites import EYE_COLORS
+
+    base = resolve_palette("gray", "colorpoint")
+    assert base == resolve_palette("gray", "colorpoint", "plain", "green")
+    for name, hex_color in EYE_COLORS.items():
+        palette = resolve_palette("gray", "colorpoint", "plain", name)
+        assert palette["e"] == hex_color
+        assert {k: v for k, v in palette.items() if k != "e"} == {k: v for k, v in base.items() if k != "e"}

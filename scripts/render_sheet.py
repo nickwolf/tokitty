@@ -8,6 +8,7 @@ Usage: python3 scripts/render_sheet.py --out sheet.png [--scale 8] [--colorway o
                                        [--state NAME ...] [--wrap 8] [--spot SPOT]
                                        [--gif DIR [--seed 0] [--gif-seconds 12]]
        python3 scripts/render_sheet.py --grid --out grid.png [--scale 6]
+       python3 scripts/render_sheet.py --eyes-grid orange/tabby --eyes-grid gray/colorpoint --out eyes.png
        python3 scripts/render_sheet.py --tones COAT,SHADE,MARK,LIGHT,EAR --out custom.png
 --tones (five #rrggbb, repeatable) renders a temporary custom colorway instead of
 --colorway; with --grid the grid is one row per --tones, across every pattern.
@@ -350,6 +351,40 @@ def register_tones(specs: Sequence[str]) -> List[str]:
     return list(table)
 
 
+def _draw_pose(grid, pose, palette, x0: int, y0: int, scale: int) -> None:
+    for ry, row in enumerate(pose):
+        for cx, ch in enumerate(row):
+            color = palette.get(ch, "")
+            if not color:
+                continue
+            px = _hex_to_rgb(color)
+            for dy in range(scale):
+                for dx in range(scale):
+                    grid[y0 + ry * scale + dy][x0 + cx * scale + dx] = px
+
+
+def render_eyes_grid(out_path: Path, scale: int = 6,
+                     looks: Sequence[Tuple[str, str]] = (("orange", "tabby"),)) -> List[str]:
+    """One 'content' cat per look (colorway, pattern) x eye colour: a row per
+    look, a column per EYE_COLORS entry. Returns the row-major legend
+    ("colorway/pattern/eyes")."""
+    from tokitty.sprites import _apply, EYE_COLORS, SITTING_TEMPLATE
+    pose = _apply(SITTING_TEMPLATE, {"L": "e", "R": "e", "A": "n"})
+    cell_w, cell_h = len(pose[0]) * scale, len(pose) * scale
+    width = GAP + len(EYE_COLORS) * (cell_w + GAP)
+    height = GAP + len(looks) * (cell_h + GAP)
+    bg = _hex_to_rgb(BG)
+    grid = [[bg] * width for _ in range(height)]
+    legend: List[str] = []
+    for r, (cw, pat) in enumerate(looks):
+        for c, eyes in enumerate(EYE_COLORS):
+            _draw_pose(grid, pose, resolve_palette(cw, pat, "plain", eyes),
+                       GAP + c * (cell_w + GAP), GAP + r * (cell_h + GAP), scale)
+            legend.append(f"{cw}/{pat}/{eyes}")
+    _write_png(out_path, [b"".join(row) for row in grid], width)
+    return legend
+
+
 def render_grid(out_path: Path, scale: int = 6,
                 colorways: Optional[Sequence[str]] = None) -> List[str]:
     """One 'content' cat per colorway x pattern, laid out as a matrix
@@ -371,15 +406,7 @@ def render_grid(out_path: Path, scale: int = 6,
             palette = resolve_palette(cw, pat)
             x0 = GAP + c * (cell_w + GAP)
             y0 = GAP + r * (cell_h + GAP)
-            for ry, row in enumerate(pose):
-                for cx, ch in enumerate(row):
-                    color = palette.get(ch, "")
-                    if not color:
-                        continue
-                    px = _hex_to_rgb(color)
-                    for dy in range(scale):
-                        for dx in range(scale):
-                            grid[y0 + ry * scale + dy][x0 + cx * scale + dx] = px
+            _draw_pose(grid, pose, palette, x0, y0, scale)
             legend.append(f"{cw}/{pat}")
     _write_png(out_path, [b"".join(row) for row in grid], width)
     return legend
@@ -395,6 +422,8 @@ def main() -> int:
                         help="five #rrggbb tones for a temporary custom colorway (repeatable; "
                              "replaces --colorway; --grid draws one row per value)")
     parser.add_argument("--grid", action="store_true")
+    parser.add_argument("--eyes-grid", action="append", metavar="COLORWAY/PATTERN",
+                        help="a row per value (repeatable), a column per eye colour")
     parser.add_argument("--state", action="append",
                         choices=(list(ALL_STATES) + [transition_name(*pair) for pair in TRANSITIONS]
                                  + [spot_state(*key) for key in SPOT_VARIANTS]
@@ -417,7 +446,11 @@ def main() -> int:
         except ValueError as exc:
             parser.error(str(exc))
         args.colorway = colorways[0]
-    if args.grid:
+    if args.eyes_grid:
+        looks = [tuple(spec.split("/", 1)) for spec in args.eyes_grid]
+        for label in render_eyes_grid(args.out, scale=args.scale, looks=looks):
+            print(label)
+    elif args.grid:
         for label in render_grid(args.out, scale=args.scale, colorways=colorways):
             print(label)
     else:
