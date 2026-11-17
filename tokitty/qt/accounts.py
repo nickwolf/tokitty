@@ -59,7 +59,7 @@ from tokitty.manual_path import PathValidationResult
 from tokitty.migration import absorb_implicit_default
 from tokitty.providers import UnknownProviderError, get_provider, supported_kinds
 from tokitty.qt.kit import Kit, clear_layout, hbox, text, vbox
-from tokitty.randomize import random_look
+from tokitty.randomize import random_look, random_tail
 from tokitty.settings_style import DIM_COLOR, FONT_BODY, FONT_MEDIUM, FONT_SMALL
 from tokitty.usage_items import USAGE_READOUT_ITEMS, USAGE_WINDOW_ITEMS, VIEW_MODE_ITEMS
 from tokitty import sprites
@@ -827,9 +827,10 @@ class AccountsManager(QWidget):
             if slug in absorbed:
                 save_customization_entry(self.state_dir, slug, absorbed[slug])
         elif slug not in store:
-            colorway, pattern = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
+            colorway, pattern = random_look(sprites.colorway_names(), list(sprites.PATTERNS))
             save_customization_entry(
-                self.state_dir, slug, Customization(colorway=colorway, pattern=pattern)
+                self.state_dir, slug,
+                Customization(colorway=colorway, pattern=pattern, tail=random_tail()),
             )
 
         self._start_mutation(new_accounts, "install", validation.config_dir, provider)

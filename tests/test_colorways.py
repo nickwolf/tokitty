@@ -316,15 +316,15 @@ def test_on_colorways_changed_restyles_panes_after_delete(tmp_path):
     assert not sprites.is_colorway(cid)
 
 
-def test_randomize_draws_built_ins_only(tmp_path, monkeypatch):
+def test_randomize_pool_includes_customs(tmp_path, monkeypatch):
     from tokitty import app_controls
     seen = []
     monkeypatch.setattr(app_controls, "random_look", lambda cws, pats: seen.append(list(cws)) or (cws[0], pats[0]))
     controls, _, _ = _controls(tmp_path)
-    colorways.add_colorway(tmp_path, "Slate", TONES)
+    cid = colorways.add_colorway(tmp_path, "Slate", TONES)
     controls.on_colorways_changed()
     controls.on_randomize(0)
-    assert seen == [list(sprites.COLORWAYS)]
+    assert seen == [list(sprites.COLORWAYS) + [cid]]
 
 
 @pytest.mark.parametrize("pattern", list(sprites.PATTERNS))

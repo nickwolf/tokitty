@@ -14,8 +14,8 @@ The file is optional and read defensively: absent or unparseable => {}; an
 entry with a bad id or any tone that is not "#rrggbb" is dropped. A bad,
 empty or colliding name never drops an entry (a built-in added later could
 otherwise orphan a user's cat): it gets a deterministic replacement, see
-_resolve_name. Randomize and "Surprise me" never draw from here
-(sprites.COLORWAYS holds the built-ins only).
+_resolve_name. Randomize and "Surprise me" draw from here too, through
+sprites.colorway_names().
 """
 from __future__ import annotations
 
