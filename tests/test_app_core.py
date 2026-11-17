@@ -678,5 +678,42 @@ def test_limits_hover_credits_row_names_claude_spend_and_a_codex_balance():
     assert _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW).credits is None
 
 
+def _failed(http_status=None, message=None):
+    return PollResult(status="api_error", snapshot=None, message=message, fetched_at=NOW,
+                      http_status=http_status)
+
+
+def test_limits_hover_carries_the_failure_cause_and_the_last_good_time():
+    last_good = _poll(snapshot=_snapshot(), fetched_at=NOW - timedelta(minutes=9))
+    hover = _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW, _failed(429), last_good)
+    assert hover.problem == "rate limited (429)"
+    assert hover.last_good_at == NOW - timedelta(minutes=9)
+
+
+def test_limits_hover_has_no_failure_note_when_the_poll_worked():
+    hover = _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW, None, _poll(snapshot=_snapshot()))
+    assert hover.problem is None and hover.last_good_at is None
+
+
+def test_step_unit_api_error_puts_the_cause_in_the_hover_and_keeps_the_card_hint(events):
+    last_good = _poll(snapshot=_snapshot(), fetched_at=NOW - timedelta(minutes=9))
+    unit = _unit(poll=_failed(503, "HTTP 503 from usage endpoint"), last_good=last_good)
+    kwargs = _step(unit, events, usage_state=_usage_state()).kwargs
+    assert kwargs["hover"].problem == "server error (503)"
+    assert kwargs["hover"].last_good_at == last_good.fetched_at
+
+
+def test_step_unit_api_error_with_no_good_poll_still_explains_itself(events):
+    unit = _unit(poll=_failed(None, "Network error reaching usage endpoint: timed out"))
+    update = _step(unit, events, usage_state=_usage_state())
+    assert update.kwargs["hint_text"] == "API hiccup, retrying"
+    assert update.kwargs["hover"] == LimitsHover(session=None, weekly=None, problem="timed out")
+
+
+def test_step_unit_a_working_poll_leaves_the_hover_without_a_failure_note(events):
+    kwargs = _step(_unit(poll=_poll(snapshot=_snapshot())), events, usage_state=_usage_state()).kwargs
+    assert kwargs["hover"].problem is None
+
+
 def test_limits_hover_is_none_without_a_snapshot():
     assert _limits_hover_for(None, BurnTracker(), {}, NOW) is None

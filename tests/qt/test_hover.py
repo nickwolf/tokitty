@@ -230,6 +230,13 @@ def test_credits_row_rides_both_limit_popups_whatever_the_status_line_shows(qapp
     assert "Credits" not in widget.hover_text_for((0, "limits", "session"))
 
 
+def test_failed_poll_note_rides_the_limit_popups_even_with_no_numbers(qapp):
+    widget = make(qapp)
+    widget.panes[0].render("confused", 0, 0, "", "", "", None, None, True,
+                           hover=LimitsHover(None, None, problem="rate limited (429)"))
+    assert widget.hover_text_for((0, "limits", "session")) == "Poll failed: rate limited (429)"
+
+
 def test_no_limits_data_means_no_popup(qapp):
     widget = make(qapp)
     widget.panes[0].render("content", 1, 1, "", "", "", None, None, False)

@@ -32,7 +32,7 @@ from tokitty.display import (
 )
 from tokitty.handoff import Hint, Standing, handoff_hints
 from tokitty.hooks_install import retry_pending_hook_op
-from tokitty.hover import LimitHover, LimitsHover
+from tokitty.hover import LimitHover, LimitsHover, poll_problem
 from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
 from tokitty.poller import PollResult, Poller
 from tokitty.pose import resolve_pose
@@ -250,12 +250,19 @@ def _projection_text_for(tracker: BurnTracker, display: dict, now: datetime) -> 
     return format_projection(projection.kind, projection.caps_at)
 
 
-def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: datetime) -> Optional[LimitsHover]:
+def _limits_hover_for(
+    snapshot, tracker: BurnTracker, display: dict, now: datetime, failed: Optional[PollResult] = None,
+    last_good: Optional[PollResult] = None,
+) -> Optional[LimitsHover]:
     """The raw numbers behind the limits popup, or None when no snapshot was
-    ever read. The pace is left out whenever the numbers are dimmed or old,
-    for the same reason the status line's projection is."""
+    ever read and nothing failed either. The pace is left out whenever the
+    numbers are dimmed or old, for the same reason the status line's
+    projection is. `failed` is the latest poll when it did not succeed, so
+    the popup can say why."""
     if snapshot is None:
-        return None
+        if failed is None:
+            return None
+        return LimitsHover(session=None, weekly=None, problem=poll_problem(failed.http_status, failed.message))
     binding = select_binding_capped_limit(snapshot.limits)
     trusted = not display.get("dimmed") and not display.get("stale_text")
 
@@ -273,6 +280,8 @@ def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: dateti
         session=row("Session", "session", snapshot.session_pct, snapshot.session_resets_at),
         weekly=row("Week", "weekly", snapshot.weekly_pct, snapshot.weekly_resets_at),
         credits=credits,
+        problem=poll_problem(failed.http_status, failed.message) if failed is not None else None,
+        last_good_at=last_good.fetched_at if failed is not None and last_good is not None else None,
     )
 
 
@@ -637,7 +646,10 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
         display["accent"] = pose["accent"]
         display["drives"] = cat_drives
         display["bar_events"] = bar_events
-        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)
+        # Only api_error needs the popup's explanation: every other failed
+        # status already has a specific hint on the card.
+        failed = latest if latest.status == "api_error" else None
+        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now, failed, unit["last_good"])
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
     return update

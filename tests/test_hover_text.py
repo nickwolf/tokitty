@@ -12,6 +12,7 @@ from tokitty.hover import (
     LimitsHover,
     limit_hover_text,
     limits_popup_text,
+    poll_problem,
 )
 from tokitty.pose import ACTIVITY_SPRITE_PLACEHOLDERS
 from tokitty.sprites import ALL_STATES
@@ -31,6 +32,46 @@ def test_limits_popup_adds_the_credits_row_to_either_bar():
         lines = limits_popup_text(hover, key, NOW).split("\n")
         assert lines[-1] == "Extra usage: $3.62 / $20.00"
         assert lines[:-1] == limit_hover_text(getattr(hover, key), NOW).split("\n")
+
+
+def test_limits_popup_names_the_failed_poll_and_the_last_good_one():
+    last_good = datetime.now(timezone.utc) - timedelta(minutes=7)
+    hover = LimitsHover(row(), row("weekly"), problem="rate limited (429)", last_good_at=last_good)
+    lines = limits_popup_text(hover, "weekly", datetime.now(timezone.utc)).split("\n")
+    assert lines[-2:] == ["Poll failed: rate limited (429)",
+                          f"Last good poll: {format_reset_time(last_good)}"]
+
+
+def test_limits_popup_adds_the_weekday_to_a_last_good_poll_from_another_day():
+    last_good = NOW - timedelta(days=1)
+    hover = LimitsHover(row(), row("weekly"), problem="no network", last_good_at=last_good)
+    assert limits_popup_text(hover, "session", NOW).endswith(
+        f"Last good poll: {last_good.astimezone().strftime('%a')} {format_reset_time(last_good)}")
+
+
+def test_limits_popup_without_numbers_is_just_the_reason():
+    hover = LimitsHover(None, None, problem="no network")
+    assert limits_popup_text(hover, "session", NOW) == "Poll failed: no network"
+
+
+def test_limits_popup_is_quiet_about_polls_that_worked():
+    text = limits_popup_text(LimitsHover(row(), row("weekly")), "session", NOW)
+    assert "Poll failed" not in text and "Last good poll" not in text
+
+
+@pytest.mark.parametrize("status, message, expected", [
+    (429, "HTTP 429 from usage endpoint", "rate limited (429)"),
+    (503, "HTTP 503 from usage endpoint", "server error (503)"),
+    (403, "HTTP 403 from usage endpoint", "HTTP error (403)"),
+    (None, "Network error reaching usage endpoint: [Errno -2] Name or service not known", "no network"),
+    (None, "Network error reaching usage endpoint: timed out", "timed out"),
+    (None, "timed out", "timed out"),
+    (None, "Usage endpoint returned invalid JSON: Expecting value", "unreadable response"),
+    (None, "something else", "unexpected error"),
+    (None, None, "unexpected error"),
+])
+def test_poll_problem_names_the_cause(status, message, expected):
+    assert poll_problem(status, message) == expected
 
 
 def test_limits_popup_has_no_credits_row_without_credits_data():

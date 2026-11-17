@@ -24,6 +24,8 @@ class PollResult:
     message: Optional[str]
     fetched_at: datetime
     source_description: Optional[str] = None
+    # The HTTP status behind an api_error, when the server answered at all.
+    http_status: Optional[int] = None
 
 
 class Poller:

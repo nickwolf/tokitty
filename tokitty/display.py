@@ -143,10 +143,15 @@ def format_observed_at(observed_at: Optional[datetime], now: datetime) -> Option
     age = (now - observed_at).total_seconds()
     if age < STALE_AFTER_SECONDS:
         return None
-    local = observed_at.astimezone()
+    return f"as of {format_clock(observed_at, now)}"
+
+
+def format_clock(when: datetime, now: datetime) -> str:
+    """"4:12 PM" for today, "Tue 4:12 PM" for any other day."""
+    local = when.astimezone()
     if local.date() == now.astimezone().date():
-        return f"as of {format_reset_time(observed_at)}"
-    return f"as of {local.strftime('%a')} {format_reset_time(observed_at)}"
+        return format_reset_time(when)
+    return f"{local.strftime('%a')} {format_reset_time(when)}"
 
 
 # Separates the harness from the cat's own name in a pane label. A middle
