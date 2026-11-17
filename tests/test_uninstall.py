@@ -102,7 +102,7 @@ def test_plan_lists_every_concrete_item_and_changes_nothing(world):
 def test_plan_format_is_one_line_per_item(world):
     lines = uninstall.format_plan(plan_for(world, purge=True))
     assert lines[0] == "Tokitty will remove:"
-    assert f"  Hook files: {os.path.join(world.configs[0], 'tokitty')}" in lines
+    assert f"  Hook files: {os.path.join(world.configs[0], 'tokitty')} ({uninstall.STUB_NOTE})" in lines
     assert "  Start at login: FAKE-AUTOSTART" in lines
     assert f"  Settings folder (accounts, looks, theme): {world.state}" in lines
     assert lines[-2] == uninstall.RESTART_NOTE
@@ -153,7 +153,7 @@ def test_execute_removes_everything_but_the_state_directory(world):
     for config in world.configs:
         data = json.loads(open(os.path.join(config, "settings.json")).read())
         assert data["theme"] == "dark" and data["hooks"] == {}
-        assert not os.path.exists(os.path.join(config, "tokitty"))
+        assert os.listdir(os.path.join(config, "tokitty")) == ["hook_writer.py"]
     assert not world.plugin.exists()
     assert world.backend.registered is False
     assert not runner_link._is_link(world.state / "current")
@@ -180,6 +180,30 @@ def test_defer_purge_leaves_the_state_directory_for_after_exit(world):
     assert (world.release / "tokitty-hook").exists()
 
 
+def test_the_stub_replaces_the_script_and_exits_zero_with_the_real_hook_args(world):
+    import subprocess
+
+    config = world.configs[0]
+    script = os.path.join(config, "tokitty", "hook_writer.py")
+    uninstall.execute(plan_for(world))
+    assert open(script).read() == uninstall.STUB_SOURCE
+    assert os.listdir(os.path.join(config, "tokitty")) == ["hook_writer.py"]
+    done = subprocess.run(
+        [sys.executable, script, "--sessions-dir", os.path.join(config, "tokitty", "sessions")],
+        input=b'{"hook_event_name": "PreToolUse"}', capture_output=True, timeout=30)
+    assert done.returncode == 0 and done.stdout == b""
+
+
+def test_a_hook_folder_without_the_script_is_removed_whole(world):
+    config = world.configs[0]
+    os.remove(os.path.join(config, "tokitty", "hook_writer.py"))
+    plan = plan_for(world)
+    item = [i for i in plan.items if i.kind == uninstall.HOOK_FILES and i.account[0] == config][0]
+    assert item.note == ""
+    uninstall.execute(plan)
+    assert not os.path.exists(os.path.join(config, "tokitty"))
+
+
 def test_a_failed_account_does_not_stop_the_rest_and_keeps_its_hook_files(world):
     (open(os.path.join(world.configs[0], "settings.json"), "w")).write("{not json")
     outcomes = uninstall.execute(plan_for(world))
@@ -189,7 +213,7 @@ def test_a_failed_account_does_not_stop_the_rest_and_keeps_its_hook_files(world)
         (uninstall.HOOK_FILES, world.configs[0]),
     ]
     assert os.path.exists(os.path.join(world.configs[0], "tokitty", "hook_writer.py"))
-    assert not os.path.exists(os.path.join(world.configs[1], "tokitty"))
+    assert os.listdir(os.path.join(world.configs[1], "tokitty")) == ["hook_writer.py"]
     assert not world.plugin.exists()
     assert world.backend.registered is False
 
@@ -206,7 +230,7 @@ def test_hook_files_stay_while_a_local_settings_entry_still_registers_them(world
         (uninstall.HOOKS, config), (uninstall.HOOK_FILES, config)]
     assert "settings.local.json" in bad[0].message
     assert os.path.exists(os.path.join(config, "tokitty", "hook_writer.py"))
-    assert not os.path.exists(os.path.join(world.configs[1], "tokitty"))
+    assert os.listdir(os.path.join(world.configs[1], "tokitty")) == ["hook_writer.py"]
 
 
 def test_a_failed_autostart_removal_is_reported_and_the_rest_still_runs(world):

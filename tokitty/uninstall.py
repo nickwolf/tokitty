@@ -20,8 +20,17 @@ from typing import Callable, List, Optional, Tuple
 
 from tokitty.paths import state_dir_path
 
-RESTART_NOTE = ("Close or restart open Claude Code and Codex sessions: until they restart "
-                "they keep calling the removed hook script.")
+RESTART_NOTE = ("Open Claude Code and Codex sessions keep the old hook until they restart. "
+                "Delete <config-dir>/tokitty afterwards if you like.")
+STUB_NOTE = "a do-nothing hook_writer.py stays until open sessions restart"
+HOOK_SCRIPT = "hook_writer.py"
+# A script missing from a hook command exits 2 under python, which blocks
+# PreToolUse and UserPromptSubmit in sessions that have not restarted yet.
+STUB_SOURCE = (
+    "import sys  # left by a Tokitty uninstall so open sessions keep working; "
+    "delete once they restart\n"
+    "sys.exit(0)\n"
+)
 
 HOOKS = "hooks"
 HOOK_FILES = "hook_files"
@@ -43,6 +52,7 @@ class Item:
     path: str
     # (config_dir, provider) for the hooks and hook_files kinds
     account: Optional[Tuple[str, str]] = None
+    note: str = ""
 
 
 @dataclass
@@ -129,7 +139,8 @@ def build_plan(
         items.append(Item(HOOKS, "Hooks", str(shown), (config_dir, provider)))
         hook_dir = _hook_dir(config_dir)
         if hook_dir.is_dir():
-            items.append(Item(HOOK_FILES, "Hook files", str(hook_dir), (config_dir, provider)))
+            note = STUB_NOTE if (hook_dir / HOOK_SCRIPT).is_file() else ""
+            items.append(Item(HOOK_FILES, "Hook files", str(hook_dir), (config_dir, provider), note))
     plugin = sd._plugins_dir(appdata) / sd.PLUGIN_FOLDER
     if sd.install_supported() and plugin.is_dir():
         items.append(Item(STREAMDOCK, "Stream Dock plugin", str(plugin)))
@@ -156,7 +167,7 @@ def with_purge(plan: Plan) -> Plan:
 def format_plan(plan: Plan) -> List[str]:
     lines = ["Tokitty will remove:"]
     for item in plan.items:
-        lines.append(f"  {item.label}: {item.path}")
+        lines.append(f"  {item.label}: {item.path}" + (f" ({item.note})" if item.note else ""))
     lines.append(RESTART_NOTE)
     lines.append("Release folders are not touched. Delete them yourself afterwards.")
     return lines
@@ -221,6 +232,25 @@ def purge_state_dir(state_dir) -> Tuple[bool, str]:
     return True, ""
 
 
+def _clear_hook_dir(hook_dir: Path) -> None:
+    """Delete the hook folder, but leave a stub where hook_writer.py was, since
+    open sessions still run it. A folder without the script is removed whole."""
+    script = hook_dir / HOOK_SCRIPT
+    if not script.is_file():
+        shutil.rmtree(hook_dir)
+        return
+    tmp = hook_dir / (HOOK_SCRIPT + ".tmp")
+    tmp.write_text(STUB_SOURCE, encoding="utf-8")
+    os.replace(tmp, script)
+    for child in hook_dir.iterdir():
+        if child == script:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def _run_item(plan: Plan, item: Item) -> Tuple[bool, str]:
     from tokitty import hooks_install
     from tokitty.streamdock import install as sd
@@ -242,7 +272,7 @@ def _run_item(plan: Plan, item: Item) -> Tuple[bool, str]:
                 return False, f"tokitty hooks remain in {target.local_settings_file}, remove them by hand"
         return result.ok, message
     if item.kind == HOOK_FILES:
-        shutil.rmtree(item.path)
+        _clear_hook_dir(Path(item.path))
         return True, ""
     if item.kind == STREAMDOCK:
         dirs = plan.config_dirs
@@ -252,6 +282,8 @@ def _run_item(plan: Plan, item: Item) -> Tuple[bool, str]:
         plan.backend.deregister()
         return True, ""
     if item.kind == RUNNER_LINK:
+        # No stub for the frozen runner: a missing exe is a non-blocking
+        # error (127 on POSIX, 1 from PowerShell or cmd), unlike python.
         _remove_link(item.path)
         return True, ""
     if item.kind == LAUNCHER:
