@@ -565,7 +565,7 @@ def rebuild_units(units: List[dict], *, accounts, state_dir, customization_store
         pool.setdefault(unit_identity(unit["account"]), []).append(unit)
     # The page may have written a label for an account before it said so.
     latest = load_customization(state_dir)
-    new_units, added = [], []
+    new_units, added, updates = [], [], []
     for index, (account, provider) in enumerate(zip(resolved_accounts, providers)):
         tag_kind = provider_tag_kind(provider, providers)
         key = customization_key(account)
@@ -574,10 +574,8 @@ def rebuild_units(units: List[dict], *, accounts, state_dir, customization_store
         if matches:
             unit = matches.pop(0)
             custom = initial_customization(account, stored)
-            customization_store[key] = custom
-            unit.update(account=account, key=key, tag_kind=tag_kind, custom=custom,
-                        label=initial_label(account, custom, tag_kind))
-            unit.pop("pane", None)
+            updates.append((unit, key, dict(account=account, key=key, tag_kind=tag_kind, custom=custom,
+                                            label=initial_label(account, custom, tag_kind))))
         else:
             if stored is not None:
                 customization_store[key] = stored
@@ -591,6 +589,11 @@ def rebuild_units(units: List[dict], *, accounts, state_dir, customization_store
                 save_customization_entry(state_dir, key, unit["custom"])
             added.append(unit)
         new_units.append(unit)
+    # Only once every new unit is built: if one raises, the running units
+    # are left exactly as they were.
+    for unit, key, changes in updates:
+        customization_store[key] = changes["custom"]
+        unit.update(changes)
     removed = [unit for left in pool.values() for unit in left]
     return UnitsRebuild(new_units, added, removed)
 

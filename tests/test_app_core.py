@@ -637,6 +637,27 @@ def test_rebuild_units_matches_duplicate_accounts_one_for_one(tmp_path):
     assert rebuilt.units[0] is units[0] and rebuilt.removed[0] is units[1]
 
 
+def test_rebuild_units_that_fails_leaves_the_running_units_alone(tmp_path, monkeypatch):
+    from tokitty import app_core
+
+    save_customization(tmp_path, {
+        "acct-v1-a": Customization(colorway="gray", pattern="solid", label="Work"),
+    })
+    a, b = _accounts(tmp_path, "a", "b", codex=("b",))
+    units, store = _build(tmp_path, [a], store=load_customization(tmp_path))
+    units[0]["pane"] = "pane 0"
+    before = dict(units[0])
+
+    def boom(*args, **kwargs):
+        raise OSError("unreachable home")
+
+    monkeypatch.setattr(app_core, "build_unit", boom)
+    with pytest.raises(OSError):
+        _rebuild(tmp_path, units, [a, b], store)
+
+    assert units[0] == before and units[0]["label"] == "Work" and units[0]["tag_kind"] is None
+
+
 def test_same_accounts_compares_identity_and_order(tmp_path):
     a, b = _accounts(tmp_path, "a", "b")
     units, _ = _build(tmp_path, [a, b])
