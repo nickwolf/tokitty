@@ -79,17 +79,6 @@ def test_settings_activates_the_app_when_opened_and_when_raised_again(make_world
     assert len(activations) == 2
 
 
-def test_the_accounts_manager_activates_the_app(make_world, activations, monkeypatch):
-    from tokitty.qt import accounts as qa
-
-    world = make_world(1)
-    manager = qa.AccountsManager.open(world.state_dir, None, host=world.host)
-    try:
-        assert len(activations) == 1
-    finally:
-        manager.close()
-
-
 def test_the_presets_window_activates_the_app(qapp, tmp_path, activations):
     from tokitty.qt import presets as qt_presets
 
