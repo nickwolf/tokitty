@@ -28,9 +28,15 @@ class QtHost:
         self.controls = None
         # Called by notify_state_changed; the open Settings window sets it.
         self.settings_refresh: Optional[Callable[[], None]] = None
-        # Opened by slices 3 and 5; None hides the rows that need them.
+        # The Manage accounts window; goes away with it in #268.
         self.on_open_accounts: Optional[Callable[[], None]] = None
         self.on_edit_streamdock_presets: Optional[Callable[[], None]] = None
+        # The Accounts page (#268) calls accounts_changed() after it wrote
+        # accounts.json; run_qt sets on_accounts_changed to rebuild the panes
+        # in place (#166). found_homes returns Discovery's WSL matches for the
+        # page's Add section; None means discovery is not available.
+        self.on_accounts_changed: Optional[Callable[[], None]] = None
+        self.found_homes: Optional[Callable[[], list]] = None
         # The StreamdockHolder's methods, set by run_qt once the deck exists;
         # None reads as "not installed" in the Stream Dock tab.
         self.streamdock_state: Optional[Callable[[], str]] = None
@@ -188,6 +194,13 @@ class QtHost:
                  for i, pane in enumerate(self.widget.panes)]
         if homes != self.widget.homes:
             self.widget.rebuild_layout(homes)
+
+    def accounts_changed(self) -> None:
+        """accounts.json was written: rebuild what depends on the account
+        list, then re-sync the views. A no-op until run_qt wires it."""
+        if self.on_accounts_changed is not None:
+            self.on_accounts_changed()
+        self.notify_state_changed()
 
     # ---- refresh and warnings ------------------------------------------
 
