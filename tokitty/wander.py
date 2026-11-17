@@ -12,9 +12,10 @@ art while the logical state stays what it was, so an alert always ends it.
 Play is a scratch (#124), as is a stop now and then on a trip.
 
 The cat also answers its own bars (#135). A tick-up of the session bar latches
-a bat and a window reset a pounce, played from home once the cat is calm and
-idle. An alert cat may walk to the top edge and sit over the fill end of the
-bar that drives it, the one exception to the ladder staying honest.
+a bat, a session reset a pounce and a weekly one a pounce then a roll (#229),
+played from home once the cat is calm and idle. An alert cat may walk to the
+top edge and sit over the fill end of the bar that drives it, the one
+exception to the ladder staying honest.
 """
 from __future__ import annotations
 
@@ -127,9 +128,11 @@ class Wanderer:
         self.play: Optional[str] = None    # a move to play once the cat is up for it
         # Bar events (#135): the last seq taken per kind, and each pending
         # event's deadline. A bat is started at most once per BAT_COOLDOWN_MS.
-        self.bar_seen = [0, 0]             # moved, reset
+        self.bar_seen = [0, 0, 0]          # moved, reset, week
         self.moved_until: Optional[int] = None
         self.reset_until: Optional[int] = None
+        self.week_until: Optional[int] = None
+        self.roll_after = False            # the pounce playing is followed by a roll
         self.last_bat: Optional[int] = None
         # Watch: the driving bar's fill end in card px, whether the cat is
         # on its way to or at the stop over it (stops = [that stop, home]),
@@ -143,6 +146,7 @@ class Wanderer:
         self.drives = old.drives
         self.bar_seen = list(old.bar_seen)
         self.moved_until, self.reset_until = old.moved_until, old.reset_until
+        self.week_until = old.week_until
         self.last_bat = old.last_bat
 
     @property
@@ -219,29 +223,41 @@ class Wanderer:
     # ---- bar events ------------------------------------------------------
 
     def set_bar_events(self, events, now: int) -> None:
-        """The (moved, reset) counters from the poll. A new count latches that
-        event until it is played (Roam tries at every render) or
+        """The (moved, reset, week) counters from the poll. A new count latches
+        that event until it is played (Roam tries at every render) or
         BAR_EVENT_TTL_MS passes."""
-        moved, reset = events
+        moved, reset, week = events
         if moved != self.bar_seen[0]:
             self.moved_until = now + BAR_EVENT_TTL_MS
         if reset != self.bar_seen[1]:
             self.reset_until = now + BAR_EVENT_TTL_MS
-        self.bar_seen = [moved, reset]
+        if week != self.bar_seen[2]:
+            self.week_until = now + BAR_EVENT_TTL_MS
+        self.bar_seen = [moved, reset, week]
 
     def bar_play(self, now: int) -> None:
         """Play a latched event if the cat is calm, home, idle and not napping.
-        A pounce wins over a bat. A taken event is spent whether or not its
-        chance passes; a chance of 0 leaves it pending until it expires, and a
-        bat still cooling down waits too."""
+        A weekly reset (a pounce, then a roll) wins over a session one (a
+        pounce) and that over a bat; the bigger one spends the smaller. A taken
+        event is spent whether or not its chance passes; a chance of 0 leaves
+        it pending until it expires, and a bat still cooling down waits too."""
         if self.moved_until is not None and now >= self.moved_until:
             self.moved_until = None
         if self.reset_until is not None and now >= self.reset_until:
             self.reset_until = None
+        if self.week_until is not None and now >= self.week_until:
+            self.week_until = None
         if (self.state not in WANDER_STATES or self.away or self.nap_until is not None
                 or self.play is not None):
             return
         d = self.drives
+        if self.week_until is not None and d.pounce > 0:
+            self.week_until = self.reset_until = None
+            if self._chance(d.pounce):
+                # the roll needs the floor inside the card, so not on the edge
+                self.roll_after = self.home.spot != "on_top"
+                self._play_now("pounce")
+            return
         if self.reset_until is not None and d.pounce > 0:
             self.reset_until = None
             if self._chance(d.pounce):
@@ -444,9 +460,12 @@ class Wanderer:
             self.stops = []
         elif move == "walk":
             pose = replace(pose, x=pose.x + (-STRIDE_PX if pose.mirrored else STRIDE_PX))
+        elif move == "pounce" and self.roll_after:
+            self.play = "roll"
         elif (move == "walk_stop" and len(self.stops) > 1 and not self.watching
               and self.drives.play > 0 and self.rng.random() < STOP_SCRATCH):
             self.play = "scratch"
+        self.roll_after = False
         self.walking = move in ("walk_start", "walk")
         self.lying = move in sprites.LYING_MOVES
         self.pose = pose
@@ -475,6 +494,7 @@ class Wanderer:
     def _go_home(self) -> None:
         self.move = None
         self.play = None
+        self.roll_after = False
         self.stops = []
         self.walking = self.at_stop = self.watching = False
         self.pose = self.home
@@ -519,13 +539,13 @@ class Roam:
             self.player.restart(name, now_ms)
 
     def set_bar_events(self, events, now_ms: int) -> None:
-        """The poll's (moved, reset) counters; see Wanderer.set_bar_events."""
+        """The poll's (moved, reset, week) counters; see Wanderer.set_bar_events."""
         self.wanderer.set_bar_events(events, now_ms)
         self._bar_play(now_ms)
 
     def note_bars(self, fill_x: Optional[float], events, now_ms: int) -> None:
         """What this poll shows, taken in before its state: the fill end (or
-        None) and the (moved, reset) counters, or None to keep them. Nothing
+        None) and the (moved, reset, week) counters, or None to keep them. Nothing
         moves here, so the state change decides with both in hand."""
         self.wanderer.fill_x = fill_x
         if events is not None:
