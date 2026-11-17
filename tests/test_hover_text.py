@@ -9,7 +9,9 @@ from tokitty.hover import (
     cat_hover_text,
     cat_phase,
     format_elapsed,
+    LimitsHover,
     limit_hover_text,
+    limits_popup_text,
 )
 from tokitty.pose import ACTIVITY_SPRITE_PLACEHOLDERS
 from tokitty.sprites import ALL_STATES
@@ -21,6 +23,19 @@ UNKNOWN = Pace(PACE_UNKNOWN)
 def row(kind="session", pct=42.0, resets_in=timedelta(hours=2, minutes=14), capped=False, pace=UNKNOWN):
     return LimitHover("Session" if kind == "session" else "Week", kind, pct,
                       None if resets_in is None else NOW + resets_in, capped, pace)
+
+
+def test_limits_popup_adds_the_credits_row_to_either_bar():
+    hover = LimitsHover(row(), row("weekly"), credits="Extra usage: $3.62 / $20.00")
+    for key in ("session", "weekly"):
+        lines = limits_popup_text(hover, key, NOW).split("\n")
+        assert lines[-1] == "Extra usage: $3.62 / $20.00"
+        assert lines[:-1] == limit_hover_text(getattr(hover, key), NOW).split("\n")
+
+
+def test_limits_popup_has_no_credits_row_without_credits_data():
+    hover = LimitsHover(row(), row("weekly"))
+    assert limits_popup_text(hover, "session", NOW) == limit_hover_text(row(), NOW)
 
 
 def test_session_popup_has_the_reset_time_and_countdown():

@@ -670,5 +670,13 @@ def test_limits_hover_marks_the_capped_bar():
     assert hover.session.capped and not hover.weekly.capped
 
 
+def test_limits_hover_credits_row_names_claude_spend_and_a_codex_balance():
+    spend = replace(_snapshot(), credits_used=3.62, credits_limit=20.0)
+    balance = replace(_snapshot(), credits_balance=12.4)
+    assert _limits_hover_for(spend, BurnTracker(), {}, NOW).credits == "Extra usage: $3.62 / $20.00"
+    assert _limits_hover_for(balance, BurnTracker(), {}, NOW).credits == "Credits: $12.40 left"
+    assert _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW).credits is None
+
+
 def test_limits_hover_is_none_without_a_snapshot():
     assert _limits_hover_for(None, BurnTracker(), {}, NOW) is None

@@ -32,15 +32,16 @@ def make(qapp, theme=None, homes=("inside",)):
     return widget
 
 
-def hover(session=42.0, weekly=81.0):
+def hover(session=42.0, weekly=81.0, credits=None):
     def row(title, kind, pct, left):
         return LimitHover(title, kind, pct, NOW + left, False, Pace(PACE_WONT_CAP))
     return LimitsHover(row("Session", "session", session, timedelta(hours=2, minutes=14)),
-                       row("Week", "weekly", weekly, timedelta(days=2, hours=3)))
+                       row("Week", "weekly", weekly, timedelta(days=2, hours=3)), credits)
 
 
-def render(pane, **kw):
-    pane.render("content", 42, 81, "6:10 PM", "Mon", "", None, None, False, hover=hover(), **kw)
+def render(pane, credits=None, **kw):
+    pane.render("content", 42, 81, "6:10 PM", "Mon", "", None, None, False,
+                hover=hover(credits=credits), **kw)
 
 
 def detail(label="Opus 4.6"):
@@ -218,6 +219,15 @@ def test_hover_text_for_each_kind_of_target(qapp):
     text = widget.hover_text_for((0, "models", 1)).split("\n")
     assert text[0] == "M1 (7d)" and text[3].startswith("cache read 1.8M")
     assert widget.hover_text_for((0, "models", 5)) is None
+
+
+def test_credits_row_rides_both_limit_popups_whatever_the_status_line_shows(qapp):
+    widget = make(qapp)
+    render(widget.panes[0], credits="Credits: $12.40 left")
+    for key in ("session", "weekly"):
+        assert widget.hover_text_for((0, "limits", key)).endswith("\nCredits: $12.40 left")
+    render(widget.panes[0])
+    assert "Credits" not in widget.hover_text_for((0, "limits", "session"))
 
 
 def test_no_limits_data_means_no_popup(qapp):

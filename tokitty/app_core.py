@@ -266,9 +266,13 @@ def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: dateti
             pace=tracker.pace(kind, now) if trusted else Pace(PACE_UNKNOWN),
         )
 
+    credits = format_credits(snapshot)
+    if credits is not None:
+        credits = f"{'Credits' if snapshot.credits_balance is not None else 'Extra usage'}: {credits}"
     return LimitsHover(
         session=row("Session", "session", snapshot.session_pct, snapshot.session_resets_at),
         weekly=row("Week", "weekly", snapshot.weekly_pct, snapshot.weekly_resets_at),
+        credits=credits,
     )
 
 

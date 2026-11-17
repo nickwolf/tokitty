@@ -29,6 +29,9 @@ class LimitHover:
 class LimitsHover:
     session: LimitHover
     weekly: LimitHover
+    # "Extra usage: $3.62 / $20.00" or "Credits: $12.40 left"; None when the
+    # account has no credits data.
+    credits: Optional[str] = None
 
 
 def limit_hover_text(row: LimitHover, now: datetime) -> str:
@@ -54,6 +57,15 @@ def limit_hover_text(row: LimitHover, now: datetime) -> str:
         elif row.pace.status == PACE_WONT_CAP:
             lines.append("At this pace: won't cap before reset")
     return "\n".join(lines)
+
+
+def limits_popup_text(hover: LimitsHover, key: str, now: datetime) -> str:
+    """The popup for one limits row: that limit's lines, then the credits row.
+    Both rows carry it so it is one hover away whichever bar the pointer is on."""
+    text = limit_hover_text(getattr(hover, key), now)
+    if hover.credits is not None:
+        text = f"{text}\n{hover.credits}"
+    return text
 
 
 # ---- the cat ----------------------------------------------------------------
