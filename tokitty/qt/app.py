@@ -197,9 +197,25 @@ def run_qt(after_update_token=None, apply_update=False) -> int:
     try:
         if after_update_token and update_controller.skips_ack(os.environ):
             return 0
-        return _run_locked(state_dir, lock, after_update_token, apply_update)
+        code = _run_locked(state_dir, lock, after_update_token, apply_update)
     finally:
         lock.release()
+    return _purge_after_exit(state_dir, code)
+
+
+def _purge_after_exit(state_dir, code: int) -> int:
+    """Settings > General > Remove Tokitty asked for the state directory to go.
+    That waits for here: the lock is released and the window's own shutdown
+    writes (position, settings) are done, so nothing recreates it."""
+    from tokitty import uninstall
+
+    if not uninstall.purge_requested():
+        return code
+    ok, message = uninstall.purge_state_dir(state_dir)
+    if not ok:
+        print(f"tokitty: could not delete {state_dir}: {message}", file=sys.stderr)
+        return 1
+    return code
 
 
 def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) -> int:
@@ -503,6 +519,15 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         host.streamdock_install = streamdock_holder.install
         host.streamdock_uninstall = streamdock_holder.uninstall
         host.streamdock_install_supported = install_supported
+
+        def finish_uninstall(purge: bool) -> None:
+            if purge:
+                from tokitty import uninstall
+
+                uninstall.request_purge_on_exit()
+            app.quit()
+
+        host.uninstall_finish = finish_uninstall
 
         def edit_streamdock_presets() -> None:
             from tokitty.qt.presets import PresetsDialog

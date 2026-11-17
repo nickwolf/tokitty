@@ -127,6 +127,10 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.hooks_install import install_hooks
 
         return install_hooks()
+    if "--uninstall" in argv:
+        from tokitty.uninstall import run_cli
+
+        return run_cli(argv)
     if "--uninstall-hooks" in argv:
         from tokitty.hooks_install import uninstall_hooks
 

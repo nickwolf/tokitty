@@ -97,6 +97,142 @@ def test_closing_the_window_releases_it(make_world):
     assert again is not window and again.alive()
 
 
+# ---- Remove Tokitty ---------------------------------------------------------
+# SAFETY: build_plan is always replaced by one over tmp_path with a fake
+# autostart backend, so no real hook, plugin or login entry is reachable.
+
+class _Backend:
+    def __init__(self):
+        self.registered = True
+
+    def is_registered(self):
+        return self.registered
+
+    def location(self):
+        return "FAKE-AUTOSTART"
+
+    def deregister(self):
+        self.registered = False
+
+
+def remove_setup(world, monkeypatch, answer):
+    from tokitty import uninstall
+
+    backend = _Backend()
+    real = uninstall.build_plan
+    monkeypatch.setattr(
+        uninstall, "build_plan",
+        lambda state_dir: real(state_dir, config_dirs=[], backend=backend,
+                               appdata=world.state_dir / "appdata"))
+    asked, shown, finished = [], [], []
+    monkeypatch.setattr(qs, "_ask_removal", lambda parent, plan: asked.append(plan) or answer)
+    monkeypatch.setattr(qs, "_show_removal_result", lambda parent, outcomes: shown.append(outcomes))
+    world.host.uninstall_finish = lambda purge: finished.append(purge)
+    return backend, asked, shown, finished
+
+
+def test_remove_row_is_hidden_without_the_seam(make_world):
+    general = open_window(make_world()).tabs["general"]
+    assert general.remove_row.isHidden()
+
+
+def test_remove_lists_asks_removes_reports_then_quits_and_keeps_settings(make_world, monkeypatch):
+    world = make_world()
+    backend, asked, shown, finished = remove_setup(world, monkeypatch, answer=False)
+    (world.state_dir / "accounts.json").write_text("{}")
+    general = open_window(world).tabs["general"]
+    assert not general.remove_row.isHidden()
+    assert general.remove_button.text() == "Remove Tokitty from this computer…"
+
+    general.remove_button.click()
+
+    assert spin_events(lambda: finished)
+    assert [i.kind for i in asked[0].items] == ["autostart"]
+    assert backend.registered is False
+    assert shown and all(o.ok for o in shown[0])
+    assert finished == [False]
+    assert (world.state_dir / "accounts.json").exists()
+
+
+def test_remove_with_the_checkbox_ticked_defers_the_state_directory(make_world, monkeypatch):
+    world = make_world()
+    backend, _asked, shown, finished = remove_setup(world, monkeypatch, answer=True)
+    general = open_window(world).tabs["general"]
+
+    general.remove_button.click()
+
+    assert spin_events(lambda: finished)
+    assert finished == [True]
+    # run_qt deletes it after exit; the open window still has its folder
+    assert world.state_dir.exists()
+    assert "state" not in [o.item.kind for o in shown[0]]
+
+
+def test_cancelling_removes_nothing_and_does_not_quit(make_world, monkeypatch):
+    world = make_world()
+    backend, asked, shown, finished = remove_setup(world, monkeypatch, answer=None)
+    general = open_window(world).tabs["general"]
+
+    general.remove_button.click()
+
+    assert spin_events(lambda: asked)
+    assert spin_events(lambda: not general._remove_pending)
+    assert backend.registered and not shown and not finished
+
+
+def test_a_failed_item_is_reported_and_the_app_still_quits(make_world, monkeypatch):
+    world = make_world()
+    backend, _asked, shown, finished = remove_setup(world, monkeypatch, answer=False)
+
+    def boom():
+        raise OSError("locked")
+
+    backend.deregister = boom
+    general = open_window(world).tabs["general"]
+    general.remove_button.click()
+
+    assert spin_events(lambda: finished)
+    assert [o.ok for o in shown[0]] == [False]
+    assert finished == [False]
+
+
+def test_the_window_cannot_close_while_removal_runs(make_world, monkeypatch):
+    world = make_world()
+    remove_setup(world, monkeypatch, answer=None)
+    general = open_window(world).tabs["general"]
+    assert general.close_blocked() is False
+    general._remove_pending = True
+    assert general.close_blocked() is True
+    general._remove_pending = False
+
+
+def test_purge_after_exit_only_runs_when_asked(tmp_path, monkeypatch):
+    from tokitty import uninstall
+    from tokitty.qt.app import _purge_after_exit
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "position.json").write_text("{}")
+    monkeypatch.setattr(uninstall, "_purge_on_exit", False)
+    assert _purge_after_exit(state, 0) == 0
+    assert state.exists()
+    uninstall.request_purge_on_exit()
+    assert _purge_after_exit(state, 0) == 0
+    assert not state.exists()
+
+
+def test_a_failed_purge_after_exit_is_a_non_zero_exit(tmp_path, monkeypatch, capsys):
+    from tokitty import uninstall
+    from tokitty.qt.app import _purge_after_exit
+
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(uninstall, "_purge_on_exit", True)
+    monkeypatch.setattr(uninstall, "purge_state_dir", lambda d: (False, "locked"))
+    assert _purge_after_exit(state, 0) == 1
+    assert "locked" in capsys.readouterr().err
+
+
 # ---- General ----------------------------------------------------------------
 
 def test_always_in_front_toggle_calls_the_seam_then_notifies(make_world):
