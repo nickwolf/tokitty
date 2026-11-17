@@ -73,6 +73,8 @@ def debug_print() -> int:
             print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
             if s.credits_used is not None and s.credits_limit is not None:
                 print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+            elif s.credits_balance is not None:
+                print(f"credits: ${s.credits_balance:.2f} left")
 
         ledger = provider.resolve_ledger(config_dir)
         if ledger is not None:

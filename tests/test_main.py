@@ -411,6 +411,7 @@ def test_build_fetch_fn_uses_the_injected_loader_and_caches_across_calls(monkeyp
     # by an unrelated early return.
     assert first.status == "api_error"
     assert second.status == "api_error"
+    assert first.http_status == 500
     # This is what the test name promises: the loader passed into
     # build_fetch_fn is the one actually used inside fetch(), and it caches
     # -- a second call must not re-read the Keychain. If `loader = ...`

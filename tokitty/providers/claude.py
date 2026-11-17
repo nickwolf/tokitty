@@ -62,7 +62,9 @@ def build_fetch_fn(config_dir: Optional[str] = None, loader: Optional[Credential
             raw = fetch_usage(creds["accessToken"])
         except ApiError as exc:
             status = "stale_token" if exc.status_code == 401 else "api_error"
-            return PollResult(status=status, snapshot=None, message=str(exc), fetched_at=now)
+            return PollResult(
+                status=status, snapshot=None, message=str(exc), fetched_at=now, http_status=exc.status_code
+            )
 
         snapshot = parse_usage_response(raw)
         return PollResult(
