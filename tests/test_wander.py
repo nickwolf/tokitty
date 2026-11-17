@@ -596,7 +596,7 @@ def _bars(home="inside", state="content", d=QUIET, rng=None, roams=True):
 
 def test_a_bar_tick_up_plays_a_bat_at_once_and_a_fresh_rest_follows():
     roam = _bars()
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert roam.player.target == "move:bat" and roam.wanderer.move == "bat"
     assert roam.wanderer.last_bat == 1_000
     shown = _run(roam, 30_000, now=1_000)
@@ -609,7 +609,7 @@ def test_a_bar_tick_up_plays_a_bat_at_once_and_a_fresh_rest_follows():
 
 def test_a_bat_waits_for_the_transition_into_the_calm_state():
     roam = _bars(state="alert")
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     roam.set_state("interested", 2_000)
     assert roam.player.in_transition and roam.wanderer.move is None
     assert roam.wanderer.moved_until is not None
@@ -620,9 +620,9 @@ def test_a_bat_waits_for_the_transition_into_the_calm_state():
 
 def test_the_same_count_again_is_not_a_new_event():
     roam = _bars()
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     _run(roam, 20_000, now=1_000)
-    roam.set_bar_events((1, 0), 20_000)
+    roam.set_bar_events((1, 0, 0), 20_000)
     roam.set_state("content", 20_500)
     assert roam.wanderer.move is None and roam.wanderer.moved_until is None
 
@@ -630,7 +630,7 @@ def test_the_same_count_again_is_not_a_new_event():
 def test_a_busy_cat_keeps_the_event_until_it_is_calm_again():
     roam = _bars()
     roam.set_state("working", 500)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert roam.wanderer.move is None and roam.wanderer.moved_until == 1_000 + BAR_EVENT_TTL_MS
     roam.set_state("working", 2_000)
     assert roam.wanderer.move is None
@@ -641,14 +641,14 @@ def test_a_busy_cat_keeps_the_event_until_it_is_calm_again():
 def test_a_pending_event_expires_silently_after_ten_minutes():
     roam = _bars()
     roam.set_state("working", 500)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     deadline = 1_000 + BAR_EVENT_TTL_MS
     roam.set_state("content", deadline)
     assert roam.wanderer.move is None and roam.wanderer.moved_until is None
     assert roam.wanderer.last_bat is None
     roam = _bars()
     roam.set_state("working", 500)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     roam.set_state("content", deadline - 1)
     assert roam.wanderer.move == "bat"
 
@@ -660,7 +660,7 @@ def test_an_event_waits_out_a_trip_and_plays_back_home():
     while not roam.wanderer.away:
         now = roam.next_due()
         roam.tick(now)
-    roam.set_bar_events((1, 0), now)
+    roam.set_bar_events((1, 0, 0), now)
     assert roam.wanderer.move != "bat" and roam.wanderer.moved_until is not None
     while roam.wanderer.away:
         roam.set_state("content", now)
@@ -675,7 +675,7 @@ def test_a_napping_cat_keeps_the_event_and_a_woken_one_plays_it():
     roam = _bars(d=Drives(trip=0.0, nap=1.0, bat=1.0, pace=0.5))
     now = _nap(roam)
     w = roam.wanderer
-    roam.set_bar_events((1, 0), now)
+    roam.set_bar_events((1, 0, 0), now)
     assert w.nap_until is not None and w.move is None and w.moved_until is not None
     roam.set_state("content", now + 1_000)
     assert w.move is None
@@ -688,9 +688,9 @@ def test_a_napping_cat_keeps_the_event_and_a_woken_one_plays_it():
 
 def test_a_bat_waits_out_its_cooldown_and_the_event_stays_pending():
     roam = _bars()
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     _run(roam, 20_000, now=1_000)
-    roam.set_bar_events((2, 0), 21_000)
+    roam.set_bar_events((2, 0, 0), 21_000)
     assert roam.wanderer.move is None and roam.wanderer.moved_until is not None
     roam.set_state("content", 1_000 + BAT_COOLDOWN_MS - 1)
     assert roam.wanderer.move is None
@@ -701,20 +701,20 @@ def test_a_bat_waits_out_its_cooldown_and_the_event_stays_pending():
 def test_a_failed_chance_spends_the_event_and_starts_no_cooldown():
     rng = _Rng([0.9, 0.1])
     roam = _bars(d=replace(QUIET, bat=0.5), rng=rng)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert roam.wanderer.move is None and roam.wanderer.moved_until is None
     assert roam.wanderer.last_bat is None
-    roam.set_bar_events((2, 0), 2_000)
+    roam.set_bar_events((2, 0, 0), 2_000)
     assert roam.wanderer.move == "bat" and roam.wanderer.last_bat == 2_000
 
 
 def test_a_certain_chance_draws_nothing_and_a_zero_one_leaves_the_event_pending():
     rng = _Rng()
     roam = _bars(rng=rng)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert roam.wanderer.move == "bat" and rng.draws == 0
     roam = _bars(d=replace(QUIET, bat=0.0, pounce=0.0), rng=_Rng())
-    roam.set_bar_events((1, 1), 1_000)
+    roam.set_bar_events((1, 1, 0), 1_000)
     roam.set_state("content", 5_000)
     w = roam.wanderer
     assert w.move is None and w.moved_until and w.reset_until and w.rng.draws == 0
@@ -725,7 +725,7 @@ def test_a_certain_chance_draws_nothing_and_a_zero_one_leaves_the_event_pending(
 
 def test_a_pounce_wins_over_a_bat_which_waits_for_the_next_calm_moment():
     roam = _bars()
-    roam.set_bar_events((1, 1), 1_000)
+    roam.set_bar_events((1, 1, 0), 1_000)
     w = roam.wanderer
     assert w.move == "pounce" and w.reset_until is None and w.moved_until is not None
     assert w.last_bat is None
@@ -736,8 +736,76 @@ def test_a_pounce_wins_over_a_bat_which_waits_for_the_next_calm_moment():
 
 def test_a_pounce_has_no_cooldown_and_a_failed_chance_spends_it():
     roam = _bars(d=replace(QUIET, pounce=0.5), rng=_Rng([0.9]))
-    roam.set_bar_events((0, 1), 1_000)
+    roam.set_bar_events((0, 1, 0), 1_000)
     assert roam.wanderer.move is None and roam.wanderer.reset_until is None
+
+
+def test_a_weekly_reset_plays_a_pounce_then_a_roll_and_ends_at_home():
+    roam = _bars()
+    roam.set_bar_events((0, 0, 1), 1_000)
+    w = roam.wanderer
+    assert w.move == "pounce" and w.week_until is None
+    shown = _run(roam, 30_000, now=1_000)
+    assert _moves(shown) == ["pounce", "roll"]
+    assert roam.pose == home_pose("inside") and not w.roll_after
+
+
+def test_a_weekly_reset_wins_over_a_session_one_and_a_bat_in_one_play():
+    roam = _bars()
+    roam.set_bar_events((1, 1, 1), 1_000)
+    w = roam.wanderer
+    assert w.move == "pounce" and w.reset_until is None and w.week_until is None
+    assert w.moved_until is not None
+    assert _moves(_run(roam, 30_000, now=1_000)) == ["pounce", "roll"]
+
+
+def test_a_session_reset_alone_pounces_without_a_roll():
+    roam = _bars()
+    roam.set_bar_events((0, 1, 0), 1_000)
+    assert _moves(_run(roam, 30_000, now=1_000)) == ["pounce"]
+    # and a weekly pounce that rolled leaves nothing behind for the next one
+    roam.set_bar_events((0, 1, 1), 40_000)
+    _run(roam, 80_000, now=40_000)
+    roam.set_bar_events((0, 2, 1), 90_000)
+    assert _moves(_run(roam, 120_000, now=90_000)) == ["pounce"]
+
+
+def test_a_weekly_reset_with_no_pounce_chance_stays_pending_then_expires():
+    roam = _bars(d=replace(QUIET, pounce=0.0), rng=_Rng())
+    roam.set_bar_events((0, 0, 1), 1_000)
+    roam.set_state("content", 5_000)
+    w = roam.wanderer
+    assert w.move is None and w.week_until is not None
+    roam.set_state("content", 1_000 + BAR_EVENT_TTL_MS)
+    assert w.week_until is None and w.move is None
+
+
+def test_a_failed_chance_spends_the_weekly_event():
+    roam = _bars(d=replace(QUIET, pounce=0.5), rng=_Rng([0.9]))
+    roam.set_bar_events((0, 0, 1), 1_000)
+    assert roam.wanderer.move is None and roam.wanderer.week_until is None
+
+
+def test_a_weekly_reset_on_the_top_edge_pounces_without_the_floor_roll():
+    roam = _bars("on_top", "content")
+    roam.set_bar_events((0, 0, 1), 1_000)
+    assert "roll" not in _moves(_run(roam, 40_000, now=1_000))
+
+
+def test_a_pounce_cut_short_does_not_roll_on_later():
+    roam = _bars()
+    roam.set_bar_events((0, 0, 1), 1_000)
+    roam.set_state("alert", 1_100)
+    w = roam.wanderer
+    assert w.move is None and not w.roll_after
+
+
+def test_a_change_of_home_carries_the_pending_weekly_reset():
+    roam = _bars(d=replace(QUIET, pounce=0.0))
+    roam.set_bar_events((0, 0, 1), 1_000)
+    before = roam.wanderer
+    roam.set_home("inside_right", True, 2_000)
+    assert roam.wanderer.week_until == before.week_until and roam.wanderer.bar_seen == [0, 0, 1]
 
 
 @pytest.mark.parametrize("state, expected", [
@@ -746,7 +814,7 @@ def test_a_pounce_has_no_cooldown_and_a_failed_chance_spends_it():
 ])
 def test_a_bat_on_the_top_edge_reaches_down_and_the_loaf_comes_back(state, expected):
     roam = _bars("on_top", state, rng=_Rng([0.0]))      # 0.0: the plain bat_down
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert _moves(_run(roam, 30_000, now=1_000)) == expected
     assert roam.pose == home_pose("on_top")
 
@@ -757,30 +825,30 @@ def test_a_bat_on_the_top_edge_reaches_down_and_the_loaf_comes_back(state, expec
 ])
 def test_a_bat_that_rolls_ends_lying_down_and_a_sitting_state_sits_up(state, expected):
     roam = _bars("on_top", state, rng=_Rng([0.99]))
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert _moves(_run(roam, 30_000, now=1_000)) == expected
 
 
 def test_a_cat_that_cannot_roam_still_bats_at_home():
     roam = _bars(roams=False)
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     assert roam.wanderer.move == "bat"
 
 
 def test_a_change_of_home_carries_the_pending_events_and_the_cooldown():
     roam = _bars()
-    roam.set_bar_events((1, 0), 1_000)
+    roam.set_bar_events((1, 0, 0), 1_000)
     _run(roam, 20_000, now=1_000)
     roam.set_state("working", 20_100)
-    roam.set_bar_events((2, 1), 21_000)
+    roam.set_bar_events((2, 1, 0), 21_000)
     before = roam.wanderer
     roam.set_home("inside_right", True, 22_000)
     w = roam.wanderer
     assert w is not before
-    assert (w.bar_seen, w.last_bat) == ([2, 1], 1_000)
+    assert (w.bar_seen, w.last_bat) == ([2, 1, 0], 1_000)
     assert (w.moved_until, w.reset_until) == (before.moved_until, before.reset_until)
     assert w.drives == QUIET
-    roam.set_bar_events((2, 1), 23_000)
+    roam.set_bar_events((2, 1, 0), 23_000)
     assert w.moved_until == before.moved_until
 
 
