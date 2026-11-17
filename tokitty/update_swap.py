@@ -175,7 +175,12 @@ def mac_swap_in(
                 f"The update was swapped in but could not be finished ({exc}), and undoing it failed ({undo})."
             ) from exc
         raise UpdateInstallError(f"Could not keep the old copy ({exc}), so the update was not installed.") from exc
-    discard_staging(state_dir, staged.staging)
+    # The swap is done and the backup recorded, so the caller must get the
+    # backup back to undo it. Startup cleanup retries an owned staging folder.
+    try:
+        discard_staging(state_dir, staged.staging)
+    except Exception as exc:
+        print(f"tokitty: update: discarding staging: {exc}", file=sys.stderr)
     return backup
 
 
