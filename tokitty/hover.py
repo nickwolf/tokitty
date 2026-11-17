@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from tokitty.burn import PACE_CAPS, PACE_WONT_CAP, Pace
-from tokitty.display import format_reset_day, format_reset_time, format_time_left
+from tokitty.display import format_clock, format_reset_day, format_reset_time, format_time_left
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,17 @@ class LimitHover:
 
 @dataclass(frozen=True)
 class LimitsHover:
-    session: LimitHover
-    weekly: LimitHover
+    # Both None when no poll ever succeeded: there are no numbers to show,
+    # only the reason below.
+    session: Optional[LimitHover]
+    weekly: Optional[LimitHover]
+    # "Extra usage: $3.62 / $20.00" or "Credits: $12.40 left"; None when the
+    # account has no credits data.
+    credits: Optional[str] = None
+    # Why the latest poll failed, and when the numbers on show were last
+    # confirmed. Both None unless the latest poll failed.
+    problem: Optional[str] = None
+    last_good_at: Optional[datetime] = None
 
 
 def limit_hover_text(row: LimitHover, now: datetime) -> str:
@@ -54,6 +63,40 @@ def limit_hover_text(row: LimitHover, now: datetime) -> str:
         elif row.pace.status == PACE_WONT_CAP:
             lines.append("At this pace: won't cap before reset")
     return "\n".join(lines)
+
+
+def limits_popup_text(hover: LimitsHover, key: str, now: datetime) -> str:
+    """The popup for one limits row: that limit's lines, then the credits row.
+    Both rows carry it so it is one hover away whichever bar the pointer is on."""
+    row = getattr(hover, key)
+    lines = [] if row is None else [limit_hover_text(row, now)]
+    if hover.credits is not None:
+        lines.append(hover.credits)
+    if hover.problem is not None:
+        lines.append(f"Poll failed: {hover.problem}")
+        if hover.last_good_at is not None:
+            lines.append(f"Last good poll: {format_clock(hover.last_good_at, now)}")
+    return "\n".join(lines)
+
+
+def poll_problem(http_status: Optional[int], message: Optional[str]) -> str:
+    """A short cause for a failed poll: "rate limited (429)", "server error
+    (503)", "timed out", "no network". The message is only consulted when no
+    server answered; ApiError carries nothing finer than its text for those."""
+    if http_status == 429:
+        return "rate limited (429)"
+    if http_status is not None and http_status >= 500:
+        return f"server error ({http_status})"
+    if http_status is not None:
+        return f"HTTP error ({http_status})"
+    text = (message or "").lower()
+    if "timed out" in text:
+        return "timed out"
+    if "network error" in text:
+        return "no network"
+    if "invalid json" in text:
+        return "unreadable response"
+    return "unexpected error"
 
 
 # ---- the cat ----------------------------------------------------------------

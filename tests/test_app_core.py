@@ -120,6 +120,12 @@ def _step(unit, events, *, usage_state=None, notifier=None, store=None, removed=
     )
 
 
+def test_step_unit_shows_a_codex_balance_on_the_card(events):
+    snapshot = replace(_snapshot(), credits_balance=12.4)
+    update = _step(_unit(poll=_poll(snapshot=snapshot)), events, usage_state=_usage_state(notes=(True, 90, 95)))
+    assert update.kwargs["credits_text"] == "$12.40 left"
+
+
 def test_step_unit_limits_ok(events):
     poll = _poll(snapshot=_snapshot())
     unit = _unit(poll=poll)
@@ -145,7 +151,7 @@ def test_step_unit_limits_ok(events):
         "tool_label": "",
         "accent": False,
         "drives": drives(None),
-        "bar_events": (0, 0),
+        "bar_events": (0, 0, 0),
     })
     assert [e[0] for e in events] == ["onboard", "note_write"]
     assert events[0][1:] == (poll, None)
@@ -209,7 +215,7 @@ def test_step_unit_stale_token_without_history(events):
         "tool_label": "",
         "accent": False,
         "drives": drives(None),
-        "bar_events": (0, 0),
+        "bar_events": (0, 0, 0),
     })
     assert unit["last_good"] is None
     assert unit["burn"].samples == []
@@ -534,33 +540,33 @@ def _bars(unit, events, session, resets=RESETS, *, capped=False, view="limits", 
 
 def test_the_first_fresh_poll_only_records(events):
     unit = _unit()
-    assert _bars(unit, events, 40.0)[0] == (0, 0)
+    assert _bars(unit, events, 40.0)[0] == (0, 0, 0)
     assert unit["bars_seen"]["pct"] == 40
 
 
 def test_a_session_percent_going_up_is_a_move(events):
     unit = _unit()
     _bars(unit, events, 40.0)
-    assert _bars(unit, events, 41.0)[0] == (1, 0)
+    assert _bars(unit, events, 41.0)[0] == (1, 0, 0)
     # the same poll on the next tick, and a fall, are not
-    assert _bars(unit, events, 41.0)[0] == (1, 0)
-    assert _bars(unit, events, 39.0)[0] == (1, 0)
-    assert _bars(unit, events, 42.0)[0] == (2, 0)
+    assert _bars(unit, events, 41.0)[0] == (1, 0, 0)
+    assert _bars(unit, events, 39.0)[0] == (1, 0, 0)
+    assert _bars(unit, events, 42.0)[0] == (2, 0, 0)
 
 
 def test_a_move_is_a_change_of_the_whole_percent_as_the_card_shows_it(events):
     unit = _unit()
     _bars(unit, events, 40.2)
-    assert _bars(unit, events, 40.4)[0] == (0, 0)           # both read 40
-    assert _bars(unit, events, 40.6)[0] == (1, 0)           # reads 41
-    assert _bars(unit, events, 41.4)[0] == (1, 0)           # still 41
+    assert _bars(unit, events, 40.4)[0] == (0, 0, 0)           # both read 40
+    assert _bars(unit, events, 40.6)[0] == (1, 0, 0)           # reads 41
+    assert _bars(unit, events, 41.4)[0] == (1, 0, 0)           # still 41
 
 
 def test_a_weekly_only_move_is_ignored(events):
     unit = _unit(poll=_poll(snapshot=_snapshot(session_pct=40.0, weekly_pct=20.0)))
-    assert _step(unit, events).kwargs["bar_events"] == (0, 0)
+    assert _step(unit, events).kwargs["bar_events"] == (0, 0, 0)
     unit["poller"] = _Worker(_poll(snapshot=_snapshot(session_pct=40.0, weekly_pct=30.0)))
-    assert _step(unit, events).kwargs["bar_events"] == (0, 0)
+    assert _step(unit, events).kwargs["bar_events"] == (0, 0, 0)
 
 
 def test_a_stale_or_failed_poll_is_not_looked_at(events):
@@ -568,7 +574,7 @@ def test_a_stale_or_failed_poll_is_not_looked_at(events):
     _bars(unit, events, 40.0)
     _bars(unit, events, 60.0, status="stale_token")
     assert unit["bars_seen"]["pct"] == 40
-    assert _bars(unit, events, 40.0, status="api_error")[0] == (0, 0)
+    assert _bars(unit, events, 40.0, status="api_error")[0] == (0, 0, 0)
 
 
 def test_the_models_view_keeps_the_baseline_and_emits_nothing(events):
@@ -577,8 +583,8 @@ def test_the_models_view_keeps_the_baseline_and_emits_nothing(events):
     update_args, seen = _bars(unit, events, 50.0, view="models")
     assert update_args is None and seen["pct"] == 50
     # back in the limits view that earlier tick-up does not fire
-    assert _bars(unit, events, 50.0)[0] == (0, 0)
-    assert _bars(unit, events, 51.0)[0] == (1, 0)
+    assert _bars(unit, events, 50.0)[0] == (0, 0, 0)
+    assert _bars(unit, events, 51.0)[0] == (1, 0, 0)
 
 
 LATER = RESETS + timedelta(hours=5)
@@ -587,29 +593,29 @@ LATER = RESETS + timedelta(hours=5)
 def test_a_rolled_over_window_with_a_drop_is_a_reset_not_a_move(events):
     unit = _unit()
     _bars(unit, events, 80.0)
-    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
-    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1, 0)
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1, 0)
 
 
 def test_a_reset_needs_the_window_more_than_an_hour_on_and_a_drop(events):
     unit = _unit()
     _bars(unit, events, 80.0)
-    assert _bars(unit, events, 3.0, RESETS + timedelta(hours=1))[0] == (0, 0)   # exactly an hour
+    assert _bars(unit, events, 3.0, RESETS + timedelta(hours=1))[0] == (0, 0, 0)   # exactly an hour
     unit = _unit()
     _bars(unit, events, 80.0)
-    assert _bars(unit, events, 90.0, LATER)[0] == (1, 0)                         # up, not a reset
+    assert _bars(unit, events, 90.0, LATER)[0] == (1, 0, 0)                         # up, not a reset
     unit = _unit()
     _bars(unit, events, 80.0)
-    assert _bars(unit, events, 3.0, RESETS)[0] == (0, 0)                         # same window
+    assert _bars(unit, events, 3.0, RESETS)[0] == (0, 0, 0)                         # same window
 
 
 def test_a_window_that_capped_does_not_pound_the_reset(events):
     unit = _unit()
     _bars(unit, events, 100.0, capped=True)
-    assert _bars(unit, events, 2.0, LATER)[0] == (0, 0)
+    assert _bars(unit, events, 2.0, LATER)[0] == (0, 0, 0)
     assert unit["bars_seen"]["capped"] is False
     # an uncapped window after it can reset again
-    assert _bars(unit, events, 1.0, LATER + timedelta(hours=5))[0] == (0, 1)
+    assert _bars(unit, events, 1.0, LATER + timedelta(hours=5))[0] == (0, 1, 0)
 
 
 def test_a_reset_compares_with_the_last_resets_at_that_was_known(events):
@@ -617,7 +623,7 @@ def test_a_reset_compares_with_the_last_resets_at_that_was_known(events):
     _bars(unit, events, 80.0)
     _bars(unit, events, 80.0, None)
     assert unit["bars_seen"]["resets_at"] == RESETS
-    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1)
+    assert _bars(unit, events, 3.0, LATER)[0] == (0, 1, 0)
 
 
 
@@ -626,8 +632,81 @@ def test_a_drop_seen_while_resets_at_was_missing_still_counts(events):
     # once the next window has one
     unit = _unit()
     _bars(unit, events, 80.0)
-    assert _bars(unit, events, 0.0, None)[0] == (0, 0)
-    assert _bars(unit, events, 1.0, LATER)[0] == (0, 1)
+    assert _bars(unit, events, 0.0, None)[0] == (0, 0, 0)
+    assert _bars(unit, events, 1.0, LATER)[0] == (0, 1, 0)
+
+# ---- the weekly window resets (#229) ---------------------------------------------
+
+WEEK_LATER = WEEKLY_RESETS + timedelta(days=7)
+
+
+def _weeks(unit, events, weekly, week_resets=WEEKLY_RESETS, *, session=40.0, resets=RESETS,
+           capped_weekly=False, view="limits", status="ok"):
+    """Step `unit` against a poll showing `weekly` percent, and return its bar_events."""
+    limits = [LimitInfo(kind="weekly", percent=100.0, severity="exceeded", resets_at=week_resets,
+                        is_active=True)] if capped_weekly else []
+    snapshot = UsageSnapshot(session_pct=session, session_resets_at=resets, weekly_pct=weekly,
+                             weekly_resets_at=week_resets, limits=limits, fetched_at=NOW)
+    unit["poller"] = _Worker(_poll(status=status, snapshot=snapshot))
+    return _step(unit, events, usage_state=_usage_state(view=view)).kwargs.get("bar_events")
+
+
+def test_a_rolled_over_week_with_a_drop_counts_once(events):
+    unit = _unit()
+    assert _weeks(unit, events, 80.0) == (0, 0, 0)               # the first poll only records
+    assert _weeks(unit, events, 2.0, WEEK_LATER) == (0, 0, 1)
+    assert _weeks(unit, events, 2.0, WEEK_LATER) == (0, 0, 1)    # the same poll again
+    assert _weeks(unit, events, 3.0, WEEK_LATER) == (0, 0, 1)
+
+
+def test_a_week_needs_a_day_more_and_a_drop(events):
+    unit = _unit()
+    _weeks(unit, events, 80.0)
+    assert _weeks(unit, events, 2.0, WEEKLY_RESETS + timedelta(days=1)) == (0, 0, 0)  # exactly a day
+    unit = _unit()
+    _weeks(unit, events, 80.0)
+    assert _weeks(unit, events, 90.0, WEEK_LATER) == (0, 0, 0)                      # no drop
+    unit = _unit()
+    _weeks(unit, events, 80.0)
+    assert _weeks(unit, events, 2.0, WEEKLY_RESETS) == (0, 0, 0)                    # same window
+
+
+def test_a_week_that_capped_does_not_count(events):
+    unit = _unit()
+    _weeks(unit, events, 100.0, capped_weekly=True)
+    assert _weeks(unit, events, 2.0, WEEK_LATER) == (0, 0, 0)
+    assert unit["bars_seen"]["week_capped"] is False
+    assert _weeks(unit, events, 1.0, WEEK_LATER + timedelta(days=7)) == (0, 0, 1)
+
+
+def test_a_capped_session_does_not_hide_a_weekly_reset(events):
+    unit = _unit()
+    _bars(unit, events, 100.0, capped=True)
+    assert _weeks(unit, events, 2.0, WEEK_LATER, session=100.0)[2] == 1
+
+
+def test_a_stale_poll_or_the_models_view_does_not_fire_a_week(events):
+    unit = _unit(breakdown=_breakdown())
+    _weeks(unit, events, 80.0)
+    _weeks(unit, events, 2.0, WEEK_LATER, status="stale_token")
+    assert unit["bars_seen"]["week_resets_at"] == WEEKLY_RESETS
+    assert _weeks(unit, events, 2.0, WEEK_LATER, view="models") is None
+    assert _weeks(unit, events, 2.0, WEEK_LATER) == (0, 0, 0)    # the baseline moved with it
+
+
+def test_a_week_and_a_session_resetting_together_count_only_the_week(events):
+    unit = _unit()
+    _weeks(unit, events, 80.0, session=80.0)
+    assert _weeks(unit, events, 2.0, WEEK_LATER, session=3.0, resets=LATER) == (0, 0, 1)
+    # the session baseline still moved, so its next window counts again on its own
+    assert _weeks(unit, events, 2.0, WEEK_LATER, session=3.0, resets=LATER) == (0, 0, 1)
+
+
+def test_a_session_reset_alone_still_counts_with_the_week_unchanged(events):
+    unit = _unit()
+    _weeks(unit, events, 20.0, session=80.0)
+    assert _weeks(unit, events, 21.0, session=3.0, resets=LATER) == (0, 1, 0)
+
 
 # ---- limits hover ------------------------------------------------------------
 
@@ -665,6 +744,51 @@ def test_limits_hover_marks_the_capped_bar():
                              weekly_resets_at=WEEKLY_RESETS, limits=[capped], fetched_at=NOW)
     hover = _limits_hover_for(snapshot, BurnTracker(), {}, NOW)
     assert hover.session.capped and not hover.weekly.capped
+
+
+def test_limits_hover_credits_row_names_claude_spend_and_a_codex_balance():
+    spend = replace(_snapshot(), credits_used=3.62, credits_limit=20.0)
+    balance = replace(_snapshot(), credits_balance=12.4)
+    assert _limits_hover_for(spend, BurnTracker(), {}, NOW).credits == "Extra usage: $3.62 / $20.00"
+    assert _limits_hover_for(balance, BurnTracker(), {}, NOW).credits == "Credits: $12.40 left"
+    assert _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW).credits is None
+
+
+def _failed(http_status=None, message=None):
+    return PollResult(status="api_error", snapshot=None, message=message, fetched_at=NOW,
+                      http_status=http_status)
+
+
+def test_limits_hover_carries_the_failure_cause_and_the_last_good_time():
+    last_good = _poll(snapshot=_snapshot(), fetched_at=NOW - timedelta(minutes=9))
+    hover = _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW, _failed(429), last_good)
+    assert hover.problem == "rate limited (429)"
+    assert hover.last_good_at == NOW - timedelta(minutes=9)
+
+
+def test_limits_hover_has_no_failure_note_when_the_poll_worked():
+    hover = _limits_hover_for(_snapshot(), BurnTracker(), {}, NOW, None, _poll(snapshot=_snapshot()))
+    assert hover.problem is None and hover.last_good_at is None
+
+
+def test_step_unit_api_error_puts_the_cause_in_the_hover_and_keeps_the_card_hint(events):
+    last_good = _poll(snapshot=_snapshot(), fetched_at=NOW - timedelta(minutes=9))
+    unit = _unit(poll=_failed(503, "HTTP 503 from usage endpoint"), last_good=last_good)
+    kwargs = _step(unit, events, usage_state=_usage_state()).kwargs
+    assert kwargs["hover"].problem == "server error (503)"
+    assert kwargs["hover"].last_good_at == last_good.fetched_at
+
+
+def test_step_unit_api_error_with_no_good_poll_still_explains_itself(events):
+    unit = _unit(poll=_failed(None, "Network error reaching usage endpoint: timed out"))
+    update = _step(unit, events, usage_state=_usage_state())
+    assert update.kwargs["hint_text"] == "API hiccup, retrying"
+    assert update.kwargs["hover"] == LimitsHover(session=None, weekly=None, problem="timed out")
+
+
+def test_step_unit_a_working_poll_leaves_the_hover_without_a_failure_note(events):
+    kwargs = _step(_unit(poll=_poll(snapshot=_snapshot())), events, usage_state=_usage_state()).kwargs
+    assert kwargs["hover"].problem is None
 
 
 def test_limits_hover_is_none_without_a_snapshot():

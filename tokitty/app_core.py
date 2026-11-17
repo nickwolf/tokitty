@@ -23,6 +23,7 @@ from tokitty.credentials import CredentialLoader
 from tokitty.customize import SINGLE_KEY, Customization, save_customization
 from tokitty.display import (
     format_countdown,
+    format_credits,
     format_observed_at,
     format_pane_label,
     format_projection,
@@ -32,8 +33,10 @@ from tokitty.display import (
 )
 from tokitty.handoff import Hint, Standing, handoff_hints
 from tokitty.hooks_install import retry_pending_hook_op
-from tokitty.hover import LimitHover, LimitsHover
-from tokitty.mood import compute_capped_substate, compute_mood, detect_activate, select_binding_capped_limit
+from tokitty.hover import LimitHover, LimitsHover, poll_problem
+from tokitty.mood import (
+    compute_capped_substate, compute_mood, detect_activate, is_capped, select_binding_capped_limit,
+)
 from tokitty.poller import PollResult, Poller
 from tokitty.pose import resolve_pose
 from tokitty.providers import (
@@ -98,10 +101,6 @@ def _display_from_snapshot(snapshot, now: datetime) -> dict:
         session_text = format_reset_time(snapshot.session_resets_at) if snapshot.session_resets_at else "—"
         weekly_text = format_reset_day(snapshot.weekly_resets_at) if snapshot.weekly_resets_at else "—"
 
-    credits_text = None
-    if snapshot.credits_used is not None and snapshot.credits_used > 0 and snapshot.credits_limit is not None:
-        credits_text = f"${snapshot.credits_used:.2f} / ${snapshot.credits_limit:.2f}"
-
     return {
         "state": state,
         "session_pct": snapshot.session_pct,
@@ -109,7 +108,7 @@ def _display_from_snapshot(snapshot, now: datetime) -> dict:
         "session_reset_text": session_text,
         "weekly_reset_text": weekly_text,
         "driving_tag": driving_tag,
-        "credits_text": credits_text,
+        "credits_text": format_credits(snapshot),
         # Derived from the snapshot rather than the poll, so it reports
         # the age of the numbers on screen whether they came from this
         # poll, a cached one, or a transcript written hours ago.
@@ -254,12 +253,19 @@ def _projection_text_for(tracker: BurnTracker, display: dict, now: datetime) -> 
     return format_projection(projection.kind, projection.caps_at)
 
 
-def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: datetime) -> Optional[LimitsHover]:
+def _limits_hover_for(
+    snapshot, tracker: BurnTracker, display: dict, now: datetime, failed: Optional[PollResult] = None,
+    last_good: Optional[PollResult] = None,
+) -> Optional[LimitsHover]:
     """The raw numbers behind the limits popup, or None when no snapshot was
-    ever read. The pace is left out whenever the numbers are dimmed or old,
-    for the same reason the status line's projection is."""
+    ever read and nothing failed either. The pace is left out whenever the
+    numbers are dimmed or old, for the same reason the status line's
+    projection is. `failed` is the latest poll when it did not succeed, so
+    the popup can say why."""
     if snapshot is None:
-        return None
+        if failed is None:
+            return None
+        return LimitsHover(session=None, weekly=None, problem=poll_problem(failed.http_status, failed.message))
     binding = select_binding_capped_limit(snapshot.limits)
     trusted = not display.get("dimmed") and not display.get("stale_text")
 
@@ -270,9 +276,15 @@ def _limits_hover_for(snapshot, tracker: BurnTracker, display: dict, now: dateti
             pace=tracker.pace(kind, now) if trusted else Pace(PACE_UNKNOWN),
         )
 
+    credits = format_credits(snapshot)
+    if credits is not None:
+        credits = f"{'Credits' if snapshot.credits_balance is not None else 'Extra usage'}: {credits}"
     return LimitsHover(
         session=row("Session", "session", snapshot.session_pct, snapshot.session_resets_at),
         weekly=row("Week", "weekly", snapshot.weekly_pct, snapshot.weekly_resets_at),
+        credits=credits,
+        problem=poll_problem(failed.http_status, failed.message) if failed is not None else None,
+        last_good_at=last_good.fetched_at if failed is not None and last_good is not None else None,
     )
 
 
@@ -556,30 +568,46 @@ def _handoff_standing(unit: dict, shown, display: dict, custom) -> Standing:
                     confirmed=not display["dimmed"], kind=unit["provider"].kind.capitalize())
 
 
-# A session window that rolled over this far ahead without capping is a reset.
+# A session window that rolled over this far ahead without capping is a reset;
+# a weekly one needs a day, as its resets_at only ever moves a week at a time.
 RESET_GAP = timedelta(hours=1)
+WEEK_RESET_GAP = timedelta(days=1)
 
 
-def _note_bars(unit: dict, latest: PollResult, display: dict, count: bool) -> Tuple[int, int]:
-    """Fold a fresh poll into unit["bars_seen"] and return its (moved, reset)
-    counters (#135). Moved: the session bar's whole percent went up. Reset:
-    the window rolled over without capping (a capped one plays activate), so
-    resets_at is over an hour on and the percent dropped. Without `count`
-    (the models view, which shows no bars) only the baseline moves, so an old
-    tick-up cannot fire when the limits come back."""
+def _window_reset(seen: dict, prefix: str, resets_at, pct: int, gap: timedelta) -> bool:
+    """Whether this poll shows the window `prefix` ("" session, "week_" weekly)
+    rolled over without capping since the last one that had a resets_at."""
+    return (resets_at is not None and seen[prefix + "resets_at"] is not None
+            and not seen[prefix + "capped"] and resets_at - seen[prefix + "resets_at"] > gap
+            and pct < seen[prefix + "window_pct"])
+
+
+def _note_bars(unit: dict, latest: PollResult, display: dict, count: bool) -> Tuple[int, int, int]:
+    """Fold a fresh poll into unit["bars_seen"] and return its (moved, reset,
+    week) counters (#135, #229). Moved: the session bar's whole percent went
+    up. Reset: the session window rolled over without capping (a capped one
+    plays activate), so resets_at is over an hour on and the percent dropped.
+    Week: the same for the weekly window, and a poll showing both counts only
+    the week. Without `count` (the models view, which shows no bars) only the
+    baseline moves, so an old tick-up cannot fire when the limits come back."""
     # window_pct and capped belong to the last poll that had a resets_at: an
     # idle window can come back without one, and the drop must still count
     # when the next window's resets_at shows up.
-    seen = unit.setdefault("bars_seen", {"pct": None, "resets_at": None, "window_pct": None,
-                                         "capped": False, "moved": 0, "reset": 0})
+    seen = unit.setdefault("bars_seen", {
+        "pct": None, "resets_at": None, "window_pct": None, "capped": False,
+        "week_resets_at": None, "week_window_pct": None, "week_capped": False,
+        "moved": 0, "reset": 0, "week": 0})
     if latest.status != "ok" or latest.snapshot is None or display["dimmed"]:
-        return seen["moved"], seen["reset"]
+        return seen["moved"], seen["reset"], seen["week"]
     snapshot = latest.snapshot
     pct = round(snapshot.session_pct)
     resets_at = snapshot.session_resets_at
+    week_pct = round(snapshot.weekly_pct)
+    week_resets_at = snapshot.weekly_resets_at
     if count and seen["pct"] is not None:
-        if (resets_at is not None and seen["resets_at"] is not None and not seen["capped"]
-                and resets_at - seen["resets_at"] > RESET_GAP and pct < seen["window_pct"]):
+        if _window_reset(seen, "week_", week_resets_at, week_pct, WEEK_RESET_GAP):
+            seen["week"] += 1
+        elif _window_reset(seen, "", resets_at, pct, RESET_GAP):
             seen["reset"] += 1
         elif pct > seen["pct"]:
             seen["moved"] += 1
@@ -588,7 +616,12 @@ def _note_bars(unit: dict, latest: PollResult, display: dict, count: bool) -> Tu
         seen["resets_at"] = resets_at
         seen["window_pct"] = pct
         seen["capped"] = select_binding_capped_limit(snapshot.limits) is not None
-    return seen["moved"], seen["reset"]
+    if week_resets_at is not None:
+        seen["week_resets_at"] = week_resets_at
+        seen["week_window_pct"] = week_pct
+        seen["week_capped"] = any(lim.kind != "session" and is_capped(lim) and lim.is_active
+                                  for lim in snapshot.limits)
+    return seen["moved"], seen["reset"], seen["week"]
 
 
 def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: dict,
@@ -643,7 +676,10 @@ def step_unit(unit: dict, *, usage_state: dict, notifier, customization_store: d
         display["accent"] = pose["accent"]
         display["drives"] = cat_drives
         display["bar_events"] = bar_events
-        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now)
+        # Only api_error needs the popup's explanation: every other failed
+        # status already has a specific hint on the card.
+        failed = latest if latest.status == "api_error" else None
+        display["hover"] = _limits_hover_for(shown, unit["burn"], display, now, failed, unit["last_good"])
         update = PaneUpdate("limits", display)
     unit["last_good"] = _next_last_good(latest, unit["last_good"])
     return update

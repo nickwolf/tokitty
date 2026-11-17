@@ -21,7 +21,7 @@ from tokitty import sprites
 from tokitty import theme as T
 from tokitty.customize import Customization
 from tokitty.display import reset_phrase
-from tokitty.hover import limit_hover_text
+from tokitty.hover import limits_popup_text
 from tokitty.menu import MenuItem
 from tokitty.qt import macos, position
 from tokitty.qt.hover import HOVER_DELAY_MS, HoverPopup, PopupLook, place_popup
@@ -993,7 +993,7 @@ class TokittyQtWidget(QWidget):
             hover = pane.limits_hover
             if hover is None:
                 return None
-            return limit_hover_text(getattr(hover, key), datetime.now(timezone.utc))
+            return limits_popup_text(hover, key, datetime.now(timezone.utc))
         view = pane.usage_view
         if view is None or key >= len(view.rows) or view.rows[key].detail is None:
             return None

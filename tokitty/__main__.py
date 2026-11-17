@@ -73,6 +73,8 @@ def debug_print() -> int:
             print(f"weekly:  {s.weekly_pct:.1f}% (resets {s.weekly_resets_at})")
             if s.credits_used is not None and s.credits_limit is not None:
                 print(f"credits: ${s.credits_used:.2f} / ${s.credits_limit:.2f}")
+            elif s.credits_balance is not None:
+                print(f"credits: ${s.credits_balance:.2f} left")
 
         ledger = provider.resolve_ledger(config_dir)
         if ledger is not None:
@@ -125,6 +127,10 @@ def main(argv: Optional[list] = None) -> int:
         from tokitty.hooks_install import install_hooks
 
         return install_hooks()
+    if "--uninstall" in argv:
+        from tokitty.uninstall import run_cli
+
+        return run_cli(argv)
     if "--uninstall-hooks" in argv:
         from tokitty.hooks_install import uninstall_hooks
 

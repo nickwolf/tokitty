@@ -2,7 +2,9 @@ import pytest
 import re
 from datetime import datetime, timezone
 
+from tokitty.api import UsageSnapshot
 from tokitty.display import (
+    format_credits,
     bar_color,
     format_countdown,
     format_time_left,
@@ -84,6 +86,26 @@ def test_format_projection_stays_within_the_character_budget():
     The real check is the Windows manual gate."""
     worst = format_projection("weekly", datetime(2026, 8, 5, 23, 40, tzinfo=timezone.utc))
     assert len(worst) <= 24
+
+
+def _credits(used=None, limit=None, balance=None):
+    return UsageSnapshot(session_pct=0.0, session_resets_at=None, weekly_pct=0.0,
+                         weekly_resets_at=None, credits_used=used, credits_limit=limit,
+                         credits_balance=balance)
+
+
+def test_format_credits_shows_claude_spend_against_its_limit():
+    assert format_credits(_credits(used=3.62, limit=20.0)) == "$3.62 / $20.00"
+
+
+def test_format_credits_shows_a_codex_balance_as_money_left():
+    assert format_credits(_credits(balance=12.4)) == "$12.40 left"
+
+
+def test_format_credits_is_none_with_nothing_spent_or_left():
+    assert format_credits(_credits()) is None
+    assert format_credits(_credits(used=0.0, limit=20.0)) is None
+    assert format_credits(_credits(balance=0.0)) is None
 
 
 def test_resolve_status_text_prefers_the_hint():

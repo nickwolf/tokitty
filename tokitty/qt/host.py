@@ -38,6 +38,9 @@ class QtHost:
         self.streamdock_install: Optional[Callable] = None
         self.streamdock_uninstall: Optional[Callable] = None
         self.streamdock_install_supported: Optional[Callable[[], bool]] = None
+        # Called with the purge choice after Remove Tokitty ran; quits the app.
+        # None hides the Settings button.
+        self.uninstall_finish: Optional[Callable[[bool], None]] = None
         # The tray seams are set by run_qt (#114). The update seams are set
         # by run_qt too (#113).
         self.tray_refresh: Optional[Callable[[], None]] = None
@@ -47,6 +50,8 @@ class QtHost:
         self.tray_available: Optional[Callable[[], bool]] = None
         self.update_check_enabled = None
         self.on_toggle_update_check = None
+        self.update_beta_enabled = None
+        self.on_toggle_update_beta = None
         self.on_check_updates = None
         self.update_available_label = None
         self.on_install_update = None

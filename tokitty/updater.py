@@ -32,9 +32,17 @@ UPDATE_LOCK_TIMEOUT = 5.0
 OWNED_KINDS = ("copy", "staging", "backup")
 
 # Leading zeros are rejected so two spellings of one version can't both exist.
-_VERSION_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)
+# An optional semver prerelease follows a hyphen: v1.1.0-beta.1.
+_IDENT = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+_VERSION_RE = re.compile(
+    rf"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-({_IDENT}(?:\.{_IDENT})*))?",
+    re.ASCII,
+)
 
-Version = Tuple[int, int, int]
+# (major, minor, patch, rank). A release ranks (1,), above any prerelease of
+# the same numbers, whose rank is (0, identifiers...) compared the semver way:
+# a number before a word, and a shorter list before a longer one it starts.
+Version = Tuple[int, int, int, tuple]
 
 
 class UpdateCheckError(Exception):
@@ -45,7 +53,19 @@ def parse_version(text) -> Optional[Version]:
     if not isinstance(text, str):
         return None
     match = _VERSION_RE.fullmatch(text)
-    return tuple(int(part) for part in match.groups()) if match else None
+    if match is None:
+        return None
+    major, minor, patch, pre = match.groups()
+    if pre is None:
+        rank = (1,)
+    else:
+        rank = (0,) + tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre.split("."))
+    return (int(major), int(minor), int(patch), rank)
+
+
+def is_prerelease_tag(tag) -> bool:
+    version = parse_version(tag)
+    return version is not None and version[3][0] == 0
 
 
 @dataclass(frozen=True)
@@ -146,24 +166,28 @@ def fetch_releases(*, urlopen=None, base_url: Optional[str] = None) -> list:
     return releases
 
 
-def select_releases(releases, target: Optional[str]) -> List[Release]:
-    """Every stable release, highest version first. Releases with the same
-    version keep their listed order."""
+def select_releases(releases, target: Optional[str], *, include_prereleases: bool = False) -> List[Release]:
+    """Every stable release, highest version first, plus the prereleases when
+    asked (a release is one by GitHub's flag or by its tag). Releases with the
+    same version keep their listed order."""
     found: List[Tuple[Version, dict]] = []
     for entry in releases if isinstance(releases, list) else []:
-        if not isinstance(entry, dict) or entry.get("draft") or entry.get("prerelease"):
+        if not isinstance(entry, dict) or entry.get("draft"):
             continue
         version = parse_version(entry.get("tag_name"))
-        if version is not None:
-            found.append((version, entry))
+        if version is None:
+            continue
+        if not include_prereleases and (entry.get("prerelease") or version[3][0] == 0):
+            continue
+        found.append((version, entry))
     found.sort(key=lambda pair: pair[0], reverse=True)
     return [_release(entry, target) for _version, entry in found]
 
 
-def select_latest(releases, target: Optional[str]) -> Optional[Release]:
+def select_latest(releases, target: Optional[str], *, include_prereleases: bool = False) -> Optional[Release]:
     """The highest stable version by number. `releases/latest` isn't used: it
     sorts by the tagged commit's date, not by version."""
-    found = select_releases(releases, target)
+    found = select_releases(releases, target, include_prereleases=include_prereleases)
     return found[0] if found else None
 
 

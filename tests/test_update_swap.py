@@ -249,6 +249,21 @@ def test_mac_swap_in_leaves_the_new_bundle_and_a_hidden_backup(tmp_path, state):
     assert _owned(state) == {str(backup): ("v0.2.1", "backup")}
 
 
+def test_mac_swap_in_still_returns_the_backup_when_discarding_staging_fails(tmp_path, state, monkeypatch):
+    apps, app, staged = _mac_setup(tmp_path, state)
+
+    def locked(state_dir, staging):
+        raise TimeoutError("update.json is locked")
+
+    monkeypatch.setattr(update_swap, "discard_staging", locked)
+    backup = mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)
+    assert backup == backup_path(app, "v0.2.1")
+    assert binary_paths(app, "darwin")[0].read_text() == "new"
+    assert _owned(state)[str(backup)] == ("v0.2.1", "backup")
+    mac_swap_back(app, backup, state, swap=_fake_swap)
+    assert binary_paths(app, "darwin")[0].read_text() == "old"
+
+
 def test_mac_swap_back_restores_the_old_bundle_and_removes_the_failed_one(tmp_path, state):
     apps, app, staged = _mac_setup(tmp_path, state)
     backup = mac_swap_in(staged, app, "v0.2.1", state, swap=_fake_swap)

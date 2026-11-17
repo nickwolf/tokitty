@@ -46,26 +46,35 @@ class FakeController:
 
 
 class FakeChecker:
-    def __init__(self, latest=None, available=False, history=None):
+    def __init__(self, latest=None, available=False, history=None, skipped=""):
         self.latest_release, self.update_available, self.waiting = latest, available, []
         self.release_history, self.enabled = history, False
+        self.skipped = skipped
+
+    def is_skipped(self, release):
+        return release is not None and release.tag == self.skipped
+
+    def apply_skip(self):
+        self.update_available = False
 
     def check_now(self, on_result):
         self.waiting.append(on_result)
 
 
 class Setup:
-    def __init__(self, world, release=RELEASE, controller=None, available=True, history=None):
+    def __init__(self, world, release=RELEASE, controller=None, available=True, history=None, skipped=""):
         self.world = world
         self.urls, self.offers = [], []
         self.controller = controller or FakeController()
         if history is None:
             history = (release,) if available and release is not None else ()
-        self.checker = FakeChecker(release if available else None, available, history)
+        self.checker = FakeChecker(release if available else None, available, history, skipped)
+        self.skips = []
         self.actions = UpdateActions(
             self.checker, self.controller,
             defer=lambda fn: fn(), error=lambda *a: None, info=lambda *a: None,
             offer=lambda r: SettingsWindow.open(world.host, tab="updates"),
+            skip=self._skip,
             changed=world.host.notify_state_changed, open_url=self.urls.append)
         host = world.host
         host.update_actions = self.actions
@@ -73,6 +82,10 @@ class Setup:
         host.on_toggle_update_check = lambda: None
         host.on_check_updates = self.actions.check_now
         host.update_available_label = lambda: f"Update to {RELEASE.tag}…" if available else None
+
+    def _skip(self, tag):
+        self.skips.append(tag)
+        self.checker.skipped = tag
 
     def tab(self):
         window = SettingsWindow.open(self.world.host, tab="updates")
@@ -108,7 +121,7 @@ def test_an_available_release_shows_headline_rendered_notes_and_install(setup):
     plain = tab.notes.toPlainText()
     assert "Fixed" in plain and "the thing" in plain and "**" not in plain
     assert "View on GitHub" in plain
-    assert tab.button_labels() == ["Install"]
+    assert tab.button_labels() == ["Install", "Skip this version"]
     assert "[View on GitHub](https://example.test/notes)" in tab.notes.toMarkdown()
 
 
@@ -159,7 +172,7 @@ def test_the_history_lists_each_release_under_its_heading_newest_first(setup):
         assert f"[View on GitHub]({release.html_url})" in markdown
     assert markdown.rstrip().endswith(f"[{MORE_ON_GITHUB}]({RELEASES_URL})")
     assert NO_NOTES in tab.notes.toPlainText()
-    assert tab.button_labels() == ["Install"]
+    assert tab.button_labels() == ["Install", "Skip this version"]
 
 
 def test_a_heading_in_a_release_body_stays_its_own_heading(setup):
@@ -227,7 +240,7 @@ def test_a_remembered_tag_triggers_a_check_when_the_tab_opens(setup):
 
 def test_a_refused_release_shows_the_reason_and_no_install(setup):
     _, tab = setup(controller=FakeController(reason="Can't update itself.")).tab()
-    assert tab.note.text() == "Can't update itself." and tab.button_labels() == []
+    assert tab.note.text() == "Can't update itself." and tab.button_labels() == ["Skip this version"]
 
 
 def test_install_progress_renders_in_the_tab(setup):
@@ -241,7 +254,7 @@ def test_install_progress_renders_in_the_tab(setup):
     assert made.controller.cancels == 1 and tab.note.text() == "Cancelling…"
     made.controller.busy = False
     made.controller.installs[0][2](UpdateResult("cancelled"))
-    assert tab.note.text() == "Cancelled." and tab.button_labels() == ["Install"]
+    assert tab.note.text() == "Cancelled." and tab.button_labels() == ["Install", "Skip this version"]
 
 
 def test_closing_is_refused_while_an_install_runs(setup):
@@ -267,7 +280,7 @@ def test_reopening_after_a_failed_install_shows_the_current_state(setup):
     made.controller.installs[0][2](UpdateResult("failed", message="again"))
     made.controller.installs[0][1](1, 2)
     window2, tab2 = made.tab()
-    assert window2 is not window and tab2.note.text() == "" and tab2.button_labels() == ["Install"]
+    assert window2 is not window and tab2.note.text() == "" and tab2.button_labels() == ["Install", "Skip this version"]
 
 
 def test_a_rolled_back_install_starts_the_tab_over(setup):
@@ -276,7 +289,7 @@ def test_a_rolled_back_install_starts_the_tab_over(setup):
     tab.invoke("Install")
     made.controller.busy = False
     made.controller.installs[0][2](UpdateResult("rolled_back"))
-    assert tab.note.text() == "" and tab.button_labels() == ["Install"]
+    assert tab.note.text() == "" and tab.button_labels() == ["Install", "Skip this version"]
 
 
 def test_open_selects_the_tab_for_a_new_and_an_open_window(setup):
@@ -304,3 +317,32 @@ def test_the_offer_opens_settings_on_the_updates_tab(setup):
     made.actions.check_now()
     made.checker.waiting[0](CheckResult(RELEASE, newer=True))
     assert SettingsWindow.open(made.world.host).current == "updates"
+
+
+def test_the_tab_offers_skip_next_to_install_and_skipping_hides_the_button(setup):
+    made = setup()
+    _, tab = made.tab()
+    assert tab.button_labels() == ["Install", "Skip this version"]
+    tab.invoke("Skip this version")
+    assert made.skips == ["v0.3.0"]
+    assert tab.button_labels() == ["Install"]
+    assert tab.headline.text() == "Tokitty v0.2.0 is installed.\nv0.3.0 is available, but you skipped it."
+
+
+def test_a_skipped_release_shows_in_the_tab_with_install_only(setup):
+    made = setup()
+    made.checker.update_available, made.checker.skipped = False, "v0.3.0"
+    _, tab = made.tab()
+    assert tab.headline.text().endswith("v0.3.0 is available, but you skipped it.")
+    assert tab.button_labels() == ["Install"]
+
+
+def test_the_beta_toggle_follows_its_seams(setup):
+    made = setup()
+    state = {"beta": False}
+    made.world.host.update_beta_enabled = lambda: state["beta"]
+    made.world.host.on_toggle_update_beta = lambda: state.update(beta=not state["beta"])
+    _, tab = made.tab()
+    assert tab.beta_toggle.get() is False
+    tab.beta_toggle._clicked()
+    assert state["beta"] is True and tab.beta_toggle.get() is True

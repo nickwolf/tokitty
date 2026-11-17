@@ -166,17 +166,15 @@ def parse_token_count_event(event: dict) -> Optional[UsageSnapshot]:
     session = by_kind.get("session")
     weekly = by_kind.get("weekly")
 
-    credits_used = None
-    credits_limit = None
+    credits_balance = None
     credits = limits_raw.get("credits")
     if isinstance(credits, dict) and not credits.get("unlimited"):
         try:
-            # Codex reports the balance remaining as a decimal string;
-            # Tokitty's card wants used-against-limit, so an unknown limit
-            # stays None rather than being invented from the balance.
-            credits_used = float(credits.get("balance"))
+            # Codex reports only the balance remaining, as a decimal string,
+            # so it gets its own field rather than posing as credits_used.
+            credits_balance = float(credits.get("balance"))
         except (TypeError, ValueError):
-            credits_used = None
+            credits_balance = None
 
     return UsageSnapshot(
         session_pct=session.percent if session else 0.0,
@@ -184,8 +182,7 @@ def parse_token_count_event(event: dict) -> Optional[UsageSnapshot]:
         weekly_pct=weekly.percent if weekly else 0.0,
         weekly_resets_at=weekly.resets_at if weekly else None,
         limits=limits,
-        credits_used=credits_used,
-        credits_limit=credits_limit,
+        credits_balance=credits_balance,
         fetched_at=_parse_iso(event.get("timestamp")) or datetime.now(timezone.utc),
     )
 
