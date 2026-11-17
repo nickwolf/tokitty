@@ -417,6 +417,8 @@ class LookTab(_Tab):
                                     lambda i, name: host.on_customization_changed(i, "pattern", name))
         self.tail = self._choice(choice_row, "Tail", list(sprites.TAIL_STYLES),
                                  lambda i, name: host.on_customization_changed(i, "tail", name))
+        self.eyes = self._choice(choice_row, "Eyes", list(sprites.EYE_COLORS),
+                                 lambda i, name: host.on_customization_changed(i, "eyes", name))
         left_col.addWidget(choices)
         # The dropdown shows names; the pane stores ids. Rebuilt by refresh().
         self._colorway_ids: Dict[str, str] = {}
@@ -571,6 +573,7 @@ class LookTab(_Tab):
             Qt.CursorShape.PointingHandCursor if editable else Qt.CursorShape.ArrowCursor)
         self.pattern.set(pane._pattern)
         self.tail.set(pane._tail)
+        self.eyes.set(pane._eyes)
         self.personality.set(pane._personality)
         for _caption, field in _COLOR_ROWS:
             self.color_rows[field].set(host.pane_color(index, field))

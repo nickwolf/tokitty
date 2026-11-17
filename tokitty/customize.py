@@ -56,6 +56,7 @@ class Customization:
     cat_home: str = "inside"  # a theme.SPOTS name; see theme.py
     tail: str = "plain"  # a sprites.TAIL_STYLES name
     personality: str = "balanced"  # a behaviour.PERSONALITIES name
+    eyes: str = "green"  # a sprites.EYE_COLORS name
 
 
 def _clean_overrides(raw) -> Dict[str, str]:
@@ -119,6 +120,9 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
         personality = entry.get("personality")
         if not (isinstance(personality, str) and personality in PERSONALITIES):
             personality = "balanced"
+        eyes = entry.get("eyes")
+        if not (isinstance(eyes, str) and eyes in sprites.EYE_COLORS):
+            eyes = "green"
         result[key] = Customization(
             colorway=colorway,
             pattern=pattern,
@@ -127,6 +131,7 @@ def load_customization(state_dir: Path) -> Dict[str, Customization]:
             cat_home=cat_home,
             tail=tail,
             personality=personality,
+            eyes=eyes,
         )
     return result
 
@@ -170,16 +175,16 @@ def effective_palette(custom: Customization) -> Dict[str, str]:
     of the cache key), so it is computed once per distinct set of them; each
     call returns a fresh dict the caller may mutate."""
     return dict(_effective_palette(
-        custom.colorway, custom.pattern, custom.tail,
+        custom.colorway, custom.pattern, custom.tail, custom.eyes,
         custom.overrides.get("coat_base"), custom.overrides.get("coat_shade"),
         sprites.custom_colorway_generation()))
 
 
 @functools.lru_cache(maxsize=None)
-def _effective_palette(colorway: str, pattern: str, tail: str,
+def _effective_palette(colorway: str, pattern: str, tail: str, eyes: str,
                        coat_base: Optional[str], coat_shade: Optional[str],
                        generation: int = 0) -> Dict[str, str]:
-    palette = sprites.resolve_palette(colorway, pattern, tail)
+    palette = sprites.resolve_palette(colorway, pattern, tail, eyes)
     if coat_base is not None:
         palette["o"] = coat_base
     if coat_shade is not None:

@@ -45,7 +45,7 @@ from tokitty.providers import (
     UnknownProviderError,
     get_provider,
 )
-from tokitty.randomize import random_look
+from tokitty.randomize import random_eyes, random_look, random_tail
 from tokitty.settings import Settings
 from tokitty.startup import ONBOARDING_MODELS_AUTOSELECT, should_auto_select_models
 from tokitty.streamdock.wiring import usage_from_display
@@ -305,8 +305,9 @@ def initial_customization(account: Optional[Account], stored: Optional[Customiza
     colorway, pattern = _seed_from_account(account)
     if colorway is not None:
         return Customization(colorway=colorway, pattern=pattern)
-    colorway, pattern = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS), rng=rng)
-    return Customization(colorway=colorway, pattern=pattern)
+    colorway, pattern = random_look(sprites.colorway_names(), list(sprites.PATTERNS), rng=rng)
+    return Customization(colorway=colorway, pattern=pattern, tail=random_tail(rng),
+                         eyes=random_eyes(pattern, rng))
 
 
 def initial_label(account: Optional[Account], custom: Customization,

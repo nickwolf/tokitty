@@ -14,8 +14,8 @@ The file is optional and read defensively: absent or unparseable => {}; an
 entry with a bad id or any tone that is not "#rrggbb" is dropped. A bad,
 empty or colliding name never drops an entry (a built-in added later could
 otherwise orphan a user's cat): it gets a deterministic replacement, see
-_resolve_name. Randomize and "Surprise me" never draw from here
-(sprites.COLORWAYS holds the built-ins only).
+_resolve_name. Randomize and "Surprise me" draw from here too, through
+sprites.colorway_names().
 """
 from __future__ import annotations
 
@@ -215,17 +215,18 @@ def delete_colorway(state_dir: Path, cid: str) -> int:
 
 
 def palette_from_tones(tones: Dict[str, str], pattern: str = "tabby",
-                       tail: str = "plain") -> Dict[str, str]:
+                       tail: str = "plain", eyes: str = sprites.DEFAULT_EYES) -> Dict[str, str]:
     """The full palette sprites.resolve_palette would give a colorway with
     these tones, without registering it (the editor's live preview). Mirrors
     sprites._resolved_palette; tests/qt/test_colorway_editor.py pins the two
-    together over every built-in x pattern x tail."""
+    together over every built-in x pattern x tail x eyes."""
     tokens = {
         "coat": tones["coat"], "shade": tones["shade"], "mark": tones["mark"],
         "light": tones["light"], "white": sprites.BASE_PALETTE["w"],
     }
     merged = dict(sprites.BASE_PALETTE)
     merged["p"] = tones["ear"]
+    merged["e"] = sprites.EYE_COLORS[eyes]
     for char, src in sprites.PATTERNS[pattern].items():
         merged[char] = tokens.get(src, src)
     rings = sprites.TAIL_STYLES[tail]

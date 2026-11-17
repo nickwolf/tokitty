@@ -1136,6 +1136,22 @@ def test_look_has_a_tail_dropdown_that_writes_through(make_world):
     assert look.tail.get() == "ringed"
 
 
+def test_look_has_an_eyes_dropdown_that_writes_through(make_world):
+    world = make_world(2)
+    window = open_window(world, 1)
+    look = window.tabs["look"]
+    assert look.eyes.choices() == list(sprites.EYE_COLORS)
+    assert look.eyes.get() == "green"
+    look.eyes.menu.actions()[look.eyes.choices().index("amber")].trigger()
+    assert world.store["k1"].eyes == "amber"
+    assert world.store["k0"].eyes == "green"
+    assert load_customization(world.state_dir)["k1"].eyes == "amber"
+    assert world.widget.panes[1]._eyes == "amber"
+    assert world.widget.panes[1].palette["e"] == sprites.EYE_COLORS["amber"]
+    assert world.widget.panes[1].palette == effective_palette(world.store["k1"])
+    assert look.eyes.get() == "amber"
+
+
 def test_look_has_a_personality_dropdown_that_writes_through(make_world):
     from tokitty.behaviour import PERSONALITIES
 

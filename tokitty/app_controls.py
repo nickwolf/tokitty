@@ -14,7 +14,7 @@ from tokitty.app_core import initial_label
 from tokitty.behaviour import PERSONALITIES
 from tokitty.customize import load_customization, save_customization_entry
 from tokitty.ntfy import send_test as ntfy_send_test
-from tokitty.randomize import random_look, random_personality
+from tokitty.randomize import random_look, random_eyes, random_personality, random_tail
 from tokitty.settings import load_settings, update_settings
 
 
@@ -97,6 +97,9 @@ def make_controls(
         elif field == "tail":
             if value in sprites.TAIL_STYLES:
                 custom = replace(custom, tail=value)
+        elif field == "eyes":
+            if value in sprites.EYE_COLORS:
+                custom = replace(custom, eyes=value)
         elif field == "personality":
             if value in PERSONALITIES:
                 custom = replace(custom, personality=value)
@@ -104,9 +107,9 @@ def make_controls(
             if value in theme.SPOTS:
                 custom = replace(custom, cat_home=value)
         elif field == "randomize":
-            cw, pat = random_look(list(sprites.COLORWAYS), list(sprites.PATTERNS))
-            custom = replace(custom, colorway=cw, pattern=pat,
-                             personality=random_personality())
+            cw, pat = random_look(sprites.colorway_names(), list(sprites.PATTERNS))
+            custom = replace(custom, colorway=cw, pattern=pat, tail=random_tail(),
+                             eyes=random_eyes(pat), personality=random_personality())
         elif field == "reset":
             custom = replace(custom, overrides={})
         elif field in ("coat_base", "coat_shade", "card_bg", "bar_fill", "session_bar",
