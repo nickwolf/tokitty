@@ -367,6 +367,11 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 always_on_top=host.always_on_top,
                 on_toggle_always_on_top=host.toggle_always_on_top,
                 on_quit=app.quit,
+                # Not offered without a running tray: nothing would bring the
+                # panes back. The tray menu is built once the icon is up.
+                panes_hidden=host.panes_hidden,
+                on_toggle_hide_panes=(
+                    host.toggle_hide_panes if tray is not None and tray.running else None),
                 on_open_settings=lambda: SettingsWindow.open(host, pane_index),
                 on_about=lambda: show_about(host, widget.panes[0]),
                 view_modes=VIEW_MODE_ITEMS,
@@ -398,6 +403,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         )
         host.attach(controls)
         host.on_always_on_top_changed = lambda on: update_settings(state_dir, always_on_top=on)
+        host.on_panes_hidden_changed = lambda hidden: update_settings(state_dir, hidden_panes=hidden)
         widget.on_menu_action_done = host.notify_state_changed
         for unit, pane in zip(units, widget.panes):
             unit["pane"] = pane
@@ -409,7 +415,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         pane0 = widget.panes[0]
         tray = QtTray(lambda: menu_model(0), state_dir,
                       colorway=pane0._colorway, pattern=pane0._pattern, tail=pane0._tail,
-                      on_action_done=host.notify_state_changed)
+                      on_action_done=host.notify_state_changed, on_activate=host.show_panes)
 
         def refresh_tray() -> None:
             # The icon wears pane 0's look, which a colorway edit can change.
@@ -432,7 +438,15 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
         host.tray_enabled = tray_enabled
         host.tray_available = lambda: tray.available
-        host.on_toggle_tray = lambda: tray.set_enabled(not tray_enabled())
+
+        def toggle_tray() -> None:
+            # Turning the tray off takes away the only way to bring hidden
+            # panes back.
+            if tray_enabled() and host.panes_hidden():
+                host.show_panes()
+            tray.set_enabled(not tray_enabled())
+
+        host.on_toggle_tray = toggle_tray
 
         update_host = QtUpdateHost(app, host, lock, state_dir, controls.autostart_backend,
                                    tray=tray, tray_enabled=tray_enabled, quiet=apply_update)
@@ -587,6 +601,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         timer.start(UI_REFRESH_MS)
         if tray.available and settings.tray_enabled:
             tray.start()
+        # A saved "hidden" only counts while a tray is up to undo it.
+        start_hidden = settings.hidden_panes and tray.running
+        if start_hidden:
+            host.start_with_panes_hidden()
         if os.environ.get(DEBUG_NOTIFY_ENV) == "1":
             QTimer.singleShot(DEBUG_NOTIFY_DELAY_MS, lambda: tray.debug_notify(
                 "Tokitty", "Test notification (TOKITTY_DEBUG_NOTIFY)"))
@@ -602,7 +620,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                 handle = widget.windowHandle()
                 exposed = handle is not None and handle.isExposed()
                 waited = time.monotonic() - started
-                if not exposed and waited < update_controller.ACK_MAP_TIMEOUT:
+                # Panes hidden on purpose are never exposed: nothing to wait for.
+                if not (exposed or start_hidden) and waited < update_controller.ACK_MAP_TIMEOUT:
                     return
                 ack_timer.stop()
                 from tokitty.update_swap import write_ack
@@ -634,7 +653,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             updates.start_apply_newest(on_apply_done)
         # showEvent runs the macOS helper and sets the click mask once the
         # native window exists.
-        widget.show()
+        if not start_hidden:
+            widget.show()
         app.exec()
         return apply_exit["code"] if apply_update else 0
     finally:

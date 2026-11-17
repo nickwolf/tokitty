@@ -34,6 +34,8 @@ def build_menu(
     always_on_top: Callable[[], bool],
     on_toggle_always_on_top: Callable[[], None],
     on_quit: Callable[[], None],
+    panes_hidden: Optional[Callable[[], bool]] = None,
+    on_toggle_hide_panes: Optional[Callable[[], None]] = None,
     on_open_settings: Optional[Callable[[], None]] = None,
     on_about: Optional[Callable[[], None]] = None,
     view_modes: Optional[List[tuple]] = None,
@@ -60,6 +62,9 @@ def build_menu(
             for value, label in view_modes
         ]))
     items.append(MenuItem(label="Always in front", action=on_toggle_always_on_top, checkbox=always_on_top))
+    if panes_hidden is not None and on_toggle_hide_panes is not None:
+        # Only offered while a tray exists to bring the panes back.
+        items.append(MenuItem(label="Hide panes", action=on_toggle_hide_panes, checkbox=panes_hidden))
     if on_open_settings is not None or on_about is not None:
         items.append(MenuItem(separator=True))
     if on_open_settings is not None:

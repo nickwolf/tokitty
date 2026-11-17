@@ -1039,3 +1039,51 @@ def test_run_qt_maps_the_platform_before_it_creates_the_application(qapp, state_
     monkeypatch.setenv("TOKITTY_DEBUG_STATE", "content")
     assert run_for(qapp, 100) == 0
     assert calls == [1]
+
+
+# -- Hide panes (#230) ---------------------------------------------------------
+
+def test_a_saved_hidden_is_ignored_without_a_tray_and_the_menu_offers_no_hide(
+    qapp, state_dir, monkeypatch, fake_workers
+):
+    save_settings(state_dir, Settings(tray_enabled=False, hidden_panes=True, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    assert run_for(qapp, 100) == 0
+    widget = seen["widgets"][0]
+    assert "Hide panes" not in [i.label for i in widget.build_menu_model(0)]
+
+
+def test_a_saved_hidden_keeps_the_panes_hidden_when_a_tray_is_up(qapp, state_dir, monkeypatch, fake_workers):
+    from PySide6.QtWidgets import QSystemTrayIcon
+
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    save_settings(state_dir, Settings(tray_enabled=True, hidden_panes=True, first_run="done"))
+    from tokitty.qt.widget import TokittyQtWidget
+
+    built = []
+    real_init = TokittyQtWidget.__init__
+    monkeypatch.setattr(TokittyQtWidget, "__init__",
+                        lambda self, *a, **k: (real_init(self, *a, **k), built.append(self))[0])
+    seen = {}
+
+    def probe() -> bool:
+        # Read while the loop runs: the tray stops with it.
+        if built:
+            seen["visible"] = built[0].isVisible()
+            seen["item"] = next((i for i in built[0].build_menu_model(0) if i.label == "Hide panes"), None)
+        return bool(built)
+
+    assert run_until(qapp, probe) == 0
+    assert seen["visible"] is False
+    assert seen["item"].checkbox() is True
+
+
+def test_hide_panes_from_the_menu_is_saved(qapp, state_dir, monkeypatch, fake_workers):
+    from PySide6.QtWidgets import QSystemTrayIcon
+
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    save_settings(state_dir, Settings(tray_enabled=True, first_run="done"))
+    seen = capture_widget(monkeypatch)
+    seen["hook"] = lambda w: next(i for i in w.build_menu_model(0) if i.label == "Hide panes").action()
+    assert run_for(qapp, 150) == 0
+    assert load_settings(state_dir).hidden_panes is True

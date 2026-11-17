@@ -54,6 +54,10 @@ class QtHost:
         self.update_actions = None
         # Called with the new state after the widget flipped; run_qt saves it.
         self.on_always_on_top_changed: Optional[Callable[[bool], None]] = None
+        # Tray-only mode (#230). run_qt only starts it hidden when a tray is
+        # running, and saves each change through on_panes_hidden_changed.
+        self._panes_hidden = False
+        self.on_panes_hidden_changed: Optional[Callable[[bool], None]] = None
         self._windows: List[QWidget] = []
 
     def attach(self, controls) -> None:
@@ -84,6 +88,33 @@ class QtHost:
                 self._apply_stacking(window)
             except RuntimeError:  # the C++ window is already gone
                 self._windows.remove(window)
+
+    # ---- hide panes ----------------------------------------------------
+
+    def panes_hidden(self) -> bool:
+        return self._panes_hidden
+
+    def start_with_panes_hidden(self) -> None:
+        """For launch: the panes are not shown yet, so there is nothing to hide."""
+        self._panes_hidden = True
+
+    def toggle_hide_panes(self) -> None:
+        self._set_panes_hidden(not self._panes_hidden)
+
+    def show_panes(self) -> None:
+        """A tray click: show the panes if hidden, and bring them to the front."""
+        if self._panes_hidden:
+            self._set_panes_hidden(False)
+        self.widget.raise_()
+
+    def _set_panes_hidden(self, hidden: bool) -> None:
+        self._panes_hidden = hidden
+        if hidden:
+            self.widget.hide()
+        else:
+            self.widget.show()
+        if self.on_panes_hidden_changed is not None:
+            self.on_panes_hidden_changed(hidden)
 
     def register_window(self, window: QWidget) -> None:
         """Track a top-level window and give it the hint if the widget is in

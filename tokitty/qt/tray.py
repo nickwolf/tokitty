@@ -54,10 +54,12 @@ class QtTray:
     def __init__(self, menu_provider: Callable[[], List], state_dir,
                  colorway: str = "orange", pattern: str = "tabby", tail: str = "plain", *,
                  on_action_done: Optional[Callable[[], None]] = None,
+                 on_activate: Optional[Callable[[], None]] = None,
                  icon_factory=None, tray_available=None, platform: str = sys.platform):
         self._menu_provider = menu_provider
         self._state_dir = state_dir
         self._on_action_done = on_action_done
+        self._on_activate = on_activate
         self._icon_factory = icon_factory or QSystemTrayIcon
         self._platform = platform
         self._qicon: Optional[QIcon] = None
@@ -104,12 +106,20 @@ class QtTray:
             self._icon = icon
             self._sync = render_menu(menu, self._menu_provider(), self._wrap)
             icon.setContextMenu(menu)
+            # The macOS menu-bar icon opens its menu on a click, so there is
+            # nothing to add there.
+            if self._on_activate is not None and self._platform != "darwin":
+                icon.activated.connect(self._on_activated)
             icon.show()
         except Exception as exc:
             # Recorded: from here the tray counts as unavailable.
             print(f"tokitty: tray: could not show the tray icon: {exc}", file=sys.stderr)
             self.available = False
             self._drop()
+
+    def _on_activated(self, reason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._wrap(self._on_activate)()
 
     def _drop(self) -> None:
         icon, menu = self._icon, self._menu
@@ -120,6 +130,11 @@ class QtTray:
                     obj.deleteLater()
                 except Exception:
                     pass
+
+    @property
+    def running(self) -> bool:
+        """An icon is up now. `available` only says one could be."""
+        return self._icon is not None
 
     def refresh(self) -> None:
         """Re-read the menu's getters in place. A no-op with no icon."""

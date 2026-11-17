@@ -87,6 +87,29 @@ def test_always_on_front_checkbox_getter():
     assert item.checkbox() is False
 
 
+def test_hide_panes_sits_after_always_in_front_and_follows_its_getter():
+    hidden = {"on": False}
+    toggled = []
+    kwargs, _, _ = _kwargs(panes_hidden=lambda: hidden["on"],
+                           on_toggle_hide_panes=lambda: toggled.append(1))
+    items = build_menu(**kwargs)
+    assert _labels(items) == ["Refresh now", "Always in front", "Hide panes", None, "Exit"]
+    item = items[2]
+    assert item.checkbox() is False
+    hidden["on"] = True
+    assert item.checkbox() is True
+    item.action()
+    assert toggled == [1]
+
+
+@pytest.mark.parametrize("drop", ["panes_hidden", "on_toggle_hide_panes"])
+def test_hide_panes_needs_both_its_seams(drop):
+    seams = dict(panes_hidden=lambda: False, on_toggle_hide_panes=lambda: None)
+    del seams[drop]
+    kwargs, _, _ = _kwargs(**seams)
+    assert "Hide panes" not in _labels(build_menu(**kwargs))
+
+
 def test_view_submenu_radio_and_actions():
     chosen = []
     view = {"mode": "compact"}

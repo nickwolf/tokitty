@@ -453,6 +453,17 @@ def test_always_on_top_defaults_on_and_roundtrips(tmp_path):
     assert load_settings(tmp_path).always_on_top is False
 
 
+def test_hidden_panes_defaults_off_and_roundtrips(tmp_path):
+    assert load_settings(tmp_path).hidden_panes is False
+    save_settings(tmp_path, Settings(hidden_panes=True))
+    assert load_settings(tmp_path).hidden_panes is True
+
+
+def test_hidden_panes_non_bool_defaults_off(tmp_path):
+    (tmp_path / "settings.json").write_text('{"hidden_panes": "yes"}', encoding="utf-8")
+    assert load_settings(tmp_path).hidden_panes is False
+
+
 def test_always_on_top_non_bool_defaults_on(tmp_path):
     (tmp_path / "settings.json").write_text('{"always_on_top": 0}', encoding="utf-8")
     assert load_settings(tmp_path).always_on_top is True

@@ -3,7 +3,7 @@ offscreen platform has no system tray, so a real QSystemTrayIcon is never
 shown)."""
 import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from tokitty.menu import MenuItem
 from tokitty.qt.tray import QtTray
@@ -17,6 +17,18 @@ RELEASE = Release(tag="v9.0.0", html_url="https://example.invalid/r", asset_url=
                   asset_size=None, sums_url=None)
 
 
+class FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def emit(self, *args):
+        for slot in self.slots:
+            slot(*args)
+
+
 class FakeIcon:
     instances = []
 
@@ -28,6 +40,7 @@ class FakeIcon:
         self.shown = False
         self.sent = []
         self.deleted = False
+        self.activated = FakeSignal()
         FakeIcon.instances.append(self)
 
     def setIcon(self, icon):
@@ -124,6 +137,45 @@ def test_start_shows_one_square_icon_with_the_tooltip(qapp, tmp_path):
     size = icon.icon.availableSizes()[0]
     assert size.width() == size.height() > 0
     assert isinstance(icon.menu, QMenu) and icon.menu.parent() is None
+
+
+def test_a_left_click_runs_the_activate_callback_then_done(qapp, tmp_path):
+    order = []
+    tray = make_tray(tmp_path, on_activate=lambda: order.append("activate"),
+                     on_action_done=lambda: order.append("done"))
+    tray.start()
+    FakeIcon.instances[0].activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+    assert order == []
+    qapp.processEvents()
+    assert order == ["activate", "done"]
+
+
+@pytest.mark.parametrize("reason", [QSystemTrayIcon.ActivationReason.Context,
+                                    QSystemTrayIcon.ActivationReason.DoubleClick,
+                                    QSystemTrayIcon.ActivationReason.MiddleClick])
+def test_only_a_plain_click_activates(qapp, tmp_path, reason):
+    order = []
+    tray = make_tray(tmp_path, on_activate=lambda: order.append("activate"))
+    tray.start()
+    FakeIcon.instances[0].activated.emit(reason)
+    qapp.processEvents()
+    assert order == []
+
+
+def test_a_click_is_not_wired_on_macos(qapp, tmp_path):
+    tray = make_tray(tmp_path, on_activate=lambda: None, platform="darwin")
+    tray.start()
+    assert FakeIcon.instances[0].activated.slots == []
+
+
+def test_running_follows_the_icon(qapp, tmp_path):
+    tray = make_tray(tmp_path)
+    assert not tray.running
+    tray.start()
+    assert tray.running
+    tray.stop()
+    assert not tray.running
+    assert not make_tray(tmp_path, available=False).running
 
 
 def test_set_tooltip_updates_a_shown_icon_and_the_next_start(qapp, tmp_path):
