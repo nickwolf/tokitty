@@ -643,28 +643,31 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
 
         applying = {"now": False}
 
-        def apply_accounts() -> None:
+        def apply_accounts() -> bool:
             """Rebuild what the account list decides from accounts.json as it
-            is now (#166). Idempotent: the same list, in the same order, does
-            nothing, so the page's call and the tick's file check rebuild once
-            between them."""
+            is now (#166), and say whether it did. Idempotent: the same list,
+            in the same order, does nothing, so the page's call and the tick's
+            file check rebuild once between them. The caller re-syncs the
+            views: the page's host.accounts_changed() always does, so a
+            refresh here as well would cost the Accounts page a second status
+            pass, one wsl.exe per WSL account."""
             # A modal box runs a nested loop, and the tick runs in it.
             if applying["now"]:
-                return
+                return False
             # A modal dialog (a colour picker, the colorway editor, Rename)
             # holds a pane index it read before it opened, and a rebuild under
             # it would send its edit to another account. The stamp stays old,
             # so the tick applies the change once the dialog closes.
             if QApplication.activeModalWidget() is not None:
-                return
+                return False
             accounts_seen["stamp"] = accounts_stamp(state_dir)
             result = load_accounts_result(state_dir)
             if result.state == "malformed":
                 # Mid-edit or a typo: keep the panes there are.
-                return
+                return False
             current = result.accounts if result.state == "valid_non_empty" else None
             if same_accounts(units, current):
-                return
+                return False
             applying["now"] = True
             try:
                 settings_window = SettingsWindow.open_for(host)
@@ -699,9 +702,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
                     settings_window.panes_changed()
             finally:
                 applying["now"] = False
-            # The tray wears pane 0's look and lists the panes; Settings
-            # re-reads its pane pickers.
-            host.notify_state_changed()
+            return True
 
         host.on_accounts_changed = apply_accounts
 
@@ -711,8 +712,10 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             if now - accounts_seen["checked"] < ACCOUNTS_CHECK_S:
                 return
             accounts_seen["checked"] = now
-            if accounts_stamp(state_dir) != accounts_seen["stamp"]:
-                apply_accounts()
+            if accounts_stamp(state_dir) != accounts_seen["stamp"] and apply_accounts():
+                # The tray wears pane 0's look and lists the panes; Settings
+                # re-reads its pane pickers.
+                host.notify_state_changed()
 
         maybe_onboard = make_onboarder(state_dir, usage_state, tray.refresh)
         notes_removed: set = set()

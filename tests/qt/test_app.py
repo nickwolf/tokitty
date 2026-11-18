@@ -463,6 +463,45 @@ def test_removing_every_account_leaves_the_default_pane(qapp, state_dir, monkeyp
     assert found["units"] == [("default", None)] and found["panes"] == 1
 
 
+def test_an_account_change_from_the_page_refreshes_the_views_once(
+        qapp, state_dir, monkeypatch, fake_workers):
+    # A second refresh made the Accounts page run its status pass twice, each
+    # one wsl.exe per WSL account with every row held at "Checking…".
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a])
+    found = {}
+
+    def hook(widget):
+        refreshes = []
+        hosts[0].settings_refresh = lambda: refreshes.append(1)
+        change_accounts(hosts[0], state_dir, [a, b])
+        found["panes"] = len(widget.panes)
+        found["refreshes"] = len(refreshes)
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found == {"panes": 2, "refreshes": 1}
+
+
+def test_a_hand_edit_refreshes_the_views_once(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.accounts import save_accounts
+    from tokitty.qt import app
+
+    monkeypatch.setattr(app, "ACCOUNTS_CHECK_S", 0.0)
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a])
+    widgets, refreshes = [], []
+
+    def hook(widget):
+        widgets.append(widget)
+        hosts[0].settings_refresh = lambda: refreshes.append(len(widget.panes))
+        save_accounts(state_dir, [a, b])
+
+    seen["hook"] = hook
+    assert run_until(qapp, lambda: refreshes) == 0
+    assert refreshes == [2]
+
+
 def test_a_hand_edit_of_accounts_json_is_picked_up_by_the_tick(qapp, state_dir, monkeypatch, fake_workers):
     from tokitty.accounts import save_accounts
     from tokitty.qt import app
