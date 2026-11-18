@@ -176,6 +176,7 @@ class AccountsTab(_Tab):
         self._finding = False
         self._guard_busy = False
         self._closed = False
+        self._was_shown = False
         self.poller = QtPoller(self.owner, self.mailbox, self._on_result,
                                self._keep_alive, on_tick=self._on_tick)
 
@@ -209,8 +210,13 @@ class AccountsTab(_Tab):
 
     def refresh(self) -> None:
         # Status is a worker round trip: only pay it while the tab is shown.
-        if self.owner.current == "accounts":
-            self._query()
+        shown = self.owner.current == "accounts"
+        if shown:
+            # The sweep lists listed homes too (_found_homes filters them),
+            # so a move, rename or remove needs no new one: only showing the
+            # tab does.
+            self._query(sweep=not self._was_shown)
+        self._was_shown = shown
 
     def close(self) -> None:
         self._closed = True
@@ -240,12 +246,21 @@ class AccountsTab(_Tab):
         if probe is None:
             return None
 
+        # One probe per status pass, not one per account: each is a wsl.exe
+        # call (about 200 ms on Windows), and the pass holds every row at
+        # "Checking…" until it ends. _query makes a fresh one per pass.
+        seen: List[set] = []
+
         def running(name: str) -> bool:
-            return name.casefold() in {d.casefold() for d in probe()}
+            if not seen:
+                seen.append({d.casefold() for d in probe()})
+            return name.casefold() in seen[0]
 
         return running
 
-    def _query(self) -> None:
+    def _query(self, sweep: bool = False) -> None:
+        if sweep:
+            self._sweep()
         if self._checking:
             self._requery = True
             return
@@ -253,6 +268,8 @@ class AccountsTab(_Tab):
         self._render()
         state_dir, running = self.state_dir, self._distro_running()
         self._launch("status", lambda: collect_rows(state_dir, running))
+
+    def _sweep(self) -> None:
         probe = getattr(self.host, "found_homes", None)
         if probe is not None and not self._finding:
             self._finding = True

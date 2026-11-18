@@ -234,6 +234,28 @@ def test_the_distro_probe_matches_case_insensitively(make_world, fake_status):
     assert probe("ubuntu") is True and probe("Debian") is False
 
 
+def test_a_status_pass_probes_the_running_distros_once(make_world, monkeypatch):
+    # Each probe is a wsl.exe call: one per account held every row at
+    # "Checking…" for about 200 ms per WSL account.
+    probes = []
+    world = make_world(1)
+    world.host.running_distros = lambda: probes.append(1) or ["Ubuntu"]
+
+    def fake(config_dir, provider, *, distro_running=None, state_dir=None):
+        distro_running("Ubuntu")
+        return STATUSES[config_dir]
+
+    monkeypatch.setattr(accounts_rows, "hook_status_for_dir", fake)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"),
+                   ("work", "/c/work", "claude"), ("none", "/c/none", "claude"))
+    _window, tab = open_tab(world)
+    assert pump(tab_settled(tab))
+    assert len(probes) == 1
+    tab.refresh()
+    assert pump(tab_settled(tab))
+    assert len(probes) == 2
+
+
 def test_checking_pills_while_a_query_is_pending(make_world, monkeypatch, fake_status):
     world = make_world(1)
     write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
@@ -788,6 +810,24 @@ def test_found_homes_are_read_on_a_worker_thread(make_world, fake_status, monkey
     _window, tab = open_ready(world)
     assert pump(lambda: len(tab.found_rows) == 1)
     assert threads and threading.main_thread() not in threads
+
+
+def test_the_found_sweep_runs_when_the_tab_is_shown_not_on_each_refresh(
+        make_world, fake_status, monkeypatch):
+    # A sweep is a wsl.exe per running distro, about half a second, and a
+    # move or rename cannot change which homes exist.
+    world = make_world(1)
+    write_accounts(world.state_dir, ("personal", "/c/personal", "claude"))
+    sweeps = []
+    world.host.found_homes = lambda: sweeps.append(1) or []
+    monkeypatch.setattr(qsa, "discover_local_codex_home", lambda accounts: None)
+    window, tab = open_ready(world)
+    assert pump(lambda: tab._pending == 0) and len(sweeps) == 1
+    world.host.notify_state_changed()
+    assert pump(tab_settled(tab)) and len(sweeps) == 1
+    window._show("general")
+    window._show("accounts")
+    assert pump(lambda: tab._pending == 0 and tab_settled(tab)()) and len(sweeps) == 2
 
 
 def test_no_found_homes_hides_the_hint_and_tolerates_a_missing_seam(
