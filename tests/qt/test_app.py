@@ -481,6 +481,32 @@ def test_a_hand_edit_of_accounts_json_is_picked_up_by_the_tick(qapp, state_dir, 
     assert len(widgets[0].panes) == 2
 
 
+def test_a_change_waits_for_an_open_modal_dialog(qapp, state_dir, monkeypatch, fake_workers):
+    # A dialog that read a pane index before opening must not see the panes
+    # change under it; the tick applies the change once it closes.
+    from PySide6.QtWidgets import QDialog
+
+    from tokitty.qt import app
+
+    monkeypatch.setattr(app, "ACCOUNTS_CHECK_S", 0.0)
+    a, b, c = account(state_dir, "a"), account(state_dir, "b"), account(state_dir, "c")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a, b, c])
+    widgets, found = [], {}
+
+    def hook(widget):
+        widgets.append(widget)
+        dialog = QDialog()
+        dialog.setModal(True)
+        dialog.show()
+        change_accounts(hosts[0], state_dir, [b, c])
+        found["while_open"] = len(widget.panes)
+        dialog.close()
+
+    seen["hook"] = hook
+    assert run_until(qapp, lambda: widgets and len(widgets[0].panes) == 2) == 0
+    assert found["while_open"] == 3 and len(widgets[0].panes) == 2
+
+
 def test_an_open_settings_window_keeps_its_pane_in_range(qapp, state_dir, monkeypatch, fake_workers):
     from tokitty.qt import settings as qt_settings
 

@@ -651,6 +651,12 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             # A modal box runs a nested loop, and the tick runs in it.
             if applying["now"]:
                 return
+            # A modal dialog (a colour picker, the colorway editor, Rename)
+            # holds a pane index it read before it opened, and a rebuild under
+            # it would send its edit to another account. The stamp stays old,
+            # so the tick applies the change once the dialog closes.
+            if QApplication.activeModalWidget() is not None:
+                return
             accounts_seen["stamp"] = accounts_stamp(state_dir)
             result = load_accounts_result(state_dir)
             if result.state == "malformed":
