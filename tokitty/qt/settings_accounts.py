@@ -419,11 +419,14 @@ class AccountsTab(_Tab):
         self._start_mutation(moved, "move", config_dir, provider)
 
     def _confirm_remove(self, label: str, harness: str, config_dir: str) -> bool:
-        box = QMessageBox(QMessageBox.Icon.NoIcon, f"Remove {label}?",
-                          f"Its cat leaves the card and Tokitty removes its hooks from "
-                          f"{elide_middle(config_dir)}. Your {harness} login, history and "
-                          f"settings stay. You can add it back from Add an account.",
+        # The question goes in the text, not only the title: macOS shows no
+        # title on a message box.
+        box = QMessageBox(QMessageBox.Icon.NoIcon, "Remove account", f"Remove {label}?",
                           QMessageBox.StandardButton.NoButton, self.owner)
+        box.setInformativeText(
+            f"Its cat leaves the card and Tokitty removes its hooks from "
+            f"{elide_middle(config_dir)}. Your {harness} login, history and "
+            f"settings stay. You can add it back from Add an account.")
         cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
         remove = box.addButton("Remove account", QMessageBox.ButtonRole.DestructiveRole)
         box.setDefaultButton(cancel)

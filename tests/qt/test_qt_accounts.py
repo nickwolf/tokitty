@@ -558,7 +558,7 @@ def test_the_confirmation_names_the_cat_the_path_and_defaults_to_cancel(
     seen = {}
 
     def fake_exec(box):
-        seen["title"], seen["text"] = box.windowTitle(), box.text()
+        seen["text"], seen["detail"] = box.text(), box.informativeText()
         seen["buttons"] = [b.text() for b in box.buttons()]
         seen["default"] = box.defaultButton().text()
         seen["parent"] = box.parent()
@@ -567,8 +567,9 @@ def test_the_confirmation_names_the_cat_the_path_and_defaults_to_cancel(
     monkeypatch.setattr(qsa.QMessageBox, "exec", fake_exec)
     monkeypatch.setattr(qsa.QMessageBox, "clickedButton", lambda box: box._remove)
     assert tab._confirm_remove("sys", "Claude Code", "/c/work") is True
-    assert seen["title"] == "Remove sys?" and seen["parent"] is tab.owner
-    assert seen["text"] == ("Its cat leaves the card and Tokitty removes its hooks from /c/work. "
+    # In the text, not only the title, which macOS doesn't show.
+    assert seen["text"] == "Remove sys?" and seen["parent"] is tab.owner
+    assert seen["detail"] == ("Its cat leaves the card and Tokitty removes its hooks from /c/work. "
                             "Your Claude Code login, history and settings stay. You can add it "
                             "back from Add an account.")
     assert seen["buttons"] == ["Cancel", "Remove account"] and seen["default"] == "Cancel"
