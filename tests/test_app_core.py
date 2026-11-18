@@ -11,7 +11,9 @@ from tokitty.credentials import CredentialsError
 from tokitty.activity import ActivityView
 from tokitty.api import LimitInfo, UsageSnapshot
 from tokitty.behaviour import drives
-from tokitty.app_core import PaneUpdate, _limits_hover_for, build_units, make_onboarder, step_unit
+from tokitty.app_core import (
+    PaneUpdate, _limits_hover_for, build_units, make_onboarder, rebuild_units, same_accounts, step_unit,
+)
 from tokitty.burn import PACE_CAPS, PACE_UNKNOWN, PACE_WONT_CAP, BurnTracker, Pace
 from tokitty.customize import Customization, load_customization, save_customization
 from tokitty.display import format_reset_day, format_reset_time
@@ -478,6 +480,194 @@ def test_build_units_names_each_units_threads_by_index(tmp_path):
         assert unit["poller"]._name == f"poller-{index}"
         assert unit["watcher"]._name == f"activity-{index}"
         assert unit["usage"]._name == f"usage-{index}"
+
+
+def _rebuild(tmp_path, units, accounts, store):
+    return rebuild_units(
+        units, accounts=accounts, state_dir=tmp_path, customization_store=store,
+        wsl_credentials=_NoCredentials(), distro_probe=_Probe(), usage_state=_usage_state(),
+    )
+
+
+def _accounts(tmp_path, *names, codex=()):
+    return [Account(name=f"acct-v1-{n}", config_dir=str(tmp_path / n),
+                    provider="codex" if n in codex else "claude") for n in names]
+
+
+def test_rebuild_units_adds_a_unit_and_reuses_the_rest(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a])
+    old = units[0]
+    poller, burn = old["poller"], old["burn"]
+    old["last_good"] = "kept"
+
+    rebuilt = _rebuild(tmp_path, units, [a, b], store)
+
+    assert [u["key"] for u in rebuilt.units] == ["acct-v1-a", "acct-v1-b"]
+    assert rebuilt.units[0] is old
+    assert old["poller"] is poller and old["burn"] is burn and old["last_good"] == "kept"
+    assert rebuilt.added == [rebuilt.units[1]] and rebuilt.removed == []
+    assert rebuilt.units[1]["poller"] is not poller
+    assert set(rebuilt.units[1]) == _UNIT_KEYS
+
+
+def test_rebuild_units_hands_back_a_removed_unit_without_stopping_it(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a, b])
+    first, second = units
+
+    rebuilt = _rebuild(tmp_path, units, [b], store)
+
+    assert rebuilt.units == [second] and rebuilt.units[0] is second
+    assert rebuilt.added == [] and rebuilt.removed == [first]
+
+
+def test_rebuild_units_reorders_without_new_units_and_labels_follow(tmp_path):
+    save_customization(tmp_path, {
+        "acct-v1-a": Customization(colorway="gray", pattern="solid", label="Work"),
+        "acct-v1-b": Customization(colorway="gray", pattern="solid", label="Home"),
+    })
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a, b], store=load_customization(tmp_path))
+    first, second = units
+
+    rebuilt = _rebuild(tmp_path, units, [b, a], store)
+
+    assert rebuilt.units[0] is second and rebuilt.units[1] is first
+    assert rebuilt.added == [] and rebuilt.removed == []
+    assert [u["label"] for u in rebuilt.units] == ["Home", "Work"]
+
+
+def test_rebuild_units_retags_every_unit_when_a_codex_account_arrives(tmp_path):
+    save_customization(tmp_path, {
+        "acct-v1-a": Customization(colorway="gray", pattern="solid", label="Work"),
+    })
+    a, b = _accounts(tmp_path, "a", "b", codex=("b",))
+    units, store = _build(tmp_path, [a], store=load_customization(tmp_path))
+    assert units[0]["tag_kind"] is None and units[0]["label"] == "Work"
+
+    rebuilt = _rebuild(tmp_path, units, [a, b], store)
+
+    assert [u["tag_kind"] for u in rebuilt.units] == ["claude", "codex"]
+    assert rebuilt.units[0]["label"] == "claude\u00b7Work"
+    assert rebuilt.units[1]["label"] == "codex"
+
+    # And back: with the Codex account gone the tag goes too.
+    again = _rebuild(tmp_path, rebuilt.units, [a], store)
+    assert again.units[0]["tag_kind"] is None and again.units[0]["label"] == "Work"
+
+
+def test_rebuild_units_takes_the_look_from_the_file_as_it_is_now(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a])
+    on_disk = load_customization(tmp_path)
+    # The page renamed a and wrote b's look before it said so.
+    on_disk["acct-v1-a"] = replace(on_disk["acct-v1-a"], label="Renamed")
+    on_disk["acct-v1-b"] = Customization(colorway="gray", pattern="solid", label="New")
+    save_customization(tmp_path, on_disk)
+
+    rebuilt = _rebuild(tmp_path, units, [a, b], store)
+
+    assert [u["label"] for u in rebuilt.units] == ["Renamed", "New"]
+    assert store["acct-v1-a"].label == "Renamed" and store["acct-v1-b"].label == "New"
+    assert [u["custom"] for u in rebuilt.units] == [store["acct-v1-a"], store["acct-v1-b"]]
+
+
+def test_rebuild_units_saves_only_the_new_look(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a])
+    # Stale in memory: the file has a newer label for a.
+    on_disk = load_customization(tmp_path)
+    save_customization(tmp_path, {"acct-v1-a": replace(on_disk["acct-v1-a"], label="Newer")})
+    store["acct-v1-x"] = Customization(label="stale only in memory")
+
+    rebuilt = _rebuild(tmp_path, units, [a, b], store)
+
+    saved = load_customization(tmp_path)
+    assert set(saved) == {"acct-v1-a", "acct-v1-b"}
+    assert saved["acct-v1-a"].label == "Newer"
+    assert saved["acct-v1-b"] == rebuilt.units[1]["custom"]
+
+
+def test_rebuild_units_rebuilds_a_unit_whose_home_changed(tmp_path):
+    a = Account(name="acct-v1-a", config_dir=str(tmp_path / "a"))
+    moved = Account(name="acct-v1-a", config_dir=str(tmp_path / "elsewhere"))
+    units, store = _build(tmp_path, [a])
+
+    rebuilt = _rebuild(tmp_path, units, [moved], store)
+
+    assert rebuilt.removed == units and rebuilt.added == rebuilt.units
+    assert rebuilt.units[0]["sessions_dir"] == str(tmp_path / "elsewhere" / "tokitty" / "sessions")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a POSIX spelling of the same dir")
+def test_rebuild_units_keeps_a_unit_whose_home_is_only_respelled(tmp_path):
+    a = Account(name="acct-v1-a", config_dir=str(tmp_path / "a"))
+    respelled = Account(name="acct-v1-a", config_dir=str(tmp_path / "x" / ".." / "a"))
+    units, store = _build(tmp_path, [a])
+
+    assert same_accounts(units, [respelled])
+    rebuilt = _rebuild(tmp_path, units, [respelled], store)
+    assert rebuilt.units == units and rebuilt.units[0]["account"] is respelled
+
+
+def test_rebuild_units_without_accounts_is_the_default_unit_a_launch_builds(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, store = _build(tmp_path, [a, b])
+    (tmp_path / "fresh").mkdir()
+    fresh, _ = _build(tmp_path / "fresh", [])
+
+    rebuilt = _rebuild(tmp_path, units, None, store)
+
+    assert rebuilt.removed == units and rebuilt.added == rebuilt.units
+    unit = rebuilt.units[0]
+    assert set(unit) == set(fresh[0]) == _UNIT_KEYS
+    for key in ("key", "account", "tag_kind", "sessions_dir", "distro_name", "last_good"):
+        assert unit[key] == fresh[0][key]
+    assert unit["provider"].kind == fresh[0]["provider"].kind == "claude"
+
+
+def test_rebuild_units_matches_duplicate_accounts_one_for_one(tmp_path):
+    (a,) = _accounts(tmp_path, "a")
+    units, store = _build(tmp_path, [a, a])
+
+    rebuilt = _rebuild(tmp_path, units, [a], store)
+
+    assert rebuilt.units == [units[0]] and rebuilt.removed == [units[1]]
+    assert rebuilt.units[0] is units[0] and rebuilt.removed[0] is units[1]
+
+
+def test_rebuild_units_that_fails_leaves_the_running_units_alone(tmp_path, monkeypatch):
+    from tokitty import app_core
+
+    save_customization(tmp_path, {
+        "acct-v1-a": Customization(colorway="gray", pattern="solid", label="Work"),
+    })
+    a, b = _accounts(tmp_path, "a", "b", codex=("b",))
+    units, store = _build(tmp_path, [a], store=load_customization(tmp_path))
+    units[0]["pane"] = "pane 0"
+    before = dict(units[0])
+
+    def boom(*args, **kwargs):
+        raise OSError("unreachable home")
+
+    monkeypatch.setattr(app_core, "build_unit", boom)
+    with pytest.raises(OSError):
+        _rebuild(tmp_path, units, [a, b], store)
+
+    assert units[0] == before and units[0]["label"] == "Work" and units[0]["tag_kind"] is None
+
+
+def test_same_accounts_compares_identity_and_order(tmp_path):
+    a, b = _accounts(tmp_path, "a", "b")
+    units, _ = _build(tmp_path, [a, b])
+
+    assert same_accounts(units, [a, b])
+    assert not same_accounts(units, [b, a])
+    assert not same_accounts(units, [a])
+    assert not same_accounts(units, None)
+    default, _ = _build(tmp_path, [])
+    assert same_accounts(default, None) and same_accounts(default, [])
 
 
 _MEXICO = timezone(timedelta(hours=-6))

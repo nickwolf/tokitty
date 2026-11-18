@@ -1,4 +1,5 @@
 """run_qt end to end under the offscreen platform."""
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -229,34 +230,321 @@ def test_the_menus_settings_item_opens_the_window_on_that_pane(qapp, state_dir, 
     assert found["window"] is not None and found["pane"] == 0 and found["parent"] is None
 
 
-def test_the_accounts_opener_passes_discovery_matches_to_the_manager(
-        qapp, state_dir, monkeypatch, fake_workers):
+def capture_host(monkeypatch):
+    """Collect the QtHost run_qt builds."""
+    from tokitty.qt.host import QtHost
+
+    seen = []
+    real_init = QtHost.__init__
+
+    def init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        seen.append(self)
+
+    monkeypatch.setattr(QtHost, "__init__", init)
+    return seen
+
+
+def capture_units(monkeypatch):
+    """The units list run_qt builds; a rebuild changes it in place."""
+    from tokitty.qt import app
+
+    seen = []
+    real = app.build_units
+
+    def build_units(**kwargs):
+        units = real(**kwargs)
+        seen.append(units)
+        return units
+
+    monkeypatch.setattr(app, "build_units", build_units)
+    return seen
+
+
+def test_the_host_gets_discoverys_homes_and_the_accounts_hook(qapp, state_dir, monkeypatch, fake_workers):
     from tokitty.app_core import Discovery
-    from tokitty.qt import accounts as qt_accounts
-    from tokitty.qt import settings as qt_settings
 
     save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
     monkeypatch.setattr(Discovery, "wsl_matches",
                         lambda self: [("Ubuntu", "/home/u/.claude/.credentials.json")])
-    monkeypatch.setattr("tokitty.accounts_logic.retry_pending_hook_op", lambda state_dir: None)
+    hosts = capture_host(monkeypatch)
     seen = capture_widget(monkeypatch)
     found = {}
 
+    from tokitty import wsl_probe
+    from tokitty.distro_probe import RunningDistroProbe
+
+    monkeypatch.setattr(RunningDistroProbe, "get_running", lambda self: ["Ubuntu"])
+    monkeypatch.setattr(wsl_probe, "find_running_wsl_credentials", lambda running: [
+        ("Ubuntu", "/home/u/.claude/.credentials.json"),
+        ("Ubuntu", "/home/u/.claude-work/.credentials.json")])
+
     def hook(widget):
-        settings_action(widget)()
-        host = qt_settings._instance.host
-        manager = host.on_open_accounts()
-        found["manager"] = manager
-        found["current"] = qt_accounts.current()
-        found["paths"] = [d.distro for d in manager._discovered_paths]
-        found["parent"] = manager.parent()
-        manager.close()
-        qt_settings._instance.close()
+        host = hosts[0]
+        with monkeypatch.context() as m:
+            m.setattr(sys, "platform", "win32")
+            found["homes"] = host.found_homes()
+        found["hook"] = host.on_accounts_changed
+        # The Manage window is gone (#268): nothing opens it any more.
+        found["manage"] = getattr(host, "on_open_accounts", None)
 
     seen["hook"] = hook
     assert run_for(qapp, 300) == 0
-    assert found["manager"] is found["current"] and found["parent"] is None
-    assert found["paths"] == ["Ubuntu"]
+    # Discovery's startup list, then what a fresh sweep adds, no repeats.
+    assert found["homes"] == [("Ubuntu", "/home/u/.claude/.credentials.json"),
+                              ("Ubuntu", "/home/u/.claude-work/.credentials.json")]
+    assert callable(found["hook"]) and found["manage"] is None
+
+
+def test_found_homes_sweeps_running_distros_only_on_windows():
+    from tokitty.qt.app import make_found_homes
+
+    swept = []
+
+    def sweep(running):
+        swept.append(running)
+        return [("Ubuntu", "/home/u/.claude-edlio/.credentials.json")]
+
+    found = make_found_homes(lambda: [], lambda: ["Ubuntu"], platform="win32", sweep=sweep)
+    assert found() == [("Ubuntu", "/home/u/.claude-edlio/.credentials.json")]
+    assert swept == [["Ubuntu"]]
+    elsewhere = make_found_homes(lambda: [], lambda: ["Ubuntu"], platform="linux", sweep=sweep)
+    assert elsewhere() == [] and len(swept) == 1
+
+
+# -- applying account changes without a restart (#166) ------------------------
+
+
+def account(state_dir, name, provider="claude"):
+    from tokitty.accounts import Account
+
+    return Account(name=f"acct-v1-{name}", config_dir=str(state_dir / name), provider=provider)
+
+
+def launch_with(state_dir, monkeypatch, accounts, labels=None):
+    """Settings and accounts for a launch, and the hooks to reach its pieces."""
+    from tokitty.accounts import save_accounts
+    from tokitty.customize import save_customization
+
+    save_settings(state_dir, Settings(tray_enabled=False, surprise_me=False, first_run="done"))
+    if accounts:
+        save_accounts(state_dir, accounts)
+    if labels:
+        save_customization(state_dir, {
+            f"acct-v1-{name}": Customization(colorway="gray", pattern="solid", label=label)
+            for name, label in labels.items()
+        })
+    return capture_host(monkeypatch), capture_units(monkeypatch), capture_widget(monkeypatch)
+
+
+def change_accounts(host, state_dir, accounts):
+    from tokitty.accounts import save_accounts
+
+    save_accounts(state_dir, accounts)
+    host.accounts_changed()
+
+
+def test_adding_an_account_starts_only_its_workers_and_retags_the_panes(
+        qapp, state_dir, monkeypatch, fake_workers):
+    a, b = account(state_dir, "a"), account(state_dir, "b", provider="codex")
+    hosts, units_seen, seen = launch_with(state_dir, monkeypatch, [a], labels={"a": "Work"})
+    found = {}
+
+    def hook(widget):
+        units = units_seen[0]
+        found["before"] = (units[0], units[0]["poller"], widget.panes[0]._label)
+        del fake_workers[:]
+        change_accounts(hosts[0], state_dir, [a, b])
+        found["log"] = list(fake_workers)
+        found["units"] = list(units)
+        found["labels"] = [pane._label for pane in widget.panes]
+        found["panes"] = [unit["pane"] for unit in units] == widget.panes
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    old_unit, old_poller, old_label = found["before"]
+    assert old_label == "Work"
+    assert found["units"][0] is old_unit and old_unit["poller"] is old_poller
+    assert sorted(found["log"]) == [("start", "ActivityWatcher"), ("start", "Poller"), ("start", "UsageWatcher")]
+    assert found["labels"] == ["claude\u00b7Work", "codex"]
+    assert found["panes"] is True
+
+
+def test_removing_an_account_stops_its_workers_off_the_gui_thread(
+        qapp, state_dir, monkeypatch, fake_workers):
+    import threading
+
+    from tokitty.poller import Poller
+
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, units_seen, seen = launch_with(state_dir, monkeypatch, [a, b])
+    stopped = threading.Event()
+    stops = []
+
+    def stop(self):
+        stops.append((self, threading.current_thread()))
+        stopped.set()
+
+    monkeypatch.setattr(Poller, "stop", stop)
+    found = {}
+
+    def hook(widget):
+        units = units_seen[0]
+        gone, kept = units
+        found["gone"], found["kept"] = gone["poller"], kept
+        change_accounts(hosts[0], state_dir, [b])
+        found["units"] = list(units)
+        found["panes"] = len(widget.panes)
+        found["stopped"] = stopped.wait(5)
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["stopped"] and found["units"] == [found["kept"]] and found["panes"] == 1
+    poller, thread = stops[0]
+    assert poller is found["gone"]
+    assert thread is not threading.main_thread()
+
+
+def test_reordering_starts_and_stops_nothing_and_the_labels_follow(
+        qapp, state_dir, monkeypatch, fake_workers):
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, units_seen, seen = launch_with(state_dir, monkeypatch, [a, b], labels={"a": "Work", "b": "Home"})
+    found = {}
+
+    def hook(widget):
+        units = units_seen[0]
+        first, second = units
+        del fake_workers[:]
+        change_accounts(hosts[0], state_dir, [b, a])
+        found["log"] = list(fake_workers)
+        found["permuted"] = units[0] is second and units[1] is first
+        found["labels"] = [pane._label for pane in widget.panes]
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["log"] == [] and found["permuted"]
+    assert found["labels"] == ["Home", "Work"]
+
+
+def test_the_same_list_again_or_a_malformed_file_keeps_the_panes(
+        qapp, state_dir, monkeypatch, fake_workers):
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a, b])
+    found = {}
+
+    def hook(widget):
+        panes = list(widget.panes)
+        del fake_workers[:]
+        change_accounts(hosts[0], state_dir, [a, b])
+        found["same"] = widget.panes == panes
+        (state_dir / "accounts.json").write_text("{not json", encoding="utf-8")
+        hosts[0].accounts_changed()
+        found["malformed"] = widget.panes == panes
+        found["log"] = list(fake_workers)
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["same"] and found["malformed"] and found["log"] == []
+
+
+def test_removing_every_account_leaves_the_default_pane(qapp, state_dir, monkeypatch, fake_workers):
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, units_seen, seen = launch_with(state_dir, monkeypatch, [a, b])
+    found = {}
+
+    def hook(widget):
+        change_accounts(hosts[0], state_dir, [])
+        units = units_seen[0]
+        found["units"] = [(unit["key"], unit["account"]) for unit in units]
+        found["panes"] = len(widget.panes)
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["units"] == [("default", None)] and found["panes"] == 1
+
+
+def test_a_hand_edit_of_accounts_json_is_picked_up_by_the_tick(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.accounts import save_accounts
+    from tokitty.qt import app
+
+    monkeypatch.setattr(app, "ACCOUNTS_CHECK_S", 0.0)
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    _hosts, _units, seen = launch_with(state_dir, monkeypatch, [a])
+    widgets = []
+
+    def hook(widget):
+        widgets.append(widget)
+        save_accounts(state_dir, [a, b])
+
+    seen["hook"] = hook
+    assert run_until(qapp, lambda: widgets and len(widgets[0].panes) == 2) == 0
+    assert len(widgets[0].panes) == 2
+
+
+def test_a_change_waits_for_an_open_modal_dialog(qapp, state_dir, monkeypatch, fake_workers):
+    # A dialog that read a pane index before opening must not see the panes
+    # change under it; the tick applies the change once it closes.
+    from PySide6.QtWidgets import QDialog
+
+    from tokitty.qt import app
+
+    monkeypatch.setattr(app, "ACCOUNTS_CHECK_S", 0.0)
+    a, b, c = account(state_dir, "a"), account(state_dir, "b"), account(state_dir, "c")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a, b, c])
+    widgets, found = [], {}
+
+    def hook(widget):
+        widgets.append(widget)
+        dialog = QDialog()
+        dialog.setModal(True)
+        dialog.show()
+        change_accounts(hosts[0], state_dir, [b, c])
+        found["while_open"] = len(widget.panes)
+        dialog.close()
+
+    seen["hook"] = hook
+    assert run_until(qapp, lambda: widgets and len(widgets[0].panes) == 2) == 0
+    assert found["while_open"] == 3 and len(widgets[0].panes) == 2
+
+
+def test_an_open_settings_window_keeps_its_pane_in_range(qapp, state_dir, monkeypatch, fake_workers):
+    from tokitty.qt import settings as qt_settings
+
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a, b], labels={"a": "Work", "b": "Home"})
+    found = {}
+
+    def hook(widget):
+        settings_action(widget, 1)()
+        window = qt_settings._instance
+        window.select_tab("look")
+        found["before"] = window.pane_index
+        change_accounts(hosts[0], state_dir, [a])
+        found["after"] = window.pane_index
+        found["names"] = window.pane_names()
+        found["picked"] = window.tabs["look"].pane_picker.get()
+        window.close()
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["before"] == 1 and found["after"] == 0
+    assert found["names"] == ["Work"] and found["picked"] == "Work"
+
+
+def test_an_account_change_closes_the_deck_views_and_restarts_the_deck(
+        qapp, state_dir, monkeypatch, fake_deck):
+    a, b = account(state_dir, "a"), account(state_dir, "b")
+    hosts, _units, seen = launch_with(state_dir, monkeypatch, [a])
+    found = {}
+
+    def hook(widget):
+        del fake_deck.log[:]
+        change_accounts(hosts[0], state_dir, [a, b])
+        found["log"] = settled(fake_deck.log, "views.close_all", "deck.restart")
+
+    seen["hook"] = hook
+    assert run_for(qapp, 300) == 0
+    assert found["log"] == [("views.close_all",), ("deck.restart",)]
 
 
 def test_closing_settings_leaves_the_event_loop_running(qapp, state_dir, monkeypatch, fake_workers):
@@ -679,6 +967,9 @@ def fake_deck(monkeypatch, fake_workers):
             log.append(("deck.stop",))
             if seen.stop_error:
                 raise seen.stop_error
+
+        def restart(self, settings=None):
+            log.append(("deck.restart",))
 
     class FakeViews:
         def __init__(self, runtime_fn, name_fn, anchor_fn, make_view):

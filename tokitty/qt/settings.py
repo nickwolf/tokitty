@@ -1212,6 +1212,28 @@ class SettingsWindow(QWidget):
         self.pane_index = self._clamp(index)
         self.refresh()
 
+    def panes_changing(self) -> None:
+        """The panes are about to be replaced (#166): save any edit while its
+        index still names the pane it was typed for."""
+        self._commit()
+
+    def panes_changed(self) -> None:
+        """The panes were replaced. Keep the index in range, without a commit:
+        it may now name a different pane. The owner refreshes."""
+        self.pane_index = self._clamp(self.pane_index)
+        look = self.tabs.get("look")
+        if look is not None:
+            # Refill the name even if the entry has focus: it was another pane's.
+            look._name_index = None
+
+    @staticmethod
+    def open_for(host) -> Optional["SettingsWindow"]:
+        """The open window showing `host`'s panes, if any."""
+        existing = _instance
+        if existing is not None and existing.alive() and existing.host is host:
+            return existing
+        return None
+
     # -- lifecycle -----------------------------------------------------------
 
     def alive(self) -> bool:

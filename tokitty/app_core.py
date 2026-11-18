@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
-from tokitty.accounts import Account
+from tokitty.accounts import Account, canonicalize_locator
 from tokitty.activity import ActivityTracker
 from tokitty.activity_watcher import ActivityWatcher
 from tokitty.behaviour import drives
@@ -434,6 +434,61 @@ def apply_handoff(stepped: List[Tuple[dict, Optional[PaneUpdate]]]) -> List[Opti
     return out
 
 
+def _resolve_providers(accounts) -> list:
+    """One provider per account (None for the default unit), in order."""
+    providers = []
+    for account in accounts:
+        try:
+            providers.append(get_provider(account.provider if account else None))
+        except UnknownProviderError as exc:
+            # A pane that polls the wrong harness is worse than a pane that
+            # says it can't: name the problem on stderr and give this one a
+            # provider that reports nothing.
+            print(f"tokitty: {exc}", file=sys.stderr)
+            providers.append(NULL_PROVIDER)
+    return providers
+
+
+def build_unit(account: Optional[Account], *, provider, tag_kind: Optional[str], suffix,
+               customization_store: dict, wsl_credentials, distro_probe, usage_state: dict) -> dict:
+    """One unit for one account, without a pane and with its workers not
+    started. `suffix` names the worker threads. The unit's look goes into
+    `customization_store` (the caller saves it)."""
+    config_dir = account.config_dir if account else None
+    cred_loader = CredentialLoader()
+    poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader),
+                    name=f"poller-{suffix}")
+    sessions_dir, distro_name = provider.resolve_activity_sessions(
+        config_dir, credentials=wsl_credentials
+    )
+    watcher = ActivityWatcher(
+        sessions_dir, ActivityTracker(), distro_name=distro_name,
+        list_running_distros_fn=distro_probe.get_running, name=f"activity-{suffix}",
+    )
+    ledger = provider.resolve_ledger(config_dir, credentials=wsl_credentials)
+    usage_watcher = UsageWatcher(
+        ledger.root if ledger else None,
+        distro_name=ledger.distro_name if ledger else None,
+        window=lambda: usage_state["window"],
+        list_running_distros_fn=distro_probe.get_running,
+        scanner_factory=ledger.make_scanner if ledger else None,
+        name=f"usage-{suffix}",
+    )
+
+    key = customization_key(account)
+    custom = initial_customization(account, customization_store.get(key))
+    customization_store[key] = custom
+    label = initial_label(account, custom, tag_kind)
+
+    return {"poller": poller, "watcher": watcher,
+            "provider": provider, "tag_kind": tag_kind,
+            "last_good": None, "key": key, "account": account,
+            "cred_loader": cred_loader, "burn": BurnTracker(),
+            "usage": usage_watcher, "custom": custom, "label": label,
+            # Kept for the Stream Dock, which derives the hook's tokitty dir from it.
+            "sessions_dir": sessions_dir, "distro_name": distro_name}
+
+
 def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentials,
                 distro_probe, usage_state: dict) -> List[dict]:
     """One unit per account (one default unit with no accounts), without a pane.
@@ -445,54 +500,14 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
     # Providers are resolved in their own pass because the label rule needs
     # to know every harness in the window before the first pane is built.
     resolved_accounts = list(accounts or [None])
-    providers = []
-    for account in resolved_accounts:
-        try:
-            providers.append(get_provider(account.provider if account else None))
-        except UnknownProviderError as exc:
-            # A pane that polls the wrong harness is worse than a pane that
-            # says it can't: name the problem on stderr and give this one a
-            # provider that reports nothing.
-            print(f"tokitty: {exc}", file=sys.stderr)
-            providers.append(NULL_PROVIDER)
-
-    units = []
-    for index, account in enumerate(resolved_accounts):
-        config_dir = account.config_dir if account else None
-        provider = providers[index]
-        tag_kind = provider_tag_kind(provider, providers)
-        cred_loader = CredentialLoader()
-        poller = Poller(fetch_fn=provider.build_fetch_fn(config_dir, loader=cred_loader),
-                        name=f"poller-{index}")
-        sessions_dir, distro_name = provider.resolve_activity_sessions(
-            config_dir, credentials=wsl_credentials
-        )
-        watcher = ActivityWatcher(
-            sessions_dir, ActivityTracker(), distro_name=distro_name,
-            list_running_distros_fn=distro_probe.get_running, name=f"activity-{index}",
-        )
-        ledger = provider.resolve_ledger(config_dir, credentials=wsl_credentials)
-        usage_watcher = UsageWatcher(
-            ledger.root if ledger else None,
-            distro_name=ledger.distro_name if ledger else None,
-            window=lambda: usage_state["window"],
-            list_running_distros_fn=distro_probe.get_running,
-            scanner_factory=ledger.make_scanner if ledger else None,
-            name=f"usage-{index}",
-        )
-
-        key = customization_key(account)
-        custom = initial_customization(account, customization_store.get(key))
-        customization_store[key] = custom
-        label = initial_label(account, custom, tag_kind)
-
-        units.append({"poller": poller, "watcher": watcher,
-                      "provider": provider, "tag_kind": tag_kind,
-                      "last_good": None, "key": key, "account": account,
-                      "cred_loader": cred_loader, "burn": BurnTracker(),
-                      "usage": usage_watcher, "custom": custom, "label": label,
-                      # Kept for the Stream Dock, which derives the hook's tokitty dir from it.
-                      "sessions_dir": sessions_dir, "distro_name": distro_name})
+    providers = _resolve_providers(resolved_accounts)
+    units = [
+        build_unit(account, provider=provider, tag_kind=provider_tag_kind(provider, providers),
+                   suffix=index, customization_store=customization_store,
+                   wsl_credentials=wsl_credentials, distro_probe=distro_probe,
+                   usage_state=usage_state)
+        for index, (account, provider) in enumerate(zip(resolved_accounts, providers))
+    ]
 
     # Persist first-run seeds (and re-write loaded entries idempotently) so a
     # random seed becomes a STABLE identity instead of re-rolling each launch.
@@ -500,6 +515,87 @@ def build_units(*, accounts, state_dir, customization_store: dict, wsl_credentia
     # look file, never accounts.json, so there is no credential-mode impact.
     save_customization(state_dir, customization_store)
     return units
+
+
+def unit_identity(account: Optional[Account]) -> tuple:
+    """What a unit can be kept across an account list change by: its look is
+    keyed by the name and its workers read this home for this harness. The
+    home is compared canonically, so a respelled path keeps its unit."""
+    if account is None:
+        return ("default", None, None)
+    try:
+        home = canonicalize_locator(account.config_dir)
+    except ValueError:
+        home = account.config_dir
+    return (account.name, home, account.provider)
+
+
+def same_accounts(units: List[dict], accounts) -> bool:
+    """True when `accounts` (load_accounts' value) would build these units, in order."""
+    wanted = [unit_identity(account) for account in (accounts or [None])]
+    return wanted == [unit_identity(unit["account"]) for unit in units]
+
+
+@dataclass
+class UnitsRebuild:
+    """What rebuild_units decided: the new list in order, the units in it that
+    are new (their workers not started yet) and the old units left out (their
+    workers still running)."""
+
+    units: List[dict]
+    added: List[dict]
+    removed: List[dict]
+
+
+def rebuild_units(units: List[dict], *, accounts, state_dir, customization_store: dict,
+                  wsl_credentials, distro_probe, usage_state: dict) -> UnitsRebuild:
+    """The units for a changed account list, reusing every unit whose account
+    is still there (its workers, last result and burn history go on as they
+    were). Each unit's look comes from customization.json as it is now, as a
+    launch would read it, and its tag and label are recomputed: they depend on
+    every harness in the window. The units keep no pane; the caller gives each
+    one its pane. Nothing is started or stopped here.
+    """
+    from tokitty.customize import load_customization, save_customization_entry
+
+    resolved_accounts = list(accounts or [None])
+    providers = _resolve_providers(resolved_accounts)
+    pool: dict = {}
+    for unit in units:
+        pool.setdefault(unit_identity(unit["account"]), []).append(unit)
+    # The page may have written a label for an account before it said so.
+    latest = load_customization(state_dir)
+    new_units, added, updates = [], [], []
+    for index, (account, provider) in enumerate(zip(resolved_accounts, providers)):
+        tag_kind = provider_tag_kind(provider, providers)
+        key = customization_key(account)
+        stored = latest.get(key, customization_store.get(key))
+        matches = pool.get(unit_identity(account))
+        if matches:
+            unit = matches.pop(0)
+            custom = initial_customization(account, stored)
+            updates.append((unit, key, dict(account=account, key=key, tag_kind=tag_kind, custom=custom,
+                                            label=initial_label(account, custom, tag_kind))))
+        else:
+            if stored is not None:
+                customization_store[key] = stored
+            unit = build_unit(account, provider=provider, tag_kind=tag_kind, suffix=index,
+                              customization_store=customization_store,
+                              wsl_credentials=wsl_credentials, distro_probe=distro_probe,
+                              usage_state=usage_state)
+            if key not in latest:
+                # Only the new look: the rest of the in-memory store may be
+                # older than the file.
+                save_customization_entry(state_dir, key, unit["custom"])
+            added.append(unit)
+        new_units.append(unit)
+    # Only once every new unit is built: if one raises, the running units
+    # are left exactly as they were.
+    for unit, key, changes in updates:
+        customization_store[key] = changes["custom"]
+        unit.update(changes)
+    removed = [unit for left in pool.values() for unit in left]
+    return UnitsRebuild(new_units, added, removed)
 
 
 def make_usage_state(settings: Settings) -> dict:

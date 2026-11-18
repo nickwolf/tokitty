@@ -89,6 +89,53 @@ def test_rebuild_layout_moves_by_the_margin_change(qapp):
         widget.rebuild_layout(["inside", "inside"])
 
 
+@pytest.mark.parametrize("before, after", [
+    (["inside"], ["on_top", "inside", "inside"]),
+    (["on_top", "inside"], ["inside"]),
+    (["inside", "inside", "inside"], ["inside", "inside"]),
+])
+def test_replace_panes_keeps_the_first_card_where_it_is(qapp, before, after):
+    widget = make(qapp, len(before), homes=before)
+    widget.move(500, 400)
+    first = widget.first_card_pos()
+
+    widget.replace_panes([Customization(cat_home=home) for home in after])
+
+    assert widget.first_card_pos() == first
+    expected = T.layout_window(widget.homes, wander=False)
+    assert len(widget.panes) == len(after) == len(widget.homes)
+    assert widget.window_layout == expected
+    assert (widget.width(), widget.height()) == expected.size
+
+
+def test_replace_panes_builds_new_panes_and_drops_the_old_ones_caches(qapp):
+    widget = make(qapp, 2)
+    old = list(widget.panes)
+    render(old[0])
+    render(old[1])
+    widget.grab()  # paints, filling the per-pane caches
+    assert widget._cards
+    widget._hover_target = (1, "cat", None)
+
+    customs = [Customization(colorway="gray", pattern="solid", label="x")]
+    widget.replace_panes(customs)
+
+    assert len(widget.panes) == 1 and widget.panes[0] not in old
+    assert widget.panes[0].customization == customs[0]
+    assert widget._cards == {} and widget._painted == {} and widget._styles == {}
+    assert widget._shadow_memo == {} and widget._hover_target is None
+    assert widget._mask_places == widget._current_mask_places()
+    widget.grab()  # and the one pane paints
+    with pytest.raises(ValueError):
+        widget.replace_panes([])
+
+
+def test_replace_panes_leaves_a_hidden_window_hidden(qapp):
+    widget = make(qapp, 1)
+    widget.replace_panes([Customization(), Customization()])
+    assert not widget.isVisible()
+
+
 def test_screen_watch_connects_once_the_native_window_exists(qapp):
     widget = make(qapp)
     assert widget.windowHandle() is None and widget._watched is None

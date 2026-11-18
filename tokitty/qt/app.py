@@ -8,9 +8,11 @@ it.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +24,9 @@ from tokitty.app_core import (
     build_units,
     make_onboarder,
     make_usage_state,
+    rebuild_units,
     refresh_units,
+    same_accounts,
     step_unit,
 )
 from tokitty.usage_items import VIEW_MODE_ITEMS  # noqa: F401  (also read by the tests)
@@ -32,6 +36,8 @@ DEBUG_NOTIFY_ENV = "TOKITTY_DEBUG_NOTIFY"
 DEBUG_NOTIFY_DELAY_MS = 5000
 AFTER_UPDATE_QT_FILE = "after-update-qt.json"
 POSITION_FILENAME = "position.json"
+# How often the tick looks for a hand edit of accounts.json.
+ACCOUNTS_CHECK_S = 1.0
 MISSING_PYSIDE6 = (
     'tokitty: PySide6 is not installed; reinstall tokitty with its dependencies '
     '(pip install -e ".") or pip install PySide6-Essentials'
@@ -100,6 +106,50 @@ def qt_timers(parent):
             pass
 
     return after, cancel
+
+
+def accounts_stamp(state_dir):
+    """What tells one write of accounts.json from the next without reading
+    it: (mtime, size), or None while it is missing."""
+    from tokitty.accounts import ACCOUNTS_FILENAME
+
+    try:
+        stat = os.stat(Path(state_dir) / ACCOUNTS_FILENAME)
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def stop_units_later(units) -> None:
+    """Stop the workers of units that are gone, on a daemon thread: each stop
+    joins its thread for up to 5 s, which would freeze the panes on the GUI
+    thread."""
+    def run() -> None:
+        for unit in units:
+            for part in ("poller", "watcher", "usage"):
+                run_guarded(f"stop {part}", unit[part].stop)
+
+    if units:
+        threading.Thread(target=run, daemon=True, name="units-stop").start()
+
+
+def make_found_homes(startup_matches, get_running, platform=None, sweep=None):
+    """The Accounts page's found homes: (distro, credentials path) pairs.
+    Discovery only sweeps when accounts.json was absent at launch, so this
+    sweeps again, in running distros only so it never boots one. It runs
+    wsl.exe, so the page calls it from its worker."""
+    def found_homes() -> list:
+        if (platform or sys.platform) != "win32":
+            return []
+        from tokitty.wsl_probe import find_running_wsl_credentials
+
+        found = list(startup_matches())
+        for match in (sweep or find_running_wsl_credentials)(get_running()):
+            if match not in found:
+                found.append(match)
+        return found
+
+    return found_homes
 
 
 def run_guarded(label, fn) -> None:
@@ -293,6 +343,8 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             # limits come from this PC.
             wsl_credentials = WslCredentialsCache(enabled=False)
 
+    # Before the read, so a write in between is seen as a change.
+    accounts_seen = {"stamp": accounts_stamp(state_dir), "checked": time.monotonic()}
     accounts = load_accounts(state_dir)
     warning = env_conflict_warning(accounts)
     if warning:
@@ -579,12 +631,89 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
         )
         discovery.start()
 
-        def open_accounts():
-            from tokitty.qt.accounts import AccountsManager
+        host.found_homes = make_found_homes(discovery.wsl_matches, distro_probe.get_running)
 
-            return AccountsManager.open(state_dir, discovery.wsl_matches(), host=host)
+        def restart_deck() -> None:
+            # The launch port and token, which the Stream Dock tab reports as
+            # being served, with the presets and hidden accounts saved since.
+            saved = load_settings(state_dir)
+            deck.restart(dataclasses.replace(
+                settings, streamdock_presets=saved.streamdock_presets,
+                streamdock_hidden_accounts=saved.streamdock_hidden_accounts))
 
-        host.on_open_accounts = open_accounts
+        applying = {"now": False}
+
+        def apply_accounts() -> None:
+            """Rebuild what the account list decides from accounts.json as it
+            is now (#166). Idempotent: the same list, in the same order, does
+            nothing, so the page's call and the tick's file check rebuild once
+            between them."""
+            # A modal box runs a nested loop, and the tick runs in it.
+            if applying["now"]:
+                return
+            # A modal dialog (a colour picker, the colorway editor, Rename)
+            # holds a pane index it read before it opened, and a rebuild under
+            # it would send its edit to another account. The stamp stays old,
+            # so the tick applies the change once the dialog closes.
+            if QApplication.activeModalWidget() is not None:
+                return
+            accounts_seen["stamp"] = accounts_stamp(state_dir)
+            result = load_accounts_result(state_dir)
+            if result.state == "malformed":
+                # Mid-edit or a typo: keep the panes there are.
+                return
+            current = result.accounts if result.state == "valid_non_empty" else None
+            if same_accounts(units, current):
+                return
+            applying["now"] = True
+            try:
+                settings_window = SettingsWindow.open_for(host)
+                if settings_window is not None:
+                    settings_window.panes_changing()
+                rebuilt = rebuild_units(
+                    units, accounts=current, state_dir=state_dir,
+                    customization_store=customization_store, wsl_credentials=wsl_credentials,
+                    distro_probe=distro_probe, usage_state=usage_state,
+                )
+                # Its windows name requests by unit index.
+                run_guarded("close deck views", deck_views.close_all)
+                # In place: Controls, the deck and the tick hold this list.
+                units[:] = rebuilt.units
+                widget.replace_panes([unit["custom"] for unit in units])
+                for unit, pane in zip(units, widget.panes):
+                    unit["pane"] = pane
+                    pane.set_appearance(label=unit["label"])
+                for unit in rebuilt.added:
+                    unit["poller"].start()
+                    unit["watcher"].start()
+                    unit["usage"].start()
+                if host.surprise_me():
+                    # As at launch, but only for the new cats.
+                    added = {id(unit) for unit in rebuilt.added}
+                    for index, unit in enumerate(units):
+                        if id(unit) in added:
+                            controls.on_customization_changed(index, "randomize", None)
+                stop_units_later(rebuilt.removed)
+                run_guarded("restart deck", restart_deck)
+                if settings_window is not None:
+                    settings_window.panes_changed()
+            finally:
+                applying["now"] = False
+            # The tray wears pane 0's look and lists the panes; Settings
+            # re-reads its pane pickers.
+            host.notify_state_changed()
+
+        host.on_accounts_changed = apply_accounts
+
+        def check_accounts_file() -> None:
+            # A hand edit of accounts.json; one stat a second at most.
+            now = time.monotonic()
+            if now - accounts_seen["checked"] < ACCOUNTS_CHECK_S:
+                return
+            accounts_seen["checked"] = now
+            if accounts_stamp(state_dir) != accounts_seen["stamp"]:
+                apply_accounts()
+
         maybe_onboard = make_onboarder(state_dir, usage_state, tray.refresh)
         notes_removed: set = set()
 
@@ -592,6 +721,7 @@ def _run_locked(state_dir, lock, after_update_token=None, apply_update=False) ->
             QMessageBox.warning(widget, "Tokitty", "\n\n".join(warnings))
 
         def tick() -> None:
+            check_accounts_file()
             updates.tick()
             checker.tick()
             # Not while the handover has the app hidden: a box would open over

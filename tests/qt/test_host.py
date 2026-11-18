@@ -20,7 +20,7 @@ def test_tray_update_and_opener_seams_are_none(make_world):
     host = make_world(1).host
     for name in ("tray_refresh", "on_toggle_tray", "tray_enabled", "tray_available", "update_check_enabled", "on_toggle_update_check",
                  "update_beta_enabled", "on_toggle_update_beta",
-                 "on_check_updates", "update_available_label", "on_install_update", "on_open_accounts",
+                 "on_check_updates", "update_available_label", "on_install_update",
                  "on_edit_streamdock_presets"):
         assert getattr(host, name) is None
 
