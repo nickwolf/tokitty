@@ -1217,3 +1217,21 @@ def test_cat_time_of_day_toggle_reflects_the_theme_after_a_refresh(make_world):
     world = make_world(1, theme=T.Theme(cat=T.CatStyle(time_of_day=False)))
     theme_tab = open_window(world).tabs["theme"]
     assert theme_tab.time_of_day_toggle.get() is False
+
+
+def test_every_tab_fits_the_window_width(make_world):
+    # The page has no horizontal scrollbar, so anything wider than the window
+    # pushes the toggles and buttons off its right edge. The Remove row's hint
+    # did that on Windows in 1.1.0; a long diagnostics error would too.
+    world = make_world(2)
+    world.host.uninstall_finish = lambda purge: None
+    window = open_window(world)
+    window.show()
+    window.tabs["general"]._set_diagnostics_hint(
+        "Could not copy diagnostics: the clipboard is held by another program, try again.")
+    for key in window.tabs:
+        window._show(key)
+        QApplication.processEvents()
+        need = window._stack.minimumSizeHint().width()
+        assert need <= window.scroll.viewport().width(), key
+    window.close()

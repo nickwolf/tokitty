@@ -17,7 +17,7 @@ import PySide6
 from PySide6.QtCore import Qt, qVersion
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QFileDialog, QFrame, QHBoxLayout, QLineEdit, QMessageBox,
+    QCheckBox, QColorDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QScrollArea, QWidget,
 )
 
@@ -128,6 +128,14 @@ def _screen_facts() -> List[Tuple[int, int, float]]:
 def _hrow() -> Tuple[QWidget, QHBoxLayout]:
     row = QWidget()
     return row, hbox(row)
+
+
+def _hint(message: str) -> QLabel:
+    # Wraps: the page has no horizontal scrollbar, so one long line widens
+    # the page past the window and clips every row on the right.
+    label = text(message, color=MUTED, font=FONT_SMALL)
+    label.setWordWrap(True)
+    return label
 
 
 class ColorRow(QFrame):
@@ -258,7 +266,7 @@ class GeneralTab(_Tab):
             "Remove Tokitty from this computer…", "danger", self._remove, compact=True)
         layout.addWidget(self.remove_button)
         layout.addSpacing(10)
-        layout.addWidget(text(REMOVE_HINT, color=MUTED, font=FONT_SMALL), 1)
+        layout.addWidget(_hint(REMOVE_HINT), 1)
         self.remove_row = row
         row.setVisible(self.host.uninstall_finish is not None)
         self.add(row)
@@ -305,7 +313,7 @@ class GeneralTab(_Tab):
             "Copy diagnostics", "secondary", self._copy_diagnostics, compact=True)
         layout.addWidget(self.diagnostics_button)
         layout.addSpacing(10)
-        self.diagnostics_hint = text(DIAGNOSTICS_HINT, color=MUTED, font=FONT_SMALL)
+        self.diagnostics_hint = _hint(DIAGNOSTICS_HINT)
         layout.addWidget(self.diagnostics_hint, 1)
         self.add(row)
 
